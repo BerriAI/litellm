@@ -650,12 +650,12 @@ class TestBackgroundStreamingModule:
 
     def test_background_streaming_task_is_async(self):
         """Test that background_streaming_task is an async function"""
-        import asyncio
+        import inspect
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
-        
-        assert asyncio.iscoroutinefunction(background_streaming_task)
+
+        assert inspect.iscoroutinefunction(background_streaming_task)
 
 
 class TestProviderResolutionForPolling:
@@ -1001,6 +1001,142 @@ class TestPollingConditionChecks:
             redis_cache=Mock(),
             model="claude-3",
             llm_router=mock_router,
+        )
+        
+        assert result is False
+
+    # ==================== Native Background Mode Tests ====================
+
+    def test_polling_disabled_when_model_in_native_background_mode(self):
+        """Test that polling is disabled when model is in native_background_mode list"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled="all",
+            redis_cache=Mock(),
+            model="o4-mini-deep-research",
+            llm_router=None,
+            native_background_mode=["o4-mini-deep-research", "o3-deep-research"],
+        )
+        
+        assert result is False
+
+    def test_polling_disabled_for_native_background_mode_with_provider_list(self):
+        """Test that native_background_mode takes precedence even when provider matches"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled=["openai"],
+            redis_cache=Mock(),
+            model="openai/o4-mini-deep-research",
+            llm_router=None,
+            native_background_mode=["openai/o4-mini-deep-research"],
+        )
+        
+        assert result is False
+
+    def test_polling_enabled_when_model_not_in_native_background_mode(self):
+        """Test that polling is enabled when model is not in native_background_mode list"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled="all",
+            redis_cache=Mock(),
+            model="gpt-4o",
+            llm_router=None,
+            native_background_mode=["o4-mini-deep-research"],
+        )
+        
+        assert result is True
+
+    def test_polling_enabled_when_native_background_mode_is_none(self):
+        """Test that polling works normally when native_background_mode is None"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled="all",
+            redis_cache=Mock(),
+            model="gpt-4o",
+            llm_router=None,
+            native_background_mode=None,
+        )
+        
+        assert result is True
+
+    def test_polling_enabled_when_native_background_mode_is_empty_list(self):
+        """Test that polling works normally when native_background_mode is empty list"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled="all",
+            redis_cache=Mock(),
+            model="gpt-4o",
+            llm_router=None,
+            native_background_mode=[],
+        )
+        
+        assert result is True
+
+    def test_native_background_mode_exact_match_required(self):
+        """Test that native_background_mode uses exact model name matching"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        # "o4-mini" should not match "o4-mini-deep-research"
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled="all",
+            redis_cache=Mock(),
+            model="o4-mini",
+            llm_router=None,
+            native_background_mode=["o4-mini-deep-research"],
+        )
+        
+        assert result is True
+
+    def test_native_background_mode_with_provider_prefix_in_request(self):
+        """Test native_background_mode matching when request model has provider prefix"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        # Model in native_background_mode without provider prefix
+        # Request comes in with provider prefix - should not match
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled=["openai"],
+            redis_cache=Mock(),
+            model="openai/o4-mini-deep-research",
+            llm_router=None,
+            native_background_mode=["o4-mini-deep-research"],  # Without prefix
+        )
+        
+        # Should return True because "openai/o4-mini-deep-research" != "o4-mini-deep-research"
+        assert result is True
+
+    def test_native_background_mode_with_router_lookup(self):
+        """Test that native_background_mode works with router-resolved models"""
+        from litellm.proxy.response_polling.polling_handler import should_use_polling_for_request
+        
+        mock_router = Mock()
+        mock_router.model_name_to_deployment_indices = {"deep-research": [0]}
+        mock_router.model_list = [
+            {
+                "model_name": "deep-research",
+                "litellm_params": {"model": "openai/o4-mini-deep-research"}
+            }
+        ]
+        
+        # Model alias "deep-research" is in native_background_mode
+        result = should_use_polling_for_request(
+            background_mode=True,
+            polling_via_cache_enabled=["openai"],
+            redis_cache=Mock(),
+            model="deep-research",
+            llm_router=mock_router,
+            native_background_mode=["deep-research"],
         )
         
         assert result is False

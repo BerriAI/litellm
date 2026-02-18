@@ -13,7 +13,7 @@ from litellm.types.utils import ImageResponse, ImageObject, ImageUsage
 @pytest.mark.parametrize(
     "model_name",
     [
-        "gemini/gemini-2.5-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
         "gemini/gemini-2.0-flash-preview-image-generation",
         "gemini/gemini-3-pro-image-preview",
     ],
@@ -211,4 +211,3 @@ def test_gemini_imagen_models_no_usage_extraction():
         
         # For Imagen models, we don't extract usage from the predictions format
         # This test just ensures we don't crash
-

@@ -21,11 +21,13 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
+    CompletionTokensDetailsWrapper,
     Delta,
     EmbeddingResponse,
     Function,
     HiddenParams,
     ImageResponse,
+    PromptTokensDetailsWrapper,
 )
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.types.utils import (
@@ -304,6 +306,22 @@ class LiteLLMResponseObjectHandler:
                     "text_tokens": 0,
                 }
 
+            # Map Responses API naming to Chat Completions API naming for cost calculator
+            if usage.get("prompt_tokens") is None:
+                usage["prompt_tokens"] = usage.get("input_tokens", 0)
+            if usage.get("completion_tokens") is None:
+                usage["completion_tokens"] = usage.get("output_tokens", 0)
+
+            # Convert dicts to wrapper objects so getattr() works in cost calculation
+            if isinstance(usage.get("input_tokens_details"), dict):
+                usage["prompt_tokens_details"] = PromptTokensDetailsWrapper(
+                    **usage["input_tokens_details"]
+                )
+            if isinstance(usage.get("output_tokens_details"), dict):
+                usage["completion_tokens_details"] = CompletionTokensDetailsWrapper(
+                    **usage["output_tokens_details"]
+                )
+
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)
             return model_response_object
@@ -528,7 +546,11 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
-                    provider_specific_fields = {}
+                    # Preserve provider_specific_fields if already present
+                    # in the response (e.g. from proxy passthrough)
+                    provider_specific_fields = dict(
+                        choice["message"].get("provider_specific_fields", None) or {}
+                    )
                     message_keys = Message.model_fields.keys()
                     for field in choice["message"].keys():
                         if field not in message_keys:

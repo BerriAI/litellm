@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Union
 
 import httpx
@@ -7,13 +8,22 @@ try:
 except Exception:
     version = "0.0.0"
 
-headers = {
-    "User-Agent": f"litellm/{version}",
-}
+def get_default_headers() -> dict:
+    """
+    Get default headers for HTTP requests.
 
+    - Default: `User-Agent: litellm/{version}`
+    - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+    """
+    user_agent = os.environ.get("LITELLM_USER_AGENT")
+    if user_agent is not None:
+        return {"User-Agent": user_agent}
+
+    return {"User-Agent": f"litellm/{version}"}
 
 class HTTPHandler:
     def __init__(self, concurrent_limit=1000):
+        headers = get_default_headers()
         # Create a client with a connection pool
         self.client = httpx.AsyncClient(
             limits=httpx.Limits(

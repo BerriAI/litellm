@@ -19,10 +19,13 @@ import pytest
 
 import litellm
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     ImageResponse,
     ImageObject,
     ImageUsage,
     ImageUsageInputTokensDetails,
+    PromptTokensDetailsWrapper,
+    Usage,
 )
 
 
@@ -200,6 +203,71 @@ class TestGPTImageCostRouting:
         )
 
         assert cost >= 0
+
+
+class TestGPTImage15OutputImageTokens:
+    """
+    Test for GitHub issue #19508:
+    Image usage calculation does not include image tokens in gpt-image-1.5
+
+    gpt-image-1.5 returns output_tokens_details with separate image_tokens and text_tokens,
+    and these must be correctly included in cost calculation.
+    """
+
+    def test_gpt_image_15_output_image_tokens_cost(self):
+        """
+        Test that output image tokens are correctly included in cost calculation.
+
+        This tests the fix for issue #19508 where output_tokens_details.image_tokens
+        were not being included in the cost calculation, causing costs to be
+        underreported (e.g., $0.046 instead of $0.14).
+        """
+        # Simulate gpt-image-1.5 response with output_tokens_details
+        # This is what the API returns and what convert_to_image_response transforms
+        usage = Usage(
+            prompt_tokens=169,
+            completion_tokens=4599,
+            total_tokens=4768,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=169,
+                image_tokens=0,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                text_tokens=439,
+                image_tokens=4160,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="test")],
+        )
+        image_response.usage = usage
+        image_response._hidden_params = {"custom_llm_provider": "openai"}
+
+        cost = litellm.completion_cost(
+            completion_response=image_response,
+            model="gpt-image-1.5",
+            call_type="image_generation",
+            custom_llm_provider="openai",
+        )
+
+        # gpt-image-1.5 pricing:
+        # - input_cost_per_token: 5e-06 ($5/1M for text input)
+        # - output_cost_per_token: 1e-05 ($10/1M for text output)
+        # - output_cost_per_image_token: 3.2e-05 ($32/1M for image output)
+        #
+        # Expected cost:
+        # Input text: 169 * $5/1M = $0.000845
+        # Output text: 439 * $10/1M = $0.00439
+        # Output image: 4160 * $32/1M = $0.13312
+        # Total: $0.138355
+        expected_cost = 169 * 5e-06 + 439 * 1e-05 + 4160 * 3.2e-05
+
+        assert abs(cost - expected_cost) < 1e-6, (
+            f"Expected {expected_cost}, got {cost}. "
+            f"Image tokens may not be included in cost calculation."
+        )
 
 
 class TestCompletionCostIntegration:

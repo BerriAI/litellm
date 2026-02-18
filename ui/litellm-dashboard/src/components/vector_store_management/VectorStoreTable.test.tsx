@@ -130,9 +130,9 @@ describe("VectorStoreTable", () => {
       expect(screen.getByText("Provider")).toBeInTheDocument();
       expect(screen.getByText("Created At")).toBeInTheDocument();
       expect(screen.getByText("Updated At")).toBeInTheDocument();
-      // Check that we have the expected number of header cells (6 data + 1 actions)
+      // Check that we have the expected number of header cells (7 data + 1 actions)
       const headers = screen.getAllByRole("columnheader");
-      expect(headers).toHaveLength(7);
+      expect(headers).toHaveLength(8);
     });
 
     it("should render all vector store rows", () => {
@@ -183,7 +183,7 @@ describe("VectorStoreTable", () => {
     it("should render fallback for missing name", () => {
       renderComponent();
       const fallbackElements = screen.getAllByText("-");
-      expect(fallbackElements.length).toBe(2); // One for missing name, one for missing description
+      expect(fallbackElements.length).toBe(5); // One for missing name, one for missing description, three for missing files (one per store)
     });
 
     it("should wrap name in tooltip", () => {
@@ -203,7 +203,7 @@ describe("VectorStoreTable", () => {
     it("should render fallback for missing description", () => {
       renderComponent();
       const fallbackElements = screen.getAllByText("-");
-      expect(fallbackElements.length).toBe(2); // One for missing name, one for missing description
+      expect(fallbackElements.length).toBe(5); // One for missing name, one for missing description, three for missing files (one per store)
     });
 
     it("should wrap description in tooltip", () => {
@@ -386,7 +386,7 @@ describe("VectorStoreTable", () => {
     it("should span all columns in empty state", () => {
       renderComponent({ data: [] });
       const emptyCell = screen.getByText("No vector stores found").closest("td");
-      expect(emptyCell).toHaveAttribute("colSpan", "7"); // 6 data columns + 1 actions column
+      expect(emptyCell).toHaveAttribute("colSpan", "8"); // 7 data columns + 1 actions column
     });
   });
 
@@ -403,7 +403,7 @@ describe("VectorStoreTable", () => {
 
       renderComponent({ data: minimalData });
       expect(screen.getByText("minimal")).toBeInTheDocument();
-      expect(screen.getAllByText("-")).toHaveLength(2); // Name and description fallbacks
+      expect(screen.getAllByText("-")).toHaveLength(3); // Name, description, and files fallbacks
     });
 
     it("should handle single vector store", () => {

@@ -38,6 +38,11 @@ def test_all_numeric_constants_can_be_overridden():
 
     print("all numeric constants", json.dumps(numeric_constants, indent=4))
 
+    # Constants that use a different env var name than the constant name
+    constant_to_env_var = {
+        "MAX_CALLBACKS": "LITELLM_MAX_CALLBACKS",
+    }
+
     # Verify all numeric constants have environment variable support
     for name, value in numeric_constants:
         # Skip constants that are not meant to be overridden (if any)
@@ -47,8 +52,11 @@ def test_all_numeric_constants_can_be_overridden():
         # Create a test value that's different from the default
         test_value = value + 1 if isinstance(value, int) else value + 0.1
 
+        # Use the env var name that the constants module actually reads
+        env_var_name = constant_to_env_var.get(name, name)
+
         # Set the environment variable
-        with mock.patch.dict(os.environ, {name: str(test_value)}):
+        with mock.patch.dict(os.environ, {env_var_name: str(test_value)}):
             print("overriding", name, "with", test_value)
             importlib.reload(constants)
 

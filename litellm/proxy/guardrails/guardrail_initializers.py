@@ -217,6 +217,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         app_name=getattr(litellm_params, "app_name", None),
         fallback_on_error=getattr(litellm_params, "fallback_on_error", "block"),
         timeout=float(getattr(litellm_params, "timeout", 10.0)),
+        violation_message_template=litellm_params.violation_message_template,
     )
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)
 

@@ -422,7 +422,7 @@ def test_streaming_tool_calls_transformation():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -454,7 +454,7 @@ def test_streaming_tool_calls_transformation():
         delta=mock_delta
     )
     
-    mock_response = ModelResponse(
+    mock_response = ModelResponseStream(
         id="test-streaming",
         choices=[mock_choice],
         created=1234567890,
@@ -493,7 +493,7 @@ def test_streaming_partial_tool_calls_accumulation():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -543,7 +543,7 @@ def test_streaming_partial_tool_calls_accumulation():
             delta=mock_delta
         )
         
-        mock_response = ModelResponse(
+        mock_response = ModelResponseStream(
             id="test-streaming",
             choices=[mock_choice],
             created=1234567890,
@@ -595,7 +595,7 @@ def test_streaming_multiple_partial_tool_calls():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -642,7 +642,7 @@ def test_streaming_multiple_partial_tool_calls():
             delta=mock_delta
         )
         
-        mock_response = ModelResponse(
+        mock_response = ModelResponseStream(
             id="test-streaming",
             choices=[mock_choice],
             created=1234567890,
@@ -1090,8 +1090,8 @@ async def test_google_generate_content_with_openai():
         usage=mock_usage
     )
     
-    # Use AsyncMock for proper async function mocking
-    with unittest.mock.patch("litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
+    # Use AsyncMock for proper async function mocking - patch at the module level where it's imported
+    with unittest.mock.patch("litellm.google_genai.main.litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
         # Set the return value directly on the MagicMock
         mock_completion.return_value = mock_response
         

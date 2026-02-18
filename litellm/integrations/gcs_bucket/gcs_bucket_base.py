@@ -2,6 +2,13 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
+from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
+    should_use_gcs_mock,
+    create_mock_gcs_client,
+    mock_vertex_auth_methods,
+)
+        
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -20,6 +27,12 @@ IAM_AUTH_KEY = "IAM_AUTH"
 
 class GCSBucketBase(CustomBatchLogger):
     def __init__(self, bucket_name: Optional[str] = None, **kwargs) -> None:
+        self.is_mock_mode = should_use_gcs_mock()
+        
+        if self.is_mock_mode:
+            mock_vertex_auth_methods()
+            create_mock_gcs_client()
+        
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )

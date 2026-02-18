@@ -2,8 +2,8 @@ import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 
 import { Button } from "@tremor/react";
-import BulkEditUserModal from "./bulk_edit_user";
-import CreateUser from "./create_user_button";
+import BulkEditUserModal from "./BulkEditUsers";
+import { CreateUserButton } from "./CreateUserButton";
 import EditUserModal from "./edit_user";
 import {
   getPossibleUserRoles,
@@ -286,7 +286,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     },
     handleDelete,
     handleResetPassword,
-    () => {}, // placeholder function, will be overridden in UserDataTable
+    () => { }, // placeholder function, will be overridden in UserDataTable
   );
 
   return (
@@ -301,7 +301,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
             </>
           ) : userID && accessToken ? (
             <>
-              <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
 
               <Button
                 onClick={handleToggleSelectionMode}
@@ -415,7 +415,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       />
 
       <BulkEditUserModal
-        visible={isBulkEditModalVisible}
+        open={isBulkEditModalVisible}
         onCancel={() => setIsBulkEditModalVisible(false)}
         selectedUsers={selectedUsers}
         possibleUIRoles={possibleUIRoles}

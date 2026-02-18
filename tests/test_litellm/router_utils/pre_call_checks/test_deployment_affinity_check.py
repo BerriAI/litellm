@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, patch
@@ -9,6 +10,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import json
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -536,6 +538,111 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
 
     assert len(filtered) == 1
     assert filtered[0]["model_info"]["id"] == "deployment-2"
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unhealthy():
+    """
+    If affinity cache points to a deployment that's no longer healthy, callback should
+    return all healthy deployments so router can pick an available one.
+    """
+
+    user_key = "user-key-unhealthy"
+    stable_model_map_key = "claude-sonnet-4-5@20250929"
+
+    cache = AsyncMock()
+    cache.async_get_cache = AsyncMock(return_value={"model_id": "stale-deployment"})
+
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=123,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+
+    healthy_deployments = [
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    filtered = await callback.async_filter_deployments(
+        model="some-router-model-group",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": user_key}},
+        parent_otel_span=None,
+    )
+
+    assert filtered == healthy_deployments
+
+
+@pytest.mark.asyncio
+async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
+    """
+    After affinity TTL expires, cached pinning should no longer filter deployments.
+    """
+
+    callback = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=1,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+
+    user_key = "ttl-user-key"
+    stable_model_map_key = "claude-sonnet-4-5@20250929"
+    healthy_deployments = [
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "model_info": {"id": "deployment-1"},
+            "metadata": {
+                "user_api_key_hash": user_key,
+                "deployment_model_name": stable_model_map_key,
+            },
+        },
+        call_type=None,
+    )
+
+    pinned = await callback.async_filter_deployments(
+        model="some-router-model-group",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": user_key}},
+        parent_otel_span=None,
+    )
+    assert len(pinned) == 1
+    assert pinned[0]["model_info"]["id"] == "deployment-1"
+
+    await asyncio.sleep(1.2)
+
+    after_ttl_expiry = await callback.async_filter_deployments(
+        model="some-router-model-group",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": user_key}},
+        parent_otel_span=None,
+    )
+    assert after_ttl_expiry == healthy_deployments
 
 
 def test_cache_key_does_not_double_hash_user_api_key_hash():

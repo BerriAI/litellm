@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
@@ -39,6 +39,38 @@ def _sanitize_prometheus_label_name(label: str) -> str:
         sanitized = "_"
 
     return sanitized
+
+
+def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
+    """
+    Sanitize a label value for Prometheus text format compatibility.
+
+    Removes or replaces characters that break the Prometheus exposition format:
+    - U+2028 (Line Separator) and U+2029 (Paragraph Separator) are removed
+    - Carriage returns are removed
+    - Newlines are replaced with spaces
+    - Backslashes and double quotes are escaped per Prometheus spec
+    """
+    if value is None:
+        return None
+
+    # Coerce non-string values (int, bool, etc.) to str before sanitizing
+    if not isinstance(value, str):
+        value = str(value)
+
+    # Remove Unicode line/paragraph separators that break text format
+    value = value.replace("\u2028", "").replace("\u2029", "")
+
+    # Remove carriage returns
+    value = value.replace("\r", "")
+
+    # Replace newlines with spaces
+    value = value.replace("\n", " ")
+
+    # Escape backslashes and double quotes per Prometheus exposition format
+    value = value.replace("\\", "\\\\").replace('"', '\\"')
+
+    return value
 
 
 @dataclass
@@ -150,6 +182,9 @@ class UserAPIKeyLabelNames(Enum):
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
     MODEL_GROUP = "model_group"
+    CLIENT_IP = "client_ip"
+    USER_AGENT = "user_agent"
+    CALLBACK_NAME = "callback_name"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -175,6 +210,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
+    "litellm_remaining_user_budget_metric",
+    "litellm_user_max_budget_metric",
+    "litellm_user_budget_remaining_hours_metric",
     "litellm_deployment_state",
     "litellm_deployment_failure_responses",
     "litellm_deployment_total_requests",
@@ -193,6 +231,12 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
     "litellm_cached_tokens_metric",
+    "litellm_deployment_tpm_limit",
+    "litellm_deployment_rpm_limit",
+    "litellm_remaining_api_key_requests_for_model",
+    "litellm_remaining_api_key_tokens_for_model",
+    "litellm_llm_api_failed_requests_metric",
+    "litellm_callback_logging_failures_metric",
 ]
 
 
@@ -206,6 +250,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
@@ -214,6 +259,10 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -225,6 +274,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -236,6 +286,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
@@ -255,6 +306,9 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.STATUS_CODE.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -269,6 +323,9 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -289,6 +346,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_remaining_requests_metric = [
@@ -298,6 +356,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_remaining_tokens_metric = [
@@ -307,6 +366,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_requests_metric = [
@@ -318,6 +378,9 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_spend_metric = [
@@ -329,6 +392,9 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_input_tokens_metric = [
@@ -341,6 +407,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_total_tokens_metric = [
@@ -353,6 +420,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_output_tokens_metric = [
@@ -365,6 +433,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_deployment_state = [
@@ -373,6 +442,15 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
+
+    litellm_deployment_tpm_limit = [
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_deployment_rpm_limit = litellm_deployment_tpm_limit
 
     litellm_deployment_cooled_down = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
@@ -391,6 +469,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
@@ -421,6 +500,38 @@ class PrometheusMetricLabels:
         litellm_remaining_api_key_budget_metric
     )
 
+    litellm_remaining_user_budget_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_max_budget_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_remaining_api_key_requests_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_remaining_api_key_tokens_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_callback_logging_failures_metric = [
+        UserAPIKeyLabelNames.CALLBACK_NAME.value,
+    ]
+
     # Add deployment metrics
     litellm_deployment_failure_responses = [
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
@@ -434,6 +545,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_deployment_total_requests = [
@@ -446,9 +559,36 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_deployment_success_responses = litellm_deployment_total_requests
+
+    litellm_remaining_api_key_requests_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+    ]
+
+    litellm_remaining_api_key_tokens_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+    ]
+
+    litellm_llm_api_failed_requests_metric = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+    ]
 
     # Buffer monitoring metrics - these typically don't need additional labels
     litellm_pod_lock_manager_size: List[str] = []
@@ -470,6 +610,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_cache_hits_metric = _cache_metric_labels
@@ -561,6 +702,12 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     route: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.ROUTE.value)
+    ] = None
+    client_ip: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.CLIENT_IP.value)
+    ] = None
+    user_agent: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_AGENT.value)
     ] = None
 
 

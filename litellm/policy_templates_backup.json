@@ -1,0 +1,1124 @@
+[
+  {
+    "id": "advanced-au-pii-protection",
+    "title": "Advanced PII Protection (Australia)",
+    "description": "Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
+    "region": "AU",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-purple-500",
+    "iconBg": "bg-purple-50",
+    "guardrails": [
+      "au-pii-tax-identifiers",
+      "au-pii-passports",
+      "international-pii-identifiers",
+      "contact-information-pii",
+      "financial-pii",
+      "credentials-api-keys",
+      "network-infrastructure-pii",
+      "protected-class-information"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "au-pii-tax-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_tfn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_abn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_medicare",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Australian Tax File Numbers, Business Numbers, and Medicare Numbers"
+        }
+      },
+      {
+        "guardrail_name": "au-pii-passports",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_australia",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[PASSPORT_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Australian passport numbers"
+        }
+      },
+      {
+        "guardrail_name": "international-pii-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "us_ssn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "us_ssn_no_dash", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_us", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_uk", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_germany", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_france", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_netherlands", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "nl_bsn_contextual", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_china", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_india", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_japan", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "passport_canada", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cpf", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cpf_unformatted", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_rg", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cnpj", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks international PII identifiers including passports and national IDs"
+        }
+      },
+      {
+        "guardrail_name": "contact-information-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "us_phone", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_phone_landline", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_phone_mobile", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "street_address", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "br_cep", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks contact information including emails, phone numbers, and addresses"
+        }
+      },
+      {
+        "guardrail_name": "financial-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "amex", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "discover", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks financial information including credit cards and bank account numbers"
+        }
+      },
+      {
+        "guardrail_name": "credentials-api-keys",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Blocks requests containing API keys and credentials (AWS, GitHub, Slack)"
+        }
+      },
+      {
+        "guardrail_name": "network-infrastructure-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "ipv4", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "ipv6", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[INTERNAL_IP_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks IP addresses in requests"
+        }
+      },
+      {
+        "guardrail_name": "protected-class-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "gender_sexual_orientation", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "race_ethnicity_national_origin", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "religion", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "age_discrimination", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "disability", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "marital_family_status", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "military_status", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "public_assistance", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[PROTECTED_CLASS_INFO_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks protected class information for HR compliance and anti-discrimination"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "advanced-pii-protection-australia",
+      "description": "Comprehensive PII detection and masking policy for Australia. Protects Australian-specific identifiers, international employee data, financial information, credentials, protected class information, and industry-specific sensitive data.",
+      "guardrails_add": [
+        "au-pii-tax-identifiers",
+        "au-pii-passports",
+        "international-pii-identifiers",
+        "contact-information-pii",
+        "financial-pii",
+        "credentials-api-keys",
+        "network-infrastructure-pii",
+        "protected-class-information"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "baseline-pii-protection",
+    "title": "Baseline PII Protection",
+    "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only. Suitable for non-sensitive internal use.",
+    "region": "Global",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-blue-500",
+    "iconBg": "bg-blue-50",
+    "guardrails": [
+      "au-pii-tax-identifiers",
+      "credentials-api-keys",
+      "financial-pii"
+    ],
+    "complexity": "Low",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "au-pii-tax-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "au_tfn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "au_abn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "au_medicare", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Masks Australian Tax File Numbers, Business Numbers, and Medicare Numbers"}
+      },
+      {
+        "guardrail_name": "credentials-api-keys",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Blocks requests containing API keys and credentials (AWS, GitHub, Slack)"}
+      },
+      {
+        "guardrail_name": "financial-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "amex", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "discover", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {"description": "Masks financial information including credit cards and bank account numbers"}
+      }
+    ],
+    "templateData": {
+      "policy_name": "baseline-pii-protection",
+      "description": "Baseline PII protection for internal tools and testing. Focuses on credentials and high-risk identifiers only.",
+      "guardrails_add": [
+        "au-pii-tax-identifiers",
+        "credentials-api-keys",
+        "financial-pii"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "nsfw-content-filter-australia",
+    "title": "NSFW Content Filter (Australia)",
+    "description": "Blocks profanity, sexual content, NSFW requests, self-harm content, and child safety violations using English and Australian-specific slang. Protects against inappropriate content including sexual solicitation, explicit content, Australian profanity, self-harm, and content involving minors.",
+    "region": "AU",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "nsfw-content-filter-english",
+      "nsfw-content-filter-australian",
+      "nsfw-self-harm-filter",
+      "nsfw-child-safety-filter",
+      "nsfw-racial-bias-filter"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "nsfw-content-filter-english",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks profanity, sexual content, slurs, and NSFW terms in English"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-content-filter-australian",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_au",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks Australian-specific slang and profanity (root, perv, bogan, wanker, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-self-harm-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_self_harm",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content related to self-harm, suicide, and eating disorders"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-child-safety-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_child_safety",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks inappropriate content involving minors using identifier + block word combinations"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-racial-bias-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "bias_racial",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks racial and ethnic discrimination, hate speech, and supremacist content"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "nsfw-content-filter-australia",
+      "description": "NSFW content filter for Australia. Blocks profanity, sexual content, inappropriate requests, self-harm content, child safety violations, and racial bias in English and Australian slang.",
+      "guardrails_add": [
+        "nsfw-content-filter-english",
+        "nsfw-content-filter-australian",
+        "nsfw-self-harm-filter",
+        "nsfw-child-safety-filter",
+        "nsfw-racial-bias-filter"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "nsfw-content-filter-basic",
+    "title": "NSFW Content Filter (Basic)",
+    "description": "Basic NSFW content filtering for English only. Blocks profanity, sexual content, slurs, solicitation, explicit requests, self-harm content, and child safety violations. Suitable for most applications requiring content moderation.",
+    "region": "Global",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-orange-500",
+    "iconBg": "bg-orange-50",
+    "guardrails": [
+      "nsfw-content-filter-english-only",
+      "nsfw-self-harm-filter-basic",
+      "nsfw-child-safety-filter-basic",
+      "nsfw-racial-bias-filter-basic"
+    ],
+    "complexity": "Low",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "nsfw-content-filter-english-only",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks profanity, sexual content, slurs, and NSFW terms. Includes 485+ keywords covering explicit content, solicitation, sexual behavior, and exploitation."
+        }
+      },
+      {
+        "guardrail_name": "nsfw-self-harm-filter-basic",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_self_harm",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content related to self-harm, suicide, and eating disorders"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-child-safety-filter-basic",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_child_safety",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks inappropriate content involving minors using identifier + block word combinations"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-racial-bias-filter-basic",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "bias_racial",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks racial and ethnic discrimination, hate speech, and supremacist content"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "nsfw-content-filter-basic",
+      "description": "Basic NSFW content filter. Blocks profanity, sexual content, inappropriate requests, self-harm content, child safety violations, and racial bias in English.",
+      "guardrails_add": [
+        "nsfw-content-filter-english-only",
+        "nsfw-self-harm-filter-basic",
+        "nsfw-child-safety-filter-basic",
+        "nsfw-racial-bias-filter-basic"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "nsfw-content-filter-all-regions",
+    "title": "NSFW Content Filter (All Regions)",
+    "description": "Comprehensive multi-language NSFW content filtering. Blocks profanity, sexual content, inappropriate requests, self-harm content, and child safety violations in English, Spanish, French, German, and Australian. Best for global applications.",
+    "region": "Global",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-purple-500",
+    "iconBg": "bg-purple-50",
+    "guardrails": [
+      "nsfw-filter-english",
+      "nsfw-filter-spanish",
+      "nsfw-filter-french",
+      "nsfw-filter-german",
+      "nsfw-filter-australian",
+      "nsfw-self-harm-filter-global",
+      "nsfw-child-safety-filter-global",
+      "nsfw-racial-bias-filter-global"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "nsfw-filter-english",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "English profanity, sexual content, slurs, and NSFW terms (485+ keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-spanish",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_es",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Spanish profanity and offensive terms (68 keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-french",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_fr",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "French profanity and offensive terms (91 keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-german",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_de",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "German profanity and offensive terms (65 keywords)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-filter-australian",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harm_toxic_abuse_au",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Australian slang and profanity (32 keywords: root, perv, bogan, wanker, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-self-harm-filter-global",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_self_harm",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content related to self-harm, suicide, and eating disorders"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-child-safety-filter-global",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "harmful_child_safety",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks inappropriate content involving minors using identifier + block word combinations"
+        }
+      },
+      {
+        "guardrail_name": "nsfw-racial-bias-filter-global",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "bias_racial",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks racial and ethnic discrimination, hate speech, and supremacist content"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "nsfw-content-filter-all-regions",
+      "description": "Comprehensive multi-language NSFW content filter. Blocks profanity, inappropriate content, self-harm, child safety violations, and racial bias in English, Spanish, French, German, and Australian. Total coverage: 741+ keywords across all languages plus self-harm, child safety, and racial bias protection.",
+      "guardrails_add": [
+        "nsfw-filter-english",
+        "nsfw-filter-spanish",
+        "nsfw-filter-french",
+        "nsfw-filter-german",
+        "nsfw-filter-australian",
+        "nsfw-self-harm-filter-global",
+        "nsfw-child-safety-filter-global",
+        "nsfw-racial-bias-filter-global"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "gdpr-eu-pii-protection",
+    "title": "GDPR Art. 32 — EU PII Protection",
+    "description": "GDPR Article 32 compliance for EU personal data protection. Masks French national IDs (NIR/INSEE), EU IBANs, French phone numbers, EU VAT numbers, EU passport numbers, and email addresses. Suitable for applications processing EU citizen data requiring GDPR compliance.",
+    "region": "EU",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-indigo-500",
+    "iconBg": "bg-indigo-50",
+    "guardrails": [
+      "gdpr-eu-national-identifiers",
+      "gdpr-eu-financial-data",
+      "gdpr-eu-contact-information",
+      "gdpr-eu-business-identifiers"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "gdpr-eu-national-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "fr_nir", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "eu_passport_generic", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU national identification numbers including French NIR/INSEE and EU passport numbers for GDPR compliance"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-financial-data",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "eu_iban_enhanced", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[IBAN_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU bank account numbers (IBANs) to protect financial data under GDPR Article 32"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-contact-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "fr_phone", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "fr_postal_code", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks contact information including emails, French phone numbers, and postal codes for EU data subjects"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-business-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "eu_vat", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[VAT_NUMBER_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU VAT identification numbers to protect business entity information under GDPR"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "gdpr-eu-pii-protection",
+      "description": "GDPR Article 32 compliance policy for EU personal data protection. Masks French national IDs, EU IBANs, phone numbers, VAT numbers, passports, and contact information.",
+      "guardrails_add": [
+        "gdpr-eu-national-identifiers",
+        "gdpr-eu-financial-data",
+        "gdpr-eu-contact-information",
+        "gdpr-eu-business-identifiers"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "eu-ai-act-article5",
+    "title": "EU AI Act Article 5 — Prohibited Practices",
+    "description": "Comprehensive EU AI Act Article 5 compliance covering all prohibited AI practices. Includes 5 dedicated sub-guardrails per language (English + French) for: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition in workplace/education (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Uses conditional matching (identifier word + context word).",
+    "region": "EU",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "eu-ai-act-art5-manipulation",
+      "eu-ai-act-art5-vulnerability",
+      "eu-ai-act-art5-social-scoring",
+      "eu-ai-act-art5-emotion-recognition",
+      "eu-ai-act-art5-biometric-profiling",
+      "eu-ai-act-art5-manipulation-fr",
+      "eu-ai-act-art5-vulnerability-fr",
+      "eu-ai-act-art5-social-scoring-fr",
+      "eu-ai-act-art5-emotion-recognition-fr",
+      "eu-ai-act-art5-biometric-profiling-fr"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "eu-ai-act-art5-manipulation",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_manipulation",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(a) — Blocks subliminal manipulation, deceptive AI techniques, dark patterns, and covert behavioral influence"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-vulnerability",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_vulnerability",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(b) — Blocks AI systems that exploit vulnerabilities of children, elderly, disabled persons, or economically disadvantaged groups"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-social-scoring",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_social_scoring",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(c) — Blocks social credit systems, citizen scoring, trustworthiness classification, and behavioral reputation scoring"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-emotion-recognition",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_emotion_recognition",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(f) — Blocks emotion recognition, mood tracking, and sentiment analysis in workplace and educational settings"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-biometric-profiling",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_biometric_profiling",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(d)(g)(h) — Blocks biometric categorization by race/ethnicity/religion/politics, facial recognition database scraping, and predictive policing"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-manipulation-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_manipulation_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(a) FR — Bloque la manipulation subliminale, les techniques d'IA trompeuses et les dark patterns (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-vulnerability-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_vulnerability_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(b) FR — Bloque l'exploitation des vulnérabilités des enfants, personnes âgées et handicapées (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-social-scoring-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_social_scoring_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(c) FR — Bloque les systèmes de crédit social, notation des citoyens et classification de fiabilité (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-emotion-recognition-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_emotion_recognition_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(f) FR — Bloque la reconnaissance des émotions et l'analyse des sentiments au travail et dans l'éducation (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-biometric-profiling-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_biometric_profiling_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(d)(g)(h) FR — Bloque la catégorisation biométrique, les bases de reconnaissance faciale et le profilage prédictif (français)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "eu-ai-act-article5",
+      "description": "Comprehensive EU AI Act Article 5 compliance policy. Covers all prohibited AI practices across 5 sub-guardrails per language: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Includes English and French detection.",
+      "guardrails_add": [
+        "eu-ai-act-art5-manipulation",
+        "eu-ai-act-art5-vulnerability",
+        "eu-ai-act-art5-social-scoring",
+        "eu-ai-act-art5-emotion-recognition",
+        "eu-ai-act-art5-biometric-profiling",
+        "eu-ai-act-art5-manipulation-fr",
+        "eu-ai-act-art5-vulnerability-fr",
+        "eu-ai-act-art5-social-scoring-fr",
+        "eu-ai-act-art5-emotion-recognition-fr",
+        "eu-ai-act-art5-biometric-profiling-fr"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "prompt-injection-detection",
+    "title": "Prompt Injection Detection",
+    "description": "Detects and blocks prompt injection attacks including SQL injection, malicious code injection, system prompt extraction, jailbreak attempts, and data exfiltration. Applies pre-call screening to block attacks before they reach the LLM.",
+    "region": "Global",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "prompt-injection-sql",
+      "prompt-injection-malicious-code",
+      "prompt-injection-system-prompt",
+      "prompt-injection-jailbreak",
+      "prompt-injection-data-exfiltration"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "prompt-injection-sql",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_sql",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks SQL injection attempts in prompts (DROP TABLE, UNION SELECT, OR 1=1, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-malicious-code",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_malicious_code",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks malicious code injection attempts (shell commands, reverse shells, script injection, encoded payloads)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-system-prompt",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_system_prompt",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks system prompt extraction and instruction override attempts (ignore previous instructions, reveal your prompt, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-jailbreak",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_jailbreak",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks jailbreak attempts (DAN mode, developer mode, safety bypass, token smuggling)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-data-exfiltration",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_data_exfiltration",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks data exfiltration attempts (extract training data, dump database, steal credentials, etc.)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "prompt-injection-detection",
+      "description": "Prompt injection detection policy. Blocks SQL injection, malicious code injection, system prompt extraction, jailbreak attempts, and data exfiltration in prompts before they reach the LLM.",
+      "guardrails_add": [
+        "prompt-injection-sql",
+        "prompt-injection-malicious-code",
+        "prompt-injection-system-prompt",
+        "prompt-injection-jailbreak",
+        "prompt-injection-data-exfiltration"
+      ],
+      "guardrails_remove": []
+    }
+  }
+]

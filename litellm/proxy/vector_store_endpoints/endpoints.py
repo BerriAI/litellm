@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -18,13 +18,54 @@ router = APIRouter()
 ########################################################
 
 
+def _check_vector_store_access(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """
+    Check if the user has access to the vector store based on team membership.
+    
+    Args:
+        vector_store: The vector store to check access for
+        user_api_key_dict: User API key authentication info
+        
+    Returns:
+        True if user has access, False otherwise
+        
+    Access rules:
+    - If vector store has no team_id, it's accessible to all (legacy behavior)
+    - If user's team_id matches the vector store's team_id, access is granted
+    - Otherwise, access is denied
+    """
+    vector_store_team_id = vector_store.get("team_id")
+    
+    # If vector store has no team_id, it's accessible to all (legacy behavior)
+    if vector_store_team_id is None:
+        return True
+    
+    # Check if user's team matches the vector store's team
+    user_team_id = user_api_key_dict.team_id
+    if user_team_id == vector_store_team_id:
+        return True
+    
+    return False
+
+
 def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> Dict:
     """
     Update the request data with the litellm managed vector store registry.
-
+    
+    Args:
+        data: Request data to update
+        vector_store_id: ID of the vector store
+        user_api_key_dict: User API key authentication info for access control
+        
+    Raises:
+        HTTPException: If user doesn't have access to the vector store
     """
     if litellm.vector_store_registry is not None:
         vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
@@ -33,6 +74,14 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
             )
         )
         if vector_store_to_run is not None:
+            # Check access control if user_api_key_dict is provided
+            if user_api_key_dict is not None:
+                if not _check_vector_store_access(vector_store_to_run, user_api_key_dict):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Access denied: You do not have permission to access this vector store",
+                    )
+            
             if "custom_llm_provider" in vector_store_to_run:
                 data["custom_llm_provider"] = vector_store_to_run.get(
                     "custom_llm_provider"
@@ -87,10 +136,17 @@ async def vector_store_search(
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
 
+    # Check for legacy vector store registry (non-managed vector stores)
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
+    # The managed_vector_stores pre-call hook will handle:
+    # 1. Decoding managed vector store IDs
+    # 2. Extracting model and provider resource ID
+    # 3. Setting up proper routing
+    # 4. Authentication checks
+    
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -132,6 +188,14 @@ async def vector_store_create(
 
     API Reference:
     https://platform.openai.com/docs/api-reference/vector-stores/create
+    
+    Supports target_model_names parameter for creating vector stores across multiple models:
+    ```json
+    {
+        "name": "my-vector-store",
+        "target_model_names": "gpt-4,gemini-2.0"
+    }
+    ```
     """
     from litellm.proxy.proxy_server import (
         _read_request_body,
@@ -149,6 +213,47 @@ async def vector_store_create(
     )
 
     data = await _read_request_body(request=request)
+    
+    # Check for target_model_names parameter
+    target_model_names = data.pop("target_model_names", None)
+    
+    if target_model_names:
+        # Use managed vector stores for multi-model support
+        if isinstance(target_model_names, str):
+            target_model_names_list = [m.strip() for m in target_model_names.split(",")]
+        elif isinstance(target_model_names, list):
+            target_model_names_list = target_model_names
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="target_model_names must be a comma-separated string or list of model names",
+            )
+        
+        # Get managed vector stores hook
+        managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
+        if managed_vector_stores is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Managed vector stores not configured. Please ensure the proxy is initialized with database support.",
+            )
+        
+        if llm_router is None:
+            raise HTTPException(
+                status_code=500,
+                detail="LLM Router not initialized. Ensure models are added to proxy.",
+            )
+        
+        # Create vector store across multiple models
+        response = await managed_vector_stores.acreate_vector_store(
+            create_request=data,
+            llm_router=llm_router,
+            target_model_names_list=target_model_names_list,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            user_api_key_dict=user_api_key_dict,
+        )
+        
+        return response
+    
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(

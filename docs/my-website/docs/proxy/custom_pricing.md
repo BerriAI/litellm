@@ -173,6 +173,28 @@ model_list:
       base_model: azure/gpt-4-1106-preview
 ```
 
+### OpenAI Models with Dated Versions
+
+`base_model` is also useful when OpenAI returns a dated model name in the response that differs from your configured model name.
+
+**Example**: You configure custom pricing for `gpt-4o-mini-audio-preview`, but OpenAI returns `gpt-4o-mini-audio-preview-2024-12-17` in the response. Since LiteLLM uses the response model name for pricing lookup, your custom pricing won't be applied.
+
+**Solution** ✅: Set `base_model` to the key you want LiteLLM to use for pricing lookup.
+
+```yaml
+model_list:
+  - model_name: my-audio-model
+    litellm_params:
+      model: openai/gpt-4o-mini-audio-preview
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      base_model: gpt-4o-mini-audio-preview  # 👈 Used for pricing lookup
+      input_cost_per_token: 0.0000006
+      output_cost_per_token: 0.0000024
+      input_cost_per_audio_token: 0.00001
+      output_cost_per_audio_token: 0.00002
+```
+
 
 ## Debugging 
 

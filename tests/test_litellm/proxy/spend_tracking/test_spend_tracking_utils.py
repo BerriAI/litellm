@@ -21,8 +21,10 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
     _get_response_for_spend_logs_payload,
+    _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
+    _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
 )
 from litellm.types.utils import (
@@ -910,4 +912,122 @@ def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_e
     # perform_redaction returns {"text": "redacted-by-litellm"}
     parsed_response = json.loads(response_result)
     assert parsed_response == {"text": "redacted-by-litellm"}
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_string(
+    mock_get_secret_bool,
+):
+    """
+    Test that _should_store_prompts_and_responses_in_spend_logs handles
+    case-insensitive string values for store_prompts_in_spend_logs in general_settings.
+    """
+    # Test case-insensitive string "true" variations
+    for true_value in ["true", "TRUE", "True", "TrUe"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": true_value}):
+            mock_get_secret_bool.return_value = False  # Ensure env var is False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True for '{true_value}', got {result}"
+    
+    # Test boolean True
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}):
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, f"Expected True for boolean True, got {result}"
+    
+    # Test that non-true values fall back to environment variable
+    for false_value in [False, None, "false", "FALSE", "False", "anything"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": false_value}):
+            # When env var is True, should return True
+            mock_get_secret_bool.return_value = True
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
+            
+            # When env var is False, should return False
+            mock_get_secret_bool.return_value = False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
+    
+    # Test when general_settings doesn't have the key at all
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        mock_get_secret_bool.return_value = True
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, "Expected True (from env var) when key missing, got False"
+        
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is False, "Expected False (from env var) when key missing, got True"
+
+
+def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
+    """
+    When standard_logging_payload is None (e.g. guardrail blocks before LLM call),
+    guardrail_information should fall back to reading from metadata's
+    standard_logging_guardrail_information field.
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_provider": "litellm",
+            "guardrail_mode": "pre_call",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": "Content blocked",
+        }
+    ]
+    metadata = {
+        "user_api_key": "test-key",
+        "standard_logging_guardrail_information": guardrail_info,
+    }
+
+    result = _get_spend_logs_metadata(
+        metadata=metadata,
+        guardrail_information=None,
+    )
+    # When guardrail_information param is None, should NOT fall back
+    # (the caller is responsible for passing it)
+    assert result["guardrail_information"] is None
+
+
+def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
+    """
+    When a guardrail blocks a request before the LLM call, the standard_logging_object
+    is not set on request_data. In this case, get_logging_payload should still include
+    guardrail_information from the metadata.
+
+    This is the bug fix for: guardrail failures not showing GuardrailViewer in the UI.
+    """
+    guardrail_info = [
+        {
+            "guardrail_name": "content_filter",
+            "guardrail_provider": "litellm",
+            "guardrail_mode": "pre_call",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": "Content blocked",
+        }
+    ]
+    # Simulate request_data as it looks when a guardrail blocks before LLM call
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "standard_logging_guardrail_information": guardrail_info,
+            },
+            "proxy_server_request": {},
+        },
+        # No "standard_logging_object" key - this is the failure case
+    }
+
+    with patch("litellm.proxy.proxy_server.master_key", "sk-master"):
+        with patch("litellm.proxy.proxy_server.general_settings", {}):
+            payload = get_logging_payload(
+                kwargs=kwargs,
+                response_obj={},
+                start_time=datetime.datetime.now(tz=timezone.utc),
+                end_time=datetime.datetime.now(tz=timezone.utc),
+            )
+
+    metadata_result = json.loads(payload["metadata"])
+    assert metadata_result["guardrail_information"] == guardrail_info
 

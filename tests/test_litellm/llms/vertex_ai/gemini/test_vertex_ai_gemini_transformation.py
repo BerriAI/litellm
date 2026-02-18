@@ -7,6 +7,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     check_if_part_exists_in_parts,
 )
 from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.utils import Message
 
 
 def test_check_if_part_exists_in_parts():
@@ -735,13 +736,14 @@ def test_file_data_field_order():
     Related issue: Gemini API returns 400 INVALID_ARGUMENT when fields are in wrong order.
     """
     import json
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
-    
+
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
     # Test with HTTPS URL and explicit format (audio file)
     file_url = "https://generativelanguage.googleapis.com/v1beta/files/test123"
     format = "audio/mpeg"
     
-    result = _process_gemini_image(image_url=file_url, format=format)
+    result = _process_gemini_media(image_url=file_url, format=format)
     
     # Verify the result has file_data
     assert "file_data" in result
@@ -770,12 +772,13 @@ def test_file_data_field_order():
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
     import json
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
-    
+
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
     # Test with GCS URL
     gcs_url = "gs://bucket/audio.mp3"
     
-    result = _process_gemini_image(image_url=gcs_url)
+    result = _process_gemini_media(image_url=gcs_url)
     
     # Verify the result has file_data
     assert "file_data" in result
@@ -802,11 +805,14 @@ def test_extract_file_data_with_path_object():
     Related issue: Files uploaded with wrong MIME type cause Gemini API to reject
     requests where the specified format doesn't match the uploaded file's MIME type.
     """
-    from pathlib import Path
-    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-    import tempfile
     import os
-    
+    import tempfile
+    from pathlib import Path
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        extract_file_data,
+    )
+
     # Create a temporary MP3 file
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp.write(b"fake mp3 content")
@@ -835,10 +841,13 @@ def test_extract_file_data_with_path_object():
 
 def test_extract_file_data_with_string_path():
     """Test that filename is correctly extracted from string paths."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-    import tempfile
     import os
-    
+    import tempfile
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        extract_file_data,
+    )
+
     # Create a temporary WAV file
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(b"fake wav content")
@@ -866,8 +875,10 @@ def test_extract_file_data_with_string_path():
 
 def test_extract_file_data_with_tuple_format():
     """Test that tuple format (with explicit content_type) still works correctly."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-    
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        extract_file_data,
+    )
+
     # Test with tuple format: (filename, content, content_type)
     filename = "test_audio.mp3"
     content = b"test audio content"
@@ -883,10 +894,13 @@ def test_extract_file_data_with_tuple_format():
 
 def test_extract_file_data_fallback_to_octet_stream():
     """Test that unknown file types fall back to application/octet-stream."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-    import tempfile
     import os
-    
+    import tempfile
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        extract_file_data,
+    )
+
     # Create a temporary file with unknown extension
     with tempfile.NamedTemporaryFile(suffix=".xyz123", delete=False) as tmp:
         tmp.write(b"unknown content")
@@ -903,7 +917,410 @@ def test_extract_file_data_fallback_to_octet_stream():
         # Verify MIME type falls back to octet-stream
         assert extracted["content_type"] == "application/octet-stream", \
             f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
-        
+
     finally:
         # Clean up temporary file
         os.unlink(tmp_path)
+
+
+def test_convert_tool_response_with_pdf_file():
+    """Test tool response with PDF file content using file_data field."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with file
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_pdf_test",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"status": "success", "pages": 1}'
+            },
+            {
+                "type": "file",
+                "file_data": file_data_uri
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_pdf_test",
+                "function": {
+                    "name": "analyze_document",
+                    "arguments": '{"path": "/tmp/doc.pdf"}'
+                }
+            }
+        ]
+    }
+
+    # Convert tool response (returns list when file is present)
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results - should be a list with 2 parts (function_response + inline_data)
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find function_response part and inline_data part
+    function_response_part = None
+    inline_data_part = None
+    for part in result:
+        if "function_response" in part:
+            function_response_part = part
+        elif "inline_data" in part:
+            inline_data_part = part
+
+    # Check function_response exists
+    assert function_response_part is not None, "Missing function_response part"
+    function_response = function_response_part["function_response"]
+    assert function_response["name"] == "analyze_document"
+    assert "response" in function_response
+    # Verify JSON response is parsed correctly
+    assert "status" in function_response["response"]
+    assert function_response["response"]["status"] == "success"
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "application/pdf"
+    assert inline_data["data"] == test_pdf_base64
+
+
+def test_convert_tool_response_with_input_file_type():
+    """Test tool response with input_file content type (Responses API format)."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with input_file type
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_input_file_test",
+        "content": [
+            {
+                "type": "input_file",
+                "file_data": file_data_uri
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_input_file_test",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+
+    # Convert tool response
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find inline_data part
+    inline_data_part = None
+    for part in result:
+        if "inline_data" in part:
+            inline_data_part = part
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    assert inline_data_part["inline_data"]["mime_type"] == "application/pdf"
+
+
+def test_convert_tool_response_with_nested_file_object():
+    """Test tool response with file content using nested file object format."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with nested file object (OpenAI Agents SDK format)
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_nested_test",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": file_data_uri
+                }
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_nested_test",
+                "function": {
+                    "name": "process_document",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+
+    # Convert tool response
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results - should be a list with 2 parts
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find inline_data part
+    inline_data_part = None
+    for part in result:
+        if "inline_data" in part:
+            inline_data_part = part
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "application/pdf"
+    assert inline_data["data"] == test_pdf_base64
+
+def test_assistant_message_with_images_field():
+    """
+    Test that assistant messages with images field are properly converted to Gemini format.
+    
+    This handles the case where an assistant message contains generated images in the
+    `images` field (e.g., from image generation models like gemini-2.5-flash-image).
+    The images should be converted to inline_data parts in the Gemini format.
+    """
+    # Create a small test image (1x1 red pixel PNG)
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    image_data_uri = f"data:image/png;base64,{test_image_base64}"
+    
+    # Create messages with assistant message containing images field
+    messages = [
+        {
+            "role": "user",
+            "content": "Generate an image of a banana wearing a costume that says LiteLLM"
+        },
+        {
+            "role": "assistant",
+            "content": "Here's your banana in a LiteLLM costume!",
+            "images": [
+                {
+                    "image_url": {
+                        "url": image_data_uri,
+                        "detail": "auto"
+                    },
+                    "index": 0,
+                    "type": "image_url"
+                }
+            ]
+        }
+    ]
+    
+    # Convert messages to Gemini format
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Verify structure
+    assert len(contents) == 2, f"Expected 2 content blocks, got {len(contents)}"
+    
+    # Verify user message
+    assert contents[0]["role"] == "user"
+    assert len(contents[0]["parts"]) == 1
+    assert contents[0]["parts"][0]["text"] == "Generate an image of a banana wearing a costume that says LiteLLM"
+    
+    # Verify assistant message
+    assert contents[1]["role"] == "model"
+    assert len(contents[1]["parts"]) == 2, f"Expected 2 parts (text + image), got {len(contents[1]['parts'])}"
+    
+    # Find text part and inline_data part
+    text_part = None
+    inline_data_part = None
+    for part in contents[1]["parts"]:
+        if "text" in part:
+            text_part = part
+        elif "inline_data" in part:
+            inline_data_part = part
+    
+    # Verify text part
+    assert text_part is not None, "Missing text part in assistant message"
+    assert text_part["text"] == "Here's your banana in a LiteLLM costume!"
+    
+    # Verify inline_data part (image)
+    assert inline_data_part is not None, "Missing inline_data part in assistant message"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "image/png"
+    assert inline_data["data"] == test_image_base64
+
+
+def test_assistant_message_with_multiple_images():
+    """Test that assistant messages with multiple images are properly converted."""
+    # Create two test images
+    test_image1_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    test_image2_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    image1_data_uri = f"data:image/png;base64,{test_image1_base64}"
+    image2_data_uri = f"data:image/jpeg;base64,{test_image2_base64}"
+    
+    messages = [
+        {
+            "role": "user",
+            "content": "Generate two images"
+        },
+        {
+            "role": "assistant",
+            "content": "Here are your images:",
+            "images": [
+                {
+                    "image_url": {
+                        "url": image1_data_uri,
+                        "detail": "auto"
+                    },
+                    "index": 0,
+                    "type": "image_url"
+                },
+                {
+                    "image_url": {
+                        "url": image2_data_uri,
+                        "detail": "high"
+                    },
+                    "index": 1,
+                    "type": "image_url"
+                }
+            ]
+        }
+    ]
+    
+    # Convert messages to Gemini format
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Verify assistant message has 3 parts (1 text + 2 images)
+    assert contents[1]["role"] == "model"
+    assert len(contents[1]["parts"]) == 3, f"Expected 3 parts (text + 2 images), got {len(contents[1]['parts'])}"
+    
+    # Count inline_data parts
+    inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
+    assert len(inline_data_parts) == 2, f"Expected 2 inline_data parts, got {len(inline_data_parts)}"
+    
+    # Verify first image
+    assert inline_data_parts[0]["inline_data"]["mime_type"] == "image/png"
+    assert inline_data_parts[0]["inline_data"]["data"] == test_image1_base64
+    
+    # Verify second image
+    assert inline_data_parts[1]["inline_data"]["mime_type"] == "image/jpeg"
+    assert inline_data_parts[1]["inline_data"]["data"] == test_image2_base64
+
+
+def test_assistant_message_with_images_using_message_object():
+    """Test that Message objects with images field are properly converted."""
+    # Create a small test image
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    image_data_uri = f"data:image/png;base64,{test_image_base64}"
+    
+    # Create messages using Message object (as returned by LiteLLM)
+    user_message = {
+        "role": "user",
+        "content": "Generate an image"
+    }
+    
+    assistant_message = Message(
+        content="Here's your image!",
+        role="assistant",
+        tool_calls=None,
+        function_call=None,
+        images=[
+            {
+                "image_url": {
+                    "url": image_data_uri,
+                    "detail": "auto"
+                },
+                "index": 0,
+                "type": "image_url"
+            }
+        ]
+    )
+    
+    messages = [user_message, assistant_message]
+    
+    # Convert messages to Gemini format
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Verify assistant message has both text and image
+    assert contents[1]["role"] == "model"
+    assert len(contents[1]["parts"]) == 2
+    
+    # Verify image was converted
+    inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
+    assert len(inline_data_parts) == 1
+    assert inline_data_parts[0]["inline_data"]["mime_type"] == "image/png"
+    assert inline_data_parts[0]["inline_data"]["data"] == test_image_base64
+
+
+def test_assistant_message_with_images_in_conversation_history():
+    """
+    Test multi-turn conversation where assistant message with images is in history.
+    
+    This simulates the real use case where:
+    1. User asks for image generation
+    2. Assistant generates image (with images field)
+    3. User asks follow-up question about the image
+    """
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    image_data_uri = f"data:image/png;base64,{test_image_base64}"
+    
+    messages = [
+        {
+            "role": "user",
+            "content": "Generate an image of a cat"
+        },
+        {
+            "role": "assistant",
+            "content": "Here's a cat image:",
+            "images": [
+                {
+                    "image_url": {
+                        "url": image_data_uri,
+                        "detail": "auto"
+                    },
+                    "index": 0,
+                    "type": "image_url"
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": "Can you make it more colorful?"
+        }
+    ]
+    
+    # Convert messages to Gemini format
+    contents = _gemini_convert_messages_with_history(messages=messages)
+    
+    # Verify structure: user -> model (with image) -> user
+    assert len(contents) == 3
+    assert contents[0]["role"] == "user"
+    assert contents[1]["role"] == "model"
+    assert contents[2]["role"] == "user"
+    
+    # Verify assistant message has image in history
+    inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
+    assert len(inline_data_parts) == 1
+    assert inline_data_parts[0]["inline_data"]["mime_type"] == "image/png"

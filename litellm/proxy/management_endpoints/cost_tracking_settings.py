@@ -10,7 +10,7 @@ PATCH /config/cost_margin_config - Update cost margin configuration
 POST /cost/estimate - Estimate cost for a given model and token counts
 """
 
-from typing import Dict, Union
+from typing import Dict, Optional, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -27,6 +27,52 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import LlmProvidersSet
 
 router = APIRouter()
+
+
+def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
+    """
+    Resolve a model name (which may be a router alias/model_group) to the
+    underlying litellm model name for cost lookup.
+
+    Args:
+        model: The model name from the request (could be a router alias like 'e-model-router'
+               or an actual model name like 'azure_ai/gpt-4')
+
+    Returns:
+        Tuple of (resolved_model_name, custom_llm_provider)
+        - resolved_model_name: The actual model name to use for cost lookup
+        - custom_llm_provider: The provider if resolved from router, None otherwise
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    custom_llm_provider: Optional[str] = None
+
+    # Try to resolve from router if available
+    if llm_router is not None:
+        try:
+            # Get deployments for this model name (handles aliases, wildcards, etc.)
+            deployments = llm_router.get_model_list(model_name=model)
+
+            if deployments and len(deployments) > 0:
+                # Get the first deployment's litellm model
+                first_deployment = deployments[0]
+                litellm_params = first_deployment.get("litellm_params", {})
+                resolved_model = litellm_params.get("model")
+
+                if resolved_model:
+                    verbose_proxy_logger.debug(
+                        f"Resolved model '{model}' to '{resolved_model}' from router"
+                    )
+                    # Extract custom_llm_provider if present
+                    custom_llm_provider = litellm_params.get("custom_llm_provider")
+                    return resolved_model, custom_llm_provider
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Could not resolve model '{model}' from router: {e}"
+            )
+
+    # Return original model if not resolved
+    return model, custom_llm_provider
 
 
 def _calculate_period_costs(
@@ -413,12 +459,18 @@ async def estimate_cost(
     ```
     """
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import Usage
-    from litellm.utils import ModelResponse
+    from litellm.types.utils import ModelResponse, Usage
+
+    # Resolve model name (handles router aliases like 'e-model-router' -> 'azure_ai/gpt-4')
+    resolved_model, resolved_provider = _resolve_model_for_cost_lookup(request.model)
+
+    verbose_proxy_logger.debug(
+        f"Cost estimate: request.model='{request.model}' resolved to '{resolved_model}'"
+    )
 
     # Create a mock response with usage for completion_cost
     mock_response = ModelResponse(
-        model=request.model,
+        model=resolved_model,
         usage=Usage(
             prompt_tokens=request.input_tokens,
             completion_tokens=request.output_tokens,
@@ -428,7 +480,7 @@ async def estimate_cost(
 
     # Create a logging object to capture cost breakdown
     litellm_logging_obj = LiteLLMLoggingObj(
-        model=request.model,
+        model=resolved_model,
         messages=[],
         stream=False,
         call_type="completion",
@@ -441,14 +493,14 @@ async def estimate_cost(
     try:
         cost_per_request = completion_cost(
             completion_response=mock_response,
-            model=request.model,
+            model=resolved_model,
             litellm_logging_obj=litellm_logging_obj,
         )
     except Exception as e:
         raise HTTPException(
             status_code=404,
             detail={
-                "error": f"Could not calculate cost for model '{request.model}': {str(e)}"
+                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {str(e)}"
             },
         )
 
@@ -461,7 +513,7 @@ async def estimate_cost(
 
     # Get model info for per-token pricing display
     try:
-        model_info = litellm.get_model_info(model=request.model)
+        model_info = litellm.get_model_info(model=resolved_model)
         input_cost_per_token = model_info.get("input_cost_per_token")
         output_cost_per_token = model_info.get("output_cost_per_token")
         custom_llm_provider = model_info.get("litellm_provider")
@@ -469,6 +521,10 @@ async def estimate_cost(
         input_cost_per_token = None
         output_cost_per_token = None
         custom_llm_provider = None
+
+    # Use provider from router resolution if not found in model_info
+    if custom_llm_provider is None and resolved_provider is not None:
+        custom_llm_provider = resolved_provider
 
     # Calculate daily and monthly costs
     daily_cost, daily_input_cost, daily_output_cost, daily_margin_cost = (

@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
@@ -28,8 +29,8 @@ from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     _get_user_role,
     _is_user_proxy_admin,
-    _virtual_key_max_budget_check,
     _virtual_key_max_budget_alert_check,
+    _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     can_key_call_model,
     common_checks,
@@ -45,6 +46,7 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
+    normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
 )
@@ -52,6 +54,7 @@ from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -113,6 +116,18 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
 
     return api_key
 
@@ -126,6 +141,20 @@ def _get_bearer_token(
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
+            else:
+                api_key = ""
     else:
         api_key = ""
     return api_key
@@ -210,6 +239,33 @@ def update_valid_token_with_end_user_params(
     return valid_token
 
 
+# Reusable coordinator for global spend to prevent cache stampede
+_global_spend_coordinator = EventDrivenCacheCoordinator(log_prefix="[GLOBAL SPEND]")
+
+
+async def _fetch_global_spend_with_event_coordination(
+    cache_key: str,
+    user_api_key_cache: DualCache,
+    prisma_client: PrismaClient,
+) -> Optional[float]:
+    """
+    Fetch global spend with event-driven coordination to prevent cache stampede.
+    Uses EventDrivenCacheCoordinator: first request queries DB and signals others when done.
+    """
+
+    async def _load_global_spend() -> Optional[float]:
+        sql_query = """SELECT SUM(spend) AS total_spend FROM "MonthlyGlobalSpend";"""
+        response = await prisma_client.db.query_raw(query=sql_query)
+        val = response[0]["total_spend"]
+        return float(val) if val is not None else None
+
+    return await _global_spend_coordinator.get_or_load(
+        cache_key=cache_key,
+        cache=user_api_key_cache,
+        load_fn=_load_global_spend,
+    )
+
+
 async def get_global_proxy_spend(
     litellm_proxy_admin_name: str,
     user_api_key_cache: DualCache,
@@ -218,25 +274,14 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0:  # user set proxy max budget
-        # check cache
-        global_proxy_spend = await user_api_key_cache.async_get_cache(
-            key="{}:spend".format(litellm_proxy_admin_name)
+    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+        # Use event-driven coordination to prevent cache stampede
+        cache_key = "{}:spend".format(litellm_proxy_admin_name)
+        global_proxy_spend = await _fetch_global_spend_with_event_coordination(
+            cache_key=cache_key,
+            user_api_key_cache=user_api_key_cache,
+            prisma_client=prisma_client,
         )
-        if global_proxy_spend is None and prisma_client is not None:
-            # get from db
-            sql_query = (
-                """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-            )
-
-            response = await prisma_client.db.query_raw(query=sql_query)
-
-            global_proxy_spend = response[0]["total_spend"]
-
-            await user_api_key_cache.async_set_cache(
-                key="{}:spend".format(litellm_proxy_admin_name),
-                value=global_proxy_spend,
-            )
         if global_proxy_spend is not None:
             user_info = CallInfo(
                 user_id=litellm_proxy_admin_name,
@@ -540,7 +585,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                 if is_proxy_admin:
                     return UserAPIKeyAuth(
+                        api_key=None,
                         user_role=LitellmUserRoles.PROXY_ADMIN,
+                        user_id=user_id,
+                        team_id=team_id,
+                        team_alias=(
+                            team_object.team_alias
+                            if team_object is not None
+                            else None
+                        ),
+                        team_metadata=team_object.metadata
+                        if team_object is not None
+                        else None,
+                        org_id=org_id,
+                        end_user_id=end_user_id,
                         parent_otel_span=parent_otel_span,
                     )
 
@@ -880,10 +938,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(
                 api_key, str
             ):  # if generated token, make sure it starts with sk-.
+                _masked_key = "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    api_key
+                    _masked_key
                 )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
@@ -1128,17 +1187,27 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
-                _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
-                    team_id=valid_token.team_id,
-                    max_budget=valid_token.team_max_budget,
-                    spend=valid_token.team_spend,
-                    tpm_limit=valid_token.team_tpm_limit,
-                    rpm_limit=valid_token.team_rpm_limit,
-                    blocked=valid_token.team_blocked,
-                    models=valid_token.team_models,
-                    metadata=valid_token.team_metadata,
-                    object_permission_id=valid_token.team_object_permission_id,
-                )
+                try:
+                    _team_obj = await get_team_object(
+                        team_id=valid_token.team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except HTTPException:
+                    _team_obj = LiteLLM_TeamTableCachedObj(
+                        team_id=valid_token.team_id,
+                        max_budget=valid_token.team_max_budget,
+                        soft_budget=valid_token.team_soft_budget,
+                        spend=valid_token.team_spend,
+                        tpm_limit=valid_token.team_tpm_limit,
+                        rpm_limit=valid_token.team_rpm_limit,
+                        blocked=valid_token.team_blocked,
+                        models=valid_token.team_models,
+                        metadata=valid_token.team_metadata,
+                        object_permission_id=valid_token.team_object_permission_id,
+                    )
             else:
                 _team_obj = None
 
@@ -1150,21 +1219,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if (
                 litellm.max_budget > 0 and prisma_client is not None
             ):  # user set proxy max budget
-                # check cache
-                global_proxy_spend = await user_api_key_cache.async_get_cache(
-                    key="{}:spend".format(litellm_proxy_admin_name)
+                cache_key = "{}:spend".format(litellm_proxy_admin_name)
+                global_proxy_spend = await _fetch_global_spend_with_event_coordination(
+                    cache_key=cache_key,
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
                 )
-                if global_proxy_spend is None:
-                    # get from db
-                    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-
-                    response = await prisma_client.db.query_raw(query=sql_query)
-
-                    global_proxy_spend = response[0]["total_spend"]
-                    await user_api_key_cache.async_set_cache(
-                        key="{}:spend".format(litellm_proxy_admin_name),
-                        value=global_proxy_spend,
-                    )
 
                 if global_proxy_spend is not None:
                     call_info = CallInfo(
@@ -1270,7 +1330,6 @@ async def user_api_key_auth(
         request_data=request_data, request=request
     )
     route: str = get_request_route(request=request)
-
     ## CHECK IF ROUTE IS ALLOWED
 
     user_api_key_auth_obj = await _user_api_key_auth_builder(
@@ -1293,8 +1352,7 @@ async def user_api_key_auth(
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
 
-    user_api_key_auth_obj.request_route = route
-
+    user_api_key_auth_obj.request_route = normalize_request_route(route)
     return user_api_key_auth_obj
 
 
@@ -1335,6 +1393,8 @@ async def _return_user_api_key_auth_obj(
             user_tpm_limit=user_obj.tpm_limit,
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
+            user_spend=getattr(user_obj, "spend", None),
+            user_max_budget=getattr(user_obj, "max_budget", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(

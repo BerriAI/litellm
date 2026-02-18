@@ -143,16 +143,21 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[Dict[str, Any], Optional[RequestFiles]]:
         # Prepare reference images in the correct Imagen format
+        if image is None:
+            raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
         reference_images = self._prepare_reference_images(image, image_edit_optional_request_params)
         if not reference_images:
             raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
+
+        if prompt is None:
+            raise ValueError("Vertex AI Imagen image edit requires a prompt.")
 
         # Correct Imagen instances format
         instances = [

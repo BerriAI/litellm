@@ -243,6 +243,13 @@ ElevenLabs provides high-quality text-to-speech capabilities through their TTS A
 | Supported Operations | `/audio/speech` |
 | Link to Provider Doc | [ElevenLabs TTS API ↗](https://elevenlabs.io/docs/api-reference/text-to-speech) |
 
+### Supported Models
+
+| Model | Route | Description |
+|-------|-------|-------------|
+| Eleven v3 | `elevenlabs/eleven_v3` | Most expressive model. 70+ languages, audio tags support for sound effects and pauses. |
+| Eleven Multilingual v2 | `elevenlabs/eleven_multilingual_v2` | Default TTS model. 29 languages, stable and production-ready. |
+
 ### Quick Start
 
 #### LiteLLM Python SDK
@@ -262,6 +269,26 @@ audio = litellm.speech(
 
 # Save audio to file
 with open("test_output.mp3", "wb") as f:
+    f.write(audio.read())
+```
+
+#### Using Eleven v3 with Audio Tags
+
+Eleven v3 supports [audio tags](https://elevenlabs.io/docs/overview/capabilities/text-to-speech#audio-tags) for adding sound effects and pauses directly in the text:
+
+```python showLineNumbers title="Eleven v3 with audio tags"
+import litellm
+import os
+
+os.environ["ELEVENLABS_API_KEY"] = "your-elevenlabs-api-key"
+
+audio = litellm.speech(
+    model="elevenlabs/eleven_v3",
+    input='Welcome back. <sfx>applause</sfx> Today we have a special guest. <pause duration="1.5s"/> Let me introduce them.',
+    voice="alloy",
+)
+
+with open("eleven_v3_output.mp3", "wb") as f:
     f.write(audio.read())
 ```
 

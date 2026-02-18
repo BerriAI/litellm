@@ -15,6 +15,7 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     db_health_cache,
+    get_callback_identifier,
     health_license_endpoint,
     health_services_endpoint,
 )
@@ -312,6 +313,43 @@ async def test_test_model_connection_loads_config_from_router():
         assert "result" in result
 
 
+@pytest.mark.asyncio
+async def test_health_services_endpoint_datadog_llm_observability():
+    """
+    Verify that 'datadog_llm_observability' is accepted as a valid service
+    by the /health/services endpoint and does not raise a 400 error.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/XXXX
+    The service was missing from the allowed services validation list.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        health_services_endpoint,
+    )
+
+    # Mock datadog_llm_observability to be in success_callback so the generic branch handles it
+    with patch("litellm.success_callback", ["datadog_llm_observability"]):
+        result = await health_services_endpoint(
+            service="datadog_llm_observability"
+        )
+
+    # Should not raise HTTPException(400) and should return success
+    assert result["status"] == "success"
+    assert "datadog_llm_observability" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_rejects_unknown_service():
+    """
+    Verify that an unknown service name is rejected with a 400 error.
+    """
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException):
+        await health_services_endpoint(
+            service="totally_unknown_service_xyz"
+        )
+
+
 @pytest.fixture(scope="function")
 def proxy_client(monkeypatch):
     """
@@ -441,3 +479,135 @@ def test_health_readiness(proxy_client):
             f"Unexpected db status: {db_status}"
     
     print("="*60 + "\n")
+
+
+def test_get_callback_identifier_string_and_object_with_callback_name():
+    """
+    Test get_callback_identifier with string callbacks and objects with callback_name attribute.
+    
+    Covers:
+    - String callback (returned as-is)
+    - Object with callback_name attribute
+    - Object with empty/None callback_name (should fall through to other checks)
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
+    
+    # Test 1: String callback should be returned as-is
+    assert get_callback_identifier("datadog") == "datadog"
+    assert get_callback_identifier("langfuse") == "langfuse"
+    
+    # Test 2: Object with callback_name attribute
+    class MockCallbackWithName:
+        def __init__(self, name):
+            self.callback_name = name
+    
+    callback_obj = MockCallbackWithName("custom_callback")
+    assert get_callback_identifier(callback_obj) == "custom_callback"
+    
+    # Test 3: Object with empty callback_name should fall through
+    callback_obj_empty = MockCallbackWithName("")
+    # This should fall through to CustomLoggerRegistry or callback_name() fallback
+    # We'll verify it doesn't return empty string
+    result = get_callback_identifier(callback_obj_empty)
+    assert result != ""  # Should not return empty string
+    assert isinstance(result, str)  # Should still return a string
+
+
+def test_get_callback_identifier_custom_logger_registry_and_fallback():
+    """
+    Test get_callback_identifier with CustomLoggerRegistry lookup and fallback scenarios.
+    
+    Covers:
+    - Object registered in CustomLoggerRegistry
+    - Object with callback_name that matches registry entry
+    - Fallback to callback_name() helper function
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+    
+    # Test 1: Object registered in CustomLoggerRegistry (without callback_name attribute)
+    # Mock a class that's registered in the registry
+    class MockRegisteredLogger:
+        pass
+    
+    # Mock the registry to return callback strings for our mock class
+    with patch.object(
+        CustomLoggerRegistry,
+        'get_all_callback_strs_from_class_type',
+        return_value=['mock_logger']
+    ):
+        mock_instance = MockRegisteredLogger()
+        result = get_callback_identifier(mock_instance)
+        assert result == "mock_logger"
+    
+    # Test 2: Object with callback_name that matches registry entry
+    class MockCallbackWithMatchingName:
+        def __init__(self):
+            self.callback_name = "matched_name"
+    
+    callback_with_matching = MockCallbackWithMatchingName()
+    # Mock registry to return list containing the matching name
+    with patch.object(
+        CustomLoggerRegistry,
+        'get_all_callback_strs_from_class_type',
+        return_value=['matched_name', 'other_name']
+    ):
+        result = get_callback_identifier(callback_with_matching)
+        assert result == "matched_name"
+    
+    # Test 3: Object with falsy callback_name (empty string), should use registry
+    class MockCallbackWithEmptyName:
+        def __init__(self):
+            self.callback_name = ""  # Empty string is falsy
+    
+    callback_empty = MockCallbackWithEmptyName()
+    # Mock registry to return list - should use first registry entry since callback_name is falsy
+    with patch.object(
+        CustomLoggerRegistry,
+        'get_all_callback_strs_from_class_type',
+        return_value=['registry_name']
+    ):
+        result = get_callback_identifier(callback_empty)
+        assert result == "registry_name"
+    
+    # Test 3b: Object with truthy callback_name not in registry - returns callback_name immediately
+    # (This tests that truthy callback_name takes precedence over registry)
+    class MockCallbackWithNonMatchingName:
+        def __init__(self):
+            self.callback_name = "non_matching"
+    
+    callback_non_matching = MockCallbackWithNonMatchingName()
+    # Even if registry has different values, truthy callback_name is returned first
+    with patch.object(
+        CustomLoggerRegistry,
+        'get_all_callback_strs_from_class_type',
+        return_value=['registry_name']
+    ):
+        result = get_callback_identifier(callback_non_matching)
+        # Should return callback_name because it's truthy (checked before registry)
+        assert result == "non_matching"
+    
+    # Test 4: Object not in registry, falls back to callback_name() helper
+    class UnregisteredCallback:
+        def __init__(self):
+            pass
+    
+    unregistered = UnregisteredCallback()
+    # Mock registry to return empty list (not registered)
+    with patch.object(
+        CustomLoggerRegistry,
+        'get_all_callback_strs_from_class_type',
+        return_value=[]
+    ):
+        result = get_callback_identifier(unregistered)
+        # Should fall back to callback_name() which returns __class__.__name__
+        assert result == "UnregisteredCallback"
+    
+    # Test 5: Function callback (not a class instance)
+    def my_callback_function():
+        pass
+    
+    # Function won't have __class__, so it will skip registry check and go to callback_name()
+    result = get_callback_identifier(my_callback_function)
+    # Should fall back to callback_name() which returns __name__
+    assert result == "my_callback_function"
