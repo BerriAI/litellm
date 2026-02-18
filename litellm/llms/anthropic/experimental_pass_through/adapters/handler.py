@@ -80,16 +80,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if isinstance(reasoning_effort, str) and reasoning_effort:
             completion_kwargs["reasoning_effort"] = {
                 "effort": reasoning_effort,
-                "summary": "detailed",
             }
-        elif isinstance(reasoning_effort, dict):
-            if (
-                "summary" not in reasoning_effort
-                and "generate_summary" not in reasoning_effort
-            ):
-                updated_reasoning_effort = dict(reasoning_effort)
-                updated_reasoning_effort["summary"] = "detailed"
-                completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
     def _prepare_completion_kwargs(
