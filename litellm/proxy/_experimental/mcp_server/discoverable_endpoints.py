@@ -382,10 +382,15 @@ async def token_endpoint(
     Accept the authorization code from client and exchange it for OAuth token.
     Supports PKCE flow by forwarding code_verifier to upstream provider.
 
+    For authorization_code:
     1. Call the token endpoint with PKCE parameters
     2. Store the user's token in the db - and generate a LiteLLM virtual key
     3. Return the token
     4. Return a virtual key in this response
+
+    For refresh_token:
+    1. Forward the refresh_token to the upstream OAuth provider
+    2. Return the refreshed token
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
