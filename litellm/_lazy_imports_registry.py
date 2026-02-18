@@ -227,6 +227,7 @@ LLM_CONFIG_NAMES = (
     "LiteLLMProxyResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
+    "DatabricksResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -905,6 +906,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "PerplexityResponsesConfig": (
         ".llms.perplexity.responses.transformation",
         "PerplexityResponsesConfig",
+    ),
+    "DatabricksResponsesAPIConfig": (
+        ".llms.databricks.responses.transformation",
+        "DatabricksResponsesAPIConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
