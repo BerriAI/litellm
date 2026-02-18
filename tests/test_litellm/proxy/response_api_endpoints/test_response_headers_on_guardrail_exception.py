@@ -1,6 +1,7 @@
 """
-Test that post_call_response_headers_hook is called on ModifyResponseException
-in the /responses endpoint, so custom headers appear even on guardrail failures.
+Test that _handle_modify_response_exception (centralized in ProxyBaseLLMRequestProcessing)
+is called on ModifyResponseException in the /responses endpoint, so custom headers appear
+even on guardrail failures.
 """
 
 import os
@@ -32,10 +33,12 @@ class GuardrailHeaderLogger(CustomLogger):
 async def test_modify_response_exception_calls_response_headers_hook():
     """
     When a guardrail raises ModifyResponseException on /responses,
-    the response should still include custom headers from the hook.
+    the response should still include custom headers from the hook
+    via the centralized _handle_modify_response_exception method.
     """
     from litellm.integrations.custom_guardrail import ModifyResponseException
     from litellm.proxy.proxy_server import app
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from fastapi.testclient import TestClient
 
     guardrail_logger = GuardrailHeaderLogger()
@@ -48,19 +51,18 @@ async def test_modify_response_exception_calls_response_headers_hook():
                 team_id=None,
             )
 
-            # Make base_process_llm_request raise ModifyResponseException
-            with patch(
-                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
-            ) as MockProcessor:
-                mock_instance = MockProcessor.return_value
-                mock_instance.base_process_llm_request = AsyncMock(
-                    side_effect=ModifyResponseException(
-                        message="Content blocked by guardrail",
-                        model="gpt-4o",
-                        request_data={"model": "gpt-4o"},
-                    )
-                )
-
+            # Only mock base_process_llm_request so the real
+            # _handle_modify_response_exception runs and calls the hook.
+            with patch.object(
+                ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new_callable=AsyncMock,
+                side_effect=ModifyResponseException(
+                    message="Content blocked by guardrail",
+                    model="gpt-4o",
+                    request_data={"model": "gpt-4o"},
+                ),
+            ):
                 client = TestClient(app)
                 response = client.post(
                     "/v1/responses",

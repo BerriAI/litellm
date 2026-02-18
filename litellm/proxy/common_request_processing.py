@@ -50,6 +50,7 @@ StreamChunkSerializer = Callable[[Any], str]
 StreamErrorSerializer = Callable[[ProxyException], str]
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_guardrail import ModifyResponseException
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
 
     ProxyConfig = _ProxyConfig
@@ -1084,6 +1085,33 @@ class ProxyBaseLLMRequestProcessing:
         if "stream" in data and data["stream"] is True:
             return True
         return False
+
+    async def _handle_modify_response_exception(
+        self,
+        e: "ModifyResponseException",
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        fastapi_response: Response,
+    ):
+        """Centralized handling for ModifyResponseException (guardrail passthrough).
+
+        Calls the failure hook and injects custom response headers — mirrors
+        the pattern in ``_handle_llm_api_exception`` for error responses.
+        """
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=e.request_data,
+        )
+
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=e.request_data,
+            user_api_key_dict=user_api_key_dict,
+            response=None,
+            request_headers=self._request_headers,
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
 
     async def _handle_llm_api_exception(
         self,
