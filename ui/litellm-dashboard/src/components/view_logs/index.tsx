@@ -529,11 +529,6 @@ export default function SpendLogsTable({
               />
             ) : (
               <>
-                <FilterComponent
-                  options={logFilterOptions}
-                  onApplyFilters={handleFilterChange}
-                  onResetFilters={handleFilterReset}
-                />
                 <SpendLogsSettingsModal
                   isVisible={isSpendLogsSettingsModalVisible}
                   onCancel={() => setIsSpendLogsSettingsModalVisible(false)}
@@ -693,6 +688,13 @@ export default function SpendLogsTable({
                         </div>
                       </div>
                     </div>
+                  </div>
+                  <div className="px-6 py-4 border-b">
+                    <FilterComponent
+                      options={logFilterOptions}
+                      onApplyFilters={handleFilterChange}
+                      onResetFilters={handleFilterReset}
+                    />
                   </div>
                   {isLiveTail && currentPage === 1 && (
                     <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
