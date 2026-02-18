@@ -320,10 +320,10 @@ async def test_proxy_admin_expired_key_from_cache():
             attr: getattr(_proxy_server_mod, attr, None)
             for attr in _attrs_to_set
         }
-        for attr, val in _attrs_to_set.items():
-            setattr(_proxy_server_mod, attr, val)
-
         try:
+            for attr, val in _attrs_to_set.items():
+                setattr(_proxy_server_mod, attr, val)
+
 
             # Create a mock request
             request = Request(scope={"type": "http"})
