@@ -21,6 +21,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -724,7 +725,7 @@ async def get_service_provider_config(request: Request):
         "SCIM ServiceProviderConfig request: method=%s url=%s headers=%s",
         request.method,
         request.url,
-        dict(request.headers),
+        _safe_get_request_headers(request),
     )
     meta = {
         "resourceType": "ServiceProviderConfig",
