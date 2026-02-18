@@ -172,8 +172,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _is_claude_opus_4_6(model: str) -> bool:
-        """Check if the model is Claude Opus 4.5."""
-        return "opus-4-6" in model.lower() or "opus_4_6" in model.lower()
+        """Check if the model is Claude Opus 4.6."""
+        model_lower = model.lower()
+        return (
+            "opus-4-6" in model_lower
+            or "opus_4_6" in model_lower
+            or "opus-4.6" in model_lower
+        )
+
+    @staticmethod
+    def _is_claude_sonnet_4_6(model: str) -> bool:
+        """Check if the model is Claude Sonnet 4.6."""
+        model_lower = model.lower()
+        return (
+            "sonnet-4-6" in model_lower
+            or "sonnet_4_6" in model_lower
+            or "sonnet-4.6" in model_lower
+        )
 
     def get_supported_openai_params(self, model: str):
         params = [
@@ -193,9 +208,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "speed",
         ]
 
-        if "claude-3-7-sonnet" in model or supports_reasoning(
-            model=model,
-            custom_llm_provider=self.custom_llm_provider,
+        if (
+            "claude-3-7-sonnet" in model
+            or self._is_claude_opus_4_6(model)
+            or self._is_claude_sonnet_4_6(model)
+            or supports_reasoning(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+            )
         ):
             params.append("thinking")
             params.append("reasoning_effort")
@@ -710,7 +730,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_claude_opus_4_6(model):
+        if (
+            AnthropicConfig._is_claude_opus_4_6(model)
+            or AnthropicConfig._is_claude_sonnet_4_6(model)
+        ):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
@@ -875,12 +898,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     for substring in {
                         "sonnet-4.5",
                         "sonnet-4-5",
+                        "sonnet-4.6",
+                        "sonnet-4-6",
+                        "sonnet_4_6",
                         "opus-4.1",
                         "opus-4-1",
                         "opus-4.5",
                         "opus-4-5",
                         "opus-4.6",
                         "opus-4-6",
+                        "opus_4_6",
                     }
                 ):
                     _output_format = (
