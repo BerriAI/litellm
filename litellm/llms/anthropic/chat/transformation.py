@@ -67,6 +67,7 @@ from litellm.utils import (
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
+    supports_response_schema,
     token_counter,
 )
 
@@ -870,18 +871,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "response_format" and isinstance(value, dict):
-                if any(
-                    substring in model
-                    for substring in {
-                        "sonnet-4.5",
-                        "sonnet-4-5",
-                        "opus-4.1",
-                        "opus-4-1",
-                        "opus-4.5",
-                        "opus-4-5",
-                        "opus-4.6",
-                        "opus-4-6",
-                    }
+                if supports_response_schema(
+                    model=model, custom_llm_provider=self.custom_llm_provider
                 ):
                     _output_format = (
                         self.map_response_format_to_anthropic_output_format(value)
