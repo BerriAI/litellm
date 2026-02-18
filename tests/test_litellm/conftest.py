@@ -49,6 +49,12 @@ def isolate_litellm_state():
     if hasattr(litellm, '_async_failure_callback'):
         original_state['_async_failure_callback'] = litellm._async_failure_callback.copy() if litellm._async_failure_callback else []
 
+    # Store transport/network globals — many tests set these without restoring,
+    # causing subsequent tests to get None from _create_async_transport()
+    for _attr in ('disable_aiohttp_transport', 'force_ipv4'):
+        if hasattr(litellm, _attr):
+            original_state[_attr] = getattr(litellm, _attr)
+
     # Flush cache before test (critical for respx mocks)
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
