@@ -3682,12 +3682,9 @@ async def test_role_mappings_override_default_internal_user_params():
             # The models will be applied when new_user processes the request
 
     finally:
-        # Restore original default_internal_user_params
-        if original_default_params is not None:
-            litellm.default_internal_user_params = original_default_params
-        else:
-            if hasattr(litellm, "default_internal_user_params"):
-                delattr(litellm, "default_internal_user_params")
+        # Restore original default_internal_user_params (always assign, never delattr —
+        # the attribute is defined in litellm/__init__.py and delattr-ing it breaks parallel tests)
+        litellm.default_internal_user_params = original_default_params
 
 
 class TestSSOReadinessEndpoint:

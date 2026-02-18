@@ -728,15 +728,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <div style={{ padding: "4px 0" }}>
                       <div style={{ fontWeight: 500 }}>Default</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call LLM API + Management routes
+                        Can call AI APIs + Management routes
                       </div>
                     </div>
                   </Option>
-                  <Option value="llm_api" label="LLM API">
+                  <Option value="llm_api" label="AI APIs">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>LLM API</div>
+                      <div style={{ fontWeight: 500 }}>AI APIs</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call only LLM API routes (chat/completions, embeddings, etc.)
+                        Can call only AI API routes (chat/completions, embeddings, etc.)
                       </div>
                     </div>
                   </Option>

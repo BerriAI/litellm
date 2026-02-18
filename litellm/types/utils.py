@@ -2532,6 +2532,8 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    team_alias: Optional[str]
+    team_id: Optional[str]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -3197,7 +3199,7 @@ class SearchProviders(str, Enum):
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
     LINKUP = "linkup"
-
+    DUCKDUCKGO = "duckduckgo"
 
 # Create a set of all search provider values for quick lookup
 SearchProvidersSet = {provider.value for provider in SearchProviders}

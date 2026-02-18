@@ -113,11 +113,11 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
+from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+    DeploymentAffinityCheck,
+)
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
-)
-from litellm.router_utils.pre_call_checks.responses_api_deployment_check import (
-    ResponsesApiDeploymentCheck,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -293,6 +293,7 @@ class Router:
         router_general_settings: Optional[
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
+        deployment_affinity_ttl_seconds: int = 3600,
         ignore_invalid_deployments: bool = False,
     ) -> None:
         """
@@ -326,6 +327,7 @@ class Router:
             routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
+            deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         Returns:
             Router: An instance of the litellm.Router class.
@@ -604,6 +606,7 @@ class Router:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
+        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.router_budget_logger: Optional[RouterBudgetLimiting] = None
         if RouterBudgetLimiting.should_init_router_budget_limiter(
             model_list=model_list, provider_budget_config=self.provider_budget_config
@@ -1184,26 +1187,78 @@ class Router:
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
-        if optional_pre_call_checks is not None:
-            for pre_call_check in optional_pre_call_checks:
-                _callback: Optional[CustomLogger] = None
-                if pre_call_check == "prompt_caching":
-                    _callback = PromptCachingDeploymentCheck(cache=self.cache)
-                elif pre_call_check == "router_budget_limiting":
-                    _callback = RouterBudgetLimiting(
-                        dual_cache=self.cache,
-                        provider_budget_config=self.provider_budget_config,
-                        model_list=self.model_list,
-                    )
-                elif pre_call_check == "responses_api_deployment_check":
-                    _callback = ResponsesApiDeploymentCheck()
-                elif pre_call_check == "enforce_model_rate_limits":
-                    _callback = ModelRateLimitingCheck(dual_cache=self.cache)
-                if _callback is not None:
-                    if self.optional_callbacks is None:
-                        self.optional_callbacks = []
-                    self.optional_callbacks.append(_callback)
-                    litellm.logging_callback_manager.add_litellm_callback(_callback)
+        if optional_pre_call_checks is None:
+            return
+
+        # ---------------------------------------------------------------------
+        # Unified deployment affinity (session stickiness)
+        # ---------------------------------------------------------------------
+        enable_user_key_affinity = "deployment_affinity" in optional_pre_call_checks
+        enable_responses_api_affinity = (
+            "responses_api_deployment_check" in optional_pre_call_checks
+        )
+        if enable_user_key_affinity or enable_responses_api_affinity:
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+
+            existing_affinity_callback: Optional[DeploymentAffinityCheck] = None
+            for cb in self.optional_callbacks:
+                if isinstance(cb, DeploymentAffinityCheck):
+                    existing_affinity_callback = cb
+                    break
+
+            if existing_affinity_callback is not None:
+                existing_affinity_callback.enable_user_key_affinity = (
+                    existing_affinity_callback.enable_user_key_affinity
+                    or enable_user_key_affinity
+                )
+                existing_affinity_callback.enable_responses_api_affinity = (
+                    existing_affinity_callback.enable_responses_api_affinity
+                    or enable_responses_api_affinity
+                )
+                existing_affinity_callback.ttl_seconds = (
+                    self.deployment_affinity_ttl_seconds
+                )
+            else:
+                affinity_callback = DeploymentAffinityCheck(
+                    cache=self.cache,
+                    ttl_seconds=self.deployment_affinity_ttl_seconds,
+                    enable_user_key_affinity=enable_user_key_affinity,
+                    enable_responses_api_affinity=enable_responses_api_affinity,
+                )
+                self.optional_callbacks.append(affinity_callback)
+                litellm.logging_callback_manager.add_litellm_callback(
+                    affinity_callback
+                )
+
+        # ---------------------------------------------------------------------
+        # Remaining optional pre-call checks
+        # ---------------------------------------------------------------------
+        for pre_call_check in optional_pre_call_checks:
+            _callback: Optional[CustomLogger] = None
+            if pre_call_check in (
+                "deployment_affinity",
+                "responses_api_deployment_check",
+            ):
+                continue
+            if pre_call_check == "prompt_caching":
+                _callback = PromptCachingDeploymentCheck(cache=self.cache)
+            elif pre_call_check == "router_budget_limiting":
+                _callback = RouterBudgetLimiting(
+                    dual_cache=self.cache,
+                    provider_budget_config=self.provider_budget_config,
+                    model_list=self.model_list,
+                )
+            elif pre_call_check == "enforce_model_rate_limits":
+                _callback = ModelRateLimitingCheck(dual_cache=self.cache)
+
+            if _callback is None:
+                continue
+
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+            self.optional_callbacks.append(_callback)
+            litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def print_deployment(self, deployment: dict):
         """
@@ -7600,9 +7655,16 @@ class Router:
         Used by `.get_model_list` to get model list from model alias.
         """
         returned_models: List[DeploymentTypedDict] = []
-        for model_alias, model_value in self.model_group_alias.items():
-            if model_name is not None and model_alias != model_name:
-                continue
+
+        if model_name is not None:
+            # Fast path: direct dict lookup avoids scanning all aliases for non-alias model names.
+            if model_name not in self.model_group_alias:
+                return returned_models
+            alias_items = [(model_name, self.model_group_alias[model_name])]
+        else:
+            alias_items = list(self.model_group_alias.items())
+
+        for model_alias, model_value in alias_items:
             if isinstance(model_value, str):
                 _router_model_name: str = model_value
             elif isinstance(model_value, dict):
@@ -9099,4 +9161,3 @@ class Router:
         litellm._async_failure_callback = []
         self.retry_policy = None
         self.flush_cache()
-
