@@ -16,6 +16,8 @@ LiteLLM_DailyUserSpend table  ← one row per (user, date, key, model, provider)
   │  (every 60 min, scheduled)
   ▼
 Mavvrik Export Job
+  ├── POST register endpoint → get current metricsMarker from Mavvrik
+  │     └── If Mavvrik's marker is earlier than local, honour Mavvrik's cursor
   ├── For each missed date from (marker + 1 day) up to yesterday:
   │     ├── Query all rows where dus.date = that date
   │     ├── Write as CSV (all columns, gzip-compressed)
@@ -138,22 +140,35 @@ only that day is retried — earlier days are not re-exported.
 
 ### metricsMarker from Mavvrik
 
-On `POST /mavvrik/init`, LiteLLM calls the Mavvrik register endpoint:
+LiteLLM calls the Mavvrik register endpoint in two situations:
+
+**1. On `POST /mavvrik/init` (one-time setup)**
 ```
 POST {api_endpoint}/{tenant}/k8s/agent/{instance_id}
 Response: { "metricsMarker": <epoch_seconds> }
 ```
-
-`metricsMarker` tells LiteLLM from what date Mavvrik wants data.
+Sets the initial local marker:
 - If `metricsMarker > 0` → initial marker = that epoch converted to a date string
 - If `metricsMarker == 0` or absent → initial marker = first day of current month
+
+**2. At the start of every scheduled export run**
+```
+POST {api_endpoint}/{tenant}/k8s/agent/{instance_id}
+Response: { "metricsMarker": <epoch_seconds> }
+```
+Used to verify connectivity and detect cursor resets on Mavvrik's side:
+- If Mavvrik's `metricsMarker` date is **earlier** than the local marker, the local
+  marker is moved back to Mavvrik's date so re-export begins from that point
+- If Mavvrik's date is the same or later, the local marker is unchanged
+- If the register call fails, a warning is logged and the run continues with the
+  local marker (best-effort — a connectivity failure does not block the export)
 
 After each successfully exported day, LiteLLM also PATCHes Mavvrik:
 ```
 PATCH {api_endpoint}/{tenant}/k8s/agent/{instance_id}
 Body: { "metricsMarker": <epoch_of_exported_day> }
 ```
-This keeps Mavvrik in sync with LiteLLM's export cursor.
+This keeps Mavvrik's cursor in sync with LiteLLM's after each day is uploaded.
 
 ---
 
@@ -232,7 +247,10 @@ latest data. Manual exports do **not** advance the scheduled marker.
 ## Future Data (Scheduled Export)
 
 The APScheduler job fires every `MAVVRIK_EXPORT_INTERVAL_MINUTES` (default: 60).
-Each run exports all complete days since the last marker, up to yesterday.
+Each run:
+1. POSTs to the Mavvrik register endpoint to verify connectivity and check for cursor resets
+2. Exports all complete days since the (effective) marker, up to yesterday
+
 It runs automatically as long as:
 1. The `callbacks: ["mavvrik"]` line is in the proxy config YAML, AND
 2. `mavvrik_settings` exists in `LiteLLM_Config` (i.e. `/mavvrik/init` has been called)

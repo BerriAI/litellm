@@ -133,10 +133,15 @@ litellm_settings:
 Then restart the proxy. On startup, LiteLLM will:
 1. Detect that `mavvrik_settings` exists in the database
 2. Register an hourly APScheduler job
-3. On each run, export all complete days since the last marker
+3. On each run, call the Mavvrik register endpoint then export all complete days since the marker
 
 > **How exports work:**
-> - Each run covers all dates from `(marker + 1 day)` up to **yesterday**
+> - Each run starts by calling the Mavvrik register endpoint (POST to the agent path)
+>   to verify connectivity and retrieve Mavvrik's current `metricsMarker`. If Mavvrik's
+>   marker is earlier than the local one (e.g. Mavvrik reset their cursor), LiteLLM
+>   honours Mavvrik's date and re-exports from that point automatically. If the call
+>   fails, a warning is logged and the export continues with the local marker.
+> - After the register check, each run covers all dates from `(marker + 1 day)` up to **yesterday**
 > - Today is never exported — spend rows are still accumulating
 > - Each day creates one GCS file named `YYYY-MM-DD`
 > - Re-uploading the same date overwrites the file (idempotent)
