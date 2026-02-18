@@ -1,4 +1,5 @@
-import pytest
+import time
+
 from unittest.mock import Mock, patch
 
 
@@ -87,12 +88,6 @@ def test_model_list_with_fallback_metadata(
     # Note: This is a simplified test since we can't easily run the full async endpoint
     # The important thing is that our function signature and logic are correct
     
-    # Import the constants we need
-    try:
-        from litellm.proxy.proxy_server import DEFAULT_MODEL_CREATED_AT_TIME
-    except ImportError:
-        DEFAULT_MODEL_CREATED_AT_TIME = 1640995200  # Default fallback
-    
     # Test with include_metadata=True (should default to general fallbacks)
     all_models = ["claude-4-sonnet", "bedrock-claude-sonnet-4"]
     
@@ -102,7 +97,7 @@ def test_model_list_with_fallback_metadata(
         model_info = {
             "id": model,
             "object": "model",
-            "created": DEFAULT_MODEL_CREATED_AT_TIME,
+            "created": int(time.time()),
             "owned_by": "openai",
         }
         
@@ -213,7 +208,7 @@ def test_response_structure_compatibility():
     basic_model = {
         "id": "claude-4-sonnet",
         "object": "model",
-        "created": 1640995200,
+        "created": int(time.time()),
         "owned_by": "openai"
     }
     
@@ -269,3 +264,54 @@ def test_get_all_fallbacks_integration():
     
     llm_router_param = sig.parameters['llm_router']
     assert llm_router_param.default is None, "llm_router should default to None"
+
+
+def test_model_info_dynamic_timestamp():
+    """Test that create_model_info_response uses dynamic timestamp instead of static constant.
+    
+    This test verifies the fix for issue #21371:
+    https://github.com/BerriAI/litellm/issues/21371
+    
+    The /v1/models endpoint should return current timestamps, not a static
+    value from Feb 2023 (1677610602).
+    """
+    from litellm.proxy.utils import create_model_info_response
+    import time
+    
+    # Get current timestamp before calling the function
+    before_time = int(time.time())
+    
+    # Call the function
+    model_info = create_model_info_response(
+        model_id="test-model",
+        provider="test-provider"
+    )
+    
+    # Get current timestamp after calling the function
+    after_time = int(time.time())
+    
+    # Verify the structure
+    assert "id" in model_info
+    assert "object" in model_info
+    assert "created" in model_info
+    assert "owned_by" in model_info
+    assert model_info["id"] == "test-model"
+    assert model_info["object"] == "model"
+    assert model_info["owned_by"] == "test-provider"
+    
+    # Verify the timestamp is dynamic (within the time window of the test)
+    created_timestamp = model_info["created"]
+    assert before_time <= created_timestamp <= after_time, (
+        f"Expected timestamp between {before_time} and {after_time}, got {created_timestamp}"
+    )
+    
+    # Verify it's NOT the old static timestamp (1677610602 = Feb 2023)
+    assert created_timestamp != 1677610602, (
+        "Timestamp should not be the old static value 1677610602"
+    )
+    
+    # Verify it's a recent timestamp (within last minute)
+    current_time = int(time.time())
+    assert current_time - created_timestamp < 60, (
+        f"Timestamp {created_timestamp} is not recent (current time: {current_time})"
+    )
