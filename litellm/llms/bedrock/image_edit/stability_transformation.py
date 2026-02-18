@@ -22,7 +22,6 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
-import json
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import httpx
@@ -285,8 +284,6 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         """
         try:
             response_data = raw_response.json()
-            with open("response_data.json", "w") as f:
-                json.dump(response_data, f)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Bedrock Stability response: {e}",
@@ -396,4 +393,3 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             headers["Content-Type"] = "application/json"
         
         return headers
-
