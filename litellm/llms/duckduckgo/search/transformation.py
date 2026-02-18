@@ -4,6 +4,7 @@ Calls DuckDuckGo's Instant Answer API to search the web.
 DuckDuckGo API Reference: https://duckduckgo.com/api
 """
 from typing import Dict, List, Literal, Optional, TypedDict, Union
+from urllib.parse import urlencode
 
 import httpx
 
@@ -78,21 +79,11 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         """
         api_base = api_base or get_secret_str("DUCKDUCKGO_API_BASE") or self.DUCKDUCKGO_API_BASE
         
-        # Ensure URL ends without trailing slash for query parameters
-        if api_base.endswith("/"):
-            api_base = api_base.rstrip("/")
-
-        # Construct URL with query parameters
-        if data and isinstance(data, dict):
-            query_params = []
-            for key, value in data.items():
-                if isinstance(value, list):
-                    # Join list values with commas
-                    value = ",".join(str(v) for v in value)
-                query_params.append(f"{key}={value}")
-            
-            if query_params:
-                api_base = f"{api_base}/?{'&'.join(query_params)}"
+        # Build query parameters from the transformed request body
+        if data and isinstance(data, dict) and "_duckduckgo_params" in data:
+            params = data["_duckduckgo_params"]
+            query_string = urlencode(params, doseq=True)
+            return f"{api_base}/?{query_string}"
         
         return api_base
         
@@ -128,14 +119,11 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
             "format": "json",  # Always use JSON format
         }
         
-        # Store max_results for response filtering if provided
-        if "max_results" in optional_params:
-            # DuckDuckGo API doesn't support max_results directly
-            # We'll filter the results in transform_search_response
-            pass
-        
         # Convert to dict before dynamic key assignments
         result_data = dict(request_data)
+    
+        if "max_results" in optional_params:
+            result_data["_max_results"] = optional_params["max_results"]
         
         # Pass through DuckDuckGo-specific parameters
         ddg_params = ["pretty", "no_redirect", "no_html", "skip_disambig"]
@@ -143,7 +131,9 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
             if param in optional_params:
                 result_data[param] = optional_params[param]
         
-        return result_data
+        return {
+            "_duckduckgo_params": result_data,
+        }
 
     def transform_search_response(
         self,
@@ -169,6 +159,15 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         """
         response_json = raw_response.json()
         
+        # Extract max_results from the request URL params
+        query_params = raw_response.request.url.params if raw_response.request else {}
+        max_results = None
+        if "_max_results" in query_params:
+            try:
+                max_results = int(query_params["_max_results"])
+            except (ValueError, TypeError):
+                pass
+        
         # Transform results to SearchResult objects
         results = []
         
@@ -189,12 +188,13 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         # Process RelatedTopics
         related_topics = response_json.get("RelatedTopics", [])
         for topic in related_topics:
-            # RelatedTopics can contain nested topics or direct results
+            # Stop if we've reached max_results
+            if max_results is not None and len(results) >= max_results:
+                break
+            
             if isinstance(topic, dict):
                 # Check if it's a direct result
                 if "FirstURL" in topic and "Text" in topic:
-                    # Extract title and snippet from Text
-                    # Text format is usually "Title - Snippet"
                     text = topic.get("Text", "")
                     url = topic.get("FirstURL", "")
                     
@@ -220,6 +220,10 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
                 elif "Topics" in topic:
                     nested_topics = topic.get("Topics", [])
                     for nested_topic in nested_topics:
+                        # Stop if we've reached max_results
+                        if max_results is not None and len(results) >= max_results:
+                            break
+                        
                         if "FirstURL" in nested_topic and "Text" in nested_topic:
                             text = nested_topic.get("Text", "")
                             url = nested_topic.get("FirstURL", "")
@@ -241,11 +245,6 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
                                 last_updated=None,
                             )
                             results.append(search_result)
-        
-        # Apply max_results filtering if provided in kwargs
-        max_results = kwargs.get("max_results")
-        if max_results is not None and isinstance(max_results, int):
-            results = results[:max_results]
         
         return SearchResponse(
             results=results,
