@@ -167,7 +167,7 @@ const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry
       .then(setGdprData)
       .catch((err) => setGdprError(err.message || "Failed to check GDPR compliance"))
       .finally(() => setGdprLoading(false));
-  }, [accessToken, logEntry.request_id]);
+  }, [accessToken, logEntry]);
 
   return (
     <div>
