@@ -256,14 +256,11 @@ response = litellm.completion(
 
 ## Supported Providers
 
-Message sanitization works with all LLM providers that support tool calling:
+Message sanitization currently works with:
 
 - ✅ Anthropic (Claude)
-- ✅ OpenAI (GPT-4, GPT-3.5)
-- ✅ AWS Bedrock (Claude, Titan)
-- ✅ Google Vertex AI (Claude, Gemini)
-- ✅ Azure OpenAI
-- ✅ And all other providers with tool calling support
+
+**Note:** While the sanitization logic is provider-agnostic, it is currently only applied in the Anthropic message transformation pipeline. Support for additional providers may be added in future releases.
 
 ## Implementation Details
 

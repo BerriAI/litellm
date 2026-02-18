@@ -31,11 +31,15 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import GuardrailTracingDetail, ModelResponseStream
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+    ModelResponseStream,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 from litellm.types.guardrails import (
     BlockedWord,
@@ -1546,8 +1550,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
-        from litellm.types.utils import GuardrailStatus
-
         start_time = datetime.now()
         detections: List[ContentFilterDetection] = []
         masked_entity_count: Dict[str, int] = {}

@@ -2044,20 +2044,23 @@ def _add_missing_tool_results(
     current_message: AllMessageValues,
     messages: List[AllMessageValues],
     current_index: int,
-) -> List[AllMessageValues]:
+) -> Tuple[List[AllMessageValues], int]:
     """
     Case A: Missing tool_result for tool_use (orphaned tool calls)
     - If an assistant message has tool_calls but no corresponding tool result follows,
       add a dummy tool result message indicating the user did not provide the result.
 
     Returns:
-        A list containing the assistant message followed by any dummy tool results needed
+        A tuple of:
+        - List containing the assistant message, followed by existing tool results,
+          followed by any dummy tool results needed
+        - Number of original messages consumed (to adjust iteration index)
     """
     result_messages: List[AllMessageValues] = []
     tool_calls = current_message.get("tool_calls")
     
     if not tool_calls or len(tool_calls) == 0:
-        return [current_message]
+        return ([current_message], 0)
     
     # Collect all tool_call_ids from this assistant message
     expected_tool_call_ids = set()
@@ -2070,7 +2073,9 @@ def _add_missing_tool_results(
         if tool_call_id:
             expected_tool_call_ids.add(tool_call_id)
     
+    # Collect actual tool result messages that follow this assistant message
     found_tool_call_ids = set()
+    actual_tool_results: List[AllMessageValues] = []
     j = current_index + 1
     
     while j < len(messages):
@@ -2082,8 +2087,9 @@ def _add_missing_tool_results(
         
         if next_role in ["tool", "function"]:
             tool_call_id = next_msg.get("tool_call_id")
-            if tool_call_id:
+            if tool_call_id and tool_call_id in expected_tool_call_ids:
                 found_tool_call_ids.add(tool_call_id)
+                actual_tool_results.append(next_msg)
         
         j += 1
     
@@ -2097,6 +2103,10 @@ def _add_missing_tool_results(
         
         result_messages.append(current_message)
         
+        # Add existing tool results FIRST
+        result_messages.extend(actual_tool_results)
+        
+        # Then add dummy tool results for missing ones
         for tool_call_id in missing_tool_call_ids:
             tool_name = "unknown_tool"
             for tool_call in tool_calls:
@@ -2126,9 +2136,10 @@ def _add_missing_tool_results(
             }
             result_messages.append(dummy_tool_result)
         
-        return result_messages
+        # Return the messages and the number of original messages to skip
+        return (result_messages, len(actual_tool_results))
     
-    return [current_message]
+    return ([current_message], 0)
 
 
 def _is_orphaned_tool_result(
@@ -2215,12 +2226,13 @@ def sanitize_messages_for_tool_calling(
         
         # Case A: Check if assistant message has tool_calls without following tool results
         if current_message.get("role") == "assistant":
-            result_messages = _add_missing_tool_results(current_message, messages, i)
+            result_messages, messages_consumed = _add_missing_tool_results(current_message, messages, i)
             
-            # If dummy tool results were added, extend sanitized_messages and continue
+            # If dummy tool results were added, extend sanitized_messages and skip consumed messages
             if len(result_messages) > 1:
                 sanitized_messages.extend(result_messages)
-                i += 1
+                # Skip the assistant message and any actual tool results that were included
+                i += 1 + messages_consumed
                 continue
         
         # Case B: Check for orphaned tool results
