@@ -104,6 +104,7 @@ class ProviderField(TypedDict):
 class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_system_messages: Optional[bool]
     supports_response_schema: Optional[bool]
+    supports_structured_outputs: Optional[bool]
     supports_vision: Optional[bool]
     supports_function_calling: Optional[bool]
     supports_tool_choice: Optional[bool]
