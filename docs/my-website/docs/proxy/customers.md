@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Customers / End-User Budgets
+# Customers / End-Users
 
 Track spend, set budgets for your customers.
 
@@ -10,9 +10,11 @@ Track spend, set budgets for your customers.
 
 ### 1. Make LLM API call w/ Customer ID
 
-Make a /chat/completions call, pass 'user' - First call Works
+You can pass the customer ID in two ways:
 
-```bash showLineNumbers title="Make request with customer ID"
+**Option 1: In the request body** (using the `user` field)
+
+```bash showLineNumbers title="Make request with customer ID in body"
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
         --header 'Content-Type: application/json' \
         --header 'Authorization: Bearer sk-1234' \ # 👈 YOUR PROXY KEY
@@ -27,6 +29,30 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
         ]
         }'
 ```
+
+**Option 2: In the request headers** (using `x-litellm-end-user`)
+
+```bash showLineNumbers title="Make request with customer ID in header"
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+        --header 'Content-Type: application/json' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'x-litellm-end-user: ishaan3' \ # 👈 CUSTOMER ID IN HEADER
+        --data ' {
+        "model": "azure-gpt-3.5",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what time is it"
+            }
+        ]
+        }'
+```
+
+**Use `x-litellm-end-user` to control permissions for end users of your AI application** (e.g. users of an internal chat UI):
+- Apply customer-specific object permissions (limit which MCP servers they can access)
+- Enforce customer budgets
+- Works with all endpoints (chat/completions, embeddings, MCP, etc.)
+- No need to modify request body
 
 The customer_id will be upserted into the DB with the new spend.
 
@@ -123,7 +149,171 @@ Expected Response
 </Tabs>
 
 
-## Setting Customer Budgets 
+## Setting Customer Object Permissions
+
+Control which resources (MCP servers, vector stores, agents) a customer can access.
+
+### What are Object Permissions?
+
+Object permissions allow you to restrict customer access to specific:
+- **MCP Servers**: Limit which MCP servers the customer can call
+- **MCP Access Groups**: Assign customers to predefined groups of MCP servers
+- **MCP Tool Permissions**: Granular control over which tools within an MCP server the customer can use
+- **Vector Stores**: Control which vector stores the customer can query
+- **Agents**: Restrict which agents the customer can interact with
+- **Agent Access Groups**: Assign customers to predefined groups of agents
+
+### Creating a Customer with Object Permissions
+
+```bash showLineNumbers title="Create customer with object permissions"
+curl -L -X POST 'http://localhost:4000/customer/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "user_1",
+    "object_permission": {
+      "mcp_servers": ["server_1", "server_2"],
+      "mcp_access_groups": ["public_group"],
+      "mcp_tool_permissions": {
+        "server_1": ["tool_a", "tool_b"]
+      },
+      "vector_stores": ["vector_store_1"],
+      "agents": ["agent_1"],
+      "agent_access_groups": ["basic_agents"]
+    }
+  }'
+```
+
+**Parameters:**
+- `mcp_servers` (Optional[List[str]]): List of allowed MCP server IDs
+- `mcp_access_groups` (Optional[List[str]]): List of MCP access group names
+- `mcp_tool_permissions` (Optional[Dict[str, List[str]]]): Map of server ID to allowed tool names
+- `vector_stores` (Optional[List[str]]): List of allowed vector store IDs
+- `agents` (Optional[List[str]]): List of allowed agent IDs
+- `agent_access_groups` (Optional[List[str]]): List of agent access group names
+
+**Note:** If `object_permission` is `null` or `{}`, the customer has no object-level restrictions.
+
+### Updating Customer Object Permissions
+
+You can update object permissions for existing customers:
+
+```bash showLineNumbers title="Update customer object permissions"
+curl -L -X POST 'http://localhost:4000/customer/update' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "user_1",
+    "object_permission": {
+      "mcp_servers": ["server_3"],
+      "vector_stores": ["vector_store_2", "vector_store_3"]
+    }
+  }'
+```
+
+### Viewing Customer Object Permissions
+
+When you query customer info, object permissions are included in the response:
+
+```bash showLineNumbers title="Get customer info with object permissions"
+curl -X GET 'http://0.0.0.0:4000/customer/info?end_user_id=user_1' \
+    -H 'Authorization: Bearer sk-1234'
+```
+
+**Response:**
+```json showLineNumbers title="Response with object permissions"
+{
+  "user_id": "user_1",
+  "blocked": false,
+  "alias": "John Doe",
+  "spend": 0.0,
+  "object_permission": {
+    "object_permission_id": "perm_abc123",
+    "mcp_servers": ["server_1", "server_2"],
+    "mcp_access_groups": ["public_group"],
+    "mcp_tool_permissions": {
+      "server_1": ["tool_a", "tool_b"]
+    },
+    "vector_stores": ["vector_store_1"],
+    "agents": ["agent_1"],
+    "agent_access_groups": ["basic_agents"]
+  },
+  "litellm_budget_table": null
+}
+```
+
+### Use Cases
+
+**1. Tiered Access Control**
+Create different permission tiers for your customers:
+
+```bash showLineNumbers title="Free tier customer"
+# Free tier - limited access
+curl -L -X POST 'http://localhost:4000/customer/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "free_user",
+    "budget_id": "free_tier",
+    "object_permission": {
+      "mcp_access_groups": ["public_group"],
+      "agent_access_groups": ["basic_agents"]
+    }
+  }'
+```
+
+```bash showLineNumbers title="Premium tier customer"
+# Premium tier - full access
+curl -L -X POST 'http://localhost:4000/customer/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "premium_user",
+    "budget_id": "premium_tier",
+    "object_permission": {
+      "mcp_servers": ["server_1", "server_2", "server_3"],
+      "vector_stores": ["vector_store_1", "vector_store_2"],
+      "agents": ["agent_1", "agent_2", "agent_3"]
+    }
+  }'
+```
+
+**2. Department-Specific Access**
+Restrict customers to resources relevant to their department:
+
+```bash showLineNumbers title="Sales team customer"
+curl -L -X POST 'http://localhost:4000/customer/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "sales_user",
+    "object_permission": {
+      "mcp_servers": ["crm_server", "email_server"],
+      "agents": ["sales_assistant"],
+      "vector_stores": ["sales_knowledge_base"]
+    }
+  }'
+```
+
+**3. Tool-Level Restrictions**
+Grant access to specific tools within an MCP server:
+
+```bash showLineNumbers title="Limited tool access"
+curl -L -X POST 'http://localhost:4000/customer/new' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "restricted_user",
+    "object_permission": {
+      "mcp_servers": ["database_server"],
+      "mcp_tool_permissions": {
+        "database_server": ["read_only_query", "get_table_schema"]
+      }
+    }
+  }'
+```
+
+## Setting Customer Budgets
 
 Set customer budgets (e.g. monthly budgets, tpm/rpm limits) on LiteLLM Proxy 
 

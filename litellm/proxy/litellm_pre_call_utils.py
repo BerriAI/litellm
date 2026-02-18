@@ -10,15 +10,10 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.proxy._types import (
-    AddTeamCallback,
-    CommonProxyErrors,
-    LitellmDataForBackendLLMCall,
-    LitellmUserRoles,
-    SpecialHeaders,
-    TeamCallbackMetadata,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import (AddTeamCallback, CommonProxyErrors,
+                                  LitellmDataForBackendLLMCall,
+                                  LitellmUserRoles, SpecialHeaders,
+                                  TeamCallbackMetadata, UserAPIKeyAuth)
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -28,12 +23,9 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
-from litellm.types.utils import (
-    LlmProviders,
-    ProviderSpecificHeader,
-    StandardLoggingUserAPIKeyMetadata,
-    SupportedCacheControls,
-)
+from litellm.types.utils import (LlmProviders, ProviderSpecificHeader,
+                                 StandardLoggingUserAPIKeyMetadata,
+                                 SupportedCacheControls)
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
@@ -396,6 +388,24 @@ class LiteLLMProxyRequestSetup:
         return user
 
     @staticmethod
+    def get_end_user_from_headers(headers: dict) -> Optional[str]:
+        """
+        Get the end user ID from the x-litellm-end-user header.
+
+        This header allows you to track customer/end-user spend and apply customer-specific
+        budgets and permissions without modifying the request body.
+
+        Returns:
+            Optional[str]: The end user ID if found in headers, None otherwise
+        """
+        end_user = LiteLLMProxyRequestSetup._get_case_insensitive_header(
+            headers, "x-litellm-end-user"
+        )
+        if end_user is not None:
+            verbose_logger.info(f'found end_user "{end_user}" in x-litellm-end-user header')
+        return end_user
+
+    @staticmethod
     def get_openai_org_id_from_headers(
         headers: dict, general_settings: Optional[Dict] = None
     ) -> Optional[str]:
@@ -640,8 +650,7 @@ class LiteLLMProxyRequestSetup:
             return data
         from litellm.proxy._types import (
             LiteLLM_ManagementEndpoint_MetadataFields,
-            LiteLLM_ManagementEndpoint_MetadataFields_Premium,
-        )
+            LiteLLM_ManagementEndpoint_MetadataFields_Premium)
 
         # ignore any special fields
         added_metadata = {}
@@ -872,7 +881,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         general_settings, user_api_key_dict, _headers
     )
 
-    # Parse user info from headers
+    # Parse end user ID from x-litellm-end-user header (takes precedence)
+    end_user_from_header = LiteLLMProxyRequestSetup.get_end_user_from_headers(_headers)
+    if end_user_from_header is not None:
+        if user_api_key_dict.end_user_id is None:
+            user_api_key_dict.end_user_id = end_user_from_header
+        if "user" not in data:
+            data["user"] = end_user_from_header
+
+    # Parse user info from headers (fallback to general_settings.user_header_name)
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
     if user is not None:
         if user_api_key_dict.end_user_id is None:
@@ -1530,12 +1547,9 @@ def _match_and_track_policies(
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_utils.callback_utils import (
-        add_policy_sources_to_metadata,
-        add_policy_to_applied_policies_header,
-    )
-    from litellm.proxy.policy_engine.attachment_registry import (
-        get_attachment_registry,
-    )
+        add_policy_sources_to_metadata, add_policy_to_applied_policies_header)
+    from litellm.proxy.policy_engine.attachment_registry import \
+        get_attachment_registry
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
     # Get matching policies via attachments (with match reasons for attribution)
@@ -1670,9 +1684,8 @@ def add_guardrails_from_policy_engine(
         user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        get_tags_from_request_body,
-    )
+    from litellm.proxy.common_utils.http_parsing_utils import \
+        get_tags_from_request_body
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
