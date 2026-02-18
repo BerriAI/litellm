@@ -1106,49 +1106,5 @@
       "guardrails_add": ["mcp-security-block"],
       "guardrails_remove": []
     }
-  },
-  {
-    "id": "claude-code-cost-optimization",
-    "title": "Claude Code Cost Optimization",
-    "description": "Reduces Claude Code API spend by blocking expensive inference modes (fast/turbo, inference_geo, and extended thinking) and automatically injecting prompt caching headers into system messages to maximize cache hit rates.",
-    "icon": "CurrencyDollarIcon",
-    "iconColor": "text-green-500",
-    "iconBg": "bg-green-50",
-    "guardrails": [
-      "claude-code-inject-prompt-cache",
-      "claude-code-block-expensive-flags"
-    ],
-    "complexity": "Low",
-    "guardrailDefinitions": [
-      {
-        "guardrail_name": "claude-code-inject-prompt-cache",
-        "litellm_params": {
-          "guardrail": "claude_code_prompt_cache",
-          "mode": "pre_call"
-        },
-        "guardrail_info": {
-          "description": "Automatically adds cache_control: {type: ephemeral} to system messages so Anthropic can cache the system prompt prefix. Only applies to Anthropic API models. Reduces cost on repeated calls that share the same system prompt."
-        }
-      },
-      {
-        "guardrail_name": "claude-code-block-expensive-flags",
-        "litellm_params": {
-          "guardrail": "claude_code_block_expensive_flags",
-          "mode": "pre_call"
-        },
-        "guardrail_info": {
-          "description": "Blocks expensive Anthropic API flags: fast/turbo inference (speed=fast, ~6x pricing), inference geo-routing (inference_geo, 1.1x pricing), and extended thinking (thinking.type=enabled). Also blocks Anthropic-hosted tools inherited from the hosted tools policy."
-        }
-      }
-    ],
-    "templateData": {
-      "policy_name": "claude-code-cost-optimization",
-      "description": "Reduces Claude Code API spend by blocking fast mode, inference_geo, extended thinking, and Anthropic-hosted tools, while auto-injecting prompt caching into system messages.",
-      "guardrails_add": [
-        "claude-code-inject-prompt-cache",
-        "claude-code-block-expensive-flags"
-      ],
-      "guardrails_remove": []
-    }
   }
 ]

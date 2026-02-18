@@ -65,7 +65,6 @@ class SupportedGuardrailIntegrations(Enum):
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
     BLOCK_HOSTED_TOOLS = "block_hosted_tools"
-    CLAUDE_CODE_PROMPT_CACHE = "claude_code_prompt_cache"
     CLAUDE_CODE_BLOCK_EXPENSIVE_FLAGS = "claude_code_block_expensive_flags"
 
 
