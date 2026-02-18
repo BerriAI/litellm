@@ -380,6 +380,7 @@ if TYPE_CHECKING:
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
@@ -2177,6 +2178,10 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
         enc = tokenizer_json["tokenizer"].encode(text)
+    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
+    # extract .ids so the return type is always List[int].
+    if hasattr(enc, "ids"):
+        return enc.ids
     return enc
 
 
@@ -2408,6 +2413,7 @@ def supports_response_schema(
         litellm.LlmProviders.FIREWORKS_AI,
         litellm.LlmProviders.LM_STUDIO,
         litellm.LlmProviders.NEBIUS,
+        litellm.LlmProviders.DATABRICKS,
     ]
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
@@ -8279,6 +8285,25 @@ class ProviderConfigManager:
         """
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicSkillsConfig()
+        return None
+
+    @staticmethod
+    def get_provider_evals_api_config(
+        provider: LlmProviders,
+    ) -> Optional["BaseEvalsAPIConfig"]:
+        """
+        Get provider-specific Evals API configuration
+
+        Args:
+            provider: The LLM provider
+
+        Returns:
+            Provider-specific Evals API config or None
+        """
+        if litellm.LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+
+            return OpenAIEvalsConfig()
         return None
 
     @staticmethod

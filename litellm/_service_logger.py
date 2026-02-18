@@ -312,10 +312,12 @@ class ServiceLogging(CustomLogger):
                         _duration, type(_duration)
                     )
                 )  # invalid _duration value
+            # Batch polling callbacks (check_batch_cost) don't include call_type in kwargs.
+            # Use .get() to avoid KeyError.
             await self.async_service_success_hook(
                 service=ServiceTypes.LITELLM,
                 duration=_duration,
-                call_type=kwargs["call_type"],
+                call_type=kwargs.get("call_type", "unknown")
             )
         except Exception as e:
             raise e

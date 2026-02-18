@@ -12,10 +12,11 @@ import { MCP_CALL_TYPES } from "../constants";
 import { getEventDisplayName } from "../utils";
 import { DrawerHeader } from "./DrawerHeader";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
-import { LogDetailContent } from "./LogDetailContent";
+import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
+import { normalizeGuardrailEntries } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 
@@ -323,6 +324,11 @@ export function LogDetailsDrawer({
             </div>
 
             <div className="flex-1 overflow-y-auto">
+              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                <div className="px-3 pt-2">
+                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
+                </div>
+              )}
               {isSessionMode ? (
                 <div className="py-1">
                   {/* Child events — vertical tree line with horizontal connectors */}
@@ -378,6 +384,7 @@ export function LogDetailsDrawer({
                 logEntry={enrichedLog}
                 onOpenSettings={onOpenSettings}
                 isLoadingDetails={isLoadingDetails}
+                accessToken={accessToken ?? null}
               />
             </div>
           </div>

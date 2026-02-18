@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Card, Button, Spin, message } from "antd";
+import React, { useState, useEffect, useMemo } from "react";
+import { Card, Button, Spin, message, Radio } from "antd";
 import {
   ShieldCheckIcon,
   ShieldExclamationIcon,
@@ -116,6 +116,26 @@ const iconMap: Record<string, React.ComponentType<React.SVGProps<SVGSVGElement>>
 const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, accessToken }) => {
   const [templates, setTemplates] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState<string>("All");
+  const [selectedType, setSelectedType] = useState<string>("All");
+
+  const availableRegions = useMemo(() => {
+    const regions = new Set(templates.map(t => t.region || "Global"));
+    return ["All", ...Array.from(regions).sort()];
+  }, [templates]);
+
+  const availableTypes = useMemo(() => {
+    const types = new Set(templates.map(t => t.type || "General"));
+    return ["All", ...Array.from(types).sort()];
+  }, [templates]);
+
+  const filteredTemplates = useMemo(() => {
+    return templates.filter(t => {
+      const regionMatch = selectedRegion === "All" || (t.region || "Global") === selectedRegion;
+      const typeMatch = selectedType === "All" || (t.type || "General") === selectedType;
+      return regionMatch && typeMatch;
+    });
+  }, [templates, selectedRegion, selectedType]);
 
   useEffect(() => {
     const fetchTemplates = async () => {
@@ -158,8 +178,41 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, access
         </div>
       </div>
 
+      <div className="flex items-center gap-6 mb-4">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-gray-700">Region:</span>
+          <Radio.Group
+            value={selectedRegion}
+            onChange={(e) => setSelectedRegion(e.target.value)}
+            buttonStyle="solid"
+          >
+            {availableRegions.map(region => (
+              <Radio.Button key={region} value={region}>
+                {region}
+              </Radio.Button>
+            ))}
+          </Radio.Group>
+        </div>
+        {availableTypes.length > 2 && (
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-gray-700">Type:</span>
+            <Radio.Group
+              value={selectedType}
+              onChange={(e) => setSelectedType(e.target.value)}
+              buttonStyle="solid"
+            >
+              {availableTypes.map(type => (
+                <Radio.Button key={type} value={type}>
+                  {type}
+                </Radio.Button>
+              ))}
+            </Radio.Group>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {templates.map((template, index) => (
+        {filteredTemplates.map((template, index) => (
           <PolicyTemplateCard
             key={template.id || index}
             title={template.title}

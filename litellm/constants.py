@@ -319,6 +319,9 @@ NON_LLM_CONNECTION_TIMEOUT = int(
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
+BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(
+    os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
+)
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 )
@@ -1036,6 +1039,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
+    "anthropic.claude-sonnet-4-6",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -1258,6 +1262,9 @@ LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false"
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
     os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
 )  # 24 hours default
+LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
+    "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
+)  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 

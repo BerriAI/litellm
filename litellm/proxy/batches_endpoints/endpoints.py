@@ -29,6 +29,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
+    resolve_input_file_id_to_unified,
     update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
@@ -305,7 +306,7 @@ async def create_batch(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
-async def retrieve_batch(
+async def retrieve_batch( # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -377,6 +378,11 @@ async def retrieve_batch(
             response = await proxy_logging_obj.post_call_success_hook(
                 data=data, user_api_key_dict=user_api_key_dict, response=response
             )
+
+            # async_post_call_success_hook replaces batch.id and output_file_id with unified IDs
+            # but not input_file_id. Resolve raw provider ID to unified ID.
+            if unified_batch_id:
+                await resolve_input_file_id_to_unified(response, prisma_client)
             
             asyncio.create_task(
                 proxy_logging_obj.update_request_status(
@@ -478,6 +484,11 @@ async def retrieve_batch(
         response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
+
+        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
+        # Resolve raw provider input_file_id to unified ID.
+        if unified_batch_id:
+            await resolve_input_file_id_to_unified(response, prisma_client)
 
         ### ALERTING ###
         asyncio.create_task(

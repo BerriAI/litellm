@@ -1726,7 +1726,7 @@ const fetchDailyActivity = async ({
   }
 };
 
-export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1) => {
+export const userDailyActivityCall = async (accessToken: string, startTime: Date, endTime: Date, page: number = 1, userId: string | null = null) => {
   /**
    * Get daily user activity on proxy
    */
@@ -1736,6 +1736,9 @@ export const userDailyActivityCall = async (accessToken: string, startTime: Date
     startTime,
     endTime,
     page,
+    extraQueryParams: {
+      user_id: userId,
+    },
   });
 };
 
@@ -3405,7 +3408,7 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
-export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date, userId: string | null = null) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
@@ -3423,6 +3426,9 @@ export const userDailyActivityAggregatedCall = async (accessToken: string, start
     queryParams.append("end_date", formatDate(endTime));
     // Send timezone offset so backend can adjust date range for UTC storage
     queryParams.append("timezone", new Date().getTimezoneOffset().toString());
+    if (userId) {
+      queryParams.append("user_id", userId);
+    }
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
@@ -9228,4 +9234,71 @@ export const deleteClaudeCodePlugin = async (accessToken: string, pluginName: st
     console.error(`Failed to delete plugin "${pluginName}":`, error);
     throw error;
   }
+};
+
+// Compliance check types and functions
+
+export interface ComplianceCheckResult {
+  check_name: string;
+  article: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface ComplianceResponse {
+  compliant: boolean;
+  regulation: string;
+  checks: ComplianceCheckResult[];
+}
+
+export interface ComplianceCheckRequest {
+  request_id: string;
+  user_id?: string;
+  model?: string;
+  timestamp?: string;
+  guardrail_information?: Record<string, any>[];
+}
+
+export const checkEuAiActCompliance = async (
+  accessToken: string,
+  payload: ComplianceCheckRequest
+): Promise<ComplianceResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/compliance/eu-ai-act`
+    : `/compliance/eu-ai-act`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+export const checkGdprCompliance = async (
+  accessToken: string,
+  payload: ComplianceCheckRequest
+): Promise<ComplianceResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/compliance/gdpr`
+    : `/compliance/gdpr`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
 };
