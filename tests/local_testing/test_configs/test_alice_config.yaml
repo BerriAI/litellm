@@ -1,0 +1,20 @@
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "alice-wonderfence"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: ["during_call", "post_call"]  # Test both input and output
+      api_key: os.environ/ALICE_API_KEY
+      app_name: os.environ/ALICE_APP_NAME
+      api_timeout: 20.0  # Default timeout (changed from 30.0 to 10.0)
+      platform: aws  # Optional: Cloud platform (aws, azure, databricks, etc.)
+      default_on: true
+
+
+litellm_settings:
+  set_verbose: true

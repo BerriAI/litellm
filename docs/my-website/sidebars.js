@@ -76,6 +76,7 @@ const sidebars = {
               "proxy/guardrails/custom_code_guardrail",
               "proxy/guardrails/prompt_injection",
               "proxy/guardrails/tool_permission",
+              "proxy/guardrails/alice_wonderfence",
               "proxy/guardrails/zscaler_ai_guard",
               "proxy/guardrails/javelin"
             ].sort(),

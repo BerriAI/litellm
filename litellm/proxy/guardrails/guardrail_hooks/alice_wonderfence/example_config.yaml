@@ -1,0 +1,88 @@
+# Example LiteLLM Proxy configuration with Alice WonderFence guardrail
+#
+# Start the proxy with:
+#   litellm --config proxy_config_wonderfence.yaml
+#
+# Environment variables:
+#   ALICE_API_KEY          - Required: API key for WonderFence
+#   ALICE_APP_NAME         - Optional: Application name (default: litellm)
+#   ALICE_RETRY_MAX        - Optional: Max retries for API calls (SDK default: 3)
+#   ALICE_RETRY_BASE_DELAY - Optional: Base retry delay in seconds (SDK default: 1.0)
+#   OPENAI_API_KEY               - Required: API key for OpenAI
+
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+# WonderFence guardrail configuration
+guardrails:
+  # Pre-call guardrail: Evaluate user prompts before sending to LLM
+  - guardrail_name: "alice-wonderfence-input-guard"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: "pre_call"
+      api_key: os.environ/ALICE_API_KEY
+      app_name: "my-litellm-app"
+      api_timeout: 20.0
+      default_on: true
+
+  # Post-call guardrail: Evaluate LLM responses before returning to user
+  - guardrail_name: "alice-wonderfence-output-guard"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: "post_call"
+      api_key: os.environ/ALICE_API_KEY
+      app_name: "my-litellm-app"
+      api_timeout: 20.0
+      default_on: true
+
+  # Combined pre and post-call guardrail with advanced options
+  - guardrail_name: "alice-wonderfence-full-guard"
+    litellm_params:
+      guardrail: alice_wonderfence
+      mode: ["pre_call", "post_call"]
+      api_key: os.environ/ALICE_API_KEY
+      app_name: "my-litellm-app"
+      api_timeout: 20.0
+      platform: "aws"           # Optional: cloud platform context
+      default_on: false         # Enable per-request only
+
+# Example usage with curl:
+#
+# 1. With default guardrails (alice-wonderfence-input-guard and alice-wonderfence-output-guard are enabled by default):
+#
+#    curl -X POST http://localhost:4000/chat/completions \
+#      -H "Authorization: Bearer sk-xxx" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "model": "gpt-4",
+#        "messages": [{"role": "user", "content": "Hello, how are you?"}]
+#      }'
+#
+# 2. With per-request guardrail selection and metadata:
+#
+#    curl -X POST http://localhost:4000/chat/completions \
+#      -H "Authorization: Bearer sk-xxx" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "model": "gpt-4",
+#        "messages": [{"role": "user", "content": "Hello"}],
+#        "guardrails": ["alice-wonderfence-full-guard"],
+#        "metadata": {
+#          "session_id": "session-123",
+#          "user_id": "user-456"
+#        }
+#      }'
+#
+# 3. Disable global guardrails for a specific request:
+#
+#    curl -X POST http://localhost:4000/chat/completions \
+#      -H "Authorization: Bearer sk-xxx" \
+#      -H "Content-Type: application/json" \
+#      -d '{
+#        "model": "gpt-4",
+#        "messages": [{"role": "user", "content": "Hello"}],
+#        "disable_global_guardrail": true
+#      }'
