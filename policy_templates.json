@@ -770,6 +770,81 @@
     }
   },
   {
+    "id": "claude-code-pii-protection",
+    "title": "Claude Code PII Protection",
+    "description": "Prevents data leakage in Claude Code sessions by blocking all Anthropic-hosted tools (bash, web_search, web_fetch, code_execution, memory, text_editor) and masking PII and credentials found in request messages.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-indigo-500",
+    "iconBg": "bg-indigo-50",
+    "guardrails": [
+      "claude-code-block-hosted-tools",
+      "claude-code-pii-credentials",
+      "claude-code-pii-personal-data"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "claude-code-block-hosted-tools",
+        "litellm_params": {
+          "guardrail": "block_hosted_tools",
+          "mode": "pre_call"
+        },
+        "guardrail_info": {
+          "description": "Blocks platform-hosted tools from Anthropic (bash, web_search, web_fetch, code_execution, memory, text_editor, tool_search), OpenAI (code_interpreter, file_search, web_search_preview), and Gemini (googleSearch, code_execution, url_context). Only custom tool schemas are permitted."
+        }
+      },
+      {
+        "guardrail_name": "claude-code-pii-credentials",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
+            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Blocks requests containing credentials or API keys (AWS, GitHub, Slack) that could be exfiltrated through the LLM context."
+        }
+      },
+      {
+        "guardrail_name": "claude-code-pii-personal-data",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {"pattern_type": "prebuilt", "pattern_name": "us_ssn", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "us_phone", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"},
+            {"pattern_type": "prebuilt", "pattern_name": "ipv4", "action": "MASK"}
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks SSNs, email addresses, phone numbers, credit card numbers, IBANs, and IP addresses before they enter the LLM context."
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "claude-code-pii-protection",
+      "description": "Prevents data leakage in Claude Code sessions. Blocks Anthropic-hosted tools and masks PII and credentials in request messages.",
+      "guardrails_add": [
+        "claude-code-block-hosted-tools",
+        "claude-code-pii-credentials",
+        "claude-code-pii-personal-data"
+      ],
+      "guardrails_remove": []
+    }
+  },
+  {
     "id": "eu-ai-act-article5",
     "title": "EU AI Act Article 5 — Prohibited Practices",
     "description": "Comprehensive EU AI Act Article 5 compliance covering all prohibited AI practices. Includes 5 dedicated sub-guardrails per language (English + French) for: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition in workplace/education (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Uses conditional matching (identifier word + context word).",

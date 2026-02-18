@@ -5,24 +5,18 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
-from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
-    EnkryptAIGuardrailConfigs,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
-    GraySwanGuardrailConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
-    IBMGuardrailsBaseConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    ContentFilterCategoryConfig,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
-    QualifireGuardrailConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
-    ToolPermissionGuardrailConfigModel,
-)
+from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import \
+    EnkryptAIGuardrailConfigs
+from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import \
+    GraySwanGuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.ibm import \
+    IBMGuardrailsBaseConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
+    ContentFilterCategoryConfig
+from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import \
+    QualifireGuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import \
+    ToolPermissionGuardrailConfigModel
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -70,6 +64,8 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    BLOCK_HOSTED_TOOLS = "block_hosted_tools"
+    CLAUDE_CODE_BLOCK_EXPENSIVE_FLAGS = "claude_code_block_expensive_flags"
 
 
 class Role(Enum):

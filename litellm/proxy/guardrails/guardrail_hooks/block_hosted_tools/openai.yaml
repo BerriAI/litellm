@@ -1,0 +1,19 @@
+# OpenAI platform-hosted tools executed on OpenAI's infrastructure.
+# These are matched by exact 'type' field value (no version suffix).
+#
+# Reference: https://platform.openai.com/docs/guides/tools
+
+provider: "openai"
+description: "OpenAI platform-hosted tools executed on OpenAI infrastructure"
+
+tool_type_exact:
+  - type: "code_interpreter"
+    description: "Python code execution and file output sandbox"
+  - type: "file_search"
+    description: "Semantic file search across vector stores"
+  - type: "web_search_preview"
+    description: "Bing-powered live web search"
+  - type: "computer_use_preview"
+    description: "Computer use / automated screen interaction"
+  - type: "shell"
+    description: "Shell command execution in containers"

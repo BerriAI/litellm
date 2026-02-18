@@ -1,0 +1,35 @@
+# Google Gemini / Vertex AI platform-hosted tools executed on Google infrastructure.
+# Gemini tools appear in two formats in the API:
+#   - OpenAI-compat: tool dict has 'type' set to the value below
+#   - Gemini native: tool dict has a top-level key matching the tool name
+# Both formats are checked.
+#
+# Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/function-calling
+
+provider: "gemini"
+description: "Google Gemini / Vertex AI platform-hosted tools"
+
+# Matched against the 'type' field (OpenAI-compat format)
+tool_type_exact:
+  - type: "code_execution"
+    description: "Code execution sandbox (OpenAI-compat format)"
+  - type: "url_context"
+    description: "URL fetching and context grounding (OpenAI-compat format)"
+
+# Matched as top-level dict keys (Gemini native format)
+# e.g. {"googleSearch": {}}, {"codeExecution": {}}
+tool_top_level_keys:
+  - key: "googleSearch"
+    description: "Google Search grounding"
+  - key: "googleSearchRetrieval"
+    description: "Google Search retrieval with data store integration"
+  - key: "enterpriseWebSearch"
+    description: "Enterprise web search"
+  - key: "url_context"
+    description: "URL context grounding"
+  - key: "code_execution"
+    description: "Code execution sandbox"
+  - key: "googleMaps"
+    description: "Google Maps integration"
+  - key: "computerUse"
+    description: "Computer use / automated screen interaction"
