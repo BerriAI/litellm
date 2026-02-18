@@ -66,9 +66,6 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
   const hasGuardrailData = guardrailEntries.length > 0;
   const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
   const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
-  const guardrailPolicyNames = Array.from(
-    new Set(guardrailEntries.map((e: any) => e?.policy_template).filter(Boolean))
-  ) as string[];
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
@@ -104,6 +101,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         />
       )}
 
+      {/* Quick-jump to Guardrails */}
+      {hasGuardrailData && <GuardrailJumpLink guardrailEntries={guardrailEntries} />}
+
       {/* Tags */}
       {logEntry.request_tags && Object.keys(logEntry.request_tags).length > 0 && (
         <TagsSection tags={logEntry.request_tags} />
@@ -127,7 +127,7 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
             )}
             {hasGuardrailData && (
               <Descriptions.Item label="Guardrail">
-                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} policyNames={guardrailPolicyNames} />
+                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} />
               </Descriptions.Item>
             )}
           </Descriptions>
@@ -225,7 +225,7 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
   );
 }
 
-function GuardrailLabel({ label, maskedCount, policyNames }: { label: string; maskedCount: number; policyNames: string[] }) {
+function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: number }) {
   const handleClick = () => {
     const el = document.getElementById("guardrail-section");
     if (el) el.scrollIntoView({ behavior: "smooth" });
@@ -239,9 +239,6 @@ function GuardrailLabel({ label, maskedCount, policyNames }: { label: string; ma
           {maskedCount} masked
         </Tag>
       )}
-      {policyNames.map((name) => (
-        <Tag key={name} color="purple">{name}</Tag>
-      ))}
     </Space>
   );
 }
@@ -420,6 +417,41 @@ function RequestResponseSection({
           },
         ]}
       />
+    </div>
+  );
+}
+
+function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
+  const allPassed = guardrailEntries.every((e) => {
+    const status = e?.guardrail_status || e?.status;
+    return status === "pass" || status === "passed" || status === "success";
+  });
+
+  const handleClick = () => {
+    const el = document.getElementById("guardrail-section");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
+  return (
+    <div
+      onClick={handleClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "4px 12px",
+        marginBottom: 12,
+        borderRadius: 16,
+        cursor: "pointer",
+        fontSize: 13,
+        fontWeight: 500,
+        backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
+        color: allPassed ? "#15803d" : "#b91c1c",
+        border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
+      }}
+    >
+      {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+      <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
     </div>
   );
 }
