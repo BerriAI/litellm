@@ -5146,13 +5146,18 @@ async def async_data_generator(
         # Close the response stream to release the underlying HTTP connection
         # back to the connection pool. This prevents pool exhaustion when
         # clients disconnect mid-stream.
-        if hasattr(response, "aclose"):
-            try:
-                await response.aclose()
-            except Exception as e:
-                verbose_proxy_logger.debug(
-                    "async_data_generator: error closing response stream: %s", e
-                )
+        # Shield from cancellation so the close awaits can complete.
+        import anyio
+
+        with anyio.CancelScope(shield=True):
+            if hasattr(response, "aclose"):
+                try:
+                    await response.aclose()
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        "async_data_generator: error closing response stream: %s",
+                        e,
+                    )
 
 
 def select_data_generator(
