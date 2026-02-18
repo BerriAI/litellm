@@ -1,0 +1,24 @@
+# Anthropic server-side hosted tools.
+# Tools are matched by prefix against the tool 'type' field, because Anthropic
+# appends a version date suffix (e.g. bash_20250124, web_search_20250305).
+#
+# Reference: https://docs.anthropic.com/en/docs/agents-and-tools/computer-use
+
+provider: "anthropic"
+description: "Anthropic server-side hosted tools executed on Anthropic infrastructure"
+
+tool_type_prefixes:
+  - prefix: "bash_"
+    description: "Bash shell execution tool"
+  - prefix: "web_search_"
+    description: "Web search tool"
+  - prefix: "web_fetch_"
+    description: "Web fetch / URL retrieval tool"
+  - prefix: "code_execution_"
+    description: "Code execution sandbox tool"
+  - prefix: "memory_"
+    description: "Memory read/write tool"
+  - prefix: "text_editor_"
+    description: "Text editor tool"
+  - prefix: "tool_search_"
+    description: "Tool search / discovery tool"
