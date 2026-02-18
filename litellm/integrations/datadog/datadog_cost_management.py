@@ -93,7 +93,9 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         Aggregates costs by Provider, Model, and Date.
         Returns a list of DatadogFOCUSCostEntry.
         """
-        aggregator: Dict[Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry] = {}
+        aggregator: Dict[
+            Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry
+        ] = {}
 
         for log in logs:
             try:
@@ -171,6 +173,12 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 tags["user"] = str(metadata["user_api_key_alias"])
             if "user_api_key_team_alias" in metadata:
                 tags["team"] = str(metadata["user_api_key_team_alias"])
+            elif "team_alias" in metadata:
+                tags["team"] = str(metadata["team_alias"])
+            elif "user_api_key_team_id" in metadata:
+                tags["team"] = str(metadata["user_api_key_team_id"])
+            elif "team_id" in metadata:
+                tags["team"] = str(metadata["team_id"])
             # model_group is not in StandardLoggingMetadata TypedDict, so we need to access it via dict.get()
             model_group = metadata.get("model_group")  # type: ignore[misc]
             if model_group:
