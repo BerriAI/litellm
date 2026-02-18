@@ -119,7 +119,7 @@ async def anthropic_response(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.anthropic_response(): Exception occurred - {}".format(
                 str(e)
             )
         )

@@ -82,7 +82,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.error(
-                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {}".format(
+                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occurred - {}".format(
                     str(e)
                 )
             )
@@ -153,7 +153,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_router_logger.exception(
-                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occured - {}".format(
+                "litellm.router_strategy.lowest_tpm_rpm.py::async_log_success_event(): Exception occurred - {}".format(
                     str(e)
                 )
             )

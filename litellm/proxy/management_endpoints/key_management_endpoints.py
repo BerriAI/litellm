@@ -1154,7 +1154,7 @@ async def generate_key_fn(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.generate_key_fn(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -1334,7 +1334,7 @@ def prepare_metadata_fields(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -1891,7 +1891,7 @@ async def update_key_fn(
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.update_key_fn(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.update_key_fn(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -2250,7 +2250,7 @@ async def delete_key_fn(
         return {"deleted_keys": deleted_keys}
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.delete_key_fn(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.delete_key_fn(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -2706,7 +2706,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                     key_data["router_settings"] = {}
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.generate_key_helper_fn(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -2936,7 +2936,7 @@ async def delete_verification_tokens(
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.delete_verification_tokens(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.delete_verification_tokens(): Exception occurred - {}".format(
                 str(e)
             )
         )

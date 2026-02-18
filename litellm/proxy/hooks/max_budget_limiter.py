@@ -43,7 +43,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             raise e
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occured - {}".format(
+                "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occurred - {}".format(
                     str(e)
                 )
             )

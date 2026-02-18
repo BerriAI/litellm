@@ -76,7 +76,7 @@ class UserAPIKeyAuthExceptionHandler:
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occurred - {}\nRequester IP Address:{}".format(
                     str(e),
                     requester_ip,
                 ),

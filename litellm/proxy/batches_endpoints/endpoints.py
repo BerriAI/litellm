@@ -284,7 +284,7 @@ async def create_batch(  # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.create_batch(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.create_batch(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -521,7 +521,7 @@ async def retrieve_batch( # noqa: PLR0915
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.retrieve_batch(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -695,7 +695,7 @@ async def list_batches(
             request_data={"after": after, "limit": limit},
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.retrieve_batch(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.retrieve_batch(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -895,7 +895,7 @@ async def cancel_batch(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.create_batch(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.create_batch(): Exception occurred - {}".format(
                 str(e)
             )
         )

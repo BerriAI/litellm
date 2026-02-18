@@ -143,7 +143,7 @@ async def add_team_callbacks(
         raise e
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.add_team_callbacks(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.add_team_callbacks(): Exception occurred - {}".format(
                 str(e)
             )
         )
