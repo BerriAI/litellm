@@ -41,7 +41,6 @@ class TestVertexAIRerankTransform:
         for var, value in self._saved_env.items():
             os.environ[var] = value
 
-<<<<<<< litellm_oss_staging_02_17_2026
     def test_get_complete_url(self):
         """
         Test URL generation for Vertex AI Discovery Engine rerank API.
@@ -52,19 +51,6 @@ class TestVertexAIRerankTransform:
         # Mock _ensure_access_token at instance level to return (token, project_id)
         mock_ensure_access_token = MagicMock(return_value=("mock-token", None))
         self.config._ensure_access_token = mock_ensure_access_token
-=======
-    @patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str')
-    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_get_complete_url(self, mock_ensure_access_token, mock_get_secret_str):
-        """Test URL generation for Vertex AI Discovery Engine rerank API."""
-        # Mock _ensure_access_token to return (token, project_id)
-        mock_ensure_access_token.return_value = ("mock-token", None)
-
-        # Mock get_secret_str to return the environment variable value
-        def mock_get_secret(key):
-            return os.environ.get(key)
-        mock_get_secret_str.side_effect = mock_get_secret
->>>>>>> main
 
         # Test with project ID from environment
         with patch.dict(os.environ, {"VERTEXAI_PROJECT": "test-project-123"}):
@@ -109,7 +95,6 @@ class TestVertexAIRerankTransform:
             finally:
                 litellm.vertex_project = original_project
 
-<<<<<<< litellm_oss_staging_02_17_2026
     def test_validate_environment(self):
         """
         Test environment validation and header setup.
@@ -135,36 +120,6 @@ class TestVertexAIRerankTransform:
             "X-Goog-User-Project": "test-project-123"
         }
         assert headers == expected_headers
-=======
-    @patch('litellm.llms.vertex_ai.rerank.transformation.get_secret_str')
-    @patch('litellm.llms.vertex_ai.rerank.transformation.VertexAIRerankConfig._ensure_access_token')
-    def test_validate_environment(self, mock_ensure_access_token, mock_get_secret_str):
-        """Test environment validation and header setup."""
-        # Mock the authentication
-        mock_ensure_access_token.return_value = ("test-access-token", "test-project-123")
-
-        # Mock get_secret_str to return the environment variable value
-        def mock_get_secret(key):
-            return os.environ.get(key)
-        mock_get_secret_str.side_effect = mock_get_secret
-
-        # Mock the credential and project methods
-        with patch.object(self.config, 'get_vertex_ai_credentials', return_value=None), \
-             patch.object(self.config, 'get_vertex_ai_project', return_value="test-project-123"):
-
-            headers = self.config.validate_environment(
-                headers={},
-                model=self.model,
-                api_key=None
-            )
-
-            expected_headers = {
-                "Authorization": "Bearer test-access-token",
-                "Content-Type": "application/json",
-                "X-Goog-User-Project": "test-project-123"
-            }
-            assert headers == expected_headers
->>>>>>> main
 
     def test_transform_rerank_request_basic(self):
         """Test basic request transformation for Vertex AI Discovery Engine format."""
