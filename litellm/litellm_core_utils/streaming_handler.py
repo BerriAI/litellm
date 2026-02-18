@@ -921,7 +921,7 @@ class CustomStreamWrapper:
                         verbose_logger.debug(
                             "model_response.choices[0].delta: %s",
                             model_response.choices[0].delta,
-                    )
+                        )
                 else:
                     ## else
                     completion_obj["content"] = model_response_str
@@ -1933,6 +1933,10 @@ class CustomStreamWrapper:
                         # drops it. The original usage is already preserved in
                         # self.chunks (appended above) for calculate_total_usage().
                         processed_chunk.usage = None  # type: ignore
+                        # After nullifying usage, check if the chunk has any
+                        # remaining content (delta, finish_reason, etc.).
+                        # is_model_response_stream_empty sees usage=None and
+                        # correctly skips it, only checking meaningful fields.
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
                         )
