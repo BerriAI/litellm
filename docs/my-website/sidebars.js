@@ -786,6 +786,7 @@ const sidebars = {
     },
     "providers/litellm_proxy",
     "providers/abliteration",
+    "providers/ag2",
     "providers/ai21",
     "providers/aiml",
         "providers/aleph_alpha",
