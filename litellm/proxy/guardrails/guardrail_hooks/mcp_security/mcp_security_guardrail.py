@@ -15,9 +15,6 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.responses.mcp.litellm_proxy_mcp_handler import (
-    LITELLM_PROXY_MCP_SERVER_URL_PREFIX,
-)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -74,34 +71,22 @@ class MCPSecurityGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def _extract_mcp_server_names_from_tools(tools: List[dict]) -> Set[str]:
-        """Extract MCP server names from tools with type=mcp and litellm_proxy server_url."""
-        server_names: Set[str] = set()
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            if tool.get("type") != "mcp":
-                continue
-            server_url = tool.get("server_url", "")
-            if not isinstance(server_url, str):
-                continue
-            if server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):
-                name = server_url[len(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):]
-                if name:
-                    server_names.add(name)
-        return server_names
-
-    @staticmethod
     def _find_unregistered_mcp_servers(data: dict) -> Set[str]:
-        """Check tools in data against the MCP server registry. Returns set of unregistered server names."""
+        """Check MCP tools in data against the MCP server registry.
+
+        A tool is considered unregistered if its server_label/name
+        does not match any registered MCP server name or alias.
+        """
         tools = data.get("tools")
         if not tools or not isinstance(tools, list):
             return set()
 
-        requested_servers = (
-            MCPSecurityGuardrail._extract_mcp_server_names_from_tools(tools)
-        )
-        if not requested_servers:
+        mcp_tools = [
+            t
+            for t in tools
+            if isinstance(t, dict) and t.get("type") == "mcp"
+        ]
+        if not mcp_tools:
             return set()
 
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -109,6 +94,39 @@ class MCPSecurityGuardrail(CustomGuardrail):
         )
 
         registry = global_mcp_server_manager.get_registry()
-        registered_names = set(registry.keys())
 
-        return requested_servers - registered_names
+        registered_identifiers: Set[str] = set()
+        for key, srv in registry.items():
+            registered_identifiers.add(key)
+            if srv.name:
+                registered_identifiers.add(srv.name)
+            if srv.alias:
+                registered_identifiers.add(srv.alias)
+            if srv.server_name:
+                registered_identifiers.add(srv.server_name)
+            if srv.url:
+                registered_identifiers.add(srv.url)
+
+        verbose_proxy_logger.info(
+            "MCP Security: registered_identifiers=%s", registered_identifiers
+        )
+
+        unregistered: Set[str] = set()
+        for tool in mcp_tools:
+            server_label = tool.get("server_label") or tool.get("server_url") or ""
+            server_url = tool.get("server_url") or ""
+
+            if not server_label and not server_url:
+                continue
+
+            label_registered = server_label in registered_identifiers
+            url_registered = server_url in registered_identifiers
+
+            if not label_registered and not url_registered:
+                display = server_label or server_url
+                unregistered.add(display)
+
+        verbose_proxy_logger.info(
+            "MCP Security: unregistered=%s", unregistered
+        )
+        return unregistered
