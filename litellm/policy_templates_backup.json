@@ -831,5 +831,126 @@
       ],
       "guardrails_remove": []
     }
+  },
+  {
+    "id": "prompt-injection-detection",
+    "title": "Prompt Injection Detection",
+    "description": "Detects and blocks prompt injection attacks including SQL injection, malicious code injection, system prompt extraction, jailbreak attempts, and data exfiltration. Applies pre-call screening to block attacks before they reach the LLM.",
+    "region": "Global",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "prompt-injection-sql",
+      "prompt-injection-malicious-code",
+      "prompt-injection-system-prompt",
+      "prompt-injection-jailbreak",
+      "prompt-injection-data-exfiltration"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "prompt-injection-sql",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_sql",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks SQL injection attempts in prompts (DROP TABLE, UNION SELECT, OR 1=1, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-malicious-code",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_malicious_code",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks malicious code injection attempts (shell commands, reverse shells, script injection, encoded payloads)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-system-prompt",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_system_prompt",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks system prompt extraction and instruction override attempts (ignore previous instructions, reveal your prompt, etc.)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-jailbreak",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_jailbreak",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks jailbreak attempts (DAN mode, developer mode, safety bypass, token smuggling)"
+        }
+      },
+      {
+        "guardrail_name": "prompt-injection-data-exfiltration",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "prompt_injection_data_exfiltration",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks data exfiltration attempts (extract training data, dump database, steal credentials, etc.)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "prompt-injection-detection",
+      "description": "Prompt injection detection policy. Blocks SQL injection, malicious code injection, system prompt extraction, jailbreak attempts, and data exfiltration in prompts before they reach the LLM.",
+      "guardrails_add": [
+        "prompt-injection-sql",
+        "prompt-injection-malicious-code",
+        "prompt-injection-system-prompt",
+        "prompt-injection-jailbreak",
+        "prompt-injection-data-exfiltration"
+      ],
+      "guardrails_remove": []
+    }
   }
 ]
