@@ -454,6 +454,7 @@ from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
+from litellm.proxy.spend_tracking.mavvrik_endpoints import router as mavvrik_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -5657,6 +5658,15 @@ class ProxyStartupEvent:
 
         if await is_cloudzero_setup():
             await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Mavvrik Background Job
+        ########################################################
+        from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
+        from litellm.proxy.spend_tracking.mavvrik_endpoints import is_mavvrik_setup
+
+        if await is_mavvrik_setup():
+            await MavvrikLogger.init_mavvrik_background_job(scheduler=scheduler)
 
         ########################################################
         # Focus Background Job
@@ -12486,6 +12496,7 @@ app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
+app.include_router(mavvrik_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
