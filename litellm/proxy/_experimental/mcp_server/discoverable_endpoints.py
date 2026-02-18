@@ -227,7 +227,7 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for grant_type=refresh_token",
             )
-        token_data = {
+        token_data: dict = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": resolved_client_id,
@@ -240,11 +240,9 @@ async def exchange_token_with_server(
             "grant_type": "authorization_code",
             "client_id": resolved_client_id,
             "redirect_uri": f"{proxy_base_url}/callback",
+            "client_secret": resolved_client_secret,
+            "code": code,
         }
-        if code:
-            token_data["code"] = code
-        if resolved_client_secret:
-            token_data["client_secret"] = resolved_client_secret
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
