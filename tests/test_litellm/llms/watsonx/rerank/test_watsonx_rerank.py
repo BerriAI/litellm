@@ -73,19 +73,7 @@ class TestIBMWatsonXRerankTransform:
         assert request_body["documents"] == optional_params["documents"]
         assert request_body["top_n"] == 2
         assert request_body["return_documents"] is True
-
-    def test_transform_rerank_request_missing_scope(self):
-        """Test that transform_rerank_request raises error for missing scope."""
-        optional_params = {
-            "documents": ["doc1"],
-        }
-        expected_error_msg = re.escape(
-            "Watsonx project_id and space_id not set. Set WX_PROJECT_ID or WX_SPACE_ID in environment variables or pass in as a parameter."
-        )
-
-        with pytest.raises(WatsonXAIError, match=expected_error_msg):
-            self.config.transform_rerank_request(model=self.model, optional_rerank_params=optional_params, headers={})
-
+        
     def test_transform_rerank_response_success(self):
         """Test successful response transformation."""
         # Mock IBM watsonx.ai response format

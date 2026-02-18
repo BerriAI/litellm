@@ -7607,7 +7607,7 @@ class Router:
                 return returned_models
             alias_items = [(model_name, self.model_group_alias[model_name])]
         else:
-            alias_items = self.model_group_alias.items()
+            alias_items = list(self.model_group_alias.items())
 
         for model_alias, model_value in alias_items:
             if isinstance(model_value, str):
