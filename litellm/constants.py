@@ -287,7 +287,9 @@ MIN_NON_ZERO_TEMPERATURE = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
 REPEATED_STREAMING_CHUNK_LIMIT = int(
     os.getenv("REPEATED_STREAMING_CHUNK_LIMIT", 100)
 )  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
-DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 16))
+# Shared maxsize for functools.lru_cache usage across hot paths.
+# Defaulted to 64 to avoid cache thrash in multi-model production workloads.
+DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 64))
 _REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
 INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY = float(os.getenv("MAX_RETRY_DELAY", 8.0))
@@ -576,6 +578,11 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
     "service_tier",
+    "store",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "verbosity",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [

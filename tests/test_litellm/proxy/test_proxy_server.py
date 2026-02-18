@@ -681,10 +681,12 @@ def test_embedding_input_array_of_tokens(client_no_auth):
     """
     from litellm.proxy import proxy_server
 
-    # Apply the mock AFTER client_no_auth fixture has initialized the router
-    # This avoids issues with llm_router being None during parallel test execution
-    if proxy_server.llm_router is None:
-        pytest.skip("llm_router not initialized - skipping test")
+    # The client_no_auth fixture should initialize the router
+    # Assert this to catch any router initialization regressions
+    assert proxy_server.llm_router is not None, (
+        "llm_router is None after client_no_auth fixture initialized. "
+        "This indicates a router initialization issue that should be investigated."
+    )
 
     try:
         with mock.patch.object(
