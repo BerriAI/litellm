@@ -177,8 +177,8 @@ def test_openai_model_with_thinking_converts_to_reasoning_effort():
         # Verify reasoning_effort is set (converted from thinking)
         assert "reasoning_effort" in call_kwargs, "reasoning_effort should be passed to completion"
 
-        # reasoning_effort is transformed into a dict with effort and summary fields
-        expected_reasoning_effort = {"effort": "minimal", "summary": "detailed"}
+        # reasoning_effort is transformed into a dict with effort field only (no hardcoded summary)
+        expected_reasoning_effort = {"effort": "minimal"}
         assert call_kwargs["reasoning_effort"] == expected_reasoning_effort, \
             f"reasoning_effort should be {expected_reasoning_effort} for budget_tokens=1024, got {call_kwargs.get('reasoning_effort')}"
 
@@ -218,3 +218,38 @@ class TestThinkingParameterTransformation:
         
         assert result == {"reasoning_effort": "minimal"}
         assert "thinking" not in result
+
+
+class TestNoHardcodedReasoningSummary:
+    """Tests for issue #20998: adapter must not hardcode reasoning summary.
+
+    Per OpenAI spec, reasoning.summary is opt-in. The adapter should not
+    inject summary='detailed' when the user didn't request it.
+    """
+
+    def test_no_summary_added_when_not_requested(self):
+        """reasoning_effort dict should only contain 'effort', no 'summary'."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 5000}
+        completion_kwargs = {"model": "openai/gpt-5.1", "reasoning_effort": "medium"}
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+        assert completion_kwargs["reasoning_effort"] == {"effort": "medium"}
+        assert "summary" not in completion_kwargs["reasoning_effort"]
+
+    def test_model_prefixed_with_responses(self):
+        """Model should be prefixed with 'responses/' for Responses API routing."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 5000}
+        completion_kwargs = {"model": "openai/gpt-5.1", "reasoning_effort": "medium"}
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+        assert completion_kwargs["model"] == "responses/openai/gpt-5.1"
