@@ -64,7 +64,7 @@ class LiteLLMDatabase:
         LEFT JOIN "LiteLLM_VerificationToken" vt  ON dus.api_key   = vt.token
         LEFT JOIN "LiteLLM_TeamTable"         tt  ON vt.team_id    = tt.team_id
         LEFT JOIN "LiteLLM_UserTable"         ut  ON dus.user_id   = ut.user_id
-        WHERE dus.date = $1::date
+        WHERE dus.date = $1
         ORDER BY dus.created_at ASC
         """
 
