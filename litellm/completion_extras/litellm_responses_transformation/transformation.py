@@ -576,9 +576,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     def _convert_content_to_responses_format(
         self,
-        content: Union[
-            str,
-            Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]],
+        content: Optional[
+            Union[
+                str,
+                Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]],
+            ]
         ],
         role: str,
     ) -> List[Dict[str, Any]]:
@@ -587,7 +589,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         verbose_logger.debug(f"Chat provider: Converting content to responses format - input type: {type(content)}")
 
-        if isinstance(content, str):
+        if content is None:
+            return [self._convert_content_str_to_input_text("", role)]
+        elif isinstance(content, str):
             result = [self._convert_content_str_to_input_text(content, role)]
             verbose_logger.debug(f"Chat provider: String content -> {result}")
             return result
