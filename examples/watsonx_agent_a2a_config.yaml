@@ -1,0 +1,82 @@
+# Example configuration for using WatsonX Agents with A2A Protocol
+#
+# This configuration demonstrates how to expose WatsonX agents through
+# LiteLLM's A2A Agent Gateway using the completion bridge adapter.
+#
+# Usage:
+#   1. Set environment variables:
+#      export WATSONX_API_KEY="your-api-key"
+#      export WATSONX_API_BASE="https://your-watsonx-endpoint.com"
+#   
+#   2. Start the proxy:
+#      litellm --config watsonx_agent_a2a_config.yaml
+#   
+#   3. Invoke via A2A protocol:
+#      curl -X POST http://localhost:4000/a2a/watsonx-assistant/message/send \
+#        -H "Authorization: Bearer sk-1234" \
+#        -H "Content-Type: application/json" \
+#        -d '{"jsonrpc":"2.0","id":"req-1","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"Hello!"}],"messageId":"msg-1"}}}'
+
+model_list:
+  # Standard completion endpoint (OpenAI-compatible)
+  - model_name: watsonx-assistant-completion
+    litellm_params:
+      model: watsonx_agent/your-agent-id-here
+      api_base: os.environ/WATSONX_API_BASE
+      api_key: os.environ/WATSONX_API_KEY
+
+# Agents configuration for A2A Protocol
+agents:
+  # Customer support agent
+  - agent_id: watsonx-assistant
+    agent_name: WatsonX Assistant
+    litellm_params:
+      custom_llm_provider: watsonx           # Required: tells LiteLLM to use watsonx provider
+      model: watsonx_agent/your-agent-id-here  # WatsonX agent ID
+      api_key: os.environ/WATSONX_API_KEY    # WatsonX API key
+    agent_card_params:
+      name: WatsonX Assistant
+      description: AI assistant powered by IBM WatsonX Orchestrate
+      url: os.environ/WATSONX_API_BASE       # WatsonX API endpoint
+      capabilities:
+        - text_generation
+        - conversation
+        - multi_turn_dialogue
+      version: "1.0"
+
+  # Technical support agent (example with multiple agents)
+  - agent_id: watsonx-tech-support
+    agent_name: Technical Support Agent
+    litellm_params:
+      custom_llm_provider: watsonx
+      model: watsonx_agent/tech-support-agent-id
+      api_key: os.environ/WATSONX_API_KEY
+    agent_card_params:
+      name: Technical Support Agent
+      description: Specialized agent for technical troubleshooting
+      url: os.environ/WATSONX_API_BASE
+      capabilities:
+        - text_generation
+        - conversation
+        - technical_support
+
+# Optional: General settings
+general_settings:
+  master_key: sk-1234  # Change this! Used to authenticate requests
+  
+  # Enable detailed logging
+  set_verbose: true
+  
+  # Cost tracking
+  track_cost_per_deployment: true
+
+# Optional: Team-based access control
+# Only users in specified teams can access certain agents
+router_settings:
+  enable_pre_call_checks: true
+
+# Optional: Rate limiting
+# litellm_settings:
+#   num_retries: 3
+#   request_timeout: 600
+#   max_budget: 100  # USD per month

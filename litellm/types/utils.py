@@ -3111,6 +3111,7 @@ class LlmProviders(str, Enum):
     FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
     WATSONX_TEXT = "watsonx_text"
+    WATSONX_AGENT = "watsonx_agent"
     TRITON = "triton"
     PREDIBASE = "predibase"
     DATABRICKS = "databricks"

@@ -2506,10 +2506,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             # Add GitHub Copilot headers (same as /responses endpoint does)
             if custom_llm_provider == "github_copilot":
+                from litellm.llms.github_copilot.authenticator import Authenticator
                 from litellm.llms.github_copilot.common_utils import (
                     get_copilot_default_headers,
                 )
-                from litellm.llms.github_copilot.authenticator import Authenticator
 
                 copilot_auth = Authenticator()
                 copilot_api_key = copilot_auth.get_api_key()
@@ -3766,6 +3766,25 @@ def completion(  # type: ignore # noqa: PLR0915
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 encoding=_get_encoding(),
                 custom_llm_provider="watsonx",
+            )
+        elif custom_llm_provider == "watsonx_agent":
+            # Handle watsonx agent completions
+            # Model format: watsonx_agent/<agent_id>
+            from litellm.llms.watsonx.agents import IBMWatsonXAgentConfig
+
+            response = IBMWatsonXAgentConfig.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                api_key=api_key,
+                model_response=model_response,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,
+                acompletion=acompletion,
+                stream=stream,
+                headers=headers or litellm.headers,
             )
         elif custom_llm_provider == "watsonx_text":
             api_key = (
