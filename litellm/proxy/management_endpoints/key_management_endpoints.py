@@ -74,7 +74,6 @@ from litellm.proxy.utils import (
     _hash_token_if_needed,
     handle_exception_on_proxy,
     is_valid_api_key,
-    jsonify_object,
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret
@@ -3052,7 +3051,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key(
+async def _rotate_master_key( # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3096,8 +3095,8 @@ async def _rotate_master_key(
             )
             if new_model:
                 _dumped = new_model.model_dump(exclude_none=True)
-                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])
-                _dumped["model_info"] = prisma.Json(_dumped["model_info"])
+                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])  # type: ignore[attr-defined]
+                _dumped["model_info"] = prisma.Json(_dumped["model_info"])  # type: ignore[attr-defined]
                 new_models.append(_dumped)
         verbose_proxy_logger.debug("Resetting proxy model table")
         async with prisma_client.db.tx() as tx:
@@ -3131,7 +3130,7 @@ async def _rotate_master_key(
             if encrypted_env_vars:
                 await prisma_client.db.litellm_config.update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json(encrypted_env_vars)},
+                    data={"param_value": prisma.Json(encrypted_env_vars)},  # type: ignore[attr-defined]
                 )
 
     # 4. process MCP server table
@@ -3164,11 +3163,11 @@ async def _rotate_master_key(
                 )
                 _cred_data = encrypted_cred.model_dump(exclude_none=True)
                 if "credential_values" in _cred_data:
-                    _cred_data["credential_values"] = prisma.Json(
+                    _cred_data["credential_values"] = prisma.Json(  # type: ignore[attr-defined]
                         _cred_data["credential_values"]
                     )
                 if "credential_info" in _cred_data:
-                    _cred_data["credential_info"] = prisma.Json(
+                    _cred_data["credential_info"] = prisma.Json(  # type: ignore[attr-defined]
                         _cred_data["credential_info"]
                     )
                 await prisma_client.db.litellm_credentialstable.update(
