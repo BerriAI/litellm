@@ -6750,6 +6750,13 @@ class Router:
             **deployment.litellm_params.model_dump(exclude_none=True)
         ).model_dump(exclude_none=True)
 
+        # Resolve litellm_credential_name to actual credentials
+        if deployment.litellm_params.litellm_credential_name is not None:
+            credential_values = CredentialAccessor.get_credential_values(
+                deployment.litellm_params.litellm_credential_name
+            )
+            credentials.update(credential_values)
+
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
             credentials[
