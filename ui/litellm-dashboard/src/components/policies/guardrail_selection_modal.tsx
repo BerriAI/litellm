@@ -201,6 +201,11 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                         {guardrail.definition.litellm_params.patterns.length} pattern(s)
                       </Tag>
                     )}
+                    {guardrail.definition?.litellm_params?.categories && (
+                      <Tag className="text-xs" color="orange">
+                        {guardrail.definition.litellm_params.categories.length} category/categories
+                      </Tag>
+                    )}
                   </div>
                 </div>
               </div>
