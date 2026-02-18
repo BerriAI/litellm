@@ -11,26 +11,104 @@ All /policy management endpoints
 
 import json
 import os
+from typing import TYPE_CHECKING, Literal, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
-from litellm.types.proxy.policy_engine import (
-    PolicyGuardrailsResponse,
-    PolicyInfoResponse,
-    PolicyListResponse,
-    PolicyMatchContext,
-    PolicyScopeResponse,
-    PolicySummaryItem,
-    PolicyTestResponse,
-    PolicyValidateRequest,
-    PolicyValidationResponse,
-)
+from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.types.proxy.policy_engine import (PolicyGuardrailsResponse,
+                                               PolicyInfoResponse,
+                                               PolicyListResponse,
+                                               PolicyMatchContext,
+                                               PolicyScopeResponse,
+                                               PolicySummaryItem,
+                                               PolicyTestResponse,
+                                               PolicyValidateRequest,
+                                               PolicyValidationResponse)
+from litellm.types.utils import GenericGuardrailAPIInputs
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
 
 router = APIRouter()
+
+
+async def apply_policies(
+    policy_names: Optional[list[str]],
+    inputs: GenericGuardrailAPIInputs,
+    request_data: dict,
+    input_type: Literal["request", "response"],
+    proxy_logging_obj: "LiteLLMLoggingObj",
+) -> GenericGuardrailAPIInputs:
+    """
+    Resolve guardrails from the given policy names and apply them to inputs.
+
+    Similar to add_guardrails_from_policy_engine + guardrail execution: resolves
+    guardrails from the policy registry (with inheritance) and runs each
+    guardrail's apply_guardrail on the inputs in order.
+    """
+    if not policy_names:
+        return inputs
+
+    registry = get_policy_registry()
+    if not registry.is_initialized():
+        verbose_proxy_logger.debug(
+            "apply_policies: policy engine not initialized, returning inputs unchanged"
+        )
+        return inputs
+
+    policies = registry.get_all_policies()
+    guardrail_names: set[str] = set()
+
+    for policy_name in policy_names:
+        resolved = PolicyResolver.resolve_policy_guardrails(
+            policy_name=policy_name,
+            policies=policies,
+            context=None,
+        )
+        guardrail_names.update(resolved.guardrails)
+
+    if not guardrail_names:
+        return inputs
+
+    guardrail_registry = GuardrailRegistry()
+    current_inputs = cast(GenericGuardrailAPIInputs, dict(inputs))
+
+    for guardrail_name in sorted(guardrail_names):
+        callback = guardrail_registry.get_initialized_guardrail_callback(
+            guardrail_name=guardrail_name
+        )
+        if callback is None:
+            verbose_proxy_logger.debug(
+                "apply_policies: guardrail '%s' not found, skipping",
+                guardrail_name,
+            )
+            continue
+        if not isinstance(callback, CustomGuardrail):
+            continue
+        if "apply_guardrail" not in type(callback).__dict__:
+            verbose_proxy_logger.debug(
+                "apply_policies: guardrail '%s' has no apply_guardrail, skipping",
+                guardrail_name,
+            )
+            continue
+
+        current_inputs = await callback.apply_guardrail(
+            inputs=current_inputs,
+            request_data=request_data,
+            input_type=input_type,
+            logging_obj=proxy_logging_obj,
+        )
+
+    return current_inputs
 
 
 @router.post(
@@ -263,7 +341,9 @@ async def test_policy_matching(
     )
 
 
-POLICY_TEMPLATES_GITHUB_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
+POLICY_TEMPLATES_GITHUB_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
+)
 
 
 def _load_policy_templates_from_local_backup() -> list:
@@ -306,7 +386,8 @@ async def get_policy_templates(
         return _load_policy_templates_from_local_backup()
 
     try:
-        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.llms.custom_httpx.http_handler import \
+            get_async_httpx_client
         from litellm.types.llms.custom_http import httpxSpecialProvider
 
         async_client = get_async_httpx_client(
