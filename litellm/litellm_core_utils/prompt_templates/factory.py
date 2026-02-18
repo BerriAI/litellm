@@ -2032,7 +2032,7 @@ def _sanitize_empty_text_content(
         content = message.get("content")
         if isinstance(content, str):
             if not content or not content.strip():
-                message = dict(message)  # Make a copy
+                message = cast(AllMessageValues, dict(message))  # Make a copy
                 message["content"] = "[System: Empty message content sanitised to satisfy protocol]"
                 verbose_logger.debug(
                     f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
@@ -2058,13 +2058,13 @@ def _add_missing_tool_results( # noqa: PLR0915
     """
     result_messages: List[AllMessageValues] = []
     tool_calls = current_message.get("tool_calls")
-    
-    if not tool_calls or len(tool_calls) == 0:
+
+    if not tool_calls or len(cast(list, tool_calls)) == 0:
         return ([current_message], 0)
-    
+
     # Collect all tool_call_ids from this assistant message
     expected_tool_call_ids = set()
-    for tool_call in tool_calls:
+    for tool_call in cast(list, tool_calls):
         tool_call_id = None
         if isinstance(tool_call, dict):
             tool_call_id = tool_call.get("id")
@@ -2109,7 +2109,7 @@ def _add_missing_tool_results( # noqa: PLR0915
         # Then add dummy tool results for missing ones
         for tool_call_id in missing_tool_call_ids:
             tool_name = "unknown_tool"
-            for tool_call in tool_calls:
+            for tool_call in cast(list, tool_calls):
                 tc_id = None
                 if isinstance(tool_call, dict):
                     tc_id = tool_call.get("id")
@@ -2170,7 +2170,7 @@ def _is_orphaned_tool_result(
         if prev_msg.get("role") == "assistant":
             tool_calls = prev_msg.get("tool_calls")
             if tool_calls:
-                for tool_call in tool_calls:
+                for tool_call in cast(list, tool_calls):
                     tc_id = None
                     if isinstance(tool_call, dict):
                         tc_id = tool_call.get("id")
