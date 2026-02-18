@@ -100,6 +100,41 @@ class MavvrikLogger(CustomLogger):
         settings = await db.get_mavvrik_settings()
         marker_str: Optional[str] = settings.get("marker")
 
+        # Call register() to verify connectivity and honour Mavvrik's metricsMarker.
+        # If Mavvrik's marker is earlier than our local one (e.g. Mavvrik reset their
+        # cursor), we use Mavvrik's date so we re-export from the right point.
+        # This is best-effort — failure falls back to the local marker.
+        try:
+            from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
+
+            _streamer = MavvrikStreamer(
+                api_key=self.api_key or "",
+                api_endpoint=self.api_endpoint or "",
+                tenant=self.tenant or "",
+                instance_id=self.instance_id or "",
+            )
+            mavvrik_marker_iso = _streamer.register()
+            mavvrik_date = date.fromisoformat(mavvrik_marker_iso[:10])
+            local_date = (
+                date.fromisoformat(marker_str[:10]) if marker_str else None
+            )
+            if local_date is None or mavvrik_date < local_date:
+                verbose_logger.info(
+                    "MavvrikLogger: Mavvrik metricsMarker %s is earlier than local "
+                    "marker %s — honouring Mavvrik's cursor",
+                    mavvrik_date,
+                    marker_str,
+                )
+                # Set marker_str to one day before Mavvrik's date so the loop
+                # starts exporting from mavvrik_date itself.
+                marker_str = (mavvrik_date - timedelta(days=1)).isoformat()
+        except Exception as exc:
+            verbose_logger.warning(
+                "MavvrikLogger: register() call failed (non-fatal), using local "
+                "marker: %s",
+                exc,
+            )
+
         today = datetime.now(timezone.utc).date()
         yesterday = today - timedelta(days=1)
 

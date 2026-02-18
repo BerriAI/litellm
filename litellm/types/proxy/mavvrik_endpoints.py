@@ -90,3 +90,9 @@ class MavvrikSettingsUpdate(BaseModel):
     tenant: Optional[str] = None
     instance_id: Optional[str] = None
     timezone: Optional[str] = None
+    marker: Optional[str] = Field(
+        None,
+        description="Reset the export cursor to this date (YYYY-MM-DD). "
+        "Use when Mavvrik resets their metricsMarker and asks you to re-export from a specific date. "
+        "The next scheduled run will export from (marker + 1 day) onwards.",
+    )

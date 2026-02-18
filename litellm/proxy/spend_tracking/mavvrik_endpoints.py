@@ -289,7 +289,10 @@ async def update_mavvrik_settings(
             tenant=_pick(request.tenant, "tenant"),
             instance_id=_pick(request.instance_id, "instance_id"),
             timezone=_pick(request.timezone, "timezone", "UTC"),
-            marker=current.get("marker"),
+            # If request.marker is provided, honour it (e.g. Mavvrik reset their
+            # metricsMarker and asked us to re-export from a specific date).
+            # Otherwise keep the existing marker unchanged.
+            marker=request.marker if request.marker is not None else current.get("marker"),
         )
         return MavvrikInitResponse(
             message="Mavvrik settings updated successfully", status="success"
