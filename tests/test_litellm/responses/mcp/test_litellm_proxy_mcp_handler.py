@@ -75,6 +75,32 @@ def test_deduplicate_mcp_tools_prefixed_names(tool_name, expected_server):
     assert server_map[tool_name] == expected_server
 
 
+def test_filter_mcp_tools_matches_known_server_prefix():
+    tools = [{"name": "deepwiki-read_wiki_structure"}]
+    tool_configs = [{"allowed_tools": ["read_wiki_structure"]}]
+
+    filtered = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=tools,
+        mcp_tools_with_litellm_proxy=tool_configs,
+        allowed_server_names=["deepwiki"],
+    )
+
+    assert filtered == tools
+
+
+def test_filter_mcp_tools_ignores_unknown_server_prefix():
+    tools = [{"name": "unknown-read_wiki_structure"}]
+    tool_configs = [{"allowed_tools": ["read_wiki_structure"]}]
+
+    filtered = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=tools,
+        mcp_tools_with_litellm_proxy=tool_configs,
+        allowed_server_names=["deepwiki"],
+    )
+
+    assert filtered == []
+
+
 def test_extract_tool_calls_from_chat_response_handles_tool_calls():
     response = ModelResponse(
         id="resp-1",
