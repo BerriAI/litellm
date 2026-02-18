@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 
 import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
+import FaviconSetter from "@/components/common_components/FaviconSetter";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -20,6 +21,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
+        <FaviconSetter />
         <AntdGlobalProvider>{children}</AntdGlobalProvider>
       </body>
     </html>

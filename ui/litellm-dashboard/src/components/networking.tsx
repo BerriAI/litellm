@@ -252,6 +252,7 @@ export interface PublicModelHubInfo {
   litellm_version: string;
   // Supports both old format (Record<string, string>) and new format (Record<string, {url: string, index: number}>)
   useful_links: Record<string, string | { url: string; index: number }>;
+  favicon_url: string | null;
 }
 
 export interface LiteLLMWellKnownUiConfig {

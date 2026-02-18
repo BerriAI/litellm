@@ -11,6 +11,8 @@ class PublicModelHubInfo(BaseModel):
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
     useful_links: Optional[Dict[str, Union[str, Dict[str, Any]]]]
+    favicon_url: Optional[str] = None
+    favicon_url: Optional[str] = None
 
 
 class ProviderCredentialField(BaseModel):

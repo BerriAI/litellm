@@ -2125,6 +2125,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
     )
+    custom_favicon_url: Optional[str] = Field(
+        None,
+        description="URL to a custom favicon for the LiteLLM Proxy UI. If not set, the default favicon is used.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

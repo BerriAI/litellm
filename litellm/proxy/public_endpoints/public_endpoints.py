@@ -119,7 +119,7 @@ async def get_mcp_servers():
 )
 async def public_model_hub_info():
     import litellm
-    from litellm.proxy.proxy_server import _title, version
+    from litellm.proxy.proxy_server import _title, version, general_settings
 
     try:
         from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
@@ -128,11 +128,17 @@ async def public_model_hub_info():
     except Exception:
         custom_docs_description = None
 
+    # Get custom favicon URL from general_settings if configured
+    custom_favicon_url = None
+    if general_settings is not None:
+        custom_favicon_url = general_settings.get("custom_favicon_url")
+
     return PublicModelHubInfo(
         docs_title=_title,
         custom_docs_description=custom_docs_description,
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,
+        favicon_url=custom_favicon_url,
     )
 
 
