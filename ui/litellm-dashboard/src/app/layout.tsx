@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "LiteLLM Dashboard",
   description: "LiteLLM Proxy Admin UI",
-  icons: { icon: process.env.NEXT_PUBLIC_FAVICON_URL || "./favicon.ico" },
+  icons: { icon: process.env.NEXT_PUBLIC_FAVICON_URL || "/get_favicon" },
 };
 
 export default function RootLayout({

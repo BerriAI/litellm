@@ -10694,6 +10694,90 @@ async def get_image():
         return FileResponse(logo_path, media_type="image/jpeg")
 
 
+@app.get("/get_favicon_url", include_in_schema=False)
+def get_favicon_url():
+    """Get the current favicon URL from environment"""
+    favicon_path = os.getenv("UI_FAVICON_PATH", "")
+    return {"favicon_url": favicon_path}
+
+
+@app.get("/get_favicon", include_in_schema=False)
+async def get_favicon():
+    """Get favicon to show on admin UI"""
+
+    # get current_dir
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    default_favicon = os.path.join(current_dir, "swagger", "favicon.ico")
+
+    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+
+    # Determine assets directory
+    # Priority: LITELLM_ASSETS_PATH env var > default based on is_non_root
+    default_assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
+    assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
+
+    # Try to create assets_dir if it doesn't exist (simple try/except approach)
+    if not os.path.exists(assets_dir):
+        try:
+            os.makedirs(assets_dir, exist_ok=True)
+            verbose_proxy_logger.debug(f"Created assets directory at {assets_dir}")
+        except (PermissionError, OSError) as e:
+            verbose_proxy_logger.warning(
+                f"Cannot create assets directory at {assets_dir}: {e}. "
+                f"Favicon caching may not work. Using current directory for assets."
+            )
+            assets_dir = current_dir
+
+    # Determine default favicon path
+    default_favicon_path = (
+        os.path.join(assets_dir, "favicon.ico")
+        if assets_dir != current_dir
+        else default_favicon
+    )
+    if assets_dir != current_dir and not os.path.exists(default_favicon_path):
+        default_favicon_path = default_favicon
+
+    cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
+    cache_path = os.path.join(cache_dir, "cached_favicon.ico")
+
+    # [OPTIMIZATION] Check if the cached favicon exists first
+    if os.path.exists(cache_path):
+        return FileResponse(cache_path, media_type="image/x-icon")
+
+    favicon_path = os.getenv("UI_FAVICON_PATH", default_favicon_path)
+    verbose_proxy_logger.debug("Reading favicon from path: %s", favicon_path)
+
+    # Check if the favicon path is an HTTP/HTTPS URL
+    if favicon_path.startswith(("http://", "https://")):
+        try:
+            # Download the favicon and cache it
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+            from litellm.types.llms.custom_http import httpxSpecialProvider
+
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
+            response = await async_client.get(favicon_path)
+            if response.status_code == 200:
+                # Save the favicon to a local file
+                with open(cache_path, "wb") as f:
+                    f.write(response.content)
+
+                # Return the cached favicon as a FileResponse
+                return FileResponse(cache_path, media_type="image/x-icon")
+            else:
+                # Handle the case when the favicon cannot be downloaded
+                return FileResponse(default_favicon_path, media_type="image/x-icon")
+        except Exception as e:
+            # Handle any exceptions during the download (e.g., timeout, connection error)
+            verbose_proxy_logger.debug(f"Error downloading favicon from {favicon_path}: {e}")
+            return FileResponse(default_favicon_path, media_type="image/x-icon")
+    else:
+        # Return the local favicon file if the favicon path is not an HTTP/HTTPS URL
+        return FileResponse(favicon_path, media_type="image/x-icon")
+
+
 #### INVITATION MANAGEMENT ####
 
 

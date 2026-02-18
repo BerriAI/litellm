@@ -3133,6 +3133,45 @@ async def test_get_image_root_case_uses_current_dir(monkeypatch):
         assert mock_file_response.called, "FileResponse should be called"
 
 
+@pytest.mark.asyncio
+async def test_get_favicon_default_uses_swagger_favicon(monkeypatch):
+    """
+    Test that get_favicon uses swagger/favicon.ico as default when UI_FAVICON_PATH is not set.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_favicon
+
+    # Don't set UI_FAVICON_PATH (should use default)
+    monkeypatch.delenv("UI_FAVICON_PATH", raising=False)
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+
+    # Mock os.path operations
+    with patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+
+        # Setup mock_getenv to return empty string for UI_FAVICON_PATH
+        def getenv_side_effect(key, default=""):
+            if key == "UI_FAVICON_PATH":
+                return ""
+            elif key == "LITELLM_NON_ROOT":
+                return ""  # Not set
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        # Call the function
+        await get_favicon()
+
+        # Verify FileResponse was called with the default swagger favicon path
+        assert mock_file_response.called, "FileResponse should be called"
+        # The call should contain 'swagger' in the path
+        call_args = str(mock_file_response.call_args)
+        assert "swagger" in call_args or "favicon.ico" in call_args, \
+            f"Should use default favicon, got: {call_args}"
+
+
 def test_get_config_normalizes_string_callbacks(monkeypatch):
     """
     Test that /get/config/callbacks normalizes string callbacks to lists.
