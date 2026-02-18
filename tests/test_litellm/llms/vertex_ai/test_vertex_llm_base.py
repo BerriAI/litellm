@@ -1048,3 +1048,316 @@ class TestVertexBase:
             MockCredentials.from_info.assert_called_once_with(json_obj)
             mock_creds.with_scopes.assert_called_once_with(scopes)
             assert result == "scoped_creds"
+
+    def test_extract_aws_params(self):
+        """Test _extract_aws_params: extraction, empty case, and unrecognized keys."""
+        # Case 1: Extracts recognized aws_* keys, ignores GCP-standard fields
+        json_with_role = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/...",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+        result = VertexBase._extract_aws_params(json_with_role)
+        assert result == {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+
+        # Case 2: Returns empty dict for standard WIF JSON (no aws_* keys)
+        json_standard = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/...",
+            "credential_source": {"environment_id": "aws1"},
+        }
+        assert VertexBase._extract_aws_params(json_standard) == {}
+
+        # Case 3: Ignores unrecognized aws_* keys (e.g. aws_bedrock_runtime_endpoint)
+        json_with_unknown = {
+            "type": "external_account",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+            "aws_unknown_field": "should-be-ignored",
+            "aws_bedrock_runtime_endpoint": "should-also-be-ignored",
+        }
+        result = VertexBase._extract_aws_params(json_with_unknown)
+        assert result == {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+
+    def test_credentials_from_aws_with_explicit_auth(self):
+        """Test that explicit AWS auth creates credentials via supplier, not metadata."""
+        vertex_base = VertexBase()
+
+        json_obj = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/aws",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa@proj.iam.gserviceaccount.com:generateAccessToken",
+            "credential_source": {"environment_id": "aws1"},
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+        aws_params = {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock BaseAWSLLM.get_credentials to return fake boto3 credentials
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_boto3_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_boto3_creds.token = "FwoGZXIvYXdzEBYaDHqa0AP"
+
+        # Mock aws.Credentials constructor
+        mock_gcp_creds = MagicMock()
+        mock_gcp_creds.requires_scopes = True
+        mock_gcp_creds.with_scopes.return_value = mock_gcp_creds
+
+        # IMPORTANT: Patch at the SOURCE modules, not at vertex_llm_base level.
+        # The imports happen inside the function via `from X import Y`, so
+        # the mock must replace the class in its defining module.
+        with patch(
+            "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM"
+        ) as MockBaseAWSLLM, patch(
+            "google.auth.aws.Credentials",
+        ) as MockAwsCredentials:
+            mock_base_aws = MagicMock()
+            mock_base_aws.get_credentials.return_value = mock_boto3_creds
+            MockBaseAWSLLM.return_value = mock_base_aws
+            MockAwsCredentials.return_value = mock_gcp_creds
+
+            result = vertex_base._credentials_from_aws_with_explicit_auth(
+                json_obj, aws_params, scopes
+            )
+
+            # Verify BaseAWSLLM.get_credentials was called with correct params
+            mock_base_aws.get_credentials.assert_called_once_with(**aws_params)
+
+            # Verify aws.Credentials was called with supplier (not from_info)
+            MockAwsCredentials.assert_called_once()
+            call_kwargs = MockAwsCredentials.call_args[1]
+            assert call_kwargs["audience"] == json_obj["audience"]
+            assert call_kwargs["subject_token_type"] == json_obj["subject_token_type"]
+            assert call_kwargs["token_url"] == json_obj["token_url"]
+            assert call_kwargs["credential_source"] is None
+            assert call_kwargs["aws_security_credentials_supplier"] is not None
+            assert call_kwargs["service_account_impersonation_url"] == json_obj["service_account_impersonation_url"]
+
+            # Verify scopes were applied
+            mock_gcp_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == mock_gcp_creds
+
+    def test_credentials_from_aws_with_explicit_auth_requires_region(self):
+        """Test that explicit AWS auth raises ValueError when region is missing."""
+        vertex_base = VertexBase()
+
+        json_obj = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/...",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+        }
+        aws_params = {
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            # No aws_region_name — should fail
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_boto3_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_boto3_creds.token = "FwoGZXIvYXdzEBYaDHqa0AP"
+
+        with patch(
+            "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM"
+        ) as MockBaseAWSLLM:
+            mock_base_aws = MagicMock()
+            mock_base_aws.get_credentials.return_value = mock_boto3_creds
+            MockBaseAWSLLM.return_value = mock_base_aws
+
+            with pytest.raises(ValueError, match="aws_region_name is required"):
+                vertex_base._credentials_from_aws_with_explicit_auth(
+                    json_obj, aws_params, scopes
+                )
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_aws_wif_routes_to_explicit_auth_when_aws_params_present(
+        self, is_async
+    ):
+        """Test that load_auth routes to explicit auth when aws_* keys are in JSON."""
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"},
+            "audience": "//iam.googleapis.com/...",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+            "aws_region_name": "us-east-1",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "explicit-auth-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with patch.object(
+            vertex_base,
+            "_credentials_from_aws_with_explicit_auth",
+            return_value=mock_creds,
+        ) as mock_explicit_auth, patch.object(
+            vertex_base,
+            "_credentials_from_identity_pool_with_aws",
+        ) as mock_metadata_auth, patch.object(
+            vertex_base, "refresh_auth"
+        ) as mock_refresh:
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base._ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base._ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Explicit auth should be called, NOT metadata auth
+            assert mock_explicit_auth.called
+            mock_metadata_auth.assert_not_called()
+            # Verify correct kwargs were passed to explicit auth
+            call_kwargs = mock_explicit_auth.call_args[1]
+            assert call_kwargs["aws_params"] == {
+                "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
+                "aws_region_name": "us-east-1",
+            }
+            assert call_kwargs["scopes"] == ["https://www.googleapis.com/auth/cloud-platform"]
+            assert token == "refreshed-token"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_aws_wif_falls_back_to_metadata_when_no_aws_params(self, is_async):
+        """Test that load_auth falls back to metadata flow when no aws_* keys in JSON."""
+        vertex_base = VertexBase()
+
+        # Standard WIF JSON — no aws_* keys
+        credentials = {
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"},
+            "audience": "//iam.googleapis.com/...",
+            "token_url": "https://sts.googleapis.com/v1/token",
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.token = "metadata-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "test-project"
+
+        with patch.object(
+            vertex_base,
+            "_credentials_from_aws_with_explicit_auth",
+        ) as mock_explicit_auth, patch.object(
+            vertex_base,
+            "_credentials_from_identity_pool_with_aws",
+            return_value=mock_creds,
+        ) as mock_metadata_auth, patch.object(
+            vertex_base, "refresh_auth"
+        ) as mock_refresh:
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            if is_async:
+                token, _ = await vertex_base._ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+            else:
+                token, _ = vertex_base._ensure_access_token(
+                    credentials=credentials,
+                    project_id=None,
+                    custom_llm_provider="vertex_ai",
+                )
+
+            # Metadata auth should be called, NOT explicit auth
+            mock_explicit_auth.assert_not_called()
+            assert mock_metadata_auth.called
+            assert token == "refreshed-token"
+
+    def test_aws_credentials_supplier(self):
+        """Test AwsCredentialsSupplier: wraps boto3 creds, handles token=None."""
+        from litellm.llms.vertex_ai.aws_credentials_supplier import (
+            AwsCredentialsSupplier,
+        )
+
+        # Case 1: With session token (STS temporary credentials)
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_boto3_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_boto3_creds.token = "FwoGZXIvYXdzEBYaDHqa0AP"
+
+        supplier = AwsCredentialsSupplier(
+            boto3_credentials=mock_boto3_creds,
+            aws_region="us-east-1",
+        )
+
+        aws_creds = supplier.get_aws_security_credentials(context=None, request=None)
+        assert aws_creds.access_key_id == "AKIAIOSFODNN7EXAMPLE"
+        assert aws_creds.secret_access_key == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        assert aws_creds.session_token == "FwoGZXIvYXdzEBYaDHqa0AP"
+        assert supplier.get_aws_region(context=None, request=None) == "us-east-1"
+
+        # Case 2: Without session token (static IAM credentials)
+        mock_static_creds = MagicMock()
+        mock_static_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
+        mock_static_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        mock_static_creds.token = None
+
+        supplier_static = AwsCredentialsSupplier(
+            boto3_credentials=mock_static_creds,
+            aws_region="eu-west-1",
+        )
+
+        aws_creds_static = supplier_static.get_aws_security_credentials(
+            context=None, request=None
+        )
+        assert aws_creds_static.access_key_id == "AKIAIOSFODNN7EXAMPLE"
+        assert aws_creds_static.session_token is None
+
+    def test_aws_credentials_supplier_returns_correct_type(self):
+        """Test that AwsCredentialsSupplier returns AwsSecurityCredentials dataclass."""
+        from google.auth.aws import AwsSecurityCredentials
+
+        from litellm.llms.vertex_ai.aws_credentials_supplier import (
+            AwsCredentialsSupplier,
+        )
+
+        mock_boto3_creds = MagicMock()
+        mock_boto3_creds.access_key = "AKID"
+        mock_boto3_creds.secret_key = "SECRET"
+        mock_boto3_creds.token = "TOKEN"
+
+        supplier = AwsCredentialsSupplier(
+            boto3_credentials=mock_boto3_creds,
+            aws_region="us-east-1",
+        )
+
+        aws_creds = supplier.get_aws_security_credentials(context=None, request=None)
+        assert isinstance(aws_creds, AwsSecurityCredentials)
