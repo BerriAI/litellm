@@ -38,9 +38,10 @@ _skip_if_no_creds = pytest.mark.skipif(
     reason="Mavvrik credentials not configured",
 )
 
-# Date used for the synthetic upload — far enough in the past that it won't
-# interfere with real data but still a valid YYYY-MM-DD string.
-_TEST_DATE = "2026-01-01"
+# Date used for the synthetic upload.
+# Prefixed with "test-" so it is clearly not real data and Mavvrik can ignore it.
+# GCS object name: test-e2e-litellm
+_TEST_DATE = "test-e2e-litellm"
 
 # Minimal synthetic CSV that matches the Mavvrik schema column order
 _TEST_CSV = (
