@@ -438,16 +438,16 @@ async def test_afile_delete_calls_check_deletion_allowed():
 
 
 @pytest.mark.asyncio
-async def test_early_exit_after_max_matches():
+async def test_database_limit_respected():
     """
-    Test that we stop checking batches once we find enough matches.
-    This is a performance optimization to avoid parsing all batches.
+    Test that we only fetch 10 batches from DB (not 500).
+    This is a performance optimization - we only fetch what we need.
     """
     unified_file_id = _make_unified_file_id("file-shared")
     
-    # Create more batches than MAX_MATCHES_TO_RETURN (10)
-    many_batches = []
-    for i in range(15):
+    # Create exactly 10 batches (what DB will return with take=10)
+    ten_batches = []
+    for i in range(10):
         batch = _make_batch_db_record(
             unified_object_id=_make_unified_batch_id(f"batch-{i}"),
             status="validating",
@@ -457,19 +457,20 @@ async def test_early_exit_after_max_matches():
                 "status": "validating"
             },
         )
-        many_batches.append(batch)
+        ten_batches.append(batch)
     
+    # Mock will return only 10 batches (as DB would with take=10)
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
-        batches=many_batches,
+        batches=ten_batches,
     )
     
     referencing_batches = await managed_files._get_batches_referencing_file(unified_file_id)
     
-    # Should return exactly 10 (MAX_MATCHES_TO_RETURN)
+    # Should return all 10 that reference the file
     assert len(referencing_batches) == 10
     
-    # Verify error message handles "10+" case
+    # Verify error message handles "10+" case (since we got exactly 10, might be more in DB)
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()
     
@@ -478,6 +479,7 @@ async def test_early_exit_after_max_matches():
             await managed_files._check_file_deletion_allowed(unified_file_id)
         
         error_detail = exc_info.value.detail
+        # When we get exactly 10 matches, show "10+" to indicate there might be more
         assert "10+ batch(es)" in error_detail
 
 

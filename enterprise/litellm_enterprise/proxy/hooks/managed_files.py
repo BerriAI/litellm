@@ -1086,7 +1086,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self, file_id: str
     ) -> List[Dict[str, Any]]:
         """
-        Find all batches in non-terminal states that reference this file.
+        Find batches in non-terminal states that reference this file.
         
         Non-terminal states: validating, in_progress, finalizing
         Terminal states: completed, complete, failed, expired, cancelled
@@ -1096,7 +1096,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             
         Returns:
             List of batch objects referencing this file in non-terminal state
-            (limited to first 10 matches for error message display)
+            (max 10 for error message display)
         """
         # Prepare list of file IDs to check (both unified and provider IDs)
         file_ids_to_check = [file_id]
@@ -1116,8 +1116,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 f"Could not get model file ID mapping for {file_id}: {e}. "
                 f"Will only check unified file ID."
             )
-    
-        MAX_BATCHES_TO_CHECK = 500
         MAX_MATCHES_TO_RETURN = 10 
         
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
@@ -1125,19 +1123,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "file_purpose": "batch",
                 "status": {"in": ["validating", "in_progress", "finalizing"]},
             },
-            take=MAX_BATCHES_TO_CHECK,
+            take=MAX_MATCHES_TO_RETURN,
             order={"created_at": "desc"},
         )
         
         referencing_batches = []
         for batch in batches:
-            # Early exit if we have enough matches for error message
-            if len(referencing_batches) >= MAX_MATCHES_TO_RETURN:
-                verbose_logger.debug(
-                    f"Found {MAX_MATCHES_TO_RETURN}+ batches referencing file {file_id}, "
-                )
-                break
-            
             try:
                 # Parse the batch file_object to check for file references
                 batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
