@@ -131,10 +131,10 @@ class MavvrikLogger(CustomLogger):
             from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
 
             streamer = MavvrikStreamer(
-                api_key=self.api_key,
-                api_endpoint=self.api_endpoint,
-                tenant=self.tenant,
-                instance_id=self.instance_id,
+                api_key=self.api_key or "",
+                api_endpoint=self.api_endpoint or "",
+                tenant=self.tenant or "",
+                instance_id=self.instance_id or "",
             )
             streamer.advance_marker(int(now_utc.timestamp()))
         except Exception as exc:
@@ -194,10 +194,10 @@ class MavvrikLogger(CustomLogger):
         )
 
         streamer = MavvrikStreamer(
-            api_key=self.api_key,
-            api_endpoint=self.api_endpoint,
-            tenant=self.tenant,
-            instance_id=self.instance_id,
+            api_key=self.api_key or "",
+            api_endpoint=self.api_endpoint or "",
+            tenant=self.tenant or "",
+            instance_id=self.instance_id or "",
         )
         streamer.upload(csv_payload, interval=interval)
 

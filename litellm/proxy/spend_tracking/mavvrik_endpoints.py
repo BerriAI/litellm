@@ -230,7 +230,9 @@ async def get_mavvrik_settings(
     try:
         settings = await _get_mavvrik_settings()
         if not settings:
-            return MavvrikSettingsView(status="not_configured")
+            return MavvrikSettingsView(
+                api_key_masked=None, marker=None, status="not_configured"
+            )
 
         return MavvrikSettingsView(
             api_key_masked=_mask_key(settings.get("api_key", "")),

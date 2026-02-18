@@ -139,7 +139,7 @@ class MavvrikStreamer:
         path = AGENT_BASE_PATH.format(tenant=self.tenant, instance_id=self.instance_id)
         url = f"{self.api_endpoint}{path}"
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
-        body = {
+        body: dict = {
             "arch": platform.machine(),
             "provider": "k8s",
             "hostProvider": "",
