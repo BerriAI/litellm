@@ -384,6 +384,7 @@ export function LogDetailsDrawer({
                 logEntry={enrichedLog}
                 onOpenSettings={onOpenSettings}
                 isLoadingDetails={isLoadingDetails}
+                accessToken={accessToken ?? null}
               />
             </div>
           </div>
