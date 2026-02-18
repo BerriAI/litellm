@@ -772,13 +772,14 @@
   {
     "id": "eu-ai-act-article5",
     "title": "EU AI Act Article 5 — Prohibited Practices",
-    "description": "EU AI Act Article 5 compliance for prohibited AI practices. Blocks requests related to social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation. Uses conditional matching (identifier word + context word).",
+    "description": "EU AI Act Article 5 compliance for prohibited AI practices. Blocks requests related to social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation. Includes both English and French keyword detection. Uses conditional matching (identifier word + context word).",
     "region": "EU",
     "icon": "ShieldExclamationIcon",
     "iconColor": "text-red-500",
     "iconBg": "bg-red-50",
     "guardrails": [
-      "eu-ai-act-prohibited-practices"
+      "eu-ai-act-prohibited-practices",
+      "eu-ai-act-prohibited-practices-fr"
     ],
     "complexity": "High",
     "guardrailDefinitions": [
@@ -794,7 +795,19 @@
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
-            },
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks EU AI Act Article 5 prohibited practices in English: social scoring systems, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-prohibited-practices-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
             {
               "category": "eu_ai_act_article5_prohibited_practices_fr",
               "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_article5_fr.yaml",
@@ -805,15 +818,16 @@
           ]
         },
         "guardrail_info": {
-          "description": "Blocks EU AI Act Article 5 prohibited practices: social scoring systems, emotion recognition in workplace/education, biometric categorization for sensitive attributes, predictive profiling, manipulation, and vulnerability exploitation"
+          "description": "Blocks EU AI Act Article 5 prohibited practices in French: detects and blocks French-language keywords related to social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation"
         }
       }
     ],
     "templateData": {
       "policy_name": "eu-ai-act-article5",
-      "description": "EU AI Act Article 5 compliance policy for prohibited AI practices. Blocks social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation.",
+      "description": "EU AI Act Article 5 compliance policy for prohibited AI practices. Blocks social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation. Includes English and French detection.",
       "guardrails_add": [
-        "eu-ai-act-prohibited-practices"
+        "eu-ai-act-prohibited-practices",
+        "eu-ai-act-prohibited-practices-fr"
       ],
       "guardrails_remove": []
     }
