@@ -2062,6 +2062,7 @@ class CustomStreamWrapper:
                     cache_hit=cache_hit,
                     start_time=None,
                     end_time=None,
+                    called_from_async=True,
                 )
 
                 raise StopAsyncIteration  # Re-raise StopIteration

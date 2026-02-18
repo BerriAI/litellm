@@ -142,6 +142,7 @@ class A2AStreamingIterator:
                 cache_hit=None,
                 start_time=self.start_time,
                 end_time=end_time,
+                called_from_async=True,
             )
 
             verbose_logger.info(
@@ -170,4 +171,3 @@ class A2AStreamingIterator:
                 pass
 
         return result
-
