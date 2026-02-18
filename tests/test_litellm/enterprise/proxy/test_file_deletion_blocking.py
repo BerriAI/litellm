@@ -112,8 +112,8 @@ def _make_managed_files_instance_with_batches(
 # --- Test: Batch polling configuration check ---
 
 
-def test_is_batch_polling_enabled_when_configured():
-    """Test that batch polling is detected as enabled when configured."""
+def test_is_batch_polling_enabled_when_job_registered():
+    """Test that batch polling is detected as enabled when scheduler job is registered."""
     from litellm_enterprise.proxy.hooks.managed_files import (
         _PROXY_LiteLLMManagedFiles,
     )
@@ -123,12 +123,17 @@ def test_is_batch_polling_enabled_when_configured():
         prisma_client=MagicMock(),
     )
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 60):
+    # Mock scheduler with registered job
+    mock_scheduler = MagicMock()
+    mock_job = MagicMock()
+    mock_scheduler.get_job.return_value = mock_job
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         assert instance._is_batch_polling_enabled() is True
 
 
-def test_is_batch_polling_disabled_when_zero():
-    """Test that batch polling is detected as disabled when set to 0."""
+def test_is_batch_polling_disabled_when_job_not_registered():
+    """Test that batch polling is detected as disabled when scheduler job is not registered."""
     from litellm_enterprise.proxy.hooks.managed_files import (
         _PROXY_LiteLLMManagedFiles,
     )
@@ -138,12 +143,16 @@ def test_is_batch_polling_disabled_when_zero():
         prisma_client=MagicMock(),
     )
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 0):
+    # Mock scheduler without registered job
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = None
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         assert instance._is_batch_polling_enabled() is False
 
 
-def test_is_batch_polling_disabled_when_not_set():
-    """Test that batch polling is detected as disabled when not set."""
+def test_is_batch_polling_disabled_when_no_scheduler():
+    """Test that batch polling is detected as disabled when scheduler is not available."""
     from litellm_enterprise.proxy.hooks.managed_files import (
         _PROXY_LiteLLMManagedFiles,
     )
@@ -153,7 +162,7 @@ def test_is_batch_polling_disabled_when_not_set():
         prisma_client=MagicMock(),
     )
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", None):
+    with patch("litellm.proxy.proxy_server.scheduler", None):
         assert instance._is_batch_polling_enabled() is False
 
 
@@ -286,7 +295,7 @@ async def test_get_batches_referencing_file_finds_multiple_batches():
 async def test_file_deletion_blocked_when_batch_polling_enabled_and_batch_references_file():
     """
     Test that file deletion is blocked when:
-    1. Batch polling is enabled
+    1. Batch cost tracking job is registered (polling enabled)
     2. File is referenced by a non-terminal batch
     """
     unified_file_id = _make_unified_file_id("file-to-delete")
@@ -309,7 +318,11 @@ async def test_file_deletion_blocked_when_batch_polling_enabled_and_batch_refere
         batches=[batch_record],
     )
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 60):
+    # Mock scheduler with registered batch cost job
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = MagicMock()  # Job exists
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         with pytest.raises(HTTPException) as exc_info:
             await managed_files._check_file_deletion_allowed(unified_file_id)
         
@@ -318,13 +331,13 @@ async def test_file_deletion_blocked_when_batch_polling_enabled_and_batch_refere
         assert "Cannot delete file" in error_detail
         assert unified_file_id in error_detail
         assert "validating" in error_detail
-        assert "delete the referencing batch" in error_detail.lower()
+        assert "delete or cancel the referencing batch" in error_detail.lower()
 
 
 @pytest.mark.asyncio
 async def test_file_deletion_allowed_when_batch_polling_disabled():
     """
-    Test that file deletion is allowed when batch polling is disabled,
+    Test that file deletion is allowed when batch cost tracking job is not registered,
     even if there are non-terminal batches referencing the file.
     """
     unified_file_id = _make_unified_file_id("file-to-delete")
@@ -347,7 +360,11 @@ async def test_file_deletion_allowed_when_batch_polling_disabled():
         batches=[batch_record],
     )
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 0):
+    # Mock scheduler without registered job (batch cost tracking disabled)
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = None
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         # Should not raise an exception
         await managed_files._check_file_deletion_allowed(unified_file_id)
 
@@ -356,7 +373,7 @@ async def test_file_deletion_allowed_when_batch_polling_disabled():
 async def test_file_deletion_allowed_when_no_batches_reference_file():
     """
     Test that file deletion is allowed when no batches reference the file,
-    even when batch polling is enabled.
+    even when batch cost tracking is enabled.
     """
     unified_file_id = _make_unified_file_id("file-to-delete")
     
@@ -365,7 +382,11 @@ async def test_file_deletion_allowed_when_no_batches_reference_file():
         batches=[],  # No batches reference this file
     )
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 60):
+    # Mock scheduler with registered job (batch cost tracking enabled)
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         # Should not raise an exception
         await managed_files._check_file_deletion_allowed(unified_file_id)
 
@@ -399,7 +420,11 @@ async def test_afile_delete_calls_check_deletion_allowed():
     mock_router = MagicMock()
     mock_router.afile_delete = AsyncMock()
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 60):
+    # Mock scheduler with registered job
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         with pytest.raises(HTTPException) as exc_info:
             await managed_files.afile_delete(
                 file_id=unified_file_id,
@@ -410,6 +435,50 @@ async def test_afile_delete_calls_check_deletion_allowed():
         # Should raise error before calling router delete
         assert exc_info.value.status_code == 400
         mock_router.afile_delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_early_exit_after_max_matches():
+    """
+    Test that we stop checking batches once we find enough matches.
+    This is a performance optimization to avoid parsing all batches.
+    """
+    unified_file_id = _make_unified_file_id("file-shared")
+    
+    # Create more batches than MAX_MATCHES_TO_RETURN (10)
+    many_batches = []
+    for i in range(15):
+        batch = _make_batch_db_record(
+            unified_object_id=_make_unified_batch_id(f"batch-{i}"),
+            status="validating",
+            file_object={
+                "id": f"batch-{i}",
+                "input_file_id": unified_file_id,
+                "status": "validating"
+            },
+        )
+        many_batches.append(batch)
+    
+    managed_files = _make_managed_files_instance_with_batches(
+        file_id=unified_file_id,
+        batches=many_batches,
+    )
+    
+    referencing_batches = await managed_files._get_batches_referencing_file(unified_file_id)
+    
+    # Should return exactly 10 (MAX_MATCHES_TO_RETURN)
+    assert len(referencing_batches) == 10
+    
+    # Verify error message handles "10+" case
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
+        with pytest.raises(HTTPException) as exc_info:
+            await managed_files._check_file_deletion_allowed(unified_file_id)
+        
+        error_detail = exc_info.value.detail
+        assert "10+ batch(es)" in error_detail
 
 
 @pytest.mark.asyncio
@@ -438,7 +507,11 @@ async def test_error_message_includes_batch_details():
         batches=[batch1, batch2],
     )
     
-    with patch("litellm.proxy.proxy_server.proxy_batch_polling_interval", 60):
+    # Mock scheduler with registered job
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = MagicMock()
+    
+    with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         with pytest.raises(HTTPException) as exc_info:
             await managed_files._check_file_deletion_allowed(unified_file_id)
         
@@ -447,3 +520,4 @@ async def test_error_message_includes_batch_details():
         assert "validating" in error_detail
         assert "in_progress" in error_detail
         assert "complete cost tracking" in error_detail.lower()
+        assert "delete or cancel the referencing batch" in error_detail.lower()

@@ -1053,22 +1053,28 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     def _is_batch_polling_enabled(self) -> bool:
         """
-        Check if batch polling is configured, which indicates user wants cost tracking.
-        
+        Check if batch cost tracking is actually enabled and running.
         Returns:
-            bool: True if batch polling is enabled (interval > 0), False otherwise
+            bool: True if batch cost tracking is active, False otherwise
         """
         try:
             # Import here to avoid circular dependencies
             import litellm.proxy.proxy_server as proxy_server_module
+
+            # Check if the scheduler has the batch cost checking job registered
+            scheduler = getattr(proxy_server_module, 'scheduler', None)
+            if scheduler is None:
+                return False
             
-            proxy_batch_polling_interval = getattr(
-                proxy_server_module, 'proxy_batch_polling_interval', None
-            )
+            # Check if the check_batch_cost_job exists in the scheduler
+            try:
+                job = scheduler.get_job('check_batch_cost_job')
+                if job is not None:
+                    return True
+            except Exception:
+                # Job not found or scheduler doesn't support get_job
+                pass
             
-            # If interval is set and greater than 0, polling is enabled
-            if proxy_batch_polling_interval is not None and proxy_batch_polling_interval > 0:
-                return True
             return False
         except Exception as e:
             verbose_logger.warning(
@@ -1090,6 +1096,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             
         Returns:
             List of batch objects referencing this file in non-terminal state
+            (limited to first 10 matches for error message display)
         """
         # Prepare list of file IDs to check (both unified and provider IDs)
         file_ids_to_check = [file_id]
@@ -1109,18 +1116,28 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 f"Could not get model file ID mapping for {file_id}: {e}. "
                 f"Will only check unified file ID."
             )
+    
+        MAX_BATCHES_TO_CHECK = 500
+        MAX_MATCHES_TO_RETURN = 10 
         
-        # Query batches in non-terminal states
-        # Batches can reference files as input_file_id, output_file_id, or error_file_id
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
                 "file_purpose": "batch",
                 "status": {"in": ["validating", "in_progress", "finalizing"]},
-            }
+            },
+            take=MAX_BATCHES_TO_CHECK,
+            order={"created_at": "desc"},
         )
         
         referencing_batches = []
         for batch in batches:
+            # Early exit if we have enough matches for error message
+            if len(referencing_batches) >= MAX_MATCHES_TO_RETURN:
+                verbose_logger.debug(
+                    f"Found {MAX_MATCHES_TO_RETURN}+ batches referencing file {file_id}, "
+                )
+                break
+            
             try:
                 # Parse the batch file_object to check for file references
                 batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
@@ -1173,14 +1190,30 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         
         if referencing_batches:
             # File is referenced by non-terminal batches and polling is enabled
-            batch_ids = [b["batch_id"] for b in referencing_batches]
-            batch_statuses = [f"{b['batch_id']}: {b['status']}" for b in referencing_batches]
+            MAX_BATCHES_IN_ERROR = 5  # Limit batches shown in error message for readability
+            
+            # Show up to MAX_BATCHES_IN_ERROR in the error message
+            batches_to_show = referencing_batches[:MAX_BATCHES_IN_ERROR]
+            batch_statuses = [f"{b['batch_id']}: {b['status']}" for b in batches_to_show]
+            
+            # Determine the count message
+            count_message = f"{len(referencing_batches)}"
+            if len(referencing_batches) >= 10:  # MAX_MATCHES_TO_RETURN from _get_batches_referencing_file
+                count_message = "10+"
             
             error_message = (
                 f"Cannot delete file {file_id}. "
-                f"The file is referenced by {len(referencing_batches)} batch(es) in non-terminal state: "
-                f"{', '.join(batch_statuses)}. "
-                f"To delete this file before complete cost tracking, please delete the referencing batch(es) first. "
+                f"The file is referenced by {count_message} batch(es) in non-terminal state"
+            )
+            
+            # Add specific batch details if not too many
+            if len(referencing_batches) <= MAX_BATCHES_IN_ERROR:
+                error_message += f": {', '.join(batch_statuses)}. "
+            else:
+                error_message += f" (showing {MAX_BATCHES_IN_ERROR} most recent): {', '.join(batch_statuses)}. "
+            
+            error_message += (
+                f"To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
                 f"Alternatively, wait for all batches to complete processing."
             )
             
