@@ -85,7 +85,7 @@ class TestMCPSecurityGuardrailPreCall:
                 data=data,
                 call_type="acompletion",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "evil_server" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
@@ -114,7 +114,7 @@ class TestMCPSecurityGuardrailPreCall:
                 data=data,
                 call_type="aresponses",
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
         assert "unknown_server" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio

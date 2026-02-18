@@ -60,7 +60,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
 
         if self.on_violation == "block":
             raise HTTPException(
-                status_code=403,
+                status_code=400,
                 detail={
                     "error": "Violated guardrail policy",
                     "guardrail": "mcp_security",
@@ -86,7 +86,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
             if not isinstance(server_url, str):
                 continue
             if server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):
-                name = server_url.split("/")[-1]
+                name = server_url[len(LITELLM_PROXY_MCP_SERVER_URL_PREFIX):]
                 if name:
                     server_names.add(name)
         return server_names
