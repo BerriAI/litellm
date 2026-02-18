@@ -944,6 +944,7 @@ const sidebars = {
         "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
+        "completion/message_sanitization",
         "completion/model_alias",
         "completion/mock_requests",
         "completion/predict_outputs",
