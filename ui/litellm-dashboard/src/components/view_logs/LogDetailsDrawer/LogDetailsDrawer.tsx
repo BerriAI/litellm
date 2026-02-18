@@ -321,14 +321,14 @@ export function LogDetailsDrawer({
                   </>
                 )}
               </div>
-              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
-                <div className="mt-2">
-                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
-                </div>
-              )}
             </div>
 
             <div className="flex-1 overflow-y-auto">
+              {normalizeGuardrailEntries(metadata?.guardrail_information).length > 0 && (
+                <div className="px-3 pt-2">
+                  <GuardrailJumpLink guardrailEntries={normalizeGuardrailEntries(metadata?.guardrail_information)} />
+                </div>
+              )}
               {isSessionMode ? (
                 <div className="py-1">
                   {/* Child events — vertical tree line with horizontal connectors */}
