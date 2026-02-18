@@ -1,0 +1,35 @@
+# Expensive Anthropic API flags.
+# Blocks request parameters that trigger feature-specific pricing surcharges.
+# Also inherits hosted tool type prefixes so hosted tools are blocked as well.
+#
+# Pricing reference: https://platform.claude.com/docs/en/about-claude/pricing#feature-specific-pricing
+
+category_name: "claude_code_expensive_flags"
+description: "Blocks expensive Anthropic API features that incur pricing surcharges"
+default_action: "BLOCK"
+
+# Inherit hosted tool type prefixes — hosted tools are also expensive.
+inherit_from: "../block_hosted_tools/anthropic.yaml"
+
+# Request-level parameters to block.
+# Each entry maps a top-level request_data key to one or more blocked values.
+# Use "*" as the value to block the flag entirely regardless of its value.
+blocked_params:
+  - param: "speed"
+    blocked_values:
+      - "fast"
+    description: "Fast/turbo inference mode (~6x pricing surcharge)"
+    error_message: "fast inference mode (speed=fast) is disabled by your organization's policy"
+
+  - param: "inference_geo"
+    blocked_values:
+      - "*"
+    description: "Inference geo-routing (1.1x pricing surcharge)"
+    error_message: "inference geo-routing (inference_geo) is disabled by your organization's policy"
+
+  - param: "thinking"
+    blocked_values:
+      - "enabled"
+    nested_key: "type"
+    description: "Extended thinking / budget-token thinking mode"
+    error_message: "extended thinking mode (thinking.type=enabled) is disabled by your organization's policy"
