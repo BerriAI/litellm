@@ -1960,6 +1960,10 @@ class CustomStreamWrapper:
                         # The copy in self.chunks retains usage for
                         # calculate_total_usage().
                         processed_chunk.usage = None  # type: ignore
+                        # After nullifying usage, check if the chunk has any
+                        # remaining content (delta, finish_reason, etc.).
+                        # is_model_response_stream_empty sees usage=None and
+                        # correctly skips it, only checking meaningful fields.
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
                         )
