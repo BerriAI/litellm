@@ -137,6 +137,25 @@ class TestNomaV2Configuration:
         assert "x-noma-context" not in payload
         assert "input" not in payload
 
+    def test_build_scan_payload_deep_copies_request_data(self, noma_v2_guardrail):
+        request_data = {
+            "metadata": {"headers": {"x-noma-application-id": "header-app"}},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=None,
+            application_id="dynamic-app",
+        )
+
+        payload["request_data"]["metadata"]["headers"]["x-noma-application-id"] = "mutated-value"
+        payload["request_data"]["messages"][0]["content"] = "changed-content"
+
+        assert request_data["metadata"]["headers"]["x-noma-application-id"] == "header-app"
+        assert request_data["messages"][0]["content"] == "hello"
+
     def test_build_scan_payload_passes_model_call_details_as_is(self, noma_v2_guardrail):
         class _LoggingObj:
             def __init__(self) -> None:
@@ -215,6 +234,37 @@ class TestNomaV2Configuration:
 
         mock_safe_dumps.assert_called_once()
         assert sanitized == {"fallback": True}
+
+    def test_sanitize_payload_for_transport_logs_warning_when_payload_becomes_empty(self, noma_v2_guardrail):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.safe_json_loads",
+            return_value={},
+        ):
+            with patch(
+                "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.verbose_proxy_logger.warning"
+            ) as mock_warning:
+                sanitized = noma_v2_guardrail._sanitize_payload_for_transport({"inputs": {"texts": ["hello"]}})
+
+        assert sanitized == {}
+        mock_warning.assert_called_once_with(
+            "Noma v2 guardrail: payload serialization failed, falling back to empty payload"
+        )
+
+    def test_sanitize_payload_for_transport_logs_warning_on_non_dict_output(self, noma_v2_guardrail):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.safe_json_loads",
+            return_value=["not-a-dict"],
+        ):
+            with patch(
+                "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.verbose_proxy_logger.warning"
+            ) as mock_warning:
+                sanitized = noma_v2_guardrail._sanitize_payload_for_transport({"inputs": {"texts": ["hello"]}})
+
+        assert sanitized == {}
+        mock_warning.assert_called_once_with(
+            "Noma v2 guardrail: payload sanitization produced non-dict output (type=%s), falling back to empty payload",
+            "list",
+        )
 
     def test_get_config_model_returns_noma_v2_config_model(self):
         assert NomaV2Guardrail.get_config_model() is NomaV2GuardrailConfigModel

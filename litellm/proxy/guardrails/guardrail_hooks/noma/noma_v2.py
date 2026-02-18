@@ -7,6 +7,7 @@
 import enum
 import json
 import os
+from copy import deepcopy
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
 from urllib.parse import urlparse
@@ -125,7 +126,7 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: Optional[str],
     ) -> dict:
-        payload_request_data = dict(request_data)
+        payload_request_data = deepcopy(request_data)
         if logging_obj is not None:
             payload_request_data["litellm_logging_obj"] = getattr(logging_obj, "model_call_details", None)
 
@@ -155,8 +156,18 @@ class NomaV2Guardrail(CustomGuardrail):
             json_str = safe_dumps(payload)
 
         safe_payload = safe_json_loads(json_str, default={})
+        if safe_payload == {} and payload:
+            verbose_proxy_logger.warning(
+                "Noma v2 guardrail: payload serialization failed, falling back to empty payload"
+            )
+
         if isinstance(safe_payload, dict):
             return safe_payload
+
+        verbose_proxy_logger.warning(
+            "Noma v2 guardrail: payload sanitization produced non-dict output (type=%s), falling back to empty payload",
+            type(safe_payload).__name__,
+        )
         return {}
 
     async def _call_noma_scan(
