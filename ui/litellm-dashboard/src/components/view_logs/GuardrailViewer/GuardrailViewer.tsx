@@ -507,20 +507,6 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
       {/* Expanded details */}
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-3">
-          {/* View Policy Configuration link */}
-          {entry.policy_template && (
-            <div className="flex justify-end mb-3">
-              <a
-                href="/ui/policies"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-              >
-                View Policy Configuration
-                <ExternalLinkIcon />
-              </a>
-            </div>
-          )}
 
           {/* Classification details for llm-judge */}
           {entry.classification && (
