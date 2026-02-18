@@ -439,40 +439,21 @@ class CustomGuardrail(CustomLogger):
                 return result
         return True
 
-    # MCP event hooks map back to their base call-phase counterparts so that
-    # guardrails configured with event_hook="pre_call" also fire for MCP calls.
-    _MCP_EVENT_HOOK_FALLBACKS = {
-        GuardrailEventHooks.pre_mcp_call.value: GuardrailEventHooks.pre_call.value,
-        GuardrailEventHooks.during_mcp_call.value: GuardrailEventHooks.during_call.value,
-    }
-
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """
         Returns True if the event_hook is the same as the event_type
 
         eg. if `self.event_hook == "pre_call" and event_type == "pre_call"` -> then True
         eg. if `self.event_hook == "pre_call" and event_type == "post_call"` -> then False
-
-        MCP event hooks also match their base counterparts:
-        eg. if `self.event_hook == "pre_call" and event_type == "pre_mcp_call"` -> then True
         """
 
         if self.event_hook is None:
             return True
-
-        et_value = event_type.value
-        fallback = self._MCP_EVENT_HOOK_FALLBACKS.get(et_value)
-
         if isinstance(self.event_hook, list):
-            return et_value in self.event_hook or (
-                fallback is not None and fallback in self.event_hook
-            )
+            return event_type.value in self.event_hook
         if isinstance(self.event_hook, Mode):
-            tag_values = self.event_hook.tags.values()
-            return et_value in tag_values or (
-                fallback is not None and fallback in tag_values
-            )
-        return self.event_hook == et_value or self.event_hook == fallback
+            return event_type.value in self.event_hook.tags.values()
+        return self.event_hook == event_type.value
 
     def get_guardrail_dynamic_request_body_params(self, request_data: dict) -> dict:
         """

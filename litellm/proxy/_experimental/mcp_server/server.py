@@ -1638,9 +1638,6 @@ if MCP_AVAILABLE:
             raise
 
         if litellm_logging_obj:
-            # Propagate guardrail info from pre_call_tool_check into logging metadata
-            from litellm.proxy.proxy_server import proxy_logging_obj as _plo
-
             litellm_logging_obj.post_call(original_response=response)
             end_time = datetime.now()
             await litellm_logging_obj.async_post_mcp_tool_call_hook(
@@ -1796,6 +1793,7 @@ if MCP_AVAILABLE:
         host_progress_callback: Optional[Callable] = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
+        # Import here to avoid circular import
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         call_tool_result = await global_mcp_server_manager.call_tool(
@@ -1810,17 +1808,6 @@ if MCP_AVAILABLE:
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
         )
-
-        # DEMO: propagate guardrail info from pre_call_tool_check into the
-        # litellm_logging_obj so it appears in spend logs.
-        if proxy_logging_obj and hasattr(proxy_logging_obj, "_mcp_guardrail_information"):
-            call_key = f"{server_name}:{name}"
-            gi = proxy_logging_obj._mcp_guardrail_information.pop(call_key, None)
-            if gi and litellm_logging_obj:
-                lp = litellm_logging_obj.model_call_details.setdefault("litellm_params", {})
-                lp_meta = lp.setdefault("metadata", {})
-                lp_meta["standard_logging_guardrail_information"] = gi
-
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
 

@@ -71,9 +71,7 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import (
-        SEP_986_URL,
-    )
+    from mcp.shared.tool_name_validation import SEP_986_URL
 except ImportError:
     from pydantic import BaseModel
 
@@ -1844,15 +1842,6 @@ class MCPServerManager:
                 )
                 if modified_kwargs.get("arguments") != arguments:
                     arguments = modified_kwargs["arguments"]
-
-                # Propagate guardrail information so MCP spend logs can record it
-                synth_meta = modified_data.get("metadata") or {}
-                gi = synth_meta.get("standard_logging_guardrail_information")
-                if gi:
-                    if not hasattr(proxy_logging_obj, "_mcp_guardrail_information"):
-                        proxy_logging_obj._mcp_guardrail_information = {}
-                    call_key = f"{server_name}:{name}"
-                    proxy_logging_obj._mcp_guardrail_information[call_key] = gi
 
         except (
             BlockedPiiEntityError,
