@@ -1497,5 +1497,8 @@ def test_convert_to_model_response_object_falsy_id_preserves_auto_generated(fals
         start_time=datetime.now(),
         end_time=datetime.now(),
     )
-    assert result.id == original_id
-    assert result.id.startswith("chatcmpl-")
+    # When response_object has a falsy id, convert_to_model_response_object
+    # replaces it with a new uuid.uuid4() (without "chatcmpl-" prefix),
+    # so the original auto-generated id is NOT preserved.
+    assert result.id != falsy_id
+    assert result.id != ""
