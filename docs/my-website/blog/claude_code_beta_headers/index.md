@@ -24,6 +24,8 @@ hide_table_of_contents: false
 **Severity:** High
 **Status:** Resolved
 
+> **Note:** This fix will be available starting from `v1.81.13-nightly` or higher of LiteLLM.
+
 ## Summary
 
 Claude Code began sending unsupported Anthropic beta headers to non-Anthropic providers (Bedrock, Azure AI, Vertex AI), causing `invalid beta flag` errors. LiteLLM was forwarding all beta headers without provider-specific validation. Users experienced request failures when routing Claude Code requests through LiteLLM to these providers.
