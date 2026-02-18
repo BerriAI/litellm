@@ -79,7 +79,9 @@ The `marker` field is a date string (`YYYY-MM-DD`) representing the last
 successfully exported day. The next scheduled run will export from
 `marker + 1 day` up to yesterday.
 
-If `marker` is `null`, the first export will start from yesterday.
+If `marker` is `null`, the first export will automatically start from the earliest
+date that has rows in `LiteLLM_DailyUserSpend` — all historical data is picked up
+without any manual backfill.
 
 ---
 

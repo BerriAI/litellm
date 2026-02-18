@@ -83,6 +83,19 @@ class LiteLLMDatabase:
         except Exception as exc:
             raise Exception(f"Error retrieving Mavvrik usage data: {exc}") from exc
 
+    async def get_earliest_date(self) -> Optional[str]:
+        """Return the earliest date string (YYYY-MM-DD) in LiteLLM_DailyUserSpend, or None."""
+        client = self._ensure_prisma_client()
+        try:
+            rows = await client.db.query_raw(
+                'SELECT MIN(date)::text AS earliest FROM "LiteLLM_DailyUserSpend"'
+            )
+            if rows and rows[0].get("earliest"):
+                return rows[0]["earliest"][:10]  # trim to YYYY-MM-DD
+        except Exception:
+            pass
+        return None
+
     # ------------------------------------------------------------------
     # Mavvrik settings + marker helpers (stored in LiteLLM_Config table)
     # ------------------------------------------------------------------

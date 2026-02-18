@@ -100,8 +100,10 @@ that was successfully exported.
 
 ### First run (no marker)
 
-On the very first export, no marker exists. The scheduler starts from yesterday —
-the most recent complete day.
+On the very first export, no marker exists. The scheduler queries
+`MIN(date)` from `LiteLLM_DailyUserSpend` and uses that as `start_date`,
+so all historical data is automatically included — no manual backfill needed.
+If the table is empty or the query fails, it falls back to yesterday.
 
 ### Steady state (marker exists)
 

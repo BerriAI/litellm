@@ -151,8 +151,20 @@ class MavvrikLogger(CustomLogger):
                 )
                 start_date = yesterday
         else:
-            # First run — start from yesterday
-            start_date = yesterday
+            # First run — start from the earliest date that has data in the DB.
+            # Falls back to yesterday if the query fails or the table is empty.
+            earliest_str = await db.get_earliest_date()
+            if earliest_str:
+                try:
+                    start_date = date.fromisoformat(earliest_str)
+                    verbose_logger.info(
+                        "MavvrikLogger: no marker found, starting from earliest DB date %s",
+                        start_date,
+                    )
+                except ValueError:
+                    start_date = yesterday
+            else:
+                start_date = yesterday
 
         if start_date > yesterday:
             verbose_logger.debug(
