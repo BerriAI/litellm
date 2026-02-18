@@ -37312,5 +37312,13 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         }
+    },
+    "duckduckgo/search": {
+        "litellm_provider": "duckduckgo",
+        "mode": "search",
+        "input_cost_per_query": 0.0,
+        "metadata": {
+            "notes": "DuckDuckGo Instant Answer API is free and does not require an API key."
+        }
     }
 }
