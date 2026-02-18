@@ -112,6 +112,99 @@ class TestClaudeCodeBlockExpensiveFlagsGuardrail:
         assert result == inputs
 
     @pytest.mark.asyncio
+    async def test_allows_thinking_type_not_enabled(self):
+        """Test that thinking.type != 'enabled' is not blocked."""
+        guardrail = ClaudeCodeBlockExpensiveFlagsGuardrail(
+            guardrail_name="test-block-expensive"
+        )
+        request_data = {"thinking": {"type": "disabled"}}
+        inputs = {"tools": None}
+
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+        assert result == inputs
+
+    @pytest.mark.asyncio
+    async def test_allows_speed_not_fast(self):
+        """Test that speed != 'fast' is not blocked."""
+        guardrail = ClaudeCodeBlockExpensiveFlagsGuardrail(
+            guardrail_name="test-block-expensive"
+        )
+        request_data = {"speed": "normal"}
+        inputs = {"tools": None}
+
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+        assert result == inputs
+
+    @pytest.mark.asyncio
+    async def test_blocks_inference_geo_any_value(self):
+        """Test that inference_geo is blocked for any value (wildcard)."""
+        guardrail = ClaudeCodeBlockExpensiveFlagsGuardrail(
+            guardrail_name="test-block-expensive"
+        )
+        for geo_value in ["eu", "ap", "us-east"]:
+            request_data = {"inference_geo": geo_value}
+            inputs = {"tools": None}
+
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="request",
+                )
+
+            assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_blocks_inherited_anthropic_hosted_tool(self):
+        """Test that inherited Anthropic hosted tools are blocked."""
+        guardrail = ClaudeCodeBlockExpensiveFlagsGuardrail(
+            guardrail_name="test-block-expensive"
+        )
+        # bash_* prefix is inherited from block_hosted_tools/anthropic.yaml
+        tools = [{"type": "bash_20250124", "name": "run_bash"}]
+        inputs = {"tools": tools}
+        request_data = {}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "bash" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
+    async def test_param_block_takes_priority_over_tools(self):
+        """Test that a blocked param raises before tool checks."""
+        guardrail = ClaudeCodeBlockExpensiveFlagsGuardrail(
+            guardrail_name="test-block-expensive"
+        )
+        tools = [{"type": "bash_20250124", "name": "run_bash"}]
+        request_data = {"speed": "fast"}
+        inputs = {"tools": tools}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+        assert exc_info.value.status_code == 403
+        # speed=fast check fires first
+        assert "fast" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
     async def test_http_403_classified_as_guardrail_intervention(self):
         """Test that HTTP 403 from guardrail is classified as guardrail_intervened."""
         assert CustomGuardrail._is_guardrail_intervention(

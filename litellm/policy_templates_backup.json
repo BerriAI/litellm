@@ -1078,26 +1078,15 @@
   {
     "id": "claude-code-cost-optimization",
     "title": "Claude Code Cost Optimization",
-    "description": "Reduces Claude Code API spend by blocking expensive inference modes (fast/turbo, inference_geo, and extended thinking) and automatically injecting prompt caching headers into system messages to maximize cache hit rates.",
+    "description": "Reduces Claude Code API spend by blocking expensive inference modes (fast/turbo, inference_geo, and extended thinking) and Anthropic-hosted tools.",
     "icon": "CurrencyDollarIcon",
     "iconColor": "text-green-500",
     "iconBg": "bg-green-50",
     "guardrails": [
-      "claude-code-inject-prompt-cache",
       "claude-code-block-expensive-flags"
     ],
     "complexity": "Low",
     "guardrailDefinitions": [
-      {
-        "guardrail_name": "claude-code-inject-prompt-cache",
-        "litellm_params": {
-          "guardrail": "claude_code_prompt_cache",
-          "mode": "pre_call"
-        },
-        "guardrail_info": {
-          "description": "Automatically adds cache_control: {type: ephemeral} to system messages so Anthropic can cache the system prompt prefix. Only applies to Anthropic API models. Reduces cost on repeated calls that share the same system prompt."
-        }
-      },
       {
         "guardrail_name": "claude-code-block-expensive-flags",
         "litellm_params": {
@@ -1111,9 +1100,8 @@
     ],
     "templateData": {
       "policy_name": "claude-code-cost-optimization",
-      "description": "Reduces Claude Code API spend by blocking fast mode, inference_geo, extended thinking, and Anthropic-hosted tools, while auto-injecting prompt caching into system messages.",
+      "description": "Reduces Claude Code API spend by blocking fast mode, inference_geo, extended thinking, and Anthropic-hosted tools.",
       "guardrails_add": [
-        "claude-code-inject-prompt-cache",
         "claude-code-block-expensive-flags"
       ],
       "guardrails_remove": []
