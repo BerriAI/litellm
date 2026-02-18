@@ -1,3 +1,4 @@
+import anyio
 import asyncio
 import copy
 import enum
@@ -5147,8 +5148,6 @@ async def async_data_generator(
         # back to the connection pool. This prevents pool exhaustion when
         # clients disconnect mid-stream.
         # Shield from cancellation so the close awaits can complete.
-        import anyio
-
         with anyio.CancelScope(shield=True):
             if hasattr(response, "aclose"):
                 try:
