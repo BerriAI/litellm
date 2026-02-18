@@ -160,3 +160,24 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].lifecycle.preStop.exec.command[2]
           value: echo "Container stopping"
+  - it: should render background health check settings in generated config
+    template: configmap-litellm.yaml
+    set:
+      backgroundHealthChecks:
+        enabled: true
+        interval: 240
+        concurrency: 16
+        details: false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*background_health_checks:\s*true$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*health_check_interval:\s*240$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*health_check_concurrency:\s*16$'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: '(?m)^\s*health_check_details:\s*false$'
