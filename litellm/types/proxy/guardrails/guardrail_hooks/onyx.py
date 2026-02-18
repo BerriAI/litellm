@@ -16,6 +16,11 @@ class OnyxGuardrailConfigModel(GuardrailConfigModel):
         description="The API key for the Onyx Guard server. If not provided, the `ONYX_API_KEY` environment variable is checked.",
     )
 
+    mcp_api_key: Optional[str] = Field(
+        default=None,
+        description="The API key for MCP Guard policies. If not provided, the `ONYX_MCP_API_KEY` environment variable is checked. MCP calls are skipped when not set.",
+    )
+
     timeout: Optional[float] = Field(
         default=None,
         description="The timeout for the Onyx Guard server in seconds. If not provided, the `ONYX_TIMEOUT` environment variable is checked.",
