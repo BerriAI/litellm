@@ -671,6 +671,15 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 if litellm_logging_obj:
                     try:
+                        # Propagate guardrail info from pre_call_tool_check into logging metadata
+                        if proxy_logging_obj and hasattr(proxy_logging_obj, "_mcp_guardrail_information"):
+                            call_key = f"{server_name}:{sanitized_tool_name}"
+                            gi = proxy_logging_obj._mcp_guardrail_information.pop(call_key, None)
+                            if gi:
+                                lp = litellm_logging_obj.model_call_details.setdefault("litellm_params", {})
+                                lp_meta = lp.setdefault("metadata", {})
+                                lp_meta["standard_logging_guardrail_information"] = gi
+
                         litellm_logging_obj.post_call(original_response=result)
                         end_time = datetime.now()
                         await litellm_logging_obj.async_post_mcp_tool_call_hook(

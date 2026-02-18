@@ -524,6 +524,7 @@ class ProxyLogging:
         synthetic_data = {
             "messages": [synthetic_message],
             "model": kwargs.get("model", "mcp-tool-call"),
+            "metadata": {},
             "user_api_key_user_id": kwargs.get("user_api_key_user_id"),
             "user_api_key_team_id": kwargs.get("user_api_key_team_id"),
             "user_api_key_end_user_id": kwargs.get("user_api_key_end_user_id"),
