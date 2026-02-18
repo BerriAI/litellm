@@ -276,6 +276,7 @@ The response follows Perplexity's search format with the following structure:
 | Firecrawl | `FIRECRAWL_API_KEY` | `firecrawl` |
 | SearXNG | `SEARXNG_API_BASE` (required) | `searxng` |
 | Linkup | `LINKUP_API_KEY` | `linkup` |
+| DuckDuckGo | `DUCKDUCKGO_API_BASE` | `duckduckgo` | 
 
 See the individual provider documentation for detailed setup instructions and provider-specific parameters.
 
