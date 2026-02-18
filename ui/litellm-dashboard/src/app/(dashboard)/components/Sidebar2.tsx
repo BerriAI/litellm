@@ -105,6 +105,8 @@ const routeFor = (slug: string): string => {
       return "guardrails";
     case "policies":
       return "policies";
+    case "compliance":
+      return "compliance";
 
     // tools
     case "mcp-servers":
@@ -174,6 +176,13 @@ const menuItems: MenuItemCfg[] = [
     label: "Usage",
     icon: <BarChartOutlined style={{ fontSize: 18 }} />,
     roles: [...all_admin_roles, ...internalUserRoles],
+  },
+  {
+    key: "29",
+    page: "compliance",
+    label: "Compliance",
+    icon: <AuditOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
   },
   { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined style={{ fontSize: 18 }} /> },
   {

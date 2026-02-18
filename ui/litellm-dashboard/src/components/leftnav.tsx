@@ -99,24 +99,6 @@ const menuGroups: MenuGroup[] = [
         icon: <ToolOutlined />,
       },
       {
-        key: "guardrails",
-        page: "guardrails",
-        label: "Guardrails",
-        icon: <SafetyOutlined />,
-        roles: all_admin_roles,
-      },
-      {
-        key: "policies",
-        page: "policies",
-        label: (
-          <span className="flex items-center gap-4">
-            Policies
-          </span>
-        ),
-        icon: <AuditOutlined />,
-        roles: all_admin_roles,
-      },
-      {
         key: "tools",
         page: "tools",
         label: "Tools",
@@ -135,6 +117,33 @@ const menuGroups: MenuGroup[] = [
             icon: <DatabaseOutlined />,
           },
         ],
+      },
+    ],
+  },
+  {
+    groupLabel: "GUARDRAILS",
+    roles: all_admin_roles,
+    items: [
+      {
+        key: "guardrails",
+        page: "guardrails",
+        label: "Guardrails",
+        icon: <SafetyOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "policies",
+        page: "policies",
+        label: "Policies",
+        icon: <AuditOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "compliance",
+        page: "compliance",
+        label: "Monitoring",
+        icon: <LineChartOutlined />,
+        roles: all_admin_roles,
       },
     ],
   },

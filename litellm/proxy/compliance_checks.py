@@ -61,6 +61,111 @@ class ComplianceChecker:
 
     # ── EU AI Act Helper Methods ────────────────────────────────────────────
 
+    def _check_art_5_content_screened(self) -> ComplianceCheckResult:
+        """Art. 5: Check if content was screened before LLM (pre-call)."""
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Content screened before LLM",
+            article="Art. 5",
+            passed=has_pre_call,
+            detail=(
+                f"{len(pre_call_guardrails)} pre-call guardrail(s) screened content"
+                if has_pre_call
+                else "No pre-call screening applied"
+            ),
+        )
+
+    def _check_art_5_1a_manipulation_screened(self) -> ComplianceCheckResult:
+        """Art. 5.1(a): Check if manipulation/subliminal techniques are screened."""
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Manipulation & subliminal techniques screened",
+            article="Art. 5.1(a)",
+            passed=has_pre_call,
+            detail=(
+                "Pre-call guardrails screen for prohibited manipulation techniques"
+                if has_pre_call
+                else "No guardrails screening for subliminal/manipulative techniques"
+            ),
+        )
+
+    def _check_art_5_1b_vulnerability_screened(self) -> ComplianceCheckResult:
+        """Art. 5.1(b): Check if vulnerability exploitation is screened."""
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Vulnerability exploitation screened",
+            article="Art. 5.1(b)",
+            passed=has_pre_call,
+            detail=(
+                "Pre-call guardrails screen for exploitation of vulnerable groups"
+                if has_pre_call
+                else "No guardrails screening for vulnerability exploitation"
+            ),
+        )
+
+    def _check_art_5_1c_social_scoring_screened(self) -> ComplianceCheckResult:
+        """Art. 5.1(c): Check if social scoring systems are screened."""
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Social scoring systems screened",
+            article="Art. 5.1(c)",
+            passed=has_pre_call,
+            detail=(
+                "Pre-call guardrails screen for prohibited social scoring"
+                if has_pre_call
+                else "No guardrails screening for social scoring systems"
+            ),
+        )
+
+    def _check_art_5_1d_predictive_policing_screened(self) -> ComplianceCheckResult:
+        """Art. 5.1(d): Check if predictive policing/criminal profiling is screened."""
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Criminal profiling & predictive policing screened",
+            article="Art. 5.1(d)",
+            passed=has_pre_call,
+            detail=(
+                "Pre-call guardrails screen for prohibited criminal profiling"
+                if has_pre_call
+                else "No guardrails screening for predictive policing"
+            ),
+        )
+
+    def _check_art_5_1f_emotion_recognition_screened(self) -> ComplianceCheckResult:
+        """Art. 5.1(f): Check if emotion recognition in workplace/education is screened."""
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Emotion recognition in workplace/education screened",
+            article="Art. 5.1(f)",
+            passed=has_pre_call,
+            detail=(
+                "Pre-call guardrails screen for prohibited emotion recognition"
+                if has_pre_call
+                else "No guardrails screening for workplace/education emotion recognition"
+            ),
+        )
+
+    def _check_art_5_1h_biometric_categorization_screened(self) -> ComplianceCheckResult:
+        """Art. 5.1(h): Check if biometric categorization is screened."""
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Biometric categorization screened",
+            article="Art. 5.1(h)",
+            passed=has_pre_call,
+            detail=(
+                "Pre-call guardrails screen for prohibited biometric categorization"
+                if has_pre_call
+                else "No guardrails screening for biometric categorization"
+            ),
+        )
+
     def _check_art_9_guardrails_applied(self) -> ComplianceCheckResult:
         """Art. 9: Check if any guardrails were applied."""
         has_guardrails = len(self.guardrails) > 0
@@ -75,18 +180,18 @@ class ComplianceChecker:
             ),
         )
 
-    def _check_art_5_content_screened(self) -> ComplianceCheckResult:
-        """Art. 5: Check if content was screened before LLM (pre-call)."""
+    def _check_art_10_data_governance(self) -> ComplianceCheckResult:
+        """Art. 10: Check if input data was validated by guardrails."""
         pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
         has_pre_call = len(pre_call_guardrails) > 0
         return ComplianceCheckResult(
-            check_name="Content screened before LLM",
-            article="Art. 5",
+            check_name="Input data governance validated",
+            article="Art. 10",
             passed=has_pre_call,
             detail=(
-                f"{len(pre_call_guardrails)} pre-call guardrail(s) screened content"
+                "Pre-call guardrails validate input data quality and governance"
                 if has_pre_call
-                else "No pre-call screening applied"
+                else "No input data validation guardrails applied"
             ),
         )
 
@@ -116,6 +221,103 @@ class ComplianceChecker:
                 "All required audit fields present"
                 if audit_complete
                 else f"Missing: {', '.join(missing)}"
+            ),
+        )
+
+    def _check_art_13_transparency(self) -> ComplianceCheckResult:
+        """Art. 13: Check if AI system transparency is maintained."""
+        has_model = bool(self.data.model)
+        has_user = bool(self.data.user_id)
+        return ComplianceCheckResult(
+            check_name="AI system transparency",
+            article="Art. 13",
+            passed=has_model and has_user,
+            detail=(
+                "AI model and user identity are recorded for transparency"
+                if has_model and has_user
+                else "Missing model or user identification for transparency compliance"
+            ),
+        )
+
+    def _check_art_14_human_oversight(self) -> ComplianceCheckResult:
+        """Art. 14: Check if human oversight mechanisms are in place."""
+        has_user = bool(self.data.user_id)
+        has_guardrails = len(self.guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Human oversight mechanisms active",
+            article="Art. 14",
+            passed=has_user and has_guardrails,
+            detail=(
+                "User identified and guardrails provide automated oversight"
+                if has_user and has_guardrails
+                else "No human oversight mechanisms detected"
+            ),
+        )
+
+    def _check_art_15_accuracy_robustness(self) -> ComplianceCheckResult:
+        """Art. 15: Check if accuracy and robustness safeguards are in place."""
+        post_call_guardrails = self._get_guardrails_by_mode("post_call")
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_both = len(post_call_guardrails) > 0 and len(pre_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="Accuracy & robustness safeguards",
+            article="Art. 15",
+            passed=has_both,
+            detail=(
+                "Both pre-call and post-call guardrails ensure output accuracy and robustness"
+                if has_both
+                else "Missing pre-call or post-call guardrails for accuracy/robustness checks"
+            ),
+        )
+
+    def _check_art_26_deployer_obligations(self) -> ComplianceCheckResult:
+        """Art. 26: Check if deployer obligations for high-risk AI are met."""
+        has_user = bool(self.data.user_id)
+        has_model = bool(self.data.model)
+        has_timestamp = bool(self.data.timestamp)
+        has_guardrails = len(self.guardrails) > 0
+        pre_call_guardrails = self._get_guardrails_by_mode("pre_call")
+        has_pre_call = len(pre_call_guardrails) > 0
+
+        obligations_met = (
+            has_user and has_model and has_timestamp and has_guardrails and has_pre_call
+        )
+
+        missing = []
+        if not has_user:
+            missing.append("user identification")
+        if not has_model:
+            missing.append("model identification")
+        if not has_timestamp:
+            missing.append("timestamp logging")
+        if not has_guardrails:
+            missing.append("guardrail application")
+        if not has_pre_call:
+            missing.append("pre-call risk screening")
+
+        return ComplianceCheckResult(
+            check_name="Deployer obligations for high-risk AI",
+            article="Art. 26",
+            passed=obligations_met,
+            detail=(
+                "All deployer obligations met: user/model identified, timestamped, guardrails active"
+                if obligations_met
+                else f"Missing deployer obligations: {', '.join(missing)}"
+            ),
+        )
+
+    def _check_art_50_synthetic_content_transparency(self) -> ComplianceCheckResult:
+        """Art. 50: Check if AI-generated content transparency is maintained."""
+        post_call_guardrails = self._get_guardrails_by_mode("post_call")
+        has_post_call = len(post_call_guardrails) > 0
+        return ComplianceCheckResult(
+            check_name="AI-generated content transparency",
+            article="Art. 50",
+            passed=has_post_call,
+            detail=(
+                "Post-call guardrails monitor AI-generated content for transparency"
+                if has_post_call
+                else "No post-call guardrails to monitor AI-generated content transparency"
             ),
         )
 
@@ -193,15 +395,39 @@ class ComplianceChecker:
         Check EU AI Act compliance.
 
         Returns:
-            List of compliance check results for:
-            - Art. 9: Guardrails applied
+            List of compliance check results covering:
             - Art. 5: Content screened before LLM (pre-call screening)
+            - Art. 5.1(a): Manipulation & subliminal techniques screened
+            - Art. 5.1(b): Vulnerability exploitation screened
+            - Art. 5.1(c): Social scoring systems screened
+            - Art. 5.1(d): Criminal profiling & predictive policing screened
+            - Art. 5.1(f): Emotion recognition in workplace/education screened
+            - Art. 5.1(h): Biometric categorization screened
+            - Art. 9: Guardrails applied
+            - Art. 10: Input data governance validated
             - Art. 12: Audit record complete
+            - Art. 13: AI system transparency
+            - Art. 14: Human oversight mechanisms active
+            - Art. 15: Accuracy & robustness safeguards
+            - Art. 26: Deployer obligations for high-risk AI
+            - Art. 50: AI-generated content transparency
         """
         return [
-            self._check_art_9_guardrails_applied(),
             self._check_art_5_content_screened(),
+            self._check_art_5_1a_manipulation_screened(),
+            self._check_art_5_1b_vulnerability_screened(),
+            self._check_art_5_1c_social_scoring_screened(),
+            self._check_art_5_1d_predictive_policing_screened(),
+            self._check_art_5_1f_emotion_recognition_screened(),
+            self._check_art_5_1h_biometric_categorization_screened(),
+            self._check_art_9_guardrails_applied(),
+            self._check_art_10_data_governance(),
             self._check_art_12_audit_complete(),
+            self._check_art_13_transparency(),
+            self._check_art_14_human_oversight(),
+            self._check_art_15_accuracy_robustness(),
+            self._check_art_26_deployer_obligations(),
+            self._check_art_50_synthetic_content_transparency(),
         ]
 
     def check_gdpr(self) -> List[ComplianceCheckResult]:

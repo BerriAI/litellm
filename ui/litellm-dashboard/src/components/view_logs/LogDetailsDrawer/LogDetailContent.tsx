@@ -42,6 +42,10 @@ export interface LogDetailContentProps {
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
   accessToken?: string | null;
+  /** Guardrail info inherited from the parent LLM call (used for MCP call_mcp_tool views). */
+  parentGuardrailInfo?: any;
+  /** Log entry of the parent LLM call, used to build the compliance panel context for MCP calls. */
+  parentLogEntry?: LogEntry | null;
 }
 
 /**
@@ -52,7 +56,7 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken, parentGuardrailInfo, parentLogEntry }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -62,12 +66,14 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
   // Don't show "missing data" warning while details are still loading
   const missingData = !hasMessages && !hasResponse && !hasError && !isLoadingDetails;
 
-  // Guardrail data
-  const guardrailInfo = metadata?.guardrail_information;
+  // Guardrail data — fall back to parent LLM call's guardrail info for MCP calls
+  const isMcpCall = logEntry.call_type === "call_mcp_tool" || logEntry.call_type === "list_mcp_tools";
+  const guardrailInfo = metadata?.guardrail_information || (isMcpCall ? parentGuardrailInfo : undefined);
   const guardrailEntries = normalizeGuardrailEntries(guardrailInfo);
   const hasGuardrailData = guardrailEntries.length > 0;
   const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
   const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
+  const complianceLogEntry = isMcpCall && parentLogEntry ? parentLogEntry : logEntry;
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
@@ -165,18 +171,32 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         />
       )}
 
-      {/* Guardrail Data */}
+      {/* Compliance Panel – always visible (uses parent LLM call data for MCP calls) */}
+      <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-4">
+        <CompliancePanel
+          accessToken={accessToken ?? null}
+          logEntry={{
+            request_id: complianceLogEntry.request_id,
+            user: complianceLogEntry.user,
+            model: complianceLogEntry.model,
+            startTime: complianceLogEntry.startTime,
+            metadata: isMcpCall && parentLogEntry ? parentLogEntry.metadata : logEntry.metadata,
+          }}
+        />
+      </div>
+
+      {/* Guardrail Data (inherits from parent LLM call for MCP calls) */}
       {hasGuardrailData && (
         <div id="guardrail-section">
           <GuardrailViewer
             data={guardrailInfo}
             accessToken={accessToken ?? null}
             logEntry={{
-              request_id: logEntry.request_id,
-              user: logEntry.user,
-              model: logEntry.model,
-              startTime: logEntry.startTime,
-              metadata: logEntry.metadata,
+              request_id: complianceLogEntry.request_id,
+              user: complianceLogEntry.user,
+              model: complianceLogEntry.model,
+              startTime: complianceLogEntry.startTime,
+              metadata: isMcpCall && parentLogEntry ? parentLogEntry.metadata : logEntry.metadata,
             }}
           />
         </div>

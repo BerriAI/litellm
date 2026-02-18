@@ -1,10 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useMemo } from "react";
 import { Tooltip } from "antd";
 import {
-  checkEuAiActCompliance,
-  checkGdprCompliance,
   ComplianceResponse,
-  ComplianceCheckRequest,
 } from "@/components/networking";
 
 interface CompliancePanelProps {
@@ -16,6 +13,102 @@ interface CompliancePanelProps {
     startTime?: string;
     metadata?: Record<string, any>;
   };
+}
+
+function runComplianceChecksLocally(logEntry: CompliancePanelProps["logEntry"]): {
+  euAiAct: ComplianceResponse;
+  gdpr: ComplianceResponse;
+} {
+  const guardrails: Record<string, any>[] = logEntry.metadata?.guardrail_information ?? [];
+  const hasGuardrails = guardrails.length > 0;
+  const preCallGuardrails = guardrails.filter(
+    (g) => g.guardrail_mode === "pre_call" || !g.guardrail_mode
+  );
+  const hasPreCall = preCallGuardrails.length > 0;
+  const hasUser = Boolean(logEntry.user);
+  const hasModel = Boolean(logEntry.model);
+  const hasTimestamp = Boolean(logEntry.startTime);
+  const auditComplete = hasUser && hasModel && hasTimestamp && hasGuardrails;
+
+  const missingFields: string[] = [];
+  if (!hasUser) missingFields.push("user_id");
+  if (!hasModel) missingFields.push("model");
+  if (!hasTimestamp) missingFields.push("timestamp");
+  if (!hasGuardrails) missingFields.push("guardrail_results");
+
+  const hasIntervention = preCallGuardrails.some((g) =>
+    ["guardrail_intervened", "failed", "blocked"].includes(g.guardrail_status ?? "")
+  );
+  const allPassed =
+    preCallGuardrails.length > 0 &&
+    preCallGuardrails.every((g) => g.guardrail_status === "success");
+  const dataProtected = hasIntervention || allPassed;
+
+  const euAiAct: ComplianceResponse = {
+    regulation: "EU AI Act",
+    compliant: hasGuardrails && hasPreCall && auditComplete,
+    checks: [
+      {
+        check_name: "Guardrails applied",
+        article: "Art. 9",
+        passed: hasGuardrails,
+        detail: hasGuardrails
+          ? `${guardrails.length} guardrail(s) applied`
+          : "No guardrails applied",
+      },
+      {
+        check_name: "Content screened before LLM",
+        article: "Art. 5",
+        passed: hasPreCall,
+        detail: hasPreCall
+          ? `${preCallGuardrails.length} pre-call guardrail(s) screened content`
+          : "No pre-call screening applied",
+      },
+      {
+        check_name: "Audit record complete",
+        article: "Art. 12",
+        passed: auditComplete,
+        detail: auditComplete
+          ? "All required audit fields present"
+          : `Missing: ${missingFields.join(", ")}`,
+      },
+    ],
+  };
+
+  const gdpr: ComplianceResponse = {
+    regulation: "GDPR",
+    compliant: hasPreCall && dataProtected && auditComplete,
+    checks: [
+      {
+        check_name: "Data protection applied",
+        article: "Art. 32",
+        passed: hasPreCall,
+        detail: hasPreCall
+          ? `${preCallGuardrails.length} pre-call guardrail(s) protect data`
+          : "No pre-call data protection applied",
+      },
+      {
+        check_name: "Sensitive data protected",
+        article: "Art. 5(1)(c)",
+        passed: dataProtected,
+        detail: hasIntervention
+          ? "Guardrail intervened to protect sensitive data"
+          : allPassed
+            ? "No sensitive data detected"
+            : "No pre-call guardrails to protect sensitive data",
+      },
+      {
+        check_name: "Audit record complete",
+        article: "Art. 30",
+        passed: auditComplete,
+        detail: auditComplete
+          ? "All required audit fields present"
+          : `Missing: ${missingFields.join(", ")}`,
+      },
+    ],
+  };
+
+  return { euAiAct, gdpr };
 }
 
 // -- Icons --
@@ -136,38 +229,7 @@ const ComplianceCard = ({
 // -- Main Component --
 
 const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry }) => {
-  const [euAiActData, setEuAiActData] = useState<ComplianceResponse | null>(null);
-  const [gdprData, setGdprData] = useState<ComplianceResponse | null>(null);
-  const [euAiActLoading, setEuAiActLoading] = useState(false);
-  const [gdprLoading, setGdprLoading] = useState(false);
-  const [euAiActError, setEuAiActError] = useState<string | null>(null);
-  const [gdprError, setGdprError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!accessToken || !logEntry.request_id) return;
-
-    const payload: ComplianceCheckRequest = {
-      request_id: logEntry.request_id,
-      user_id: logEntry.user,
-      model: logEntry.model,
-      timestamp: logEntry.startTime,
-      guardrail_information: logEntry.metadata?.guardrail_information,
-    };
-
-    setEuAiActLoading(true);
-    setEuAiActError(null);
-    checkEuAiActCompliance(accessToken, payload)
-      .then(setEuAiActData)
-      .catch((err) => setEuAiActError(err.message || "Failed to check EU AI Act compliance"))
-      .finally(() => setEuAiActLoading(false));
-
-    setGdprLoading(true);
-    setGdprError(null);
-    checkGdprCompliance(accessToken, payload)
-      .then(setGdprData)
-      .catch((err) => setGdprError(err.message || "Failed to check GDPR compliance"))
-      .finally(() => setGdprLoading(false));
-  }, [accessToken, logEntry]);
+  const { euAiAct, gdpr } = useMemo(() => runComplianceChecksLocally(logEntry), [logEntry]);
 
   return (
     <div>
@@ -177,15 +239,15 @@ const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry
       <div className="space-y-3">
         <ComplianceCard
           title="EU AI Act"
-          data={euAiActData}
-          loading={euAiActLoading}
-          error={euAiActError}
+          data={euAiAct}
+          loading={false}
+          error={null}
         />
         <ComplianceCard
           title="GDPR"
-          data={gdprData}
-          loading={gdprLoading}
-          error={gdprError}
+          data={gdpr}
+          loading={false}
+          error={null}
         />
       </div>
     </div>
