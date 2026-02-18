@@ -10,6 +10,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
 )
 from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
@@ -685,7 +686,7 @@ if MCP_AVAILABLE:
         return await _execute_with_mcp_client(
             new_mcp_server_request,
             _test_connection_operation,
-            raw_headers=dict(request.headers),
+            raw_headers=_safe_get_request_headers(request),
         )
 
     @router.post("/test/tools/list")
@@ -744,5 +745,5 @@ if MCP_AVAILABLE:
             _list_tools_operation,
             mcp_auth_header=mcp_auth_header,
             oauth2_headers=oauth2_headers,
-            raw_headers=dict(request.headers),
+            raw_headers=_safe_get_request_headers(request),
         )

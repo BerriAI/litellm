@@ -50,7 +50,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_get_request_headers,
+)
 from litellm.proxy.utils import get_server_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -68,9 +71,7 @@ router = APIRouter()
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
-_registered_pass_through_routes: Dict[
-    str, Dict[str, Union[str, List[str], Dict[str, Any]]]
-] = {}
+_registered_pass_through_routes: Dict[str, Dict[str, Union[str, Dict[str, Any]]]] = {}
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -500,7 +501,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_org_id=user_api_key_dict.org_id,
-                user_api_key_project_id=user_api_key_dict.project_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
@@ -603,7 +603,6 @@ async def pass_through_request(  # noqa: PLR0915
     forward_headers: Optional[bool] = False,
     merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
-    default_query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
@@ -621,7 +620,6 @@ async def pass_through_request(  # noqa: PLR0915
         forward_headers: Whether to forward headers
         merge_query_params: Whether to merge query params
         query_params: The query params
-        default_query_params: The default query params to be applied if not overridden by client
         stream: Whether to stream the response
         cost_per_request: Optional field - cost per request to the target endpoint
         custom_llm_provider: Optional field - custom LLM provider for the endpoint
@@ -649,23 +647,18 @@ async def pass_through_request(  # noqa: PLR0915
         url = httpx.URL(target)
         headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request_headers=dict(request.headers),
+            request_headers=_safe_get_request_headers(request).copy(),
             headers=headers,
             forward_headers=forward_headers,
         )
 
-        # Apply default query parameters if provided, regardless of merge_query_params setting
-        if default_query_params or merge_query_params:
-            # Determine what to merge based on settings
-            request_params = dict(request.query_params) if merge_query_params else {}
-
+        if merge_query_params:
             # Create a new URL with the merged query params
             url = url.copy_with(
                 query=urlencode(
                     HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
-                        request_query_params=request_params,
-                        default_query_params=default_query_params,
+                        request_query_params=dict(request.query_params),
                     )
                 ).encode("ascii")
             )
@@ -967,7 +960,7 @@ async def pass_through_request(  # noqa: PLR0915
 
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "message", str(getattr(e, "detail", str(e)))),
+                message=getattr(e, "message", str(e.detail)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1090,7 +1083,6 @@ def create_pass_through_route(
     custom_llm_provider: Optional[str] = None,
     is_streaming_request: Optional[bool] = False,
     query_params: Optional[dict] = None,
-    default_query_params: Optional[dict] = None,
     guardrails: Optional[Dict[str, Any]] = None,
 ):
     # check if target is an adapter.py or a url
@@ -1110,9 +1102,7 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
-            custom_body: Optional[
-                dict
-            ] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
+            custom_body: Optional[dict] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
         ):
             return await chat_completion_pass_through_endpoint(
                 fastapi_response=fastapi_response,
@@ -1155,7 +1145,7 @@ def create_pass_through_route(
 
             passthrough_params = (
                 InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                    route=path, method=request.method
+                    route=path
                 )
             )
             target_params = {
@@ -1183,7 +1173,6 @@ def create_pass_through_route(
                 "cost_per_request", cost_per_request
             )
             param_guardrails = target_params.get("guardrails", None)
-            param_default_query_params = target_params.get("default_query_params", None)
 
             # Construct the full target URL with subpath if needed
             full_target = (
@@ -1221,7 +1210,6 @@ def create_pass_through_route(
                 forward_headers=cast(Optional[bool], param_forward_headers),
                 merge_query_params=cast(Optional[bool], param_merge_query_params),
                 query_params=final_query_params,
-                default_query_params=cast(Optional[dict], param_default_query_params),
                 stream=is_streaming_request or stream,
                 custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),
@@ -1862,30 +1850,20 @@ class InitPassThroughEndpointHelpers:
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
-        methods: Optional[List[str]] = None,
-        default_query_params: Optional[dict] = None,
     ):
         """Add exact path route for pass-through endpoint"""
-        # Default to all methods if none specified (backward compatibility)
-        if methods is None or len(methods) == 0:
-            methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
-
-        # Create route key that includes methods for uniqueness
-        methods_str = ",".join(sorted(methods))
-        route_key = f"{endpoint_id}:exact:{path}:{methods_str}"
+        route_key = f"{endpoint_id}:exact:{path}"
 
         # Check if this exact route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
-                "Updating duplicate exact pass through endpoint: %s with methods %s (already registered)",
+                "Updating duplicate exact pass through endpoint: %s (already registered)",
                 path,
-                methods,
             )
 
         verbose_proxy_logger.debug(
-            "adding exact pass through endpoint: %s, methods: %s, dependencies: %s",
+            "adding exact pass through endpoint: %s, dependencies: %s",
             path,
-            methods,
             dependencies,
         )
 
@@ -1901,10 +1879,9 @@ class InitPassThroughEndpointHelpers:
                 merge_query_params,
                 dependencies,
                 cost_per_request=cost_per_request,
-                default_query_params=default_query_params,
                 guardrails=guardrails,
             ),
-            methods=methods,
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
 
@@ -1913,13 +1890,11 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "exact",
-            "methods": methods,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
                 "merge_query_params": merge_query_params,
-                "default_query_params": default_query_params,
                 "dependencies": dependencies,
                 "cost_per_request": cost_per_request,
                 "guardrails": guardrails,
@@ -1938,30 +1913,21 @@ class InitPassThroughEndpointHelpers:
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
-        methods: Optional[List[str]] = None,
-        default_query_params: Optional[dict] = None,
     ):
         """Add wildcard route for sub-paths"""
-        # Default to all methods if none specified (backward compatibility)
-        if methods is None or len(methods) == 0:
-            methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
-
         wildcard_path = f"{path}/{{subpath:path}}"
-        methods_str = ",".join(sorted(methods))
-        route_key = f"{endpoint_id}:subpath:{path}:{methods_str}"
+        route_key = f"{endpoint_id}:subpath:{path}"
 
         # Check if this subpath route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
-                "Updating duplicate wildcard pass through endpoint: %s with methods %s (already registered)",
+                "Updating duplicate wildcard pass through endpoint: %s (already registered)",
                 wildcard_path,
-                methods,
             )
 
         verbose_proxy_logger.debug(
-            "adding wildcard pass through endpoint: %s, methods: %s, dependencies: %s",
+            "adding wildcard pass through endpoint: %s, dependencies: %s",
             wildcard_path,
-            methods,
             dependencies,
         )
 
@@ -1978,10 +1944,9 @@ class InitPassThroughEndpointHelpers:
                 dependencies,
                 include_subpath=True,
                 cost_per_request=cost_per_request,
-                default_query_params=default_query_params,
                 guardrails=guardrails,
             ),
-            methods=methods,
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
         )
 
@@ -1990,13 +1955,11 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "subpath",
-            "methods": methods,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
                 "merge_query_params": merge_query_params,
-                "default_query_params": default_query_params,
                 "dependencies": dependencies,
                 "cost_per_request": cost_per_request,
                 "guardrails": guardrails,
@@ -2063,15 +2026,14 @@ class InitPassThroughEndpointHelpers:
                 return True
 
         # Fast path: check if any registered route key contains this path
-        # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
-        # For backward compatibility, also support old format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
+        # Keys are in format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
         # Extract unique paths from keys for quick checking
         for key in _registered_pass_through_routes.keys():
-            parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
-            if len(parts) >= 3:
+            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
+            if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
                 )
                 if route_type == "exact" and route == registered_path:
                     return True
@@ -2084,37 +2046,21 @@ class InitPassThroughEndpointHelpers:
         return False
 
     @staticmethod
-    def get_registered_pass_through_route(
-        route: str, method: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Get passthrough params for a given route and optionally filter by HTTP method"""
+    def get_registered_pass_through_route(route: str) -> Optional[Dict[str, Any]]:
+        """Get passthrough params for a given route"""
         for key in _registered_pass_through_routes.keys():
-            parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
-            if len(parts) >= 3:
+            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
+            if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
                 )
 
-                # Get the methods for this route
-                route_methods = _registered_pass_through_routes[key].get("methods", [])
-
-                # Check if path matches
-                path_matches = False
                 if route_type == "exact" and route == registered_path:
-                    path_matches = True
+                    return _registered_pass_through_routes[key]
                 elif route_type == "subpath":
                     if route == registered_path or route.startswith(
                         registered_path + "/"
-                    ):
-                        path_matches = True
-
-                # If path matches and method filter is provided, check if method is allowed
-                if path_matches:
-                    if (
-                        method is None
-                        or not route_methods
-                        or method in route_methods
                     ):
                         return _registered_pass_through_routes[key]
 
@@ -2198,7 +2144,6 @@ async def initialize_pass_through_endpoints(
         )
         _forward_headers = endpoint.get("forward_headers", None)
         _merge_query_params = endpoint.get("merge_query_params", None)
-        _default_query_params = endpoint.get("default_query_params", None)
         _auth = endpoint.get("auth", None)
         _dependencies = None
         if _auth is not None and str(_auth).lower() == "true":
@@ -2217,9 +2162,6 @@ async def initialize_pass_through_endpoints(
         # Get guardrails config if present
         _guardrails = endpoint.get("guardrails", None)
 
-        # Get methods list if present (None means all methods for backward compatibility)
-        _methods = endpoint.get("methods", None)
-
         # Add exact path route
         verbose_proxy_logger.debug(
             "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint_id
@@ -2235,16 +2177,9 @@ async def initialize_pass_through_endpoints(
             cost_per_request=endpoint.get("cost_per_request", None),
             endpoint_id=endpoint_id,
             guardrails=_guardrails,
-            methods=_methods,
-            default_query_params=_default_query_params,
         )
 
-        # Generate route key with methods for tracking
-        methods_for_key = (
-            _methods if _methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
-        )
-        methods_str = ",".join(sorted(methods_for_key))
-        visited_endpoints.add(f"{endpoint_id}:exact:{_path}:{methods_str}")
+        visited_endpoints.add(f"{endpoint_id}:exact:{_path}")
 
         # Add wildcard route for sub-paths
         if endpoint.get("include_subpath", False) is True:
@@ -2259,11 +2194,9 @@ async def initialize_pass_through_endpoints(
                 cost_per_request=endpoint.get("cost_per_request", None),
                 endpoint_id=endpoint_id,
                 guardrails=_guardrails,
-                methods=_methods,
-                default_query_params=_default_query_params,
             )
 
-            visited_endpoints.add(f"{endpoint_id}:subpath:{_path}:{methods_str}")
+            visited_endpoints.add(f"{endpoint_id}:subpath:{_path}")
 
         verbose_proxy_logger.debug(
             "Added new pass through endpoint: %s (ID: %s)", _path, endpoint_id
@@ -2441,7 +2374,9 @@ async def get_pass_through_endpoints(
 
     # Merge: config endpoints not in DB + all DB endpoints (DB overrides config for same path)
     db_paths = {ep.path for ep in db_endpoints}
-    config_only_endpoints = [ep for ep in config_endpoints if ep.path not in db_paths]
+    config_only_endpoints = [
+        ep for ep in config_endpoints if ep.path not in db_paths
+    ]
     if endpoint_id is not None:
         # When filtering by endpoint_id, only return if found in DB (config endpoints use generated IDs)
         pass_through_endpoints = db_endpoints
@@ -2576,8 +2511,6 @@ async def update_pass_through_endpoints(
             cost_per_request=updated_endpoint.cost_per_request,
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
-            methods=updated_endpoint.methods,
-            default_query_params=updated_endpoint.default_query_params,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2591,8 +2524,6 @@ async def update_pass_through_endpoints(
             cost_per_request=updated_endpoint.cost_per_request,
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
-            methods=updated_endpoint.methods,
-            default_query_params=updated_endpoint.default_query_params,
         )
 
     return PassThroughEndpointResponse(
@@ -2669,8 +2600,6 @@ async def create_pass_through_endpoints(
             cost_per_request=created_endpoint.cost_per_request,
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
-            methods=created_endpoint.methods,
-            default_query_params=created_endpoint.default_query_params,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2684,8 +2613,6 @@ async def create_pass_through_endpoints(
             cost_per_request=created_endpoint.cost_per_request,
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
-            methods=created_endpoint.methods,
-            default_query_params=created_endpoint.default_query_params,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])
