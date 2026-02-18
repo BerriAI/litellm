@@ -2163,7 +2163,7 @@ def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     for chunk in chunks:
-        if "usage" in chunk:
+        if "usage" in chunk and chunk["usage"] is not None:
             if "prompt_tokens" in chunk["usage"]:
                 prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
             if "completion_tokens" in chunk["usage"]:
