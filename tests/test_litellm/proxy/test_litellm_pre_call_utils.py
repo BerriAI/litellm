@@ -1014,6 +1014,7 @@ async def test_add_litellm_metadata_from_request_headers():
     # Set up test logger
     litellm._turn_on_debug()
     test_logger = TestCustomLogger()
+    original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]
 
     # Prepare test data (ensure no streaming, add mock_response and api_key to route to litellm.acompletion)
@@ -1098,7 +1099,9 @@ async def test_add_litellm_metadata_from_request_headers():
     SPEND_LOGS_METADATA = standard_logging_obj["metadata"]["spend_logs_metadata"]
     assert SPEND_LOGS_METADATA == dict(json.loads(headers["x-litellm-spend-logs-metadata"])), "spend_logs_metadata should be the same as the headers"
 
-        
+    litellm.callbacks = original_callbacks
+
+
 
 def test_get_internal_user_header_from_mapping_returns_expected_header():
     mappings = [
