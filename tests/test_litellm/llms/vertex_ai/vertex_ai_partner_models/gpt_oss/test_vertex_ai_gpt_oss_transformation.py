@@ -16,6 +16,14 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation impo
 
 
 @pytest.fixture(autouse=True)
+def _reset_litellm_http_client_cache():
+    """Ensure each test gets a fresh async HTTP client mock."""
+    from litellm import in_memory_llm_clients_cache
+
+    in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.fixture(autouse=True)
 def clean_vertex_env():
     """Clear Google/Vertex AI environment variables before each test to prevent test isolation issues."""
     saved_env = {}
