@@ -4,6 +4,7 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
+import CompliancePanel from "../GuardrailViewer/CompliancePanel";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -40,6 +41,7 @@ export interface LogDetailContentProps {
   onOpenSettings?: () => void;
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
+  accessToken?: string | null;
 }
 
 /**
@@ -50,7 +52,7 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -66,9 +68,6 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
   const hasGuardrailData = guardrailEntries.length > 0;
   const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
   const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
-  const guardrailPolicyNames = Array.from(
-    new Set(guardrailEntries.map((e: any) => e?.policy_template).filter(Boolean))
-  ) as string[];
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
@@ -127,7 +126,7 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
             )}
             {hasGuardrailData && (
               <Descriptions.Item label="Guardrail">
-                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} policyNames={guardrailPolicyNames} />
+                <GuardrailLabel label={primaryGuardrailLabel} maskedCount={totalMaskedEntities} />
               </Descriptions.Item>
             )}
           </Descriptions>
@@ -169,7 +168,17 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       {/* Guardrail Data */}
       {hasGuardrailData && (
         <div id="guardrail-section">
-          <GuardrailViewer data={guardrailInfo} />
+          <GuardrailViewer
+            data={guardrailInfo}
+            accessToken={accessToken ?? null}
+            logEntry={{
+              request_id: logEntry.request_id,
+              user: logEntry.user,
+              model: logEntry.model,
+              startTime: logEntry.startTime,
+              metadata: logEntry.metadata,
+            }}
+          />
         </div>
       )}
 
@@ -225,7 +234,7 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
   );
 }
 
-function GuardrailLabel({ label, maskedCount, policyNames }: { label: string; maskedCount: number; policyNames: string[] }) {
+function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: number }) {
   const handleClick = () => {
     const el = document.getElementById("guardrail-section");
     if (el) el.scrollIntoView({ behavior: "smooth" });
@@ -239,9 +248,6 @@ function GuardrailLabel({ label, maskedCount, policyNames }: { label: string; ma
           {maskedCount} masked
         </Tag>
       )}
-      {policyNames.map((name) => (
-        <Tag key={name} color="purple">{name}</Tag>
-      ))}
     </Space>
   );
 }
@@ -420,6 +426,42 @@ function RequestResponseSection({
           },
         ]}
       />
+    </div>
+  );
+}
+
+export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
+  const allPassed = guardrailEntries.every((e) => {
+    const status = e?.guardrail_status || e?.status;
+    return status === "pass" || status === "passed" || status === "success";
+  });
+
+  const handleClick = () => {
+    const el = document.getElementById("guardrail-section");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
+  return (
+    <div style={{ textAlign: "left", marginBottom: 12 }}>
+      <div
+        onClick={handleClick}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 12px",
+          borderRadius: 16,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 500,
+          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
+          color: allPassed ? "#15803d" : "#b91c1c",
+          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
+        }}
+      >
+        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+        <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
+      </div>
     </div>
   );
 }
