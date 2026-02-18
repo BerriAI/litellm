@@ -352,6 +352,8 @@ def get_logging_payload(  # noqa: PLR0915
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
+            else metadata.get("standard_logging_guardrail_information", None)
+            if metadata is not None
             else None
         ),
         cold_storage_object_key=(
