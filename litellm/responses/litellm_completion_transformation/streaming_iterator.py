@@ -88,6 +88,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._pending_tool_events: List[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
+        self._tool_call_id_by_index: dict[int, str] = {}
+        self._ambiguous_tool_call_indexes: set[int] = set()
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0  
@@ -110,6 +112,19 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._next_tool_output_index += 1
         self._tool_output_index_by_call_id[call_id] = idx
         return idx
+
+    def _normalize_tool_call_index(self, tool_call: object) -> Optional[int]:
+        idx_raw = (
+            tool_call.get("index")
+            if isinstance(tool_call, dict)
+            else getattr(tool_call, "index", None)
+        )
+        if idx_raw is None:
+            return None
+        try:
+            return int(idx_raw)
+        except (TypeError, ValueError):
+            return None
 
 
     def _is_reasoning_end(self, chunk):
@@ -143,10 +158,28 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
 
         for tc in tool_calls:
+            tc_index = self._normalize_tool_call_index(tc)
             call_id_raw = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-            if not call_id_raw:
+            call_id = ""
+
+            if call_id_raw:
+                call_id = str(call_id_raw)
+                if tc_index is not None:
+                    existing_call_id = self._tool_call_id_by_index.get(tc_index)
+                    if existing_call_id is not None and existing_call_id != call_id:
+                        # Reusing the same index for multiple call_ids is ambiguous for id-less deltas.
+                        # Guard against silent misrouting by disabling index fallback for this index.
+                        self._ambiguous_tool_call_indexes.add(tc_index)
+                    self._tool_call_id_by_index[tc_index] = call_id
+            elif tc_index is not None:
+                if tc_index in self._ambiguous_tool_call_indexes:
+                    continue
+                mapped_call_id = self._tool_call_id_by_index.get(tc_index)
+                if mapped_call_id:
+                    call_id = mapped_call_id
+
+            if not call_id:
                 continue
-            call_id = str(call_id_raw)
 
             fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
             fn_name = ""

@@ -181,6 +181,7 @@ async def aresponses_api_with_mcp(
     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        litellm_trace_id=kwargs.get("litellm_trace_id"),
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -681,6 +682,7 @@ def responses(
                 _is_async=_is_async,
                 stream=stream,
                 extra_headers=extra_headers,
+                extra_body=extra_body,
                 **kwargs,
             )
 

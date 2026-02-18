@@ -7,7 +7,10 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 """
 
 import copy
+import json
 from typing import Any, AsyncGenerator, List, Optional, Union
+
+from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -18,9 +21,34 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes, CallTypesLiteral, ModelResponseStream
+from litellm.types.utils import CallTypes, CallTypesLiteral
+
+# Call types that use NDJSON streaming (A2A); guardrail HTTPException is emitted as in-stream error
+A2A_CALL_TYPES = (CallTypes.asend_message, CallTypes.send_message)
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
+
+
+def _get_a2a_request_id(
+    responses_so_far: List[Any], request_data: dict
+) -> Optional[str]:
+    """Get JSON-RPC request id from first A2A chunk or request body for in-stream error reporting."""
+    for item in responses_so_far:
+        if isinstance(item, dict) and "id" in item:
+            return item.get("id")
+        if isinstance(item, str):
+            try:
+                obj = json.loads(item.strip())
+                if isinstance(obj, dict) and "id" in obj:
+                    return obj.get("id")
+            except (json.JSONDecodeError, TypeError):
+                continue
+    body = request_data.get("body") or request_data.get("data") or {}
+    if isinstance(body, dict):
+        return body.get("id")
+    return None
+
+
 endpoint_guardrail_translation_mappings = None
 
 
@@ -66,7 +94,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if call_type == CallTypes.call_mcp_tool.value:
             event_type = GuardrailEventHooks.pre_mcp_call
-
 
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
@@ -233,7 +260,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[Any, None]:
         """
         Passes the entire stream to the guardrail
 
@@ -364,13 +391,47 @@ class UnifiedLLMGuardrails(CustomLogger):
                     CallTypes(call_type)
                 ]()
 
-                await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=responses_so_far,
-                    guardrail_to_apply=guardrail_to_apply,
-                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                    user_api_key_dict=user_api_key_dict,
-                )
-
+                try:
+                    await endpoint_translation.process_output_streaming_response(
+                        responses_so_far=responses_so_far,
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                        user_api_key_dict=user_api_key_dict,
+                    )
+                except HTTPException as e:
+                    # Response already started (we already yielded chunks); cannot send 400.
+                    # For A2A (NDJSON), yield an in-stream JSON-RPC error so the client sees it.
+                    if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
+                        request_id = _get_a2a_request_id(responses_so_far, request_data)
+                        detail = (
+                            e.detail
+                            if isinstance(e.detail, dict)
+                            else {"message": str(e.detail)}
+                        )
+                        error_chunk = (
+                            json.dumps(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "error": {
+                                        "code": -32603,
+                                        "message": detail.get(
+                                            "error",
+                                            detail.get("message", str(e.detail)),
+                                        ),
+                                        "data": {
+                                            k: v
+                                            for k, v in detail.items()
+                                            if k not in ("error", "message")
+                                        },
+                                    },
+                                }
+                            )
+                            + "\n"
+                        )
+                        yield error_chunk
+                        return
+                    raise
                 yield original_item
             else:
                 yield item
@@ -390,9 +451,41 @@ class UnifiedLLMGuardrails(CustomLogger):
                 CallTypes(call_type)
             ]()
 
-            await endpoint_translation.process_output_streaming_response(
-                responses_so_far=responses_so_far,
-                guardrail_to_apply=guardrail_to_apply,
-                litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                user_api_key_dict=user_api_key_dict,
-            )
+            try:
+                await endpoint_translation.process_output_streaming_response(
+                    responses_so_far=responses_so_far,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
+                )
+            except HTTPException as e:
+                if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
+                    request_id = _get_a2a_request_id(responses_so_far, request_data)
+                    detail = (
+                        e.detail
+                        if isinstance(e.detail, dict)
+                        else {"message": str(e.detail)}
+                    )
+                    error_chunk = (
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": request_id,
+                                "error": {
+                                    "code": -32603,
+                                    "message": detail.get(
+                                        "error", detail.get("message", str(e.detail))
+                                    ),
+                                    "data": {
+                                        k: v
+                                        for k, v in detail.items()
+                                        if k not in ("error", "message")
+                                    },
+                                },
+                            }
+                        )
+                        + "\n"
+                    )
+                    yield error_chunk
+                else:
+                    raise

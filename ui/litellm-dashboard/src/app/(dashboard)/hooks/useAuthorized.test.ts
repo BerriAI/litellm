@@ -90,6 +90,7 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
     
     const decodedPayload = {
@@ -131,6 +132,7 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
 
     decodeTokenMock.mockReturnValue(null);
@@ -155,6 +157,7 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: true,
+      sso_configured: false,
     });
 
     const decodedPayload = {
@@ -190,6 +193,7 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
 
     decodeTokenMock.mockReturnValue(null);
@@ -212,6 +216,7 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
 
     const decodedPayload = {

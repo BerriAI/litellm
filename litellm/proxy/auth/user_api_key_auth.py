@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
@@ -115,6 +116,18 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
 
     return api_key
 
@@ -128,6 +141,20 @@ def _get_bearer_token(
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            if match:
+                api_key = match.group(1)
+            else:
+                api_key = ""
     else:
         api_key = ""
     return api_key
@@ -558,7 +585,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                 if is_proxy_admin:
                     return UserAPIKeyAuth(
+                        api_key=None,
                         user_role=LitellmUserRoles.PROXY_ADMIN,
+                        user_id=user_id,
+                        team_id=team_id,
+                        team_alias=(
+                            team_object.team_alias
+                            if team_object is not None
+                            else None
+                        ),
+                        team_metadata=team_object.metadata
+                        if team_object is not None
+                        else None,
+                        org_id=org_id,
+                        end_user_id=end_user_id,
                         parent_otel_span=parent_otel_span,
                     )
 
@@ -898,10 +938,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(
                 api_key, str
             ):  # if generated token, make sure it starts with sk-.
+                _masked_key = "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    api_key
+                    _masked_key
                 )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
@@ -1146,18 +1187,27 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
-                _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
-                    team_id=valid_token.team_id,
-                    max_budget=valid_token.team_max_budget,
-                    soft_budget=valid_token.team_soft_budget,
-                    spend=valid_token.team_spend,
-                    tpm_limit=valid_token.team_tpm_limit,
-                    rpm_limit=valid_token.team_rpm_limit,
-                    blocked=valid_token.team_blocked,
-                    models=valid_token.team_models,
-                    metadata=valid_token.team_metadata,
-                    object_permission_id=valid_token.team_object_permission_id,
-                )
+                try:
+                    _team_obj = await get_team_object(
+                        team_id=valid_token.team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except HTTPException:
+                    _team_obj = LiteLLM_TeamTableCachedObj(
+                        team_id=valid_token.team_id,
+                        max_budget=valid_token.team_max_budget,
+                        soft_budget=valid_token.team_soft_budget,
+                        spend=valid_token.team_spend,
+                        tpm_limit=valid_token.team_tpm_limit,
+                        rpm_limit=valid_token.team_rpm_limit,
+                        blocked=valid_token.team_blocked,
+                        models=valid_token.team_models,
+                        metadata=valid_token.team_metadata,
+                        object_permission_id=valid_token.team_object_permission_id,
+                    )
             else:
                 _team_obj = None
 

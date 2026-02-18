@@ -1,11 +1,45 @@
-import { KeyIcon, TrashIcon } from "@heroicons/react/outline";
+import { EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
+import { TrashIcon } from "@heroicons/react/outline";
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button, Icon } from "@tremor/react";
-import { Popover, Tooltip, Typography, Space, Flex } from "antd";
+import { Divider, Flex, Popover, Space, Tooltip, Typography } from "antd";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
 
-const { Text } = Typography;
+const { Text, Title } = Typography;
+
+const credentialsInfoPopoverContent = (
+  <Space direction="vertical" size={12}>
+    <Text strong style={{ fontSize: 13 }}>
+      Credential types
+    </Text>
+    <Space direction="vertical" size={8}>
+      <Flex align="center" gap={8}>
+        <Space direction="vertical">
+          <Flex align="center" gap={8}>
+            <SyncOutlined style={{ color: "#1890ff" }} />
+            <Title level={5} style={{ margin: 0, color: "#1890ff" }}>Reusable</Title>
+          </Flex>
+          <Text type="secondary">
+            Credentials saved in LiteLLM that can be added to models repeatedly.
+          </Text>
+        </Space>
+      </Flex>
+      <Divider size="small" />
+      <Flex align="center" gap={8}>
+        <Space direction="vertical" size={8}>
+          <Flex align="center" gap={8}>
+            <EditOutlined style={{ color: "#8c8c8c", fontSize: 14, flexShrink: 0 }} />
+            <Title level={5} style={{ margin: 0 }}>Manual</Title>
+          </Flex>
+          <Text type="secondary">
+            Credentials added directly during model creation or defined in the config file.
+          </Text>
+        </Space>
+      </Flex>
+    </Space>
+  </Space>
+);
 
 export const columns = (
   userRole: string,
@@ -127,7 +161,21 @@ export const columns = (
       },
     },
     {
-      header: () => <span className="text-sm font-semibold">Credentials</span>,
+      header: () => (
+        <span className="flex items-center gap-1">
+          <span className="text-sm font-semibold">Credentials</span>
+          <Popover
+            content={credentialsInfoPopoverContent}
+            placement="bottom"
+            arrow={{ pointAtCenter: true }}
+          >
+            <InfoCircleOutlined
+              className="cursor-pointer text-gray-400 hover:text-gray-600"
+              style={{ fontSize: 12 }}
+            />
+          </Popover>
+        </span>
+      ),
       accessorKey: "litellm_credential_name",
       enableSorting: false,
       size: 180,
@@ -135,20 +183,23 @@ export const columns = (
       cell: ({ row }) => {
         const model = row.original;
         const credentialName = model.litellm_params?.litellm_credential_name;
+        const isReusable = !!credentialName;
 
-        return credentialName ? (
-          <Tooltip title={`Credential: ${credentialName}`}>
-            <div className="flex items-center space-x-2 min-w-0 w-full">
-              <KeyIcon className="w-4 h-4 text-blue-500 flex-shrink-0" />
-              <span className="text-xs truncate" title={credentialName}>
-                {credentialName}
-              </span>
-            </div>
-          </Tooltip>
-        ) : (
+        return (
           <div className="flex items-center space-x-2 min-w-0 w-full">
-            <KeyIcon className="w-4 h-4 text-gray-300 flex-shrink-0" />
-            <span className="text-xs text-gray-400">No credentials</span>
+            {isReusable ? (
+              <>
+                <SyncOutlined className="flex-shrink-0" style={{ color: "#1890ff", fontSize: 14 }} />
+                <span className="text-xs truncate text-blue-600" title={credentialName}>
+                  {credentialName}
+                </span>
+              </>
+            ) : (
+              <>
+                <EditOutlined className="flex-shrink-0" style={{ color: "#8c8c8c", fontSize: 14 }} />
+                <span className="text-xs text-gray-500">Manual</span>
+              </>
+            )}
           </div>
         );
       },
@@ -211,7 +262,7 @@ export const columns = (
         const outputCost = model.output_cost;
 
         // If both costs are missing or undefined, show "-"
-        if (!inputCost && !outputCost) {
+        if (inputCost == null && outputCost == null) {
           return (
             <div className="w-full">
               <span className="text-xs text-gray-400">-</span>
@@ -223,9 +274,9 @@ export const columns = (
           <Tooltip title="Cost per 1M tokens">
             <div className="flex flex-col min-w-0 w-full">
               {/* Input Cost - Primary */}
-              {inputCost && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
+              {inputCost != null && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
               {/* Output Cost - Secondary */}
-              {outputCost && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
+              {outputCost != null && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
             </div>
           </Tooltip>
         );

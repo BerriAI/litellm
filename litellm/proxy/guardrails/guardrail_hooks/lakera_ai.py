@@ -59,7 +59,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self.lakera_api_key = api_key or os.environ["LAKERA_API_KEY"]
+        self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.moderation_check = moderation_check
         self.category_thresholds = category_thresholds
         self.api_base = (

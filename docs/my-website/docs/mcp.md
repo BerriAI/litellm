@@ -506,7 +506,14 @@ Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
 - **Operation IDs**: Each operation should have a unique `operationId` (this becomes the tool name)
 - **Parameters**: Request parameters should be properly documented with types and descriptions
 
-## MCP Oauth
+## MCP OAuth
+
+LiteLLM supports OAuth 2.0 for MCP servers -- both interactive (PKCE) flows for user-facing clients and machine-to-machine (M2M) `client_credentials` for backend services.
+
+See the **[MCP OAuth guide](./mcp_oauth.md)** for setup instructions, sequence diagrams, and a test server.
+
+<details>
+<summary>Detailed OAuth reference (click to expand)</summary>
 
 LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
 
@@ -587,6 +594,8 @@ sequenceDiagram
 6. **MCP Invocation**: With a valid token, the client sends the MCP JSON-RPC request (plus LiteLLM API key) to LiteLLM, which forwards it to the MCP server and relays the tool response.
 
 See the official [MCP Authorization Flow](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-flow-steps) for additional reference.
+
+</details>
 
 
 ## Forwarding Custom Headers to MCP Servers
@@ -1486,7 +1495,7 @@ async with stdio_client(server_params) as (read, write):
 
 **Q: How do I use OAuth2 client_credentials (machine-to-machine) with MCP servers behind LiteLLM?**
 
-At the moment LiteLLM only forwards whatever `Authorization` header/value you configure for the MCP server; it does not issue OAuth2 tokens by itself. If your MCP requires the Client Credentials grant, obtain the access token directly from the authorization server and set that bearer token as the MCP server’s Authorization header value. LiteLLM does not yet fetch or refresh those machine-to-machine tokens on your behalf, but we plan to add first-class client_credentials support in a future release so the proxy can manage those tokens automatically.
+LiteLLM supports automatic token management for the `client_credentials` grant. Configure `client_id`, `client_secret`, and `token_url` on your MCP server and LiteLLM will fetch, cache, and refresh tokens automatically. See the [MCP OAuth M2M guide](./mcp_oauth.md#machine-to-machine-m2m-auth) for setup instructions.
 
 **Q: When I fetch an OAuth token from the LiteLLM UI, where is it stored?**
 

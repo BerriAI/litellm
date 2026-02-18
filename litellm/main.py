@@ -7383,6 +7383,16 @@ def stream_chunk_builder(  # noqa: PLR0915
 
         setattr(response, "usage", usage)
 
+        # Propagate provider_specific_fields from the last chunk (contains provider
+        # metadata like traffic_type set during streaming)
+        for chunk in reversed(chunks):
+            hidden = getattr(chunk, "_hidden_params", None)
+            if hidden and "provider_specific_fields" in hidden:
+                response._hidden_params.setdefault(
+                    "provider_specific_fields", {}
+                ).update(hidden["provider_specific_fields"])
+                break
+
         # Add cost to usage object if include_cost_in_streaming_usage is True
         if litellm.include_cost_in_streaming_usage and logging_obj is not None:
             setattr(

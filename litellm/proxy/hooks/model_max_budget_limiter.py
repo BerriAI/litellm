@@ -153,7 +153,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             "standard_logging_object", None
         )
         if standard_logging_payload is None:
-            raise ValueError("standard_logging_payload is required")
+            verbose_proxy_logger.debug(
+                "Skipping _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: standard_logging_payload is None"
+            )
+            return
 
         _litellm_params: dict = kwargs.get("litellm_params", {}) or {}
         _metadata: dict = _litellm_params.get("metadata", {}) or {}
@@ -171,19 +174,35 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
         response_cost: float = standard_logging_payload.get("response_cost", 0)
         model = standard_logging_payload.get("model")
+        virtual_key = standard_logging_payload.get("metadata", {}).get(
+            "user_api_key_hash"
+        )
 
-        virtual_key = standard_logging_payload.get("metadata").get("user_api_key_hash")
-        model = standard_logging_payload.get("model")
-        if virtual_key is not None:
-            budget_config = BudgetConfig(time_period="1d", budget_limit=0.1)
-            virtual_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_config.budget_duration}"
-            virtual_start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
-            await self._increment_spend_for_key(
-                budget_config=budget_config,
-                spend_key=virtual_spend_key,
-                start_time_key=virtual_start_time_key,
-                response_cost=response_cost,
+        if virtual_key is None or model is None:
+            return
+
+        # Resolve per-model budget config (same logic as is_key_within_model_budget)
+        internal_model_max_budget: GenericBudgetConfigType = {}
+        for _model, _budget_info in user_api_key_model_max_budget.items():
+            internal_model_max_budget[_model] = BudgetConfig(**_budget_info)
+        key_budget_config = self._get_request_model_budget_config(
+            model=model, internal_model_max_budget=internal_model_max_budget
+        )
+        if key_budget_config is None or not key_budget_config.budget_duration:
+            verbose_proxy_logger.debug(
+                "Not incrementing model spend: no budget config or budget_duration for model=%s",
+                model,
             )
+            return
+
+        virtual_spend_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{key_budget_config.budget_duration}"
+        virtual_start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
+        await self._increment_spend_for_key(
+            budget_config=key_budget_config,
+            spend_key=virtual_spend_key,
+            start_time_key=virtual_start_time_key,
+            response_cost=response_cost,
+        )
         verbose_proxy_logger.debug(
             "current state of in memory cache %s",
             json.dumps(

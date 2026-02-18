@@ -6,7 +6,11 @@ All /policy management endpoints
 /policy/validate - Validate a policy configuration
 /policy/list - List all loaded policies
 /policy/info - Get information about a specific policy
+/policy/templates - Get policy templates (GitHub with local fallback)
 """
+
+import json
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -257,3 +261,64 @@ async def test_policy_matching(
         matching_policies=matching_policy_names,
         resolved_guardrails=resolved_guardrails,
     )
+
+
+POLICY_TEMPLATES_GITHUB_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json"
+
+
+def _load_policy_templates_from_local_backup() -> list:
+    """Load policy templates from local backup file (litellm/policy_templates_backup.json)."""
+    backup_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "policy_templates_backup.json",
+    )
+    path = os.path.abspath(backup_path)
+    if not os.path.exists(path):
+        return []
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+@router.get(
+    "/policy/templates",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def get_policy_templates(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> list:
+    """
+    Get policy templates for the UI (pre-configured guardrail combinations).
+
+    Fetches from GitHub with automatic fallback to local backup on failure.
+    Set LITELLM_LOCAL_POLICY_TEMPLATES=true to skip GitHub and use local backup only.
+    """
+    use_local = os.getenv("LITELLM_LOCAL_POLICY_TEMPLATES", "").strip().lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    if use_local:
+        return _load_policy_templates_from_local_backup()
+
+    try:
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.UI,
+            params={"timeout": 10.0},
+        )
+        response = await async_client.get(POLICY_TEMPLATES_GITHUB_URL)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to fetch policy templates from GitHub, using local backup: %s", e
+        )
+
+    return _load_policy_templates_from_local_backup()

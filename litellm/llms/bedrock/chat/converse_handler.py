@@ -13,7 +13,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
-
+from litellm.anthropic_beta_headers_manager import (
+            update_headers_with_filtered_beta,
+        )
 from ..base_aws_llm import BaseAWSLLM, Credentials
 from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
@@ -337,7 +339,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-
+        
+        # Filter beta headers in HTTP headers before making the request
+        headers = update_headers_with_filtered_beta(
+            headers=headers, provider="bedrock_converse"
+        )
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             if isinstance(client, HTTPHandler):
