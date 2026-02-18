@@ -2,12 +2,11 @@
 Claude Code - Block Expensive API Flags Guardrail
 
 Blocks Anthropic API parameters that trigger feature-specific pricing surcharges
-(fast mode, inference_geo, extended thinking).  Also inherits the hosted tool
-type prefixes from hosted_tool_types.yaml so hosted tools are blocked here too.
+(speed=fast, inference_geo, thinking.type=enabled).  Optionally inherits hosted
+tool type prefixes from expensive_api_flags.yaml's `inherit_from` (e.g.
+block_hosted_tools/anthropic.yaml) so hosted tools can be blocked as well.
 
-Blocked params are driven by expensive_api_flags.yaml which references
-hosted_tool_types.yaml via `inherit_from`, following the same pattern as
-harmful_child_safety.yaml inherits from harm_toxic_abuse.json.
+Blocked params are driven by expensive_api_flags.yaml.
 """
 
 import os
@@ -28,7 +27,6 @@ if TYPE_CHECKING:
 
 _DIR = os.path.dirname(__file__)
 _FLAGS_YAML = os.path.join(_DIR, "expensive_api_flags.yaml")
-_TOOLS_YAML = os.path.join(_DIR, "hosted_tool_types.yaml")
 
 
 def _load_config() -> dict:
@@ -54,7 +52,9 @@ def _load_config() -> dict:
 
 _CONFIG: dict = _load_config()
 _BLOCKED_PARAMS: List[dict] = _CONFIG.get("blocked_params", [])
-_INHERITED_TOOL_TYPE_PREFIXES: tuple = tuple(_CONFIG.get("_inherited_tool_type_prefixes", []))
+_INHERITED_TOOL_TYPE_PREFIXES: tuple = tuple(
+    _CONFIG.get("_inherited_tool_type_prefixes", [])
+)
 
 
 def _tool_type(tool: dict) -> Optional[str]:
@@ -73,9 +73,7 @@ def _is_hosted_tool(tool: dict) -> bool:
     return t.startswith(_INHERITED_TOOL_TYPE_PREFIXES)
 
 
-def _check_param(
-    request_data: dict, param_cfg: dict
-) -> Optional[str]:
+def _check_param(request_data: dict, param_cfg: dict) -> Optional[str]:
     """
     Return an error message if the param in request_data matches a blocked value.
     Returns None when the param is not blocked.
@@ -99,7 +97,9 @@ def _check_param(
 
     blocked_values: List[str] = param_cfg.get("blocked_values", [])
     if "*" in blocked_values or str(value) in blocked_values:
-        return param_cfg.get("error_message", f"{param} is disabled by your organization's policy")
+        return param_cfg.get(
+            "error_message", f"{param} is disabled by your organization's policy"
+        )
 
     return None
 
@@ -108,9 +108,10 @@ class ClaudeCodeBlockExpensiveFlagsGuardrail(CustomGuardrail):
     """
     Guardrail that blocks expensive Anthropic API flags.
 
-    Checks request_data for feature-specific pricing flags (fast mode,
-    inference_geo, extended thinking) and Anthropic-hosted tools inherited
-    from hosted_tool_types.yaml.  Raises HTTP 403 on the first violation.
+    Checks request_data for feature-specific pricing flags (speed=fast,
+    inference_geo, thinking.type=enabled) and optionally hosted tools via
+    inherited prefixes from expensive_api_flags.yaml.  Raises HTTP 403 on
+    the first violation.
     """
 
     def __init__(self, **kwargs):
@@ -147,7 +148,7 @@ class ClaudeCodeBlockExpensiveFlagsGuardrail(CustomGuardrail):
                 )
 
         # ------------------------------------------------------------------ #
-        # 2. Check for inherited hosted tools (from hosted_tool_types.yaml)  #
+        # 2. Check for inherited hosted tools (from expensive_api_flags)     #
         # ------------------------------------------------------------------ #
         if _INHERITED_TOOL_TYPE_PREFIXES:
             tools: List[dict] = list(inputs.get("tools") or [])  # type: ignore[assignment]

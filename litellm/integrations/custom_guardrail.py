@@ -1,35 +1,19 @@
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Type,
-    Union,
-    get_args,
-)
+from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type,
+                    Union, get_args)
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.guardrails import (
-    DynamicGuardrailParams,
-    GuardrailEventHooks,
-    LitellmParams,
-    Mode,
-)
+from litellm.types.guardrails import (DynamicGuardrailParams,
+                                      GuardrailEventHooks, LitellmParams, Mode)
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import (
-    CallTypes,
-    GenericGuardrailAPIInputs,
-    GuardrailStatus,
-    GuardrailTracingDetail,
-    LLMResponseTypes,
-    StandardLoggingGuardrailInformation,
-)
+from litellm.types.proxy.guardrails.guardrail_hooks.base import \
+    GuardrailConfigModel
+from litellm.types.utils import (CallTypes, GenericGuardrailAPIInputs,
+                                 GuardrailStatus, GuardrailTracingDetail,
+                                 LLMResponseTypes,
+                                 StandardLoggingGuardrailInformation)
 
 try:
     from fastapi.exceptions import HTTPException
@@ -37,7 +21,8 @@ except ImportError:
     HTTPException = None  # type: ignore
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
 dc = DualCache()
 
 
@@ -398,9 +383,8 @@ class CustomGuardrail(CustomLogger):
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
                     try:
-                        from litellm_enterprise.integrations.custom_guardrail import (
-                            EnterpriseCustomGuardrailHelper,
-                        )
+                        from litellm_enterprise.integrations.custom_guardrail import \
+                            EnterpriseCustomGuardrailHelper
                     except ImportError:
                         raise ImportError(
                             "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
@@ -425,9 +409,8 @@ class CustomGuardrail(CustomLogger):
 
         if isinstance(self.event_hook, Mode):
             try:
-                from litellm_enterprise.integrations.custom_guardrail import (
-                    EnterpriseCustomGuardrailHelper,
-                )
+                from litellm_enterprise.integrations.custom_guardrail import \
+                    EnterpriseCustomGuardrailHelper
             except ImportError:
                 raise ImportError(
                     "Setting tag-based guardrails is only available in litellm-enterprise. You must be a premium user to use this feature."
@@ -546,9 +529,8 @@ class CustomGuardrail(CustomLogger):
         else:
             guardrail_mode = self.event_hook  # type: ignore[assignment]
 
-        from litellm.litellm_core_utils.core_helpers import (
-            filter_exceptions_from_params,
-        )
+        from litellm.litellm_core_utils.core_helpers import \
+            filter_exceptions_from_params
 
         # Sanitize the response to ensure it's JSON serializable and free of circular refs
         # This prevents RecursionErrors in downstream loggers (Langfuse, Datadog, etc.)
@@ -670,7 +652,7 @@ class CustomGuardrail(CustomLogger):
         (this was logged previously as an API failure - guardrail_failed_to_respond).
 
         Guardrails signal intentional blocks by raising:
-        - HTTPException with status 400 (content policy violation)
+        - HTTPException with status 400 (content policy violation) or 403 (forbidden)
         - ModifyResponseException (passthrough mode violation)
         """
 
@@ -679,7 +661,7 @@ class CustomGuardrail(CustomLogger):
         if (
             HTTPException is not None
             and isinstance(e, HTTPException)
-            and e.status_code == 400
+            and e.status_code in (400, 403)
         ):
             return True
         return False
@@ -795,9 +777,8 @@ class CustomGuardrail(CustomLogger):
         ):
             from typing import cast
 
-            from litellm.responses.litellm_completion_transformation.transformation import (
-                LiteLLMCompletionResponsesConfig,
-            )
+            from litellm.responses.litellm_completion_transformation.transformation import \
+                LiteLLMCompletionResponsesConfig
 
             input_data = data.get("input")
             if input_data is None:
