@@ -209,12 +209,83 @@ class TestThinkingParameterTransformation:
         from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
             LiteLLMAnthropicMessagesAdapter,
         )
-        
+
         thinking = {"type": "enabled", "budget_tokens": 1024}
         result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
             thinking=thinking,
             model="openai/gpt-5.2",
         )
-        
+
         assert result == {"reasoning_effort": "minimal"}
         assert "thinking" not in result
+
+
+class TestThinkingSummaryPreservation:
+    """Tests for issue #20998: thinking.summary must be preserved when routing to OpenAI Responses API."""
+
+    def test_thinking_summary_concise_preserved_for_openai(self):
+        """User-provided summary='concise' should not be replaced with 'detailed'."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
+        completion_kwargs = {"model": "openai/gpt-5.1", "reasoning_effort": "medium"}
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+        assert completion_kwargs["reasoning_effort"] == {"effort": "medium", "summary": "concise"}
+
+    def test_thinking_summary_auto_preserved_for_openai(self):
+        """User-provided summary='auto' should be preserved."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "summary": "auto"}
+        completion_kwargs = {"model": "openai/gpt-5.1", "reasoning_effort": "high"}
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+        assert completion_kwargs["reasoning_effort"] == {"effort": "high", "summary": "auto"}
+
+    def test_thinking_without_summary_defaults_to_detailed(self):
+        """When no summary is provided, default 'detailed' should still be used."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        thinking = {"type": "enabled", "budget_tokens": 5000}
+        completion_kwargs = {"model": "openai/gpt-5.1", "reasoning_effort": "medium"}
+        LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
+            completion_kwargs, thinking=thinking
+        )
+        assert completion_kwargs["reasoning_effort"] == {"effort": "medium", "summary": "detailed"}
+
+    def test_openai_model_with_thinking_summary_end_to_end(self):
+        """End-to-end: anthropic_messages_handler should preserve thinking.summary for OpenAI models."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            anthropic_messages_handler,
+        )
+
+        with patch("litellm.completion", return_value="test-response") as mock_completion:
+            try:
+                anthropic_messages_handler(
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": "What is 2+2?"}],
+                    model="openai/gpt-5.2",
+                    api_key="test-api-key",
+                    thinking={
+                        "type": "enabled",
+                        "budget_tokens": 5000,
+                        "summary": "concise",
+                    },
+                )
+            except Exception:
+                pass
+
+            mock_completion.assert_called_once()
+            call_kwargs = mock_completion.call_args.kwargs
+            reasoning_effort = call_kwargs["reasoning_effort"]
+            assert reasoning_effort["summary"] == "concise", \
+                f"Expected summary='concise', got summary='{reasoning_effort.get('summary')}'"
