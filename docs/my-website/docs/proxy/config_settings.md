@@ -358,7 +358,8 @@ router_settings:
 | redis_url | str | URL for Redis server. **Known performance issue with Redis URL.** |
 | cache_responses | boolean | Flag to enable caching LLM Responses, if cache set under `router_settings`. If true, caches responses. Defaults to False. |
 | router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
-| optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Currently supported: 'router_budget_limiting', 'prompt_caching' |
+| optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Supported: `router_budget_limiting`, `prompt_caching`, `responses_api_deployment_check`, `deployment_affinity`, `forward_client_headers_by_model_group` |
+| deployment_affinity_ttl_seconds | int | TTL (seconds) for user-key → deployment affinity mapping when `deployment_affinity` is enabled (configured at Router init / proxy startup). Defaults to `3600` (1 hour). |
 | ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
 | search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search.md) |
 | guardrail_list | List[GuardrailTypedDict] | List of guardrail configurations for guardrail load balancing. Enables load balancing across multiple guardrail deployments with the same guardrail_name. [Further Docs](./guardrails/guardrail_load_balancing.md) |
@@ -540,7 +541,7 @@ router_settings:
 | DEFAULT_IMAGE_WIDTH | Default width for images. Default is 300
 | DEFAULT_IN_MEMORY_TTL | Default time-to-live for in-memory cache in seconds. Default is 5
 | DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL | Default time-to-live in seconds for management objects (User, Team, Key, Organization) in memory cache. Default is 60 seconds.
-| DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 16
+| DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 64
 | DEFAULT_MAX_RECURSE_DEPTH | Default maximum recursion depth. Default is 100
 | DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER | Default maximum recursion depth for sensitive data masker. Default is 10
 | DEFAULT_MAX_RETRIES | Default maximum retry attempts. Default is 2

@@ -1335,7 +1335,11 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
         # Store additional costs if provided (free-form dict for extensibility)
-        if additional_costs and isinstance(additional_costs, dict) and len(additional_costs) > 0:
+        if (
+            additional_costs
+            and isinstance(additional_costs, dict)
+            and len(additional_costs) > 0
+        ):
             self.cost_breakdown["additional_costs"] = additional_costs
 
         # Store discount information if provided
@@ -4519,13 +4523,19 @@ class StandardLoggingPayloadSetup:
             requester_custom_headers=None,
             cold_storage_object_key=None,
             user_api_key_auth_metadata=None,
+            team_alias=None,
+            team_id=None,
         )
         if isinstance(metadata, dict):
             for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
                 clean_metadata[key] = metadata[key]  # type: ignore
 
             user_api_key = metadata.get("user_api_key")
-            if user_api_key and isinstance(user_api_key, str) and is_valid_sha256_hash(user_api_key):
+            if (
+                user_api_key
+                and isinstance(user_api_key, str)
+                and is_valid_sha256_hash(user_api_key)
+            ):
                 clean_metadata["user_api_key_hash"] = user_api_key
             _potential_requester_metadata = metadata.get(
                 "metadata", None
@@ -5279,6 +5289,8 @@ def get_standard_logging_metadata(
         user_api_key_request_route=None,
         cold_storage_object_key=None,
         user_api_key_auth_metadata=None,
+        team_alias=None,
+        team_id=None,
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields

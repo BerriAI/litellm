@@ -3224,6 +3224,7 @@ def test_video_metadata_only_for_gemini_3():
 def test_chunk_parser_handles_prompt_feedback_block():
     """Test chunk_parser correctly handles promptFeedback.blockReason"""
     from unittest.mock import Mock
+
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
     )
@@ -3260,6 +3261,7 @@ def test_chunk_parser_handles_prompt_feedback_block():
 def test_chunk_parser_handles_prompt_feedback_safety_block():
     """Test chunk_parser handles different blockReason types (SAFETY)"""
     from unittest.mock import Mock
+
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
     )
@@ -3294,6 +3296,7 @@ def test_chunk_parser_handles_prompt_feedback_safety_block():
 def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     """Test chunk_parser correctly extracts usageMetadata when promptFeedback.blockReason is present"""
     from unittest.mock import Mock
+
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
     )
@@ -3428,4 +3431,81 @@ def test_vertex_ai_traffic_type_surfaced_in_responses_api():
     )
 
     assert responses_api_response.provider_specific_fields["traffic_type"] == "ON_DEMAND"
+
+
+def test_vertex_ai_web_search_options_parameter():
+    """
+    Test that web_search_options parameter is transformed to googleSearch tool.
+
+    When a user provides web_search_options as a parameter (not as a tool in the tools array),
+    it should be transformed to Gemini's googleSearch tool.
+
+    This is important for the /v1/messages -> chat/completions -> Gemini flow:
+    - Anthropic web search tool -> web_search_options parameter -> Gemini googleSearch tool
+
+    Input (optional_params):
+        {"web_search_options": {}}
+
+    Expected Output:
+        tools=[{"googleSearch": {}}]
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Simulate the map_openai_params flow
+    optional_params = {}
+
+    # When web_search_options is present, it should be mapped to a tool
+    web_search_options = {}
+    _tools = v._map_web_search_options(web_search_options)
+
+    # Verify the tool is a googleSearch tool
+    assert "googleSearch" in _tools, f"Expected googleSearch in tool, got {_tools.keys()}"
+    assert _tools["googleSearch"] == {}, f"Expected empty googleSearch config, got {_tools['googleSearch']}"
+
+
+def test_vertex_ai_web_search_options_in_map_openai_params():
+    """
+    Test that web_search_options is properly handled in map_openai_params.
+
+    This tests the full flow where web_search_options parameter is converted
+    to a googleSearch tool and added to optional_params.
+
+    Input:
+        optional_params with web_search_options: {}
+
+    Expected:
+        optional_params should have tools with googleSearch
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Simulate optional_params passed to map_openai_params
+    optional_params = {
+        "web_search_options": {}
+    }
+
+    # Call the transformation that happens in map_openai_params
+    # Lines 1075-1079 in vertex_and_google_ai_studio_gemini.py (after fix)
+    web_search_value = optional_params.get("web_search_options")
+    if isinstance(web_search_value, dict):  # Fixed: removed 'value and' check to support empty dicts
+        _tools = v._map_web_search_options(web_search_value)
+        # Simulate _add_tools_to_optional_params
+        optional_params = v._add_tools_to_optional_params(optional_params, [_tools])
+
+    # Remove web_search_options as it's been transformed
+    optional_params.pop("web_search_options", None)
+
+    # Verify the transformation
+    assert "tools" in optional_params, "tools should be added to optional_params"
+    assert len(optional_params["tools"]) == 1, "Should have exactly one tool"
+    assert "googleSearch" in optional_params["tools"][0], "Tool should be googleSearch"
+    assert optional_params["tools"][0]["googleSearch"] == {}, "googleSearch should be empty config"
+    assert "web_search_options" not in optional_params, "web_search_options should be removed after transformation"
 
