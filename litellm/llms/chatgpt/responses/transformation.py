@@ -96,7 +96,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                                 system_parts.append(block["text"])
                 else:
                     filtered.append(item)
-            if system_parts:
+            if system_parts or len(filtered) != len(raw_input):
                 request["input"] = filtered
 
         system_text = "\n\n".join(system_parts) if system_parts else None
