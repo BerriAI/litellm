@@ -162,3 +162,97 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello!"
+
+    def test_chatgpt_extracts_system_messages_from_input(self):
+        """ChatGPT backend rejects role:'system' in input. They should be
+        extracted and prepended to instructions."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {"type": "input_text", "text": "You are helpful"},
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Hello"},
+                    ],
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        # System message removed from input
+        for item in request["input"]:
+            if isinstance(item, dict):
+                assert item.get("role") != "system"
+
+        # System text appears in instructions, along with Codex defaults
+        assert "You are helpful" in request["instructions"]
+        assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_extracts_developer_messages_from_input(self):
+        """role:'developer' should be treated the same as 'system'."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[
+                {"role": "developer", "content": "Be concise"},
+                {"role": "user", "content": "Hi"},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        for item in request["input"]:
+            if isinstance(item, dict):
+                assert item.get("role") not in ("system", "developer")
+
+        assert "Be concise" in request["instructions"]
+
+    def test_chatgpt_system_messages_merged_with_explicit_instructions(self):
+        """System messages + explicit instructions should all appear."""
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=[
+                {"role": "system", "content": "System prompt here"},
+                {"role": "user", "content": "Hello"},
+            ],
+            response_api_optional_request_params={
+                "instructions": "User-provided instructions",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        instructions = request["instructions"]
+        assert "System prompt here" in instructions
+        assert "User-provided instructions" in instructions
+        assert instructions.startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_no_system_messages_unchanged(self):
+        """When there are no system messages, input should pass through unchanged."""
+        config = ChatGPTResponsesAPIConfig()
+        original_input = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.2-codex",
+            input=original_input,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert len(request["input"]) == 2
