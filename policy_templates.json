@@ -810,5 +810,37 @@
       ],
       "guardrails_remove": []
     }
+  },
+  {
+    "id": "mcp-security-unregistered-server-block",
+    "title": "MCP Security: Block Unregistered Servers",
+    "description": "Blocks requests that reference MCP servers not registered on this LiteLLM gateway. Prevents unauthorized tool access via unregistered MCP endpoints.",
+    "type": "MCP Security",
+    "region": "Global",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": ["mcp-security-block"],
+    "complexity": "Low",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "mcp-security-block",
+        "litellm_params": {
+          "guardrail": "mcp_security",
+          "mode": "pre_call",
+          "default_on": true,
+          "on_violation": "block"
+        },
+        "guardrail_info": {
+          "description": "Blocks requests referencing MCP servers not in the gateway registry"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "mcp-security-unregistered-server-block",
+      "description": "Blocks requests referencing MCP servers not registered on this gateway.",
+      "guardrails_add": ["mcp-security-block"],
+      "guardrails_remove": []
+    }
   }
 ]
