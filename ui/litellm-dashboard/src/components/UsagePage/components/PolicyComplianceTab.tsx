@@ -38,7 +38,7 @@ interface ViolationLog {
   key: string;
   timestamp: string;
   requestId: string;
-  regulation: "EU AI Act" | "GDPR" | "MCP Unregistered";
+  regulation: "EU AI Act" | "GDPR";
   article: string;
   severity: "critical" | "high" | "medium";
   model: string;
@@ -56,7 +56,6 @@ interface DailyViolation {
   Compliant: number;
   "EU AI Act": number;
   GDPR: number;
-  "MCP Unregistered": number;
 }
 
 // ─── Mock Data ──────────────────────────────────────────────────────────────
@@ -152,14 +151,6 @@ const ALL_VIOLATIONS: ViolationLog[] = [
     recommendation: "Add role-based access controls to document search. Salary data queries should require manager-level permissions and audit logging.",
   },
   {
-    key: "v9", timestamp: "2026-02-16 09:33:41", requestId: "req_5c6d7e8f",
-    regulation: "MCP Unregistered", article: "MCP Unregistered Server", severity: "medium",
-    model: "gpt-4o", requestType: "MCP Tool Call", team: "Internal Doc Search", keyAlias: "sk-docsearch-prod", user: "krrish@berri.ai",
-    inputSnippet: "Tool call to 'internal-search-v2' server at endpoint https://search-staging.internal:8443/query — server not found in MCP registry...",
-    violationReason: "MCP tool call routed to unregistered server 'internal-search-v2'. This server is not in the approved MCP registry and has not been security-reviewed.",
-    recommendation: "Register 'internal-search-v2' in the MCP server registry via Settings > MCP Servers. Ensure security review is completed before production use.",
-  },
-  {
     key: "v10", timestamp: "2026-02-15 15:22:09", requestId: "req_9a0b1c2d",
     regulation: "GDPR", article: "Art. 32 (Data Protection)", severity: "high",
     model: "text-embedding-3-small", requestType: "LLM Call", team: "Internal Doc Search", keyAlias: "sk-docsearch-prod", user: "krrish@berri.ai",
@@ -175,14 +166,6 @@ const ALL_VIOLATIONS: ViolationLog[] = [
     inputSnippet: "Index all documents in /shared/hr/personnel-files/ including performance reviews, salary letters, and disciplinary records...",
     violationReason: "Bulk indexing of personnel files containing personal data without consent or data protection impact assessment.",
     recommendation: "Conduct a DPIA before indexing personnel files. Implement access controls and audit logging for sensitive document collections.",
-  },
-  {
-    key: "v12", timestamp: "2026-02-15 09:12:33", requestId: "req_ee5f6a7b",
-    regulation: "MCP Unregistered", article: "MCP Unregistered Server", severity: "medium",
-    model: "gpt-4o", requestType: "MCP Tool Call", team: "Internal Doc Search", keyAlias: "sk-docsearch-dev", user: "ishaan@berri.ai",
-    inputSnippet: "Tool call to 'dev-search-experimental' at localhost:9200/query — server not in MCP registry...",
-    violationReason: "Development MCP server 'dev-search-experimental' used in staging environment without being registered in the MCP registry.",
-    recommendation: "Register all MCP servers including development instances. Use environment-specific registries for dev/staging/prod.",
   },
   // Contract Analyzer — sameer@berri.ai
   {
@@ -239,14 +222,14 @@ const ALL_VIOLATIONS: ViolationLog[] = [
 ];
 
 const MOCK_DAILY_VIOLATIONS: DailyViolation[] = [
-  { date: "Feb 10", Compliant: 548, "EU AI Act": 2, GDPR: 5, "MCP Unregistered": 1 },
-  { date: "Feb 11", Compliant: 612, "EU AI Act": 3, GDPR: 6, "MCP Unregistered": 1 },
-  { date: "Feb 12", Compliant: 655, "EU AI Act": 4, GDPR: 7, "MCP Unregistered": 2 },
-  { date: "Feb 13", Compliant: 670, "EU AI Act": 3, GDPR: 4, "MCP Unregistered": 0 },
-  { date: "Feb 14", Compliant: 660, "EU AI Act": 3, GDPR: 5, "MCP Unregistered": 1 },
-  { date: "Feb 15", Compliant: 675, "EU AI Act": 2, GDPR: 6, "MCP Unregistered": 2 },
-  { date: "Feb 16", Compliant: 540, "EU AI Act": 4, GDPR: 6, "MCP Unregistered": 1 },
-  { date: "Feb 17", Compliant: 391, "EU AI Act": 2, GDPR: 2, "MCP Unregistered": 0 },
+  { date: "Feb 10", Compliant: 548, "EU AI Act": 2, GDPR: 5 },
+  { date: "Feb 11", Compliant: 612, "EU AI Act": 3, GDPR: 6 },
+  { date: "Feb 12", Compliant: 655, "EU AI Act": 4, GDPR: 7 },
+  { date: "Feb 13", Compliant: 670, "EU AI Act": 3, GDPR: 4 },
+  { date: "Feb 14", Compliant: 660, "EU AI Act": 3, GDPR: 5 },
+  { date: "Feb 15", Compliant: 675, "EU AI Act": 2, GDPR: 6 },
+  { date: "Feb 16", Compliant: 540, "EU AI Act": 4, GDPR: 6 },
+  { date: "Feb 17", Compliant: 391, "EU AI Act": 2, GDPR: 2 },
 ];
 
 const MOCK_TEAM_REQUESTS: Record<string, number> = {
@@ -288,13 +271,12 @@ function groupBy<T>(arr: T[], fn: (item: T) => string): Record<string, T[]> {
 }
 
 function countByRegulation(violations: ViolationLog[]) {
-  let euAiAct = 0, gdpr = 0, mcp = 0;
+  let euAiAct = 0, gdpr = 0;
   for (const v of violations) {
     if (v.regulation === "EU AI Act") euAiAct++;
     else if (v.regulation === "GDPR") gdpr++;
-    else mcp++;
   }
-  return { euAiAct, gdpr, mcp, total: euAiAct + gdpr + mcp };
+  return { euAiAct, gdpr, total: euAiAct + gdpr };
 }
 
 function riskLevel(total: number): "HIGH" | "MED" | "LOW" | "NONE" {
@@ -343,7 +325,6 @@ const regulationBadge = (reg: string) => {
   const styles: Record<string, string> = {
     "EU AI Act": "bg-indigo-50 text-indigo-700 border border-indigo-200",
     GDPR: "bg-green-50 text-green-700 border border-green-200",
-    "MCP Unregistered": "bg-orange-50 text-orange-700 border border-orange-200",
   };
   return (
     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${styles[reg] || ""}`}>
@@ -461,11 +442,10 @@ const KPIRow = ({ violations, totalRequests }: { violations: ViolationLog[]; tot
   return (
     <Card>
       <Title>Compliance Metrics</Title>
-      <Grid numItems={5} className="gap-4 mt-4">
+      <Grid numItems={4} className="gap-4 mt-4">
         <Card><Title>Total Requests</Title><Text className="text-2xl font-bold mt-2">{totalRequests.toLocaleString()}</Text></Card>
         <Card><Title>EU AI Act Violations</Title><Text className="text-2xl font-bold mt-2 text-red-600">{counts.euAiAct}</Text></Card>
         <Card><Title>GDPR Violations</Title><Text className="text-2xl font-bold mt-2 text-red-600">{counts.gdpr}</Text></Card>
-        <Card><Title>MCP Unregistered</Title><Text className="text-2xl font-bold mt-2 text-orange-500">{counts.mcp}</Text></Card>
         <Card><Title>Compliant Requests</Title><Text className="text-2xl font-bold mt-2 text-green-600">{Math.max(0, compliant).toLocaleString()}</Text></Card>
       </Grid>
     </Card>
@@ -481,7 +461,6 @@ interface EntityRow {
   compliant: number;
   euAiAct: number;
   gdpr: number;
-  mcp: number;
   totalViolations: number;
   risk: string;
 }
@@ -507,7 +486,6 @@ const EntityBreakdown = ({
     name: r.name.length > 20 ? `${r.name.slice(0, 20)}...` : r.name,
     "EU AI Act": r.euAiAct,
     GDPR: r.gdpr,
-    "MCP Unregistered": r.mcp,
   }));
 
   return (
@@ -533,8 +511,8 @@ const EntityBreakdown = ({
             className="mt-4 h-52"
             data={chartData}
             index="name"
-            categories={["EU AI Act", "GDPR", "MCP Unregistered"]}
-            colors={["indigo", "emerald", "amber"]}
+            categories={["EU AI Act", "GDPR"]}
+            colors={["indigo", "emerald"]}
             layout="vertical"
             yAxisWidth={160}
             stack={true}
@@ -679,7 +657,7 @@ const GlobalComplianceView = () => {
     const reqs = MOCK_TEAM_REQUESTS[team] || 0;
     return {
       key: team, name: team, totalRequests: reqs, compliant: reqs - counts.total,
-      euAiAct: counts.euAiAct, gdpr: counts.gdpr, mcp: counts.mcp,
+      euAiAct: counts.euAiAct, gdpr: counts.gdpr,
       totalViolations: counts.total, risk: riskLevel(counts.total),
     };
   }).sort((a, b) => b.totalViolations - a.totalViolations);
@@ -690,7 +668,7 @@ const GlobalComplianceView = () => {
     const counts = countByRegulation(vs);
     return {
       key: k, name: k, totalRequests: 0, compliant: 0,
-      euAiAct: counts.euAiAct, gdpr: counts.gdpr, mcp: counts.mcp,
+      euAiAct: counts.euAiAct, gdpr: counts.gdpr,
       totalViolations: counts.total, risk: riskLevel(counts.total),
     };
   }).sort((a, b) => b.totalViolations - a.totalViolations);
@@ -701,7 +679,7 @@ const GlobalComplianceView = () => {
     const counts = countByRegulation(vs);
     return {
       key: u, name: u, totalRequests: 0, compliant: 0,
-      euAiAct: counts.euAiAct, gdpr: counts.gdpr, mcp: counts.mcp,
+      euAiAct: counts.euAiAct, gdpr: counts.gdpr,
       totalViolations: counts.total, risk: riskLevel(counts.total),
     };
   }).sort((a, b) => b.totalViolations - a.totalViolations);
@@ -737,8 +715,8 @@ const GlobalComplianceView = () => {
                     className="mt-4"
                     data={MOCK_DAILY_VIOLATIONS}
                     index="date"
-                    categories={["Compliant", "EU AI Act", "GDPR", "MCP Unregistered"]}
-                    colors={["cyan", "red", "orange", "amber"]}
+                    categories={["Compliant", "EU AI Act", "GDPR"]}
+                    colors={["cyan", "red", "orange"]}
                     stack={true}
                     yAxisWidth={60}
                     showLegend={true}
@@ -850,7 +828,7 @@ const TeamComplianceView = () => {
     const reqs = MOCK_TEAM_REQUESTS[team] || 0;
     return {
       key: team, name: team, totalRequests: reqs, compliant: reqs - counts.total,
-      euAiAct: counts.euAiAct, gdpr: counts.gdpr, mcp: counts.mcp,
+      euAiAct: counts.euAiAct, gdpr: counts.gdpr,
       totalViolations: counts.total, risk: riskLevel(counts.total),
     };
   }).sort((a, b) => b.totalViolations - a.totalViolations);
@@ -863,7 +841,7 @@ const TeamComplianceView = () => {
       const counts = countByRegulation(vs);
       return {
         key: k, name: `${k}  (${info.user})`, totalRequests: 0, compliant: 0,
-        euAiAct: counts.euAiAct, gdpr: counts.gdpr, mcp: counts.mcp,
+        euAiAct: counts.euAiAct, gdpr: counts.gdpr,
         totalViolations: counts.total, risk: riskLevel(counts.total),
       };
     }).sort((a, b) => b.totalViolations - a.totalViolations);
@@ -991,7 +969,7 @@ const KeyComplianceView = () => {
     const counts = countByRegulation(vs);
     return {
       key: u, name: u, totalRequests: 0, compliant: 0,
-      euAiAct: counts.euAiAct, gdpr: counts.gdpr, mcp: counts.mcp,
+      euAiAct: counts.euAiAct, gdpr: counts.gdpr,
       totalViolations: counts.total, risk: riskLevel(counts.total),
     };
   }).filter((r) => !selectedKey || r.totalViolations > 0 || MOCK_KEY_OWNERS[selectedKey]?.user === r.name)
@@ -1095,7 +1073,7 @@ const UserComplianceView = () => {
       const counts = countByRegulation(vs);
       return {
         key: k, name: `${k}  (${MOCK_KEY_OWNERS[k]?.team})`, totalRequests: 0, compliant: 0,
-        euAiAct: counts.euAiAct, gdpr: counts.gdpr, mcp: counts.mcp,
+        euAiAct: counts.euAiAct, gdpr: counts.gdpr,
         totalViolations: counts.total, risk: riskLevel(counts.total),
       };
     }).sort((a, b) => b.totalViolations - a.totalViolations);
