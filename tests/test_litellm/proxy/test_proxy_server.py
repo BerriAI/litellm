@@ -25,6 +25,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
     "object": "list",
@@ -1743,30 +1744,39 @@ class TestPriceDataReloadAPI:
 
     def test_reload_model_cost_map_admin_access(self, client_with_auth):
         """Test that admin users can access the reload endpoint"""
-        with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-        ) as mock_get_map:
-            mock_get_map.return_value = {
-                "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-            }
-            # Mock the database connection
-            with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+        # Save the original model_cost so the endpoint's direct assignment
+        # (litellm.model_cost = new_model_cost_map) does not contaminate
+        # subsequent tests running in the same worker process.
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with patch(
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+            ) as mock_get_map:
+                mock_get_map.return_value = {
+                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
+                }
+                # Mock the database connection
+                with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
-                response = client_with_auth.post("/reload/model_cost_map")
+                    response = client_with_auth.post("/reload/model_cost_map")
 
-                assert response.status_code == 200
-                data = response.json()
-                assert data["status"] == "success"
-                assert "message" in data
-                assert "timestamp" in data
-                assert "models_count" in data
-                # The new implementation immediately reloads and returns the count
-                assert (
-                    "Price data reloaded successfully! 1 models updated."
-                    in data["message"]
-                )
-                assert data["models_count"] == 1
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["status"] == "success"
+                    assert "message" in data
+                    assert "timestamp" in data
+                    assert "models_count" in data
+                    # The new implementation immediately reloads and returns the count
+                    assert (
+                        "Price data reloaded successfully! 1 models updated."
+                        in data["message"]
+                    )
+                    assert data["models_count"] == 1
+        finally:
+            # Restore the full model cost map so subsequent tests are not affected
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
 
     def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot access the reload endpoint"""

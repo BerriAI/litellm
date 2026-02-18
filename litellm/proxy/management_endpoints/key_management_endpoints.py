@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
+import prisma
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
@@ -74,7 +75,6 @@ from litellm.proxy.utils import (
     _hash_token_if_needed,
     handle_exception_on_proxy,
     is_valid_api_key,
-    jsonify_object,
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret
@@ -3052,7 +3052,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key(
+async def _rotate_master_key( # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3095,13 +3095,17 @@ async def _rotate_master_key(
                 should_create_model_in_db=False,
             )
             if new_model:
-                new_models.append(jsonify_object(new_model.model_dump()))
+                _dumped = new_model.model_dump(exclude_none=True)
+                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])  # type: ignore[attr-defined]
+                _dumped["model_info"] = prisma.Json(_dumped["model_info"])  # type: ignore[attr-defined]
+                new_models.append(_dumped)
         verbose_proxy_logger.debug("Resetting proxy model table")
-        await prisma_client.db.litellm_proxymodeltable.delete_many()
-        verbose_proxy_logger.debug("Creating %s models", len(new_models))
-        await prisma_client.db.litellm_proxymodeltable.create_many(
-            data=new_models,
-        )
+        async with prisma_client.db.tx() as tx:
+            await tx.litellm_proxymodeltable.delete_many()
+            verbose_proxy_logger.debug("Creating %s models", len(new_models))
+            await tx.litellm_proxymodeltable.create_many(
+                data=new_models,
+            )
     # 3. process config table
     try:
         config = await prisma_client.db.litellm_config.find_many()
@@ -3127,15 +3131,20 @@ async def _rotate_master_key(
             if encrypted_env_vars:
                 await prisma_client.db.litellm_config.update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": jsonify_object(encrypted_env_vars)},
+                    data={"param_value": prisma.Json(encrypted_env_vars)},  # type: ignore[attr-defined]
                 )
 
     # 4. process MCP server table
-    await rotate_mcp_server_credentials_master_key(
-        prisma_client=prisma_client,
-        touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-        new_master_key=new_master_key,
-    )
+    try:
+        await rotate_mcp_server_credentials_master_key(
+            prisma_client=prisma_client,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to rotate MCP server credentials: %s", str(e)
+        )
 
     # 5. process credentials table
     try:
@@ -3153,13 +3162,19 @@ async def _rotate_master_key(
                     updated_patch=decrypted_cred,
                     new_encryption_key=new_master_key,
                 )
-                credential_object_jsonified = jsonify_object(
-                    encrypted_cred.model_dump()
-                )
+                _cred_data = encrypted_cred.model_dump(exclude_none=True)
+                if "credential_values" in _cred_data:
+                    _cred_data["credential_values"] = prisma.Json(  # type: ignore[attr-defined]
+                        _cred_data["credential_values"]
+                    )
+                if "credential_info" in _cred_data:
+                    _cred_data["credential_info"] = prisma.Json(  # type: ignore[attr-defined]
+                        _cred_data["credential_info"]
+                    )
                 await prisma_client.db.litellm_credentialstable.update(
                     where={"credential_name": cred.credential_name},
                     data={
-                        **credential_object_jsonified,
+                        **_cred_data,
                         "updated_by": user_api_key_dict.user_id,
                     },
                 )

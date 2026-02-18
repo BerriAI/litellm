@@ -772,26 +772,34 @@
   {
     "id": "eu-ai-act-article5",
     "title": "EU AI Act Article 5 — Prohibited Practices",
-    "description": "EU AI Act Article 5 compliance for prohibited AI practices. Blocks requests related to social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation. Includes both English and French keyword detection. Uses conditional matching (identifier word + context word).",
+    "description": "Comprehensive EU AI Act Article 5 compliance covering all prohibited AI practices. Includes 5 dedicated sub-guardrails per language (English + French) for: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition in workplace/education (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Uses conditional matching (identifier word + context word).",
     "region": "EU",
     "icon": "ShieldExclamationIcon",
     "iconColor": "text-red-500",
     "iconBg": "bg-red-50",
     "guardrails": [
-      "eu-ai-act-prohibited-practices",
-      "eu-ai-act-prohibited-practices-fr"
+      "eu-ai-act-art5-manipulation",
+      "eu-ai-act-art5-vulnerability",
+      "eu-ai-act-art5-social-scoring",
+      "eu-ai-act-art5-emotion-recognition",
+      "eu-ai-act-art5-biometric-profiling",
+      "eu-ai-act-art5-manipulation-fr",
+      "eu-ai-act-art5-vulnerability-fr",
+      "eu-ai-act-art5-social-scoring-fr",
+      "eu-ai-act-art5-emotion-recognition-fr",
+      "eu-ai-act-art5-biometric-profiling-fr"
     ],
     "complexity": "High",
     "guardrailDefinitions": [
       {
-        "guardrail_name": "eu-ai-act-prohibited-practices",
+        "guardrail_name": "eu-ai-act-art5-manipulation",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "categories": [
             {
-              "category": "eu_ai_act_article5_prohibited_practices",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_article5.yaml",
+              "category": "eu_ai_act_art5_manipulation",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -799,18 +807,18 @@
           ]
         },
         "guardrail_info": {
-          "description": "Blocks EU AI Act Article 5 prohibited practices in English: social scoring systems, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation"
+          "description": "Art. 5.1(a) — Blocks subliminal manipulation, deceptive AI techniques, dark patterns, and covert behavioral influence"
         }
       },
       {
-        "guardrail_name": "eu-ai-act-prohibited-practices-fr",
+        "guardrail_name": "eu-ai-act-art5-vulnerability",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "categories": [
             {
-              "category": "eu_ai_act_article5_prohibited_practices_fr",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_article5_fr.yaml",
+              "category": "eu_ai_act_art5_vulnerability",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -818,17 +826,209 @@
           ]
         },
         "guardrail_info": {
-          "description": "Blocks EU AI Act Article 5 prohibited practices in French: detects and blocks French-language keywords related to social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation"
+          "description": "Art. 5.1(b) — Blocks AI systems that exploit vulnerabilities of children, elderly, disabled persons, or economically disadvantaged groups"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-social-scoring",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_social_scoring",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(c) — Blocks social credit systems, citizen scoring, trustworthiness classification, and behavioral reputation scoring"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-emotion-recognition",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_emotion_recognition",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(f) — Blocks emotion recognition, mood tracking, and sentiment analysis in workplace and educational settings"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-biometric-profiling",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_biometric_profiling",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(d)(g)(h) — Blocks biometric categorization by race/ethnicity/religion/politics, facial recognition database scraping, and predictive policing"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-manipulation-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_manipulation_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(a) FR — Bloque la manipulation subliminale, les techniques d'IA trompeuses et les dark patterns (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-vulnerability-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_vulnerability_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(b) FR — Bloque l'exploitation des vulnérabilités des enfants, personnes âgées et handicapées (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-social-scoring-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_social_scoring_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(c) FR — Bloque les systèmes de crédit social, notation des citoyens et classification de fiabilité (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-emotion-recognition-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_emotion_recognition_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(f) FR — Bloque la reconnaissance des émotions et l'analyse des sentiments au travail et dans l'éducation (français)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-biometric-profiling-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_biometric_profiling_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(d)(g)(h) FR — Bloque la catégorisation biométrique, les bases de reconnaissance faciale et le profilage prédictif (français)"
         }
       }
     ],
     "templateData": {
       "policy_name": "eu-ai-act-article5",
-      "description": "EU AI Act Article 5 compliance policy for prohibited AI practices. Blocks social scoring, emotion recognition in workplace/education, biometric categorization, predictive profiling, manipulation, and vulnerability exploitation. Includes English and French detection.",
+      "description": "Comprehensive EU AI Act Article 5 compliance policy. Covers all prohibited AI practices across 5 sub-guardrails per language: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Includes English and French detection.",
       "guardrails_add": [
-        "eu-ai-act-prohibited-practices",
-        "eu-ai-act-prohibited-practices-fr"
+        "eu-ai-act-art5-manipulation",
+        "eu-ai-act-art5-vulnerability",
+        "eu-ai-act-art5-social-scoring",
+        "eu-ai-act-art5-emotion-recognition",
+        "eu-ai-act-art5-biometric-profiling",
+        "eu-ai-act-art5-manipulation-fr",
+        "eu-ai-act-art5-vulnerability-fr",
+        "eu-ai-act-art5-social-scoring-fr",
+        "eu-ai-act-art5-emotion-recognition-fr",
+        "eu-ai-act-art5-biometric-profiling-fr"
       ],
+      "guardrails_remove": []
+    }
+  },
+  {
+    "id": "mcp-security-unregistered-server-block",
+    "title": "MCP Security: Block Unregistered Servers",
+    "description": "Blocks requests that reference MCP servers not registered on this LiteLLM gateway. Prevents unauthorized tool access via unregistered MCP endpoints.",
+    "type": "MCP Security",
+    "region": "Global",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": ["mcp-security-block"],
+    "complexity": "Low",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "mcp-security-block",
+        "litellm_params": {
+          "guardrail": "mcp_security",
+          "mode": "pre_call",
+          "default_on": true,
+          "on_violation": "block"
+        },
+        "guardrail_info": {
+          "description": "Blocks requests referencing MCP servers not in the gateway registry"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "mcp-security-unregistered-server-block",
+      "description": "Blocks requests referencing MCP servers not registered on this gateway.",
+      "guardrails_add": ["mcp-security-block"],
       "guardrails_remove": []
     }
   }
