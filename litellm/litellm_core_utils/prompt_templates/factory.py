@@ -2040,7 +2040,7 @@ def _sanitize_empty_text_content(
     return message
 
 
-def _add_missing_tool_results(
+def _add_missing_tool_results( # noqa: PLR0915
     current_message: AllMessageValues,
     messages: List[AllMessageValues],
     current_index: int,
