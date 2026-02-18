@@ -8,7 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy.route_llm_request import route_request
 
@@ -168,7 +168,9 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
     assert call_kwargs["num_retries"] == 5
     assert call_kwargs["timeout"] == 30
-    assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    assert call_kwargs["model_group_retry_policy"] == {
+        "gpt-3.5-turbo": {"RateLimitErrorRetries": 3}
+    }
     # Verify unsupported settings were NOT merged
     assert "routing_strategy" not in call_kwargs
     assert "model_group_alias" not in call_kwargs
@@ -237,3 +239,115 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["num_retries"] == 10
     # Key/team timeout should be applied since not in request
     assert call_kwargs["timeout"] == 30
+
+
+def _make_mock_router(
+    model_names: list,
+    deployment_names: list,
+    pattern_router_patterns: dict,
+    model_group_alias: dict = None,
+    default_deployment=None,
+    pass_through_all_models: bool = False,
+):
+    """Create a mock Router with the given routing configuration."""
+    router = MagicMock()
+    router.model_names = model_names
+    router.deployment_names = deployment_names
+    router.model_group_alias = model_group_alias
+    router.default_deployment = default_deployment
+    router.has_model_id = MagicMock(return_value=False)
+    router.map_team_model = MagicMock(return_value=None)
+
+    pattern_router = MagicMock()
+    pattern_router.patterns = pattern_router_patterns
+    router.pattern_router = pattern_router
+
+    general_settings = MagicMock()
+    general_settings.pass_through_all_models = pass_through_all_models
+    router.router_general_settings = general_settings
+
+    return router
+
+
+@pytest.mark.asyncio
+async def test_deployment_names_match_before_wildcard_pattern():
+    """
+    When a model matches both deployment_names and a wildcard pattern_router
+    pattern, the deployment_names match should take priority and
+    specific_deployment=True should be passed.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21128
+    """
+    model = "bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    router = _make_mock_router(
+        model_names=["bedrock-sonnet"],  # does NOT include the exact model string
+        deployment_names=[model],  # exact match on litellm_params.model
+        pattern_router_patterns={"bedrock/(.*)": [{"model_name": "bedrock/*"}]},
+    )
+    router.acompletion = AsyncMock(return_value="fake_response")
+
+    data = {"model": model, "messages": [{"role": "user", "content": "test"}]}
+
+    await route_request(data, router, None, "acompletion")
+
+    router.acompletion.assert_called_once()
+    call_kwargs = router.acompletion.call_args
+    assert (
+        call_kwargs.kwargs.get("specific_deployment") is True
+    ), "deployment_names match should pass specific_deployment=True"
+
+
+@pytest.mark.asyncio
+async def test_wildcard_still_works_when_no_deployment_names_match():
+    """
+    When a model does NOT match deployment_names but a wildcard pattern exists,
+    the request should still route through the pattern_router path (without
+    specific_deployment=True).
+    """
+    model = "bedrock/some-other-model"
+
+    router = _make_mock_router(
+        model_names=["bedrock-sonnet"],
+        deployment_names=[
+            "bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        ],  # does NOT include the requested model
+        pattern_router_patterns={"bedrock/(.*)": [{"model_name": "bedrock/*"}]},
+    )
+    router.acompletion = AsyncMock(return_value="fake_response")
+
+    data = {"model": model, "messages": [{"role": "user", "content": "test"}]}
+
+    await route_request(data, router, None, "acompletion")
+
+    router.acompletion.assert_called_once()
+    call_kwargs = router.acompletion.call_args
+    assert (
+        call_kwargs.kwargs.get("specific_deployment") is not True
+    ), "wildcard match should NOT pass specific_deployment=True"
+
+
+@pytest.mark.asyncio
+async def test_exact_model_name_still_highest_priority():
+    """
+    When a model matches router_model_names (exact model_name from config),
+    it should take priority over both deployment_names and wildcards.
+    """
+    model = "bedrock-sonnet"
+
+    router = _make_mock_router(
+        model_names=["bedrock-sonnet"],  # exact match
+        deployment_names=[model],  # also in deployment_names
+        pattern_router_patterns={"bedrock/(.*)": [{"model_name": "bedrock/*"}]},
+    )
+    router.acompletion = AsyncMock(return_value="fake_response")
+
+    data = {"model": model, "messages": [{"role": "user", "content": "test"}]}
+
+    await route_request(data, router, None, "acompletion")
+
+    router.acompletion.assert_called_once()
+    call_kwargs = router.acompletion.call_args
+    assert (
+        call_kwargs.kwargs.get("specific_deployment") is not True
+    ), "exact model_name match should NOT pass specific_deployment=True"
