@@ -120,6 +120,13 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        {
+          type: "category",
+          label: "Contributing to Prompt Management",
+          items: [
+            "adding_provider/generic_prompt_management_api",
+          ]
+        },
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
@@ -573,6 +580,7 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
+        "evals_api",
         "generateContent",
         "apply_guardrail",
         "bedrock_invoke",
@@ -1126,6 +1134,11 @@ const sidebars = {
       type: "category",
       label: "Blog",
       items: [
+        {
+          type: "link",
+          label: "Day 0 Support: Claude Sonnet 4.6",
+          href: "/blog/claude_sonnet_4_6",
+        },
         {
           type: "link",
           label: "Incident: Broken Model Cost Map",
