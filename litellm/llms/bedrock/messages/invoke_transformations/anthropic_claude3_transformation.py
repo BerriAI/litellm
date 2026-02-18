@@ -180,6 +180,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4",  # Opus 4
             "sonnet-4",
             "sonnet_4",  # Sonnet 4
+            "sonnet-4.6",
+            "sonnet_4.6",
+            "sonnet-4-6",
+            "sonnet_4_6",
+            "opus-4.6",
+            "opus_4.6",
+            "opus-4-6",
+            "opus_4_6",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
