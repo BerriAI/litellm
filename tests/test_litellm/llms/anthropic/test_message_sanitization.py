@@ -116,8 +116,8 @@ class TestMessageSanitization:
         assert len(sanitized) == 4
         assert sanitized[0]["role"] == "user"
         assert sanitized[1]["role"] == "assistant"
-        assert sanitized[2]["tool_call_id"] == "call_2"  # Dummy added first
-        assert sanitized[3]["tool_call_id"] == "call_1"  # Original tool result
+        assert sanitized[2]["tool_call_id"] == "call_1"  # Original tool result (first in tool_calls)
+        assert sanitized[3]["tool_call_id"] == "call_2"  # Dummy added for missing call_2
 
     def test_case_b_orphaned_tool_result(self):
         """
