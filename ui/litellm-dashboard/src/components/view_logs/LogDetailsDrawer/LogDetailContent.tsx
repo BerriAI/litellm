@@ -4,6 +4,7 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
+import CompliancePanel from "../GuardrailViewer/CompliancePanel";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -40,6 +41,7 @@ export interface LogDetailContentProps {
   onOpenSettings?: () => void;
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
+  accessToken?: string | null;
 }
 
 /**
@@ -50,7 +52,7 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -166,7 +168,17 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       {/* Guardrail Data */}
       {hasGuardrailData && (
         <div id="guardrail-section">
-          <GuardrailViewer data={guardrailInfo} />
+          <GuardrailViewer
+            data={guardrailInfo}
+            accessToken={accessToken ?? null}
+            logEntry={{
+              request_id: logEntry.request_id,
+              user: logEntry.user,
+              model: logEntry.model,
+              startTime: logEntry.startTime,
+              metadata: logEntry.metadata,
+            }}
+          />
         </div>
       )}
 
