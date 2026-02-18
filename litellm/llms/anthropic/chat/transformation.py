@@ -173,7 +173,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def _is_claude_opus_4_6(model: str) -> bool:
         """Check if the model is Claude Opus 4.5 or Sonnet 4.6."""
-        return "opus-4-6" in model.lower() or "opus_4_6" in model.lower() or "sonnet-4-6" in model.lower() or "sonnet_4_6" in model.lower()
+        return "opus-4-6" in model.lower() or "opus_4_6" in model.lower() or "sonnet-4-6" in model.lower() or "sonnet_4_6" in model.lower() or "sonnet-4.6" in model.lower()
 
     def get_supported_openai_params(self, model: str):
         params = [
