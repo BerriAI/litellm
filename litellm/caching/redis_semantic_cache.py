@@ -44,6 +44,7 @@ class RedisSemanticCache(BaseCache):
         redis_url: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
         embedding_model: str = "text-embedding-ada-002",
+        embedding_dimensions: Optional[int] = None,
         index_name: Optional[str] = None,
         **kwargs,
     ):
@@ -86,6 +87,7 @@ class RedisSemanticCache(BaseCache):
         # While similarity: 1 = most similar, 0 = least similar
         self.distance_threshold = 1 - similarity_threshold
         self.embedding_model = embedding_model
+        self.embedding_dimensions = embedding_dimensions  # Optional: explicit dimensions for embeddings
 
         # Set up Redis connection
         if redis_url is None:

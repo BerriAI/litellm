@@ -99,6 +99,7 @@ class Cache:
         gcs_path_service_account: Optional[str] = None,
         gcs_path: Optional[str] = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        redis_semantic_cache_embedding_dimensions: Optional[int] = None,
         redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
@@ -108,6 +109,7 @@ class Cache:
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        qdrant_semantic_cache_embedding_dimensions: Optional[int] = None,
         # GCP IAM authentication parameters
         gcp_service_account: Optional[str] = None,
         gcp_ssl_ca_certs: Optional[str] = None,
@@ -196,6 +198,7 @@ class Cache:
                 password=password,
                 similarity_threshold=similarity_threshold,
                 embedding_model=redis_semantic_cache_embedding_model,
+                embedding_dimensions=redis_semantic_cache_embedding_dimensions,
                 index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
@@ -207,6 +210,7 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 quantization_config=qdrant_quantization_config,
                 embedding_model=qdrant_semantic_cache_embedding_model,
+                embedding_dimensions=qdrant_semantic_cache_embedding_dimensions,
             )
         elif type == LiteLLMCacheType.LOCAL:
             self.cache = InMemoryCache()
