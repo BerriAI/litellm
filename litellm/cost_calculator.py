@@ -448,7 +448,9 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "bedrock":
-        return bedrock_cost_per_token(model=model, usage=usage_block)
+        return bedrock_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
@@ -2145,5 +2147,4 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
-
 
