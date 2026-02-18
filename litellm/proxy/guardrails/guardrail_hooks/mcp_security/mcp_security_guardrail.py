@@ -5,7 +5,7 @@ Validates that MCP servers referenced in request tools are registered
 on the LiteLLM gateway. Blocks or alerts when unregistered servers are found.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import Any, List, Literal, Optional, Set, Union
 
 from fastapi import HTTPException
 
