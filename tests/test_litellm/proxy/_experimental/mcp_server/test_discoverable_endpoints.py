@@ -10,7 +10,7 @@ from fastapi import HTTPException
 @pytest.fixture(autouse=True)
 def mock_mcp_client_ip():
     """Mock IPAddressUtils.get_mcp_client_ip to return None for all tests.
-    
+
     This bypasses IP-based access control in tests, since the MCP server's
     available_on_public_internet defaults to False and mock requests don't
     have proper client IP context.
@@ -145,9 +145,9 @@ async def test_authorize_endpoint_preserves_existing_query_params():
     location = response.headers["location"]
 
     # Must NOT have double '?' — existing params must be merged correctly
-    assert location.count("?") == 1, (
-        f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
-    )
+    assert (
+        location.count("?") == 1
+    ), f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
     assert "tenant=system" in location
     assert "client_id=test_client_id" in location
     assert "response_type=code" in location
@@ -1485,5 +1485,228 @@ async def test_discovery_root_includes_server_name_prefix():
         assert "/test_oauth/token" in response["token_endpoint"]
         assert "/test_oauth/register" in response["registration_endpoint"]
         assert response["scopes_supported"] == ["read", "write"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_refresh_token_grant():
+    """Test that token endpoint supports grant_type=refresh_token and forwards to upstream."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "new_access_token",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "refresh_token": "new_refresh_token",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_get_client.return_value = mock_async_client
+
+            response = await token_endpoint(
+                request=mock_request,
+                grant_type="refresh_token",
+                code=None,
+                redirect_uri=None,
+                client_id="test_client_id",
+                client_secret=None,
+                code_verifier=None,
+                refresh_token="old_refresh_token",
+                mcp_server_name="test_oauth",
+            )
+
+        import json
+
+        token_data = json.loads(response.body)
+        assert token_data["access_token"] == "new_access_token"
+        assert token_data["refresh_token"] == "new_refresh_token"
+
+        # Verify it forwarded to the correct upstream token URL
+        call_args = mock_async_client.post.call_args
+        assert call_args.args[0] == "https://provider.com/oauth/token"
+
+        # Verify the upstream POST body contains the right fields
+        upstream_data = call_args.kwargs["data"]
+        assert upstream_data["grant_type"] == "refresh_token"
+        assert upstream_data["refresh_token"] == "old_refresh_token"
+        assert upstream_data["client_id"] == "test_client_id"
+        # redirect_uri should NOT be present for refresh_token grant
+        assert "redirect_uri" not in upstream_data
+        assert "code" not in upstream_data
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_refresh_token_uses_server_client_id():
+    """Test that refresh_token grant uses the MCP server's client_id when available."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server(
+        client_id="server_configured_client_id",
+        client_secret="server_configured_secret",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "refreshed_token",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            mock_get_client.return_value = mock_async_client
+
+            response = await token_endpoint(
+                request=mock_request,
+                grant_type="refresh_token",
+                code=None,
+                redirect_uri=None,
+                client_id="client_sent_id",
+                client_secret=None,
+                code_verifier=None,
+                refresh_token="some_refresh_token",
+                mcp_server_name="test_oauth",
+            )
+
+        # Verify server's client_id takes precedence
+        call_args = mock_async_client.post.call_args
+        upstream_data = call_args.kwargs["data"]
+        assert upstream_data["client_id"] == "server_configured_client_id"
+        assert upstream_data["client_secret"] == "server_configured_secret"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_refresh_token_missing_value():
+    """Test that refresh_token grant without a refresh_token value returns 400."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await token_endpoint(
+                request=mock_request,
+                grant_type="refresh_token",
+                code=None,
+                redirect_uri=None,
+                client_id="test_client_id",
+                client_secret=None,
+                code_verifier=None,
+                refresh_token=None,
+                mcp_server_name="test_oauth",
+            )
+        assert exc_info.value.status_code == 400
+        assert "refresh_token is required" in str(exc_info.value.detail)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_unsupported_grant_type():
+    """Test that an unsupported grant_type still returns 400."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await token_endpoint(
+                request=mock_request,
+                grant_type="client_credentials",
+                code=None,
+                redirect_uri=None,
+                client_id="test_client_id",
+                client_secret=None,
+                code_verifier=None,
+                refresh_token=None,
+                mcp_server_name="test_oauth",
+            )
+        assert exc_info.value.status_code == 400
+        assert "Unsupported grant_type" in str(exc_info.value.detail)
     finally:
         global_mcp_server_manager.registry.clear()
