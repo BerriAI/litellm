@@ -70,6 +70,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    SEMANTIC_GUARD = "semantic_guard"
 
 
 class Role(Enum):
