@@ -130,7 +130,7 @@ curl -X POST http://localhost:4000/v1/chat/completions \
     "messages": [{"role": "user", "content": "Complex reasoning task"}],
     "reasoning_effort": "medium"
   }'
-``'
+```
 
 </TabItem>
 </Tabs>
