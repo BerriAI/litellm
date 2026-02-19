@@ -58,6 +58,17 @@ Configure the required authentication and pricing:
 - The Bria API requires an `api_token` header
 - Enter your Bria API key as the value for the `api_token` header
 
+**Default Query Parameters (Optional):**
+- Add query parameters that will be automatically sent with every request
+- Perfect for API versioning, format specifications, or default configurations
+- Clients can override these parameters by providing their own values
+- Example: `version=v1`, `format=json`, `timeout=30`
+
+<Image 
+  img={require('../../img/passthrough_query_default.png')}
+  style={{width: '60%', display: 'block', margin: '2rem auto'}}
+/>
+
 **Pricing Configuration:**
 - Set a cost per request (e.g., $12.00 in this example)
 - This enables cost tracking and billing for your users
@@ -112,6 +123,9 @@ general_settings:
         content-type: application/json
         accept: application/json
       forward_headers: true                               # Forward all incoming headers
+      default_query_params:                               # Optional: Default query parameters
+        version: "v1"                                     # Always send version=v1
+        format: "json"                                    # Default format (can be overridden)
 ```
 
 ### Start and Test
@@ -167,6 +181,8 @@ general_settings:
       forward_headers: boolean        # Forward all incoming headers
       include_subpath: boolean        # If true, forwards requests to sub-paths (default: false)
       methods: list[string]           # Optional: HTTP methods (e.g., ["GET", "POST"]). If not specified, all methods are supported.
+      default_query_params:           # Optional: Default query parameters sent with every request
+        <param-name>: string          # Key-value pairs (e.g., version: "v1", format: "json")
       headers:                        # Custom headers to add
         Authorization: string         # Auth header for target API
         content-type: string         # Request content type
@@ -178,10 +194,16 @@ general_settings:
 
 ### Header Options
 - **Authorization**: Authentication for the target API
-- **content-type**: Request body format specification  
+- **content-type**: Request body format specification
 - **accept**: Expected response format
 - **LANGFUSE_PUBLIC_KEY/SECRET_KEY**: For Langfuse integration
 - **Custom headers**: Any additional key-value pairs
+
+### Default Query Parameters
+- **Parameter precedence**: Client params > URL params > default params
+- **Use cases**: API versioning, authentication tokens, format control, feature flags
+- **Override capability**: Clients can override any default parameter
+- **Examples**: `version: "v1"`, `format: "json"`, `timeout: "30"`
 
 ### Sub-path Routing
 
@@ -202,7 +224,51 @@ general_settings:
 
 ---
 
-### Method-Specific Routing
+### Default Query Parameters
+
+Pass-through endpoints support default query parameters that are automatically added to every request. This is useful for API versioning, format specifications, authentication tokens, or any default configuration.
+
+#### How It Works
+
+**Parameter Precedence (highest to lowest priority):**
+1. **Client-provided parameters** (in the request URL)
+2. **URL parameters** (from the target URL)
+3. **Default parameters** (from configuration)
+
+#### Example Configuration
+
+```yaml
+general_settings:
+  pass_through_endpoints:
+    - path: "/api/v1"
+      target: "https://external-api.com/service?timeout=60"  # URL has timeout=60
+      default_query_params:
+        version: "v1"          # Always add version=v1
+        format: "json"         # Default format=json (can be overridden)
+        auth_level: "basic"    # Always add auth_level=basic
+```
+
+#### Request Examples
+
+**Client Request:** `GET /api/v1/users`
+**Actual Backend Call:** `https://external-api.com/service?version=v1&format=json&auth_level=basic&timeout=60`
+
+**Client Request:** `GET /api/v1/users?format=xml&custom=value`
+**Actual Backend Call:** `https://external-api.com/service?version=v1&auth_level=basic&timeout=60&format=xml&custom=value`
+- Client `format=xml` overrides default `format=json`
+- Default `version=v1` and `auth_level=basic` are preserved
+- URL `timeout=60` is preserved
+- Client `custom=value` is added
+
+#### Use Cases
+
+- **API Versioning**: Always send `version=v2` to maintain compatibility
+- **Authentication**: Add authentication tokens like `api_key=default_key`
+- **Format Control**: Default to `format=json` but allow client override
+- **Rate Limiting**: Set `rate_limit=standard` as default
+- **Feature Flags**: Enable `experimental=false` by default
+
+---
 
 You can configure different target URLs for the same path using different HTTP methods. This is useful when different backends handle different operations:
 

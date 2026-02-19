@@ -600,6 +600,7 @@ async def pass_through_request(  # noqa: PLR0915
     forward_headers: Optional[bool] = False,
     merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
+    default_query_params: Optional[dict] = None,
     stream: Optional[bool] = None,
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
@@ -617,6 +618,7 @@ async def pass_through_request(  # noqa: PLR0915
         forward_headers: Whether to forward headers
         merge_query_params: Whether to merge query params
         query_params: The query params
+        default_query_params: The default query params to be applied if not overridden by client
         stream: Whether to stream the response
         cost_per_request: Optional field - cost per request to the target endpoint
         custom_llm_provider: Optional field - custom LLM provider for the endpoint
@@ -649,13 +651,18 @@ async def pass_through_request(  # noqa: PLR0915
             forward_headers=forward_headers,
         )
 
-        if merge_query_params:
+        # Apply default query parameters if provided, regardless of merge_query_params setting
+        if default_query_params or merge_query_params:
+            # Determine what to merge based on settings
+            request_params = dict(request.query_params) if merge_query_params else {}
+
             # Create a new URL with the merged query params
             url = url.copy_with(
                 query=urlencode(
                     HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
-                        request_query_params=dict(request.query_params),
+                        request_query_params=request_params,
+                        default_query_params=default_query_params,
                     )
                 ).encode("ascii")
             )
@@ -1080,6 +1087,7 @@ def create_pass_through_route(
     custom_llm_provider: Optional[str] = None,
     is_streaming_request: Optional[bool] = False,
     query_params: Optional[dict] = None,
+    default_query_params: Optional[dict] = None,
     guardrails: Optional[Dict[str, Any]] = None,
 ):
     # check if target is an adapter.py or a url
@@ -1171,6 +1179,7 @@ def create_pass_through_route(
                 "cost_per_request", cost_per_request
             )
             param_guardrails = target_params.get("guardrails", None)
+            param_default_query_params = target_params.get("default_query_params", None)
 
             # Construct the full target URL with subpath if needed
             full_target = (
@@ -1208,6 +1217,7 @@ def create_pass_through_route(
                 forward_headers=cast(Optional[bool], param_forward_headers),
                 merge_query_params=cast(Optional[bool], param_merge_query_params),
                 query_params=final_query_params,
+                default_query_params=param_default_query_params,
                 stream=is_streaming_request or stream,
                 custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),
@@ -1849,6 +1859,7 @@ class InitPassThroughEndpointHelpers:
         endpoint_id: str,
         guardrails: Optional[dict] = None,
         methods: Optional[List[str]] = None,
+        default_query_params: Optional[dict] = None,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -1886,6 +1897,7 @@ class InitPassThroughEndpointHelpers:
                 merge_query_params,
                 dependencies,
                 cost_per_request=cost_per_request,
+                default_query_params=default_query_params,
                 guardrails=guardrails,
             ),
             methods=methods,
@@ -1903,6 +1915,7 @@ class InitPassThroughEndpointHelpers:
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
                 "merge_query_params": merge_query_params,
+                "default_query_params": default_query_params,
                 "dependencies": dependencies,
                 "cost_per_request": cost_per_request,
                 "guardrails": guardrails,
@@ -1922,6 +1935,7 @@ class InitPassThroughEndpointHelpers:
         endpoint_id: str,
         guardrails: Optional[dict] = None,
         methods: Optional[List[str]] = None,
+        default_query_params: Optional[dict] = None,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -1960,6 +1974,7 @@ class InitPassThroughEndpointHelpers:
                 dependencies,
                 include_subpath=True,
                 cost_per_request=cost_per_request,
+                default_query_params=default_query_params,
                 guardrails=guardrails,
             ),
             methods=methods,
@@ -1977,6 +1992,7 @@ class InitPassThroughEndpointHelpers:
                 "custom_headers": custom_headers,
                 "forward_headers": forward_headers,
                 "merge_query_params": merge_query_params,
+                "default_query_params": default_query_params,
                 "dependencies": dependencies,
                 "cost_per_request": cost_per_request,
                 "guardrails": guardrails,
@@ -2170,6 +2186,7 @@ async def initialize_pass_through_endpoints(
         )
         _forward_headers = endpoint.get("forward_headers", None)
         _merge_query_params = endpoint.get("merge_query_params", None)
+        _default_query_params = endpoint.get("default_query_params", None)
         _auth = endpoint.get("auth", None)
         _dependencies = None
         if _auth is not None and str(_auth).lower() == "true":
@@ -2207,6 +2224,7 @@ async def initialize_pass_through_endpoints(
             endpoint_id=endpoint_id,
             guardrails=_guardrails,
             methods=_methods,
+            default_query_params=_default_query_params,
         )
 
         # Generate route key with methods for tracking
@@ -2228,6 +2246,7 @@ async def initialize_pass_through_endpoints(
                 endpoint_id=endpoint_id,
                 guardrails=_guardrails,
                 methods=_methods,
+                default_query_params=_default_query_params,
             )
 
             visited_endpoints.add(f"{endpoint_id}:subpath:{_path}:{methods_str}")
@@ -2546,6 +2565,7 @@ async def update_pass_through_endpoints(
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
             methods=updated_endpoint.methods,
+            default_query_params=updated_endpoint.default_query_params,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2560,6 +2580,7 @@ async def update_pass_through_endpoints(
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
             methods=updated_endpoint.methods,
+            default_query_params=updated_endpoint.default_query_params,
         )
 
     return PassThroughEndpointResponse(
@@ -2637,6 +2658,7 @@ async def create_pass_through_endpoints(
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
             methods=created_endpoint.methods,
+            default_query_params=created_endpoint.default_query_params,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2651,6 +2673,7 @@ async def create_pass_through_endpoints(
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
             methods=created_endpoint.methods,
+            default_query_params=created_endpoint.default_query_params,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])
