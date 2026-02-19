@@ -6368,20 +6368,6 @@
         "supports_video_input": true,
         "supports_vision": true
     },
-    "bedrock/converse/moonshotai.kimi-k2.5": {
-        "input_cost_per_token": 6e-07,
-        "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 262144,
-        "max_tokens": 262144,
-        "mode": "chat",
-        "output_cost_per_token": 3e-06,
-        "source": "https://aws.amazon.com/bedrock/pricing/",
-        "supports_function_calling": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
-    },
     "bedrock/ap-south-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 3.18e-06,
         "litellm_provider": "bedrock",
