@@ -332,7 +332,7 @@ async def test_mcp_get_prompt_success():
         mock_manager.get_prompt_from_server = AsyncMock(return_value=prompt_result)
 
         result = await mcp_get_prompt(
-            name="hello",
+            name="server_a-hello",  # prefixed name since server prefixes are always added
             arguments={"foo": "bar"},
             user_api_key_auth=user_api_key_auth,
         )
@@ -1006,7 +1006,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
 
 @pytest.mark.asyncio
 async def test_list_tools_single_server_unprefixed_names():
-    """When only one MCP server is allowed, list tools should return unprefixed names."""
+    """When only one MCP server is allowed, list tools should return prefixed names (server prefix is always added)."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _get_tools_from_mcp_servers,
@@ -1063,9 +1063,9 @@ async def test_list_tools_single_server_unprefixed_names():
             mcp_server_auth_headers=None,
         )
 
-    # Should be unprefixed since only one server is allowed
+    # Server prefix is always added regardless of number of allowed servers
     assert len(tools) == 1
-    assert tools[0].name == "toolA"
+    assert tools[0].name == "zapier-toolA"
 
 
 @pytest.mark.asyncio
