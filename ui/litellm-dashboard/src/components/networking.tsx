@@ -9511,3 +9511,115 @@ export const checkGdprCompliance = async (
   }
   return response.json();
 };
+
+// Guardrails Metrics API Calls
+import type {
+  GuardrailMetricsResponse,
+  GuardrailDetailMetrics,
+  GuardrailLogsResponse,
+} from "./GuardrailsPage/types";
+
+export const guardrailMetricsCall = async (
+  accessToken: string,
+  startDate: string,
+  endDate: string,
+  page: number = 1,
+  pageSize: number = 50
+): Promise<GuardrailMetricsResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrail/metrics`
+    : `/guardrail/metrics`;
+
+  const params = new URLSearchParams({
+    start_date: startDate,
+    end_date: endDate,
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  });
+
+  const response = await fetch(`${url}?${params}`, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Failed to fetch guardrail metrics: ${errorData}`);
+  }
+
+  return await response.json();
+};
+
+export const guardrailDetailMetricsCall = async (
+  accessToken: string,
+  guardrailName: string,
+  startDate: string,
+  endDate: string
+): Promise<GuardrailDetailMetrics> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrail/${encodeURIComponent(guardrailName)}/metrics`
+    : `/guardrail/${encodeURIComponent(guardrailName)}/metrics`;
+
+  const params = new URLSearchParams({
+    start_date: startDate,
+    end_date: endDate,
+  });
+
+  const response = await fetch(`${url}?${params}`, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Failed to fetch guardrail details: ${errorData}`);
+  }
+
+  return await response.json();
+};
+
+export const guardrailLogsCall = async (
+  accessToken: string,
+  guardrailName: string,
+  startDate: string,
+  endDate: string,
+  statusFilter?: string,
+  page: number = 1,
+  pageSize: number = 50
+): Promise<GuardrailLogsResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrail/${encodeURIComponent(guardrailName)}/logs`
+    : `/guardrail/${encodeURIComponent(guardrailName)}/logs`;
+
+  const params = new URLSearchParams({
+    start_date: startDate,
+    end_date: endDate,
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  });
+
+  if (statusFilter) {
+    params.append("status_filter", statusFilter);
+  }
+
+  const response = await fetch(`${url}?${params}`, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Failed to fetch guardrail logs: ${errorData}`);
+  }
+
+  return await response.json();
+};
