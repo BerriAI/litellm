@@ -299,12 +299,54 @@ class WebSearchInterceptionLogger(CustomLogger):
             f"WebSearchInterception: Detected {len(tool_calls)} WebSearch tool call(s), executing agentic loop"
         )
 
-        # Return tools dict with tool calls
+        # Extract thinking blocks from response content.
+        # When extended thinking is enabled, the model response includes
+        # thinking/redacted_thinking blocks that must be preserved and
+        # prepended to the follow-up assistant message.
+        thinking_blocks: List[Dict] = []
+        if isinstance(response, dict):
+            content = response.get("content", [])
+        else:
+            content = getattr(response, "content", []) or []
+
+        for block in content:
+            if isinstance(block, dict):
+                block_type = block.get("type")
+            else:
+                block_type = getattr(block, "type", None)
+
+            if block_type in ("thinking", "redacted_thinking"):
+                if isinstance(block, dict):
+                    thinking_blocks.append(block)
+                else:
+                    # Convert object to dict using getattr, matching the
+                    # pattern in _detect_from_non_streaming_response
+                    thinking_block_dict: Dict = {"type": block_type}
+                    if block_type == "thinking":
+                        thinking_block_dict["thinking"] = getattr(
+                            block, "thinking", ""
+                        )
+                        thinking_block_dict["signature"] = getattr(
+                            block, "signature", ""
+                        )
+                    else:  # redacted_thinking
+                        thinking_block_dict["data"] = getattr(
+                            block, "data", ""
+                        )
+                    thinking_blocks.append(thinking_block_dict)
+
+        if thinking_blocks:
+            verbose_logger.debug(
+                f"WebSearchInterception: Extracted {len(thinking_blocks)} thinking block(s) from response"
+            )
+
+        # Return tools dict with tool calls and thinking blocks
         tools_dict = {
             "tool_calls": tool_calls,
             "tool_type": "websearch",
             "provider": custom_llm_provider,
             "response_format": "anthropic",
+            "thinking_blocks": thinking_blocks,
         }
         return True, tools_dict
 
@@ -387,6 +429,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
 
         tool_calls = tools["tool_calls"]
+        thinking_blocks = tools.get("thinking_blocks", [])
 
         verbose_logger.debug(
             f"WebSearchInterception: Executing agentic loop for {len(tool_calls)} search(es)"
@@ -396,6 +439,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             model=model,
             messages=messages,
             tool_calls=tool_calls,
+            thinking_blocks=thinking_blocks,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             logging_obj=logging_obj,
             stream=stream,
@@ -442,6 +486,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         model: str,
         messages: List[Dict],
         tool_calls: List[Dict],
+        thinking_blocks: List[Dict],
         anthropic_messages_optional_request_params: Dict,
         logging_obj: Any,
         stream: bool,
@@ -495,6 +540,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         assistant_message, user_message = WebSearchTransformation.transform_response(
             tool_calls=tool_calls,
             search_results=final_search_results,
+            thinking_blocks=thinking_blocks,
         )
 
         # Make follow-up request with search results
