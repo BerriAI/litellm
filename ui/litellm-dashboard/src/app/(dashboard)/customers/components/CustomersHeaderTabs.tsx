@@ -16,18 +16,15 @@ const CustomersHeaderTabs: React.FC<CustomersHeaderTabsProps> = ({
   children,
 }) => {
   return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <TabGroup>
-          <TabList className="mt-2">
-            <Tab>Your Customers</Tab>
-            {(userRole === "Admin" || userRole === "Org Admin") && (
-              <Tab>Customer Settings</Tab>
-            )}
-          </TabList>
-          <TabPanels>{children}</TabPanels>
-        </TabGroup>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
+    <TabGroup className="w-full">
+      <div className="flex items-center justify-between gap-4 mb-2">
+        <TabList className="mt-2">
+          <Tab>Your Customers</Tab>
+          {(userRole === "Admin" || userRole === "Org Admin") && (
+            <Tab>Customer Settings</Tab>
+          )}
+        </TabList>
+        <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
           <Text>Last Refreshed: {lastRefreshed}</Text>
           <button
             onClick={onRefresh}
@@ -38,7 +35,8 @@ const CustomersHeaderTabs: React.FC<CustomersHeaderTabsProps> = ({
           </button>
         </div>
       </div>
-    </div>
+      <TabPanels>{children}</TabPanels>
+    </TabGroup>
   );
 };
 

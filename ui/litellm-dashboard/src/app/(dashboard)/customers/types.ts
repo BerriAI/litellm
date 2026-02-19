@@ -1,3 +1,11 @@
+export interface CustomerObjectPermission {
+  mcp_servers?: string[];
+  mcp_access_groups?: string[];
+  mcp_tool_permissions?: Record<string, string[]>;
+  agents?: string[];
+  agent_access_groups?: string[];
+}
+
 export interface Customer {
   user_id: string;
   alias: string | null;
@@ -12,6 +20,7 @@ export interface Customer {
     max_budget: number | null;
     budget_duration: string | null;
   } | null;
+  object_permission?: CustomerObjectPermission | null;
 }
 
 export interface NewCustomerData {
@@ -23,4 +32,5 @@ export interface NewCustomerData {
   allowed_model_region?: string;
   budget_duration?: string;
   metadata?: string;
+  object_permission?: CustomerObjectPermission;
 }

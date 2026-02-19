@@ -1,14 +1,14 @@
 import React, { useState } from "react";
-import { Button, Card, Col, Grid, TabPanel, Text } from "@tremor/react";
+import { Button, Card, TabPanel, Text } from "@tremor/react";
 import { RefreshCw } from "lucide-react";
 import CustomersTable from "@/app/(dashboard)/customers/components/CustomersTable";
+import CustomerInfo from "@/app/(dashboard)/customers/components/CustomerInfo";
 import CreateCustomerModal from "@/app/(dashboard)/customers/components/modals/CreateCustomerModal";
-import CustomerInfoModal from "@/app/(dashboard)/customers/components/modals/CustomerInfoModal";
 import DeleteCustomerModal from "@/app/(dashboard)/customers/components/modals/DeleteCustomerModal";
 import CustomersHeaderTabs from "@/app/(dashboard)/customers/components/CustomersHeaderTabs";
 import CustomersFilters from "@/app/(dashboard)/customers/components/CustomersFilters";
 import type { Customer, NewCustomerData } from "@/app/(dashboard)/customers/types";
-import { customerCreateCall, customerDeleteCall, customerUpdateCall } from "@/components/networking";
+import { customerDeleteCall } from "@/components/networking";
 
 interface CustomersViewProps {
   customers: Customer[];
@@ -43,53 +43,48 @@ const CustomersView: React.FC<CustomersViewProps> = ({
   });
 
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showInfoModal, setShowInfoModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [customerDetailDefaultTab, setCustomerDetailDefaultTab] = useState<"overview" | "settings">("overview");
   const [lastRefreshed, setLastRefreshed] = useState(new Date().toLocaleString("en-US"));
 
-  const handleCreateCustomer = async (data: NewCustomerData) => {
+  const handleCreateCustomer = async () => {
     if (!accessToken) return;
-
     try {
-      const response = await customerCreateCall(accessToken, data);
-      if (response) {
-        // Refresh the customer list
-        const { allEndUsersCall } = await import("@/components/networking");
-        const listData = await allEndUsersCall(accessToken);
-        if (listData) {
-          setCustomers(Array.isArray(listData) ? listData : []);
-        }
+      const { allEndUsersCall } = await import("@/components/networking");
+      const listData = await allEndUsersCall(accessToken);
+      if (listData) {
+        setCustomers(Array.isArray(listData) ? listData : []);
       }
       setShowCreateModal(false);
     } catch (error) {
-      console.error("Error creating customer:", error);
+      console.error("Error refreshing customers:", error);
     }
   };
 
   const handleEditCustomer = (customer: Customer) => {
+    setSelectedCustomerId(customer.user_id);
     setSelectedCustomer(customer);
-    setShowInfoModal(true);
+    setCustomerDetailDefaultTab("settings");
   };
 
   const handleViewInfo = (customer: Customer) => {
+    setSelectedCustomerId(customer.user_id);
     setSelectedCustomer(customer);
-    setShowInfoModal(true);
+    setCustomerDetailDefaultTab("overview");
   };
 
-  const handleSaveCustomer = async (updated: Customer) => {
-    if (!accessToken) return;
+  const handleCloseCustomerInfo = () => {
+    setSelectedCustomerId(null);
+    setSelectedCustomer(null);
+  };
 
-    try {
-      await customerUpdateCall(accessToken, updated);
-      setCustomers(
-        customers.map((c) => (c.user_id === updated.user_id ? updated : c))
-      );
-      setShowInfoModal(false);
-      setSelectedCustomer(null);
-    } catch (error) {
-      console.error("Error updating customer:", error);
-    }
+  const handleUpdateCustomer = (updated: Customer) => {
+    setCustomers((prev) =>
+      prev.map((c) => (c.user_id === updated.user_id ? updated : c))
+    );
+    setSelectedCustomer(updated);
   };
 
   const handleDeleteClick = (customer: Customer) => {
@@ -142,46 +137,67 @@ const CustomersView: React.FC<CustomersViewProps> = ({
     return matchesUserId && matchesAlias && matchesBlocked && matchesRegion;
   });
 
-  return (
-    <div className="w-full mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Col numColSpan={1} className="flex flex-col gap-2">
-          {(userRole === "Admin" || userRole === "Org Admin") && (
-            <Button className="w-fit" onClick={() => setShowCreateModal(true)}>
-              + Create New Customer
-            </Button>
-          )}
+  const initialCustomerForDetail =
+    selectedCustomerId && selectedCustomer?.user_id === selectedCustomerId
+      ? selectedCustomer
+      : customers.find((c) => c.user_id === selectedCustomerId) ?? null;
 
-          <CustomersHeaderTabs lastRefreshed={lastRefreshed} onRefresh={handleRefresh} userRole={userRole}>
-            <TabPanel>
-              <Text>
-                Click on &ldquo;Customer ID&rdquo; to view customer details and manage settings.
-              </Text>
-              <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-                <Col numColSpan={1}>
-                  <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
-                    <div className="border-b px-6 py-4">
-                      <CustomersFilters
-                        filters={filters}
-                        showFilters={showFilters}
-                        onToggleFilters={setShowFilters}
-                        onChange={handleFilterChange}
-                        onReset={handleFilterReset}
-                      />
-                    </div>
-                    <CustomersTable
-                      customers={filteredCustomers}
-                      userRole={userRole}
-                      onEdit={handleEditCustomer}
-                      onDelete={handleDeleteClick}
-                      onViewInfo={handleViewInfo}
-                      isLoading={isLoading}
-                    />
-                  </Card>
-                </Col>
-              </Grid>
-            </TabPanel>
-          </CustomersHeaderTabs>
+  if (selectedCustomerId) {
+    return (
+      <div className="w-full max-w-full px-4 py-4 md:px-6">
+        <CustomerInfo
+          customerId={selectedCustomerId}
+          initialCustomer={initialCustomerForDetail}
+          onClose={handleCloseCustomerInfo}
+          onUpdate={handleUpdateCustomer}
+          accessToken={accessToken}
+          userRole={userRole}
+          defaultTab={customerDetailDefaultTab}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full max-w-full px-4 py-4 md:px-6">
+      <div className="flex flex-col gap-4">
+        {(userRole === "Admin" || userRole === "Org Admin") && (
+          <Button className="w-fit" onClick={() => setShowCreateModal(true)}>
+            + Create New Customer
+          </Button>
+        )}
+        <Text className="text-sm text-gray-500">
+          Customers are end-users of an AI application (e.g. users of your internal chat UI).
+        </Text>
+
+        <CustomersHeaderTabs lastRefreshed={lastRefreshed} onRefresh={handleRefresh} userRole={userRole}>
+          <TabPanel>
+            <Text className="block mb-3">
+              Click on &ldquo;Customer ID&rdquo; to view customer details and manage settings.
+            </Text>
+            <Card className="w-full overflow-hidden flex flex-col min-h-[400px]">
+              <div className="border-b px-4 sm:px-6 py-4 shrink-0">
+                <CustomersFilters
+                  filters={filters}
+                  showFilters={showFilters}
+                  onToggleFilters={setShowFilters}
+                  onChange={(key, value) => handleFilterChange(key as keyof FilterState, value)}
+                  onReset={handleFilterReset}
+                />
+              </div>
+              <div className="overflow-auto flex-1 min-h-0">
+                <CustomersTable
+                  customers={filteredCustomers}
+                  userRole={userRole}
+                  onEdit={handleEditCustomer}
+                  onDelete={handleDeleteClick}
+                  onViewInfo={handleViewInfo}
+                  isLoading={isLoading}
+                />
+              </div>
+            </Card>
+          </TabPanel>
+        </CustomersHeaderTabs>
 
           {(userRole === "Admin" || userRole === "Org Admin") && (
             <>
@@ -189,15 +205,6 @@ const CustomersView: React.FC<CustomersViewProps> = ({
                 isOpen={showCreateModal}
                 onClose={() => setShowCreateModal(false)}
                 onCreate={handleCreateCustomer}
-              />
-              <CustomerInfoModal
-                isOpen={showInfoModal}
-                onClose={() => {
-                  setShowInfoModal(false);
-                  setSelectedCustomer(null);
-                }}
-                customer={selectedCustomer}
-                onSave={handleSaveCustomer}
               />
               <DeleteCustomerModal
                 isOpen={showDeleteModal}
@@ -211,8 +218,7 @@ const CustomersView: React.FC<CustomersViewProps> = ({
               />
             </>
           )}
-        </Col>
-      </Grid>
+      </div>
     </div>
   );
 };
