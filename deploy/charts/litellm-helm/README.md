@@ -36,6 +36,10 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `serviceAccount.create`     | Whether or not to create a Kubernetes Service Account for this deployment. The default is `false` because LiteLLM has no need to access the Kubernetes API.                                                                                   | `false`                   |
 | `service.type`              | Kubernetes Service type (e.g. `LoadBalancer`, `ClusterIP`, etc.)                                                                                                                                                                              | `ClusterIP`               |
 | `service.port`              | TCP port that the Kubernetes Service will listen on. Also the TCP port within the Pod that the proxy will listen on.                                                                                                                          | `4000`                    |
+| `livenessProbe.*`           | Liveness probe settings for the LiteLLM container (`path`, `periodSeconds`, `timeoutSeconds`, thresholds, and initial delay).                                                                                                                  | See `values.yaml`         |
+| `readinessProbe.*`          | Readiness probe settings for the LiteLLM container (`path`, `periodSeconds`, `timeoutSeconds`, thresholds, and initial delay).                                                                                                                 | See `values.yaml`         |
+| `startupProbe.*`            | Startup probe settings for the LiteLLM container (`path`, `periodSeconds`, `timeoutSeconds`, thresholds, and initial delay).                                                                                                                   | See `values.yaml`         |
+| `resources.*`               | CPU/memory requests and limits for the LiteLLM container.                                                                                                                                                                                       | `{}`                      |
 | `service.loadBalancerClass` | Optional LoadBalancer implementation class (only used when `service.type` is `LoadBalancer`)                                                                                                                                                  | `""`                      |
 | `ingress.labels`            | Additional labels for the Ingress resource                                                                                                                                                                                                    | `{}`                      |
 | `ingress.*`                 | See [values.yaml](./values.yaml) for example settings                                                                                                                                                                                         | N/A                       |
@@ -43,7 +47,6 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `proxyConfigMap.name`       | When `create=false`, name of the existing ConfigMap to mount.                                                                                                                                                                                 | `""`                      |
 | `proxyConfigMap.key`        | Key in the ConfigMap that contains the proxy config file.                                                                                                                                                                                     | `"config.yaml"`           |
 | `proxy_config.*`            | See [values.yaml](./values.yaml) for default settings. Rendered into the ConfigMap’s `config.yaml` only when `proxyConfigMap.create=true`. See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples. | `N/A`                     |
-| `backgroundHealthChecks.*`  | Optional convenience values merged into `proxy_config.general_settings` when `proxyConfigMap.create=true`. Supports `enabled`, `interval`, `concurrency`, and `details`.                                                                     | `{}`                      |
 | `extraContainers[]`         | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.                                                                                                                                                     |
 | `pdb.enabled`               | Enable a PodDisruptionBudget for the LiteLLM proxy Deployment                                                                                                                                                                                 | `false`                   |
 | `pdb.minAvailable`          | Minimum number/percentage of pods that must be available during **voluntary** disruptions (choose **one** of minAvailable/maxUnavailable)                                                                                                     | `null`                    |
@@ -77,16 +80,6 @@ proxyConfigMap:
   key: config.yaml
 
 # proxy_config is ignored in this mode
-```
-
-#### Example enabling background health checks and concurrency:
-
-```yaml
-backgroundHealthChecks:
-  enabled: true
-  interval: 300
-  concurrency: 10
-  details: true
 ```
 
 #### Example `environmentSecrets` Secret

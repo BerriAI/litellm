@@ -1,27 +1,9 @@
 {{- if .Values.proxyConfigMap.create }}
-{{- $proxyConfig := deepCopy (default (dict) .Values.proxy_config) }}
-{{- $backgroundHealthChecks := default (dict) .Values.backgroundHealthChecks }}
-{{- if or (hasKey $backgroundHealthChecks "enabled") (hasKey $backgroundHealthChecks "interval") (hasKey $backgroundHealthChecks "concurrency") (hasKey $backgroundHealthChecks "details") }}
-{{- $generalSettings := default (dict) (get $proxyConfig "general_settings") }}
-{{- if hasKey $backgroundHealthChecks "enabled" }}
-{{- $_ := set $generalSettings "background_health_checks" $backgroundHealthChecks.enabled }}
-{{- end }}
-{{- if hasKey $backgroundHealthChecks "interval" }}
-{{- $_ := set $generalSettings "health_check_interval" $backgroundHealthChecks.interval }}
-{{- end }}
-{{- if hasKey $backgroundHealthChecks "concurrency" }}
-{{- $_ := set $generalSettings "health_check_concurrency" $backgroundHealthChecks.concurrency }}
-{{- end }}
-{{- if hasKey $backgroundHealthChecks "details" }}
-{{- $_ := set $generalSettings "health_check_details" $backgroundHealthChecks.details }}
-{{- end }}
-{{- $_ := set $proxyConfig "general_settings" $generalSettings }}
-{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "litellm.fullname" . }}-config
 data:
   config.yaml: |
-{{ $proxyConfig | toYaml | indent 6 }}
+{{ .Values.proxy_config | toYaml | indent 6 }}
 {{- end }}
