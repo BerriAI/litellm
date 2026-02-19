@@ -1916,6 +1916,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default={},
         description="Key-value pairs of headers to be forwarded with the request. You can set any key value pair here and it will be forwarded to your target endpoint",
     )
+    default_query_params: dict = Field(
+        default={},
+        description="Key-value pairs of default query parameters to be sent with every request to this endpoint. These can be overridden by client-provided query parameters. For example: {'key': 'default_value', 'api_version': '2023-01'}",
+    )
     include_subpath: bool = Field(
         default=False,
         description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
@@ -1935,6 +1939,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
     is_from_config: bool = Field(
         default=False,
         description="True if this endpoint is defined in the config file, False if from DB. Config-defined endpoints cannot be edited via the UI.",
+    )
+    methods: Optional[List[str]] = Field(
+        default=None,
+        description="List of HTTP methods this endpoint handles (e.g., ['GET', 'POST']). If None or empty, all methods (GET, POST, PUT, DELETE, PATCH) are supported for backward compatibility. This allows the same path to have different targets for different HTTP methods.",
     )
 
 
