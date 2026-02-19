@@ -573,7 +573,7 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
     "/user/info",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
-    # response_model=UserInfoResponse,
+    response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
 async def user_info(

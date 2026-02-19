@@ -222,6 +222,31 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
           </div>
         )}
 
+        {/* Discovered Competitors */}
+        {template?.discoveredCompetitors?.length > 0 && (
+          <>
+            <Divider />
+            <div className="p-3 bg-purple-50 rounded-lg border border-purple-100">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-lg">✨</span>
+                <span className="font-medium text-purple-900 text-sm">
+                  AI-Discovered Competitors ({template.discoveredCompetitors.length})
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {template.discoveredCompetitors.map((name: string) => (
+                  <Tag key={name} color="purple" className="text-xs">
+                    {name}
+                  </Tag>
+                ))}
+              </div>
+              <p className="text-xs text-purple-600 mt-2">
+                These competitor names will be automatically blocked by the competitor-name-blocker guardrail.
+              </p>
+            </div>
+          </>
+        )}
+
         <Divider />
 
         {/* Selected Summary */}
