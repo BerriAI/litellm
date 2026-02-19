@@ -191,6 +191,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "user",
             "web_search_options",
             "speed",
+            "context_management",
         ]
 
         if "claude-3-7-sonnet" in model or supports_reasoning(
@@ -825,6 +826,62 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return hosted_web_search_tool
 
+    @staticmethod
+    def map_openai_context_management_to_anthropic(
+        context_management: Union[List[Dict[str, Any]], Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        OpenAI format: [{"type": "compaction", "compact_threshold": 200000}]
+        Anthropic format: {
+            "edits": [
+                {
+                    "type": "compact_20260112",
+                    "trigger": {"type": "input_tokens", "value": 150000}
+                }
+            ]
+        }
+
+        Args:
+            context_management: OpenAI or Anthropic context_management parameter
+
+        Returns:
+            Anthropic-formatted context_management dict, or None if invalid
+        """
+        # If already in Anthropic format (dict with 'edits'), pass through
+        if isinstance(context_management, dict) and "edits" in context_management:
+            return context_management
+
+        # If in OpenAI format (list), transform to Anthropic format
+        if isinstance(context_management, list):
+            anthropic_edits = []
+            for entry in context_management:
+                if not isinstance(entry, dict):
+                    continue
+
+                entry_type = entry.get("type")
+                if entry_type == "compaction":
+                    anthropic_edit: Dict[str, Any] = {
+                        "type": "compact_20260112"
+                    }
+                    compact_threshold = entry.get("compact_threshold")
+                    # Rewrite to 'trigger' with correct nesting if threshold exists
+                    if compact_threshold is not None and isinstance(compact_threshold, (int, float)):
+                        anthropic_edit["trigger"] = {
+                            "type": "input_tokens",
+                            "value": int(compact_threshold)
+                        }
+                    # Map any other keys by passthrough except handled ones
+                    for k in entry:
+                        if k not in {"type", "compact_threshold"}:  # only passthrough other keys
+                            anthropic_edit[k] = entry[k]
+
+                    anthropic_edits.append(anthropic_edit)
+
+            if anthropic_edits:
+                return {"edits": anthropic_edits}
+
+        return None
+
     def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: dict,
@@ -931,9 +988,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             elif param == "extra_headers":
                 optional_params["extra_headers"] = value
-            elif param == "context_management" and isinstance(value, dict):
-                # Pass through Anthropic-specific context_management parameter
-                optional_params["context_management"] = value
+            elif param == "context_management":
+                # Supports both OpenAI list format and Anthropic dict format
+                if isinstance(value, (list, dict)):
+                    anthropic_context_management = self.map_openai_context_management_to_anthropic(value)
+                    if anthropic_context_management is not None:
+                        optional_params["context_management"] = anthropic_context_management
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1094,32 +1154,39 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
 
     def _ensure_context_management_beta_header(
-        self, headers: dict, context_management: dict
+        self, headers: dict, context_management: object
     ) -> None:
         """
         Add appropriate beta headers based on context_management edits.
-        - If any edit has type "compact_20260112", add compact-2026-01-12 header
-        - For all other edits, add context-management-2025-06-27 header
         """
-        edits = context_management.get("edits", [])
-        
+        edits = []
+        # If anthropic format (dict with "edits" key)
+        if isinstance(context_management, dict) and "edits" in context_management:
+            edits = context_management.get("edits", [])
+        # If OpenAI format: list of context management entries
+        elif isinstance(context_management, list):
+            edits = context_management
+        # Defensive: ignore/fallback if context_management not valid
+        else:
+            return
+
         has_compact = False
         has_other = False
-        
+
         for edit in edits:
             edit_type = edit.get("type", "")
-            if edit_type == "compact_20260112":
+            if edit_type == "compact_20260112" or edit_type == "compaction":
                 has_compact = True
             else:
                 has_other = True
-        
-        # Add compact header if any compact edits exist
+
+        # Add compact header if any compact edits/entries exist
         if has_compact:
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
             )
-        
-        # Add context management header if any other edits exist
+
+        # Add context management header if any other edits/entries exist
         if has_other:
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
