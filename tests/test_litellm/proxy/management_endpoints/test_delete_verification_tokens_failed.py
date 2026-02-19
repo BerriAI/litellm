@@ -208,3 +208,50 @@ async def test_delete_tokens_non_admin_token_not_in_db_returns_failed_tokens(
         "token-2 was not found in the DB and must appear in failed_tokens"
     )
     assert "hashed-token-1" in result["deleted_keys"]
+
+
+# ---------------------------------------------------------------------------
+# Test 4 – admin, DB bulk-delete returns fewer tokens → failed_tokens populated
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_delete_tokens_admin_partial_db_failure_returns_failed_tokens(
+    monkeypatch,
+):
+    """
+    PROXY_ADMIN requests deletion of two tokens; the DB bulk-delete only
+    removes one (e.g. the other was concurrently deleted).  The unremoved
+    token must appear in `failed_tokens` — previously it would be silently
+    swallowed since the admin path never compared returned vs. requested counts.
+    """
+    key1 = _make_token("hashed-token-1")
+    key2 = _make_token("hashed-token-2")
+    # DB reports only token-1 as deleted
+    mock_prisma = _mock_prisma(
+        keys=[key1, key2],
+        deleted_tokens=["hashed-token-1"],
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.delete_cache = MagicMock()
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: token,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token",
+        lambda token: token,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    result, _ = await delete_verification_tokens(
+        tokens=["hashed-token-1", "hashed-token-2"],
+        user_api_key_cache=mock_cache,
+        user_api_key_dict=_admin_user(),
+    )
+
+    assert "failed_tokens" in result
+    assert "hashed-token-2" in result["failed_tokens"], (
+        "token-2 was not deleted by the DB and must appear in failed_tokens for admins too"
+    )
+    assert "hashed-token-1" in result["deleted_keys"]
