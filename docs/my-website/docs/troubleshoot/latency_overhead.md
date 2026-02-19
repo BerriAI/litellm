@@ -4,11 +4,23 @@ Use this guide when you see unexpected latency overhead between LiteLLM proxy an
 
 ## Quick Checklist
 
-1. **Is DEBUG logging enabled?** This is the #1 cause of latency with large payloads.
-2. **Are you sending large base64 payloads?** (images, PDFs) — see [Large Payload Overhead](#large-payload-overhead).
-3. **Enable detailed timing headers** to pinpoint where time is spent.
+1. **Collect the `x-litellm-overhead-duration-ms` response header** — this tells you LiteLLM's total overhead on every request. Start here.
+2. **Is DEBUG logging enabled?** This is the #1 cause of latency with large payloads.
+3. **Are you sending large base64 payloads?** (images, PDFs) — see [Large Payload Overhead](#large-payload-overhead).
+4. **Enable detailed timing headers** to pinpoint where time is spent.
 
 ## Diagnostic Headers
+
+### `x-litellm-overhead-duration-ms` (always on)
+
+Every response from LiteLLM includes this header. It shows the total latency overhead in milliseconds added by LiteLLM proxy (i.e. total response time minus the LLM API call time). Collect this on every request to understand your baseline overhead.
+
+```bash
+curl -s -D - http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}' \
+  2>&1 | grep x-litellm-overhead-duration-ms
+```
 
 ### `x-litellm-callback-duration-ms` (always on)
 
