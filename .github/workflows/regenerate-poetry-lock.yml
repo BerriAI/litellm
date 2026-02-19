@@ -54,20 +54,23 @@ jobs:
           git add poetry.lock
           git commit -m "chore: regenerate poetry.lock to match pyproject.toml"
           git push -f origin "$BRANCH"
+
+          # Write body to a temp file to avoid heredoc/quoting issues in YAML
+          cat > /tmp/pr-body.md << 'BODY'
+          Automated regeneration of `poetry.lock` after `pyproject.toml` was updated on `main`.
+
+          Fixes the recurring CI failure:
+          ```
+          pyproject.toml changed significantly since poetry.lock was last generated.
+          Run `poetry lock` to fix the lock file.
+          ```
+
+          Regenerated with `poetry lock --no-update` (existing package versions are preserved; only the lock file metadata is updated to match the new constraints).
+          BODY
+
           gh pr create \
             --title "chore: regenerate poetry.lock to match pyproject.toml" \
-            --body "$(cat <<'EOF'
-Automated regeneration of \`poetry.lock\` after \`pyproject.toml\` was updated on \`main\`.
-
-Fixes the recurring CI failure:
-\`\`\`
-pyproject.toml changed significantly since poetry.lock was last generated.
-Run \`poetry lock\` to fix the lock file.
-\`\`\`
-
-Regenerated with \`poetry lock --no-update\` (existing package versions are preserved; only the lock file metadata is updated to match the new constraints).
-EOF
-)" \
+            --body-file /tmp/pr-body.md \
             --head "$BRANCH" \
             --base main
         env:
