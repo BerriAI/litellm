@@ -1,0 +1,128 @@
+# SQL Injection Detection — Keyword-Based Policy Template
+# Detects SQL injection payloads embedded in user prompts.
+# Prevents LLM-connected tools/agents from generating malicious SQL.
+category_name: "sql_injection"
+description: "Detects SQL injection patterns in prompts to protect LLM-connected databases"
+default_action: "BLOCK"
+
+# IDENTIFIER WORDS — SQL verbs/clauses that signal a query manipulation attempt
+identifier_words:
+  - "select"
+  - "insert"
+  - "update"
+  - "delete"
+  - "drop"
+  - "alter"
+  - "create"
+  - "truncate"
+  - "exec"
+  - "execute"
+  - "union"
+  - "grant"
+  - "revoke"
+  - "shutdown"
+
+# ADDITIONAL BLOCK WORDS — when combined with identifier words, triggers blocking
+additional_block_words:
+  # SQL injection operators and syntax
+  - "or 1=1"
+  - "1=1"
+  - "information_schema"
+  - "sys.tables"
+  - "sysobjects"
+  - "pg_catalog"
+  - "pg_tables"
+
+  # Destructive targets
+  - "drop table"
+  - "drop database"
+  - "drop schema"
+  - "truncate table"
+  - "delete from"
+  - "alter table"
+
+  # Data exfiltration
+  - "union select"
+  - "union all select"
+  - "into outfile"
+  - "into dumpfile"
+  - "load_file"
+
+  # Privilege escalation
+  - "grant all"
+  - "grant select"
+  - "grant insert"
+  - "grant delete"
+
+# ALWAYS BLOCK — explicit SQL injection payloads (blocked regardless of context)
+# NOTE: avoid regex-special characters like ( ) [ ] { } in keywords,
+# because the content filter matches keywords via regex internally.
+always_block_keywords:
+  - keyword: "' or 1=1 --"
+    severity: "high"
+  - keyword: "' or '1'='1"
+    severity: "high"
+  - keyword: "'; drop table"
+    severity: "high"
+  - keyword: "'; drop database"
+    severity: "high"
+  - keyword: "union select null"
+    severity: "high"
+  - keyword: "union all select null"
+    severity: "high"
+  - keyword: "' or ''='"
+    severity: "high"
+  - keyword: "'; shutdown --"
+    severity: "high"
+  - keyword: "'; exec xp_cmdshell"
+    severity: "high"
+  - keyword: "'; exec sp_"
+    severity: "high"
+  - keyword: "into outfile"
+    severity: "high"
+  - keyword: "into dumpfile"
+    severity: "high"
+  - keyword: "load_file"
+    severity: "high"
+  - keyword: "information_schema.tables"
+    severity: "high"
+  - keyword: "information_schema.columns"
+    severity: "high"
+  - keyword: "' union select"
+    severity: "high"
+  - keyword: "order by 1--"
+    severity: "high"
+  - keyword: "having 1=1"
+    severity: "high"
+  - keyword: "group by 1--"
+    severity: "high"
+  - keyword: "waitfor delay"
+    severity: "medium"
+  - keyword: "benchmark"
+    severity: "medium"
+  - keyword: "xp_cmdshell"
+    severity: "high"
+  - keyword: "sp_addlogin"
+    severity: "high"
+  - keyword: "sp_addsrvrolemember"
+    severity: "high"
+
+# EXCEPTIONS — legitimate use cases
+exceptions:
+  - "how to prevent"
+  - "how to protect"
+  - "how to defend"
+  - "how do companies defend"
+  - "what is sql injection"
+  - "explain sql injection"
+  - "research on"
+  - "study on"
+  - "academic"
+  - "security research"
+  - "penetration testing"
+  - "security audit"
+  - "best practices"
+  - "how to validate"
+  - "how to sanitize"
+  - "parameterized queries"
+  - "prepared statements"
