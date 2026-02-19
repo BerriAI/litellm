@@ -1,7 +1,7 @@
 ---
 slug: gemini_3_1_pro
 title: "DAY 0 Support: Gemini 3.1 Pro on LiteLLM"
-date: 2025-12-17T10:00:00
+date: 2026-02-19T10:00:00
 authors:
   - name: Sameer Kankute
     title: SWE @ LiteLLM (LLM Translation)
