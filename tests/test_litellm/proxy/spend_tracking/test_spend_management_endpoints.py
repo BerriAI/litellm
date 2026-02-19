@@ -287,6 +287,18 @@ ignored_keys = [
     "metadata.additional_usage_values.speed",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.user_api_key",
+    "metadata.user_api_key_alias",
+    "metadata.user_api_key_team_id",
+    "metadata.user_api_key_project_id",
+    "metadata.user_api_key_org_id",
+    "metadata.user_api_key_user_id",
+    "metadata.user_api_key_team_alias",
+    "metadata.spend_logs_metadata",
+    "metadata.requester_ip_address",
+    "metadata.status",
+    "metadata.proxy_server_request",
+    "metadata.error_information",
 ]
 
 MODEL_LIST = [
