@@ -3133,7 +3133,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key( # noqa: PLR0915
+async def _rotate_master_key(  # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3346,6 +3346,8 @@ async def _insert_deprecated_key(
             "Failed to insert deprecated key for grace period: %s",
             deprecated_err,
         )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -4802,6 +4804,19 @@ async def test_key_logging(
         )
 
 
+def _is_invalid_key_alias(alias: Optional[str]) -> bool:
+    """
+    Return True if key_alias is invalid (would cause rotation to create new secrets instead of updating in place).
+
+    Invalid: "-", whitespace-only, or empty string.
+    Valid: None (no alias), or a non-empty non-whitespace string that is not "-".
+    """
+    if alias is None:
+        return False
+    s = alias.strip()
+    return s == "" or s == "-"
+
+
 async def _enforce_unique_key_alias(
     key_alias: Optional[str],
     prisma_client: Any,
@@ -4819,6 +4834,13 @@ async def _enforce_unique_key_alias(
     Raises:
         ProxyException: If key alias already exists on a different key
     """
+    if key_alias is not None and _is_invalid_key_alias(key_alias):
+        raise ProxyException(
+            message="key_alias cannot be '-' or whitespace-only. Use a valid alias or omit it.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
     if key_alias is not None and prisma_client is not None:
         where_clause: dict[str, Any] = {"key_alias": key_alias}
         if existing_key_token:

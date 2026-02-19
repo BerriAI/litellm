@@ -150,11 +150,16 @@ class KeyManagementEventHooks:
                     existing_key_row.key_alias
                     or f"virtual-key-{existing_key_row.token}"
                 )
-                new_secret_name = (
-                    response.key_alias
-                    or data.key_alias
-                    or f"virtual-key-{response.token_id}"
-                )
+                resolved_alias = response.key_alias or data.key_alias
+                # Defensive: invalid alias (e.g. "-", empty) would create new secret each rotation.
+                # Use same name as current so we update in place and avoid orphan secrets.
+                if resolved_alias is not None and resolved_alias.strip() not in (
+                    "",
+                    "-",
+                ):
+                    new_secret_name = resolved_alias
+                else:
+                    new_secret_name = initial_secret_name
                 verbose_proxy_logger.info(
                     "Updating secret in secret manager: secret_name=%s",
                     new_secret_name,
