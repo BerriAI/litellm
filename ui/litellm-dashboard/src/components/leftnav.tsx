@@ -9,6 +9,7 @@ import {
   BgColorsOutlined,
   BlockOutlined,
   BookOutlined,
+  ContactsOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -171,6 +172,17 @@ const menuGroups: MenuGroup[] = [
         page: "teams",
         label: "Teams",
         icon: <TeamOutlined />,
+      },
+      {
+        key: "customers",
+        page: "customers",
+        label: (
+          <span className="flex items-center gap-2">
+            Customers <NewBadge />
+          </span>
+        ),
+        icon: <ContactsOutlined />,
+        roles: all_admin_roles,
       },
       {
         key: "organizations",
