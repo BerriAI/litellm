@@ -721,7 +721,11 @@ async def _stream_competitor_events(
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
             return
 
+    yield f"data: {json.dumps({'type': 'status', 'message': f'Generating alternate spellings for {len(competitors)} competitors...'})}\n\n"
     variations_map = await _generate_competitor_variations(competitors, model=model)
+
+    total_variations = sum(len(v) for v in variations_map.values())
+    yield f"data: {json.dumps({'type': 'status', 'message': f'Building guardrail definitions with {total_variations} variations...'})}\n\n"
     enriched_definitions = _build_competitor_guardrail_definitions(
         template.get("guardrailDefinitions", []),
         competitors,
