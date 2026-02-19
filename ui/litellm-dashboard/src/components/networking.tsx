@@ -5593,7 +5593,8 @@ export const enrichPolicyTemplate = async (
 export const suggestPolicyTemplates = async (
   accessToken: string,
   attackExamples: string[],
-  description: string
+  description: string,
+  model: string
 ) => {
   try {
     const url = proxyBaseUrl
@@ -5608,6 +5609,7 @@ export const suggestPolicyTemplates = async (
       body: JSON.stringify({
         attack_examples: attackExamples.filter((e) => e.trim()),
         description,
+        model,
       }),
     });
 
