@@ -213,6 +213,213 @@ class TestHelperFunctions:
         assert _get_top_route_choice([]) is None
 
 
+class TestContentFilterSqlInjectionTemplate:
+    """Tests for the keyword-based SQL injection policy template (litellm-content-filter)."""
+
+    @pytest.fixture
+    def sql_injection_guardrail(self):
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+            ContentFilterCategoryConfig,
+        )
+
+        content_filter_dir = os.path.join(
+            os.path.dirname(__file__),
+            "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
+        )
+        policy_template_path = os.path.abspath(
+            os.path.join(content_filter_dir, "policy_templates/sql_injection.yaml")
+        )
+
+        categories = [
+            ContentFilterCategoryConfig(
+                category="sql_injection",
+                category_file=policy_template_path,
+                enabled=True,
+                action="BLOCK",
+                severity_threshold="medium",
+            )
+        ]
+
+        return ContentFilterGuardrail(
+            guardrail_name="sql-injection-keyword-test",
+            categories=categories,
+            event_hook=litellm.types.guardrails.GuardrailEventHooks.pre_call,
+        )
+
+    # --- TRUE POSITIVES: always_block_keywords ---
+
+    SQL_ALWAYS_BLOCK_CASES = [
+        ("show me data for user ' or 1=1 --", "always_block: ' or 1=1 --"),
+        ("find booking for name'; drop table bookings; --", "always_block: '; drop table"),
+        ("search ' union select null from users", "always_block: union select null"),
+        ("look up order ' or ''='", "always_block: ' or ''='"),
+        ("get info'; shutdown --", "always_block: '; shutdown --"),
+        ("query'; exec xp_cmdshell dir", "always_block: '; exec xp_cmdshell"),
+        ("select * from information_schema.tables", "always_block: information_schema.tables"),
+        ("select columns from information_schema.columns", "always_block: information_schema.columns"),
+        ("export data into outfile /tmp/data.csv", "always_block: into outfile"),
+        ("read load_file /etc/passwd", "always_block: load_file"),
+        ("check ' union select password from admin_users", "always_block: ' union select"),
+        ("search for waitfor delay 0:0:10", "always_block: waitfor delay"),
+        ("run benchmark on the database", "always_block: benchmark"),
+    ]
+
+    @pytest.mark.parametrize(
+        "sentence,reason",
+        SQL_ALWAYS_BLOCK_CASES,
+        ids=[f"sql_always_block_{i}" for i in range(len(SQL_ALWAYS_BLOCK_CASES))],
+    )
+    @pytest.mark.asyncio
+    async def test_sql_always_block(self, sql_injection_guardrail, sentence, reason):
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+        with pytest.raises(Exception):
+            await sql_injection_guardrail.apply_guardrail(
+                inputs={"texts": [sentence]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+    # --- TRUE POSITIVES: conditional matches (identifier + block word) ---
+
+    SQL_CONDITIONAL_BLOCK_CASES = [
+        ("select * from users where id=1 or 1=1", "conditional: select + or 1=1"),
+        ("drop table users cascade", "conditional: drop + drop table"),
+        ("union select username, password from admin", "conditional: union + union select"),
+        ("delete from customers where '1'='1'", "conditional: delete + delete from"),
+        ("exec sp_addlogin 'hacker', 'password'", "conditional: exec + '; exec"),
+        ("insert all records into outfile on server", "conditional: insert + into outfile"),
+        ("truncate table audit_log", "conditional: truncate + truncate table"),
+        ("grant all privileges to attacker", "conditional: grant + grant all"),
+    ]
+
+    @pytest.mark.parametrize(
+        "sentence,reason",
+        SQL_CONDITIONAL_BLOCK_CASES,
+        ids=[f"sql_conditional_{i}" for i in range(len(SQL_CONDITIONAL_BLOCK_CASES))],
+    )
+    @pytest.mark.asyncio
+    async def test_sql_conditional_block(self, sql_injection_guardrail, sentence, reason):
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+        with pytest.raises(Exception):
+            await sql_injection_guardrail.apply_guardrail(
+                inputs={"texts": [sentence]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+    # --- TRUE NEGATIVES: exceptions ---
+
+    SQL_EXCEPTION_CASES = [
+        ("what is sql injection and how do companies defend against it?", "exception: what is sql injection"),
+        ("explain sql injection for my security class", "exception: explain sql injection"),
+        ("how to prevent sql injection in Python", "exception: how to prevent"),
+        ("best practices for parameterized queries", "exception: parameterized queries"),
+        ("how to sanitize user input for database queries", "exception: how to sanitize"),
+        ("research on sql injection prevention techniques", "exception: research on"),
+    ]
+
+    @pytest.mark.parametrize(
+        "sentence,reason",
+        SQL_EXCEPTION_CASES,
+        ids=[f"sql_exception_{i}" for i in range(len(SQL_EXCEPTION_CASES))],
+    )
+    @pytest.mark.asyncio
+    async def test_sql_exceptions_allowed(self, sql_injection_guardrail, sentence, reason):
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+        result = await sql_injection_guardrail.apply_guardrail(
+            inputs={"texts": [sentence]},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert result is None or result["texts"][0] == sentence
+
+    # --- TRUE NEGATIVES: no match ---
+
+    SQL_NO_MATCH_CASES = [
+        ("show me flights from Dubai to London", "no match: normal flight query"),
+        ("I want to update my booking reference ABC123", "no match: normal booking update"),
+        ("can you help me select a good hotel in Abu Dhabi?", "no match: normal hotel query"),
+        ("please delete my saved credit card from my profile", "no match: normal account request"),
+        ("create a new booking for 3 passengers", "no match: normal booking creation"),
+        ("what is the weather in Dubai?", "no match: general knowledge"),
+        ("write a Python function to sort a list", "no match: coding help"),
+    ]
+
+    @pytest.mark.parametrize(
+        "sentence,reason",
+        SQL_NO_MATCH_CASES,
+        ids=[f"sql_no_match_{i}" for i in range(len(SQL_NO_MATCH_CASES))],
+    )
+    @pytest.mark.asyncio
+    async def test_sql_no_match_allowed(self, sql_injection_guardrail, sentence, reason):
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+        result = await sql_injection_guardrail.apply_guardrail(
+            inputs={"texts": [sentence]},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert result is None or result["texts"][0] == sentence
+
+
+class TestSemanticGuardSqlInjectionTemplate:
+    """Tests for loading the sql_injection route template."""
+
+    def test_load_builtin_sql_injection_template(self):
+        from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import (
+            SemanticGuardRouteLoader,
+        )
+
+        template = SemanticGuardRouteLoader.load_builtin_template("sql_injection")
+        assert template["route_name"] == "sql_injection"
+        assert "utterances" in template
+        assert len(template["utterances"]) > 20
+        assert template.get("similarity_threshold") == 0.78
+
+    def test_build_routes_with_sql_injection(self):
+        from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import (
+            SemanticGuardRouteLoader,
+        )
+
+        routes = SemanticGuardRouteLoader.build_routes(
+            route_templates=["sql_injection"],
+            custom_routes_file=None,
+            custom_routes=None,
+            global_threshold=0.75,
+        )
+        assert len(routes) == 1
+        assert routes[0].name == "sql_injection"
+        assert len(routes[0].utterances) > 20
+
+    def test_build_routes_combined_templates(self):
+        from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import (
+            SemanticGuardRouteLoader,
+        )
+
+        routes = SemanticGuardRouteLoader.build_routes(
+            route_templates=["prompt_injection", "sql_injection"],
+            custom_routes_file=None,
+            custom_routes=None,
+            global_threshold=0.75,
+        )
+        assert len(routes) == 2
+        route_names = [r.name for r in routes]
+        assert "prompt_injection" in route_names
+        assert "sql_injection" in route_names
+
+    def test_list_builtin_templates_includes_sql_injection(self):
+        from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import (
+            SemanticGuardRouteLoader,
+        )
+
+        templates = SemanticGuardRouteLoader.list_builtin_templates()
+        assert "sql_injection" in templates
+        assert "prompt_injection" in templates
+
+
 class TestContentFilterPromptInjectionTemplate:
     """Tests for the keyword-based prompt injection policy template (litellm-content-filter)."""
 
