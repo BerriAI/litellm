@@ -215,11 +215,11 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             ]
         if response_api_optional_params.get("frequency_penalty") is not None:
             mapped_params["frequency_penalty"] = response_api_optional_params[
-                "frequency_penalty"
+                "frequency_penalty"  # type: ignore[typeddict-item]
             ]
         if response_api_optional_params.get("presence_penalty") is not None:
             mapped_params["presence_penalty"] = response_api_optional_params[
-                "presence_penalty"
+                "presence_penalty"  # type: ignore[typeddict-item]
             ]
         if response_api_optional_params.get("service_tier"):
             mapped_params["service_tier"] = response_api_optional_params["service_tier"]
