@@ -640,3 +640,37 @@ def _build_competitor_guardrail_definitions(
             defn["litellm_params"]["blocked_words"] = blocked_words_map[guardrail_name]
 
     return enriched
+
+
+class SuggestTemplatesRequest(BaseModel):
+    attack_examples: List[str] = Field(default_factory=list)
+    description: str = Field(default="")
+
+
+@router.post(
+    "/policy/templates/suggest",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def suggest_policy_templates(
+    data: SuggestTemplatesRequest,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> dict:
+    """
+    Use AI to suggest policy templates based on attack examples and descriptions.
+
+    Calls an LLM with tool calling to match user requirements to available templates.
+    """
+    from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import (
+        AiPolicySuggester,
+    )
+
+    templates = _load_policy_templates_from_local_backup()
+    suggester = AiPolicySuggester()
+    return await suggester.suggest(
+        templates=templates,
+        attack_examples=data.attack_examples,
+        description=data.description,
+    )
