@@ -1999,22 +1999,27 @@ class TestPriceDataReloadIntegration:
             "gpt-4": {"input_cost_per_token": 0.03, "output_cost_per_token": 0.06},
         }
 
-        with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-        ) as mock_get_map:
-            mock_get_map.return_value = mock_cost_map
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with patch(
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+            ) as mock_get_map:
+                mock_get_map.return_value = mock_cost_map
 
-            # Mock the database connection
-            with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+                # Mock the database connection
+                with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
-                # Test reload endpoint
-                response = client_with_auth.post("/reload/model_cost_map")
-                assert response.status_code == 200
+                    # Test reload endpoint
+                    response = client_with_auth.post("/reload/model_cost_map")
+                    assert response.status_code == 200
 
-                # Test get endpoint
-                response = client_with_auth.get("/public/litellm_model_cost_map")
-                assert response.status_code == 200
+                    # Test get endpoint
+                    response = client_with_auth.get("/public/litellm_model_cost_map")
+                    assert response.status_code == 200
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
 
     def test_distributed_reload_check_function(self):
         """Test the _check_and_reload_model_cost_map function"""
@@ -2054,23 +2059,28 @@ class TestPriceDataReloadIntegration:
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
-        with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-        ) as mock_get_map:
-            mock_get_map.return_value = {
-                "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-            }
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with patch(
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+            ) as mock_get_map:
+                mock_get_map.return_value = {
+                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
+                }
 
-            # Should reload due to force flag
-            asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+                # Should reload due to force flag
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
-            # Verify force_reload was reset to False
-            mock_prisma.db.litellm_config.upsert.assert_called()
-            call_args = mock_prisma.db.litellm_config.upsert.call_args
-            # The param_value is now a JSON string, so we need to parse it
-            param_value_json = call_args[1]["data"]["update"]["param_value"]
-            param_value_dict = json.loads(param_value_json)
-            assert param_value_dict["force_reload"] == False
+                # Verify force_reload was reset to False
+                mock_prisma.db.litellm_config.upsert.assert_called()
+                call_args = mock_prisma.db.litellm_config.upsert.call_args
+                # The param_value is now a JSON string, so we need to parse it
+                param_value_json = call_args[1]["data"]["update"]["param_value"]
+                param_value_dict = json.loads(param_value_json)
+                assert param_value_dict["force_reload"] == False
+        finally:
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
 
     def test_config_file_parsing(self):
         """Test parsing of config file with reload settings"""
