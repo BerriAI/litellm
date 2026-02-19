@@ -13,6 +13,7 @@ import PolicyTestPanel from "./policy_test_panel";
 import PolicyTemplates from "./policy_templates";
 import GuardrailSelectionModal from "./guardrail_selection_modal";
 import TemplateParameterModal from "./template_parameter_modal";
+import AiSuggestionModal from "./ai_suggestion_modal";
 import {
   getPoliciesList,
   deletePolicyCall,
@@ -63,6 +64,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [isParameterModalOpen, setIsParameterModalOpen] = useState(false);
   const [isEnrichingTemplate, setIsEnrichingTemplate] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<any>(null);
+  const [isAiSuggestionModalOpen, setIsAiSuggestionModalOpen] = useState(false);
+  const [loadedTemplates, setLoadedTemplates] = useState<any[]>([]);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -369,7 +372,12 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               closable
               className="mb-6"
             />
-            <PolicyTemplates onUseTemplate={handleUseTemplate} accessToken={accessToken} />
+            <PolicyTemplates
+              onUseTemplate={handleUseTemplate}
+              onOpenAiSuggestion={() => setIsAiSuggestionModalOpen(true)}
+              onTemplatesLoaded={setLoadedTemplates}
+              accessToken={accessToken}
+            />
           </TabPanel>
 
           <TabPanel>
@@ -568,6 +576,19 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      <AiSuggestionModal
+        visible={isAiSuggestionModalOpen}
+        onSelectTemplates={(selectedTemplates) => {
+          setIsAiSuggestionModalOpen(false);
+          if (selectedTemplates.length > 0) {
+            handleUseTemplate(selectedTemplates[0]);
+          }
+        }}
+        onCancel={() => setIsAiSuggestionModalOpen(false)}
+        accessToken={accessToken}
+        allTemplates={loadedTemplates}
+      />
 
       {showFlowBuilder && (
         <FlowBuilderPage
