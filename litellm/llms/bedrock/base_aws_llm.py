@@ -384,6 +384,14 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="moonshot"
             )
+        elif "nova-2/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="nova-2"
+            )
+        elif "nova/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="nova"
+            )
         return model_id
 
     @staticmethod

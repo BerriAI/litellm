@@ -100,7 +100,11 @@ jobs:
 
       - name: Setup litellm-enterprise
         run: |
-          cd enterprise && poetry run pip install -e . && cd ..
+          poetry run pip install --force-reinstall --no-deps -e enterprise/
+
+      - name: Generate Prisma client
+        run: |
+          poetry run prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests - ${{ matrix.test-group.name }}
         run: |

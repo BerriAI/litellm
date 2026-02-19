@@ -5438,6 +5438,68 @@ export const getPoliciesList = async (accessToken: string) => {
   }
 };
 
+export interface TestPoliciesAndGuardrailsRequest {
+  policy_names?: string[] | null;
+  guardrail_names?: string[] | null;
+  inputs: { texts?: string[]; images?: string[]; [key: string]: unknown };
+  request_data?: Record<string, unknown>;
+  input_type?: "request" | "response";
+}
+
+export interface GuardrailErrorEntry {
+  guardrail_name: string;
+  message: string;
+}
+
+export interface TestPoliciesAndGuardrailsResponse {
+  inputs: Record<string, unknown>;
+  guardrail_errors: GuardrailErrorEntry[];
+}
+
+export const testPoliciesAndGuardrails = async (
+  accessToken: string,
+  body: TestPoliciesAndGuardrailsRequest
+): Promise<TestPoliciesAndGuardrailsResponse> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/utils/test_policies_and_guardrails`
+      : `/utils/test_policies_and_guardrails`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        policy_names: body.policy_names ?? null,
+        guardrail_names: body.guardrail_names ?? null,
+        inputs: body.inputs,
+        request_data: body.request_data ?? {},
+        input_type: body.input_type ?? "request",
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      let errorMessage = "Failed to test policies and guardrails";
+      try {
+        const errorJson = JSON.parse(errorData);
+        if (errorJson.detail) errorMessage = typeof errorJson.detail === "string" ? errorJson.detail : JSON.stringify(errorJson.detail);
+        else if (errorJson.message) errorMessage = errorJson.message;
+      } catch {
+        errorMessage = errorData || errorMessage;
+      }
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to test policies and guardrails:", error);
+    throw error;
+  }
+};
+
 export const getPolicyInfoWithGuardrails = async (accessToken: string, policyName: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/info/${policyName}` : `/policy/info/${policyName}`;
@@ -5486,6 +5548,39 @@ export const getPolicyTemplates = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to get policy templates:", error);
+    throw error;
+  }
+};
+
+export const enrichPolicyTemplate = async (
+  accessToken: string,
+  templateId: string,
+  parameters: Record<string, string>
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policy/templates/enrich`
+      : `/policy/templates/enrich`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ template_id: templateId, parameters }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to enrich policy template:", error);
     throw error;
   }
 };

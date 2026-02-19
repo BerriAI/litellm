@@ -12,6 +12,7 @@ import AddAttachmentForm from "./add_attachment_form";
 import PolicyTestPanel from "./policy_test_panel";
 import PolicyTemplates from "./policy_templates";
 import GuardrailSelectionModal from "./guardrail_selection_modal";
+import TemplateParameterModal from "./template_parameter_modal";
 import {
   getPoliciesList,
   deletePolicyCall,
@@ -23,6 +24,7 @@ import {
   updatePolicyCall,
   createPolicyAttachmentCall,
   createGuardrailCall,
+  enrichPolicyTemplate,
 } from "../networking";
 import {
   Policy,
@@ -58,6 +60,9 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [existingGuardrailNames, setExistingGuardrailNames] = useState<Set<string>>(new Set());
   const [isCreatingGuardrails, setIsCreatingGuardrails] = useState(false);
   const [showFlowBuilder, setShowFlowBuilder] = useState(false);
+  const [isParameterModalOpen, setIsParameterModalOpen] = useState(false);
+  const [isEnrichingTemplate, setIsEnrichingTemplate] = useState(false);
+  const [pendingTemplate, setPendingTemplate] = useState<any>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -187,8 +192,20 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       return;
     }
 
+    // If template has parameters, show parameter modal first
+    if (template.parameters && template.parameters.length > 0) {
+      setPendingTemplate(template);
+      setIsParameterModalOpen(true);
+      return;
+    }
+
+    await proceedWithTemplate(template);
+  };
+
+  const proceedWithTemplate = async (template: any) => {
+    if (!accessToken) return;
+
     try {
-      // Fetch existing guardrails to show in the modal
       const existingGuardrailsResponse = await getGuardrailsList(accessToken);
       const existingNames = new Set<string>(
         existingGuardrailsResponse.guardrails?.map((g: any) => g.guardrail_name as string) || []
@@ -201,6 +218,53 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       console.error("Error fetching guardrails:", error);
       message.error("Failed to load guardrails. Please try again.");
     }
+  };
+
+  const substituteParameters = (template: any, parameters: Record<string, string>): any => {
+    let templateStr = JSON.stringify(template);
+    for (const [key, value] of Object.entries(parameters)) {
+      templateStr = templateStr.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+    }
+    return JSON.parse(templateStr);
+  };
+
+  const handleParameterConfirm = async (parameters: Record<string, string>) => {
+    if (!accessToken || !pendingTemplate) return;
+
+    setIsEnrichingTemplate(true);
+
+    try {
+      let enrichedTemplate = pendingTemplate;
+
+      if (pendingTemplate.llm_enrichment) {
+        // Call backend to enrich template with LLM-discovered data
+        const enrichResult = await enrichPolicyTemplate(
+          accessToken,
+          pendingTemplate.id,
+          parameters
+        );
+        // The backend returns the enriched guardrailDefinitions
+        enrichedTemplate = { ...pendingTemplate, guardrailDefinitions: enrichResult.guardrailDefinitions };
+      }
+
+      // Substitute parameters in template
+      enrichedTemplate = substituteParameters(enrichedTemplate, parameters);
+
+      setIsParameterModalOpen(false);
+      setIsEnrichingTemplate(false);
+      setPendingTemplate(null);
+
+      await proceedWithTemplate(enrichedTemplate);
+    } catch (error) {
+      console.error("Error enriching template:", error);
+      message.error("Failed to configure template. Please try again.");
+      setIsEnrichingTemplate(false);
+    }
+  };
+
+  const handleParameterCancel = () => {
+    setIsParameterModalOpen(false);
+    setPendingTemplate(null);
   };
 
   const handleGuardrailSelectionConfirm = async (selectedGuardrailDefinitions: any[]) => {
@@ -419,6 +483,14 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               onConfirm={handleGuardrailSelectionConfirm}
               onCancel={handleGuardrailSelectionCancel}
               isLoading={isCreatingGuardrails}
+            />
+
+            <TemplateParameterModal
+              visible={isParameterModalOpen}
+              template={pendingTemplate}
+              onConfirm={handleParameterConfirm}
+              onCancel={handleParameterCancel}
+              isLoading={isEnrichingTemplate}
             />
           </TabPanel>
 

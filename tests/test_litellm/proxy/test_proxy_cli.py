@@ -233,15 +233,20 @@ class TestProxyInitializationHelpers:
 
         runner = CliRunner()
 
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
         with patch.dict(
             "sys.modules",
             {
-                "proxy_server": MagicMock(
-                    app=MagicMock(),
-                    ProxyConfig=MagicMock(),
-                    KeyManagementSettings=MagicMock(),
-                    save_worker_config=MagicMock(),
-                )
+                "proxy_server": mock_proxy_module,
+                # Prevent real import of proxy_server inside Click's
+                # isolation context (heavy side effects cause stream
+                # lifecycle issues with Click 8.2+)
+                "litellm.proxy.proxy_server": mock_proxy_module,
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"

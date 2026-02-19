@@ -456,18 +456,26 @@ class ProxyLogging:
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         self._add_proxy_hooks(llm_router)
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
-        for callback in litellm.callbacks:
+
+        # Track string callbacks and their initialized instances so we can
+        # replace them in-place, preventing duplicates (string + instance) in
+        # litellm.callbacks which caused double-counting of metrics.
+        string_callbacks_to_replace: Dict[int, CustomLogger] = {}
+
+        for idx, callback in enumerate(litellm.callbacks):
             if isinstance(callback, str):
-                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                initialized_callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
 
-                if callback is None:
-                    continue
+                if initialized_callback is not None:
+                    string_callbacks_to_replace[idx] = initialized_callback
 
-            litellm.logging_callback_manager.add_litellm_callback(callback)
+        # Replace string entries in litellm.callbacks with initialized instances
+        for idx, initialized_callback in string_callbacks_to_replace.items():
+            litellm.callbacks[idx] = initialized_callback
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -1312,6 +1320,7 @@ class ProxyLogging:
             # Get pipeline-managed guardrails to skip in normal loop
             metadata = data.get("metadata", data.get("litellm_metadata", {})) or {}
             pipeline_managed: set = metadata.get("_pipeline_managed_guardrails", set())
+
 
             for callback in litellm.callbacks:
                 start_time = time.time()

@@ -600,8 +600,12 @@ def responses(
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
         model_file_id_mapping = kwargs.get("model_file_id_mapping")
-        model_info_id = kwargs.get("model_info", {}).get("id") if isinstance(kwargs.get("model_info"), dict) else None
-        
+        model_info_id = (
+            kwargs.get("model_info", {}).get("id")
+            if isinstance(kwargs.get("model_info"), dict)
+            else None
+        )
+
         input = cast(
             Union[str, ResponseInputParam],
             update_responses_input_with_model_file_ids(
@@ -611,7 +615,7 @@ def responses(
             ),
         )
         local_vars["input"] = input
-        
+
         # Update tools with provider-specific file IDs if needed
         if tools:
             tools = cast(
@@ -696,7 +700,10 @@ def responses(
             )
         )
 
-        # Pre Call logging
+        # Pre Call logging - preserve metadata for custom callbacks
+        # When called from completion bridge (codex models), metadata is in litellm_metadata
+        metadata_for_callbacks = metadata or kwargs.get("litellm_metadata") or {}
+
         litellm_logging_obj.update_environment_variables(
             model=model,
             user=user,
@@ -705,7 +712,7 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
-                "metadata": metadata,
+                "metadata": metadata_for_callbacks,
             },
             custom_llm_provider=custom_llm_provider,
         )
