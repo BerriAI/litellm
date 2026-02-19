@@ -331,6 +331,17 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                           {template.complexity}
                         </span>
                       )}
+                      {template.estimated_latency_ms != null && (
+                        <Tooltip title="Estimated latency overhead added to each request">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                            template.estimated_latency_ms <= 1
+                              ? "bg-green-50 text-green-600 border-green-200"
+                              : "bg-amber-50 text-amber-600 border-amber-200"
+                          }`}>
+                            +{template.estimated_latency_ms <= 1 ? "<1" : template.estimated_latency_ms}ms latency
+                          </span>
+                        </Tooltip>
+                      )}
                     </div>
                     <p className="text-xs text-gray-500 leading-relaxed">
                       {template.description}
