@@ -5555,19 +5555,24 @@ export const getPolicyTemplates = async (accessToken: string) => {
 export const enrichPolicyTemplate = async (
   accessToken: string,
   templateId: string,
-  parameters: Record<string, string>
+  parameters: Record<string, string>,
+  model?: string,
+  competitors?: string[]
 ) => {
   try {
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/policy/templates/enrich`
       : `/policy/templates/enrich`;
+    const body: any = { template_id: templateId, parameters };
+    if (model) body.model = model;
+    if (competitors) body.competitors = competitors;
     const response = await fetch(url, {
       method: "POST",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ template_id: templateId, parameters }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -5582,6 +5587,78 @@ export const enrichPolicyTemplate = async (
   } catch (error) {
     console.error("Failed to enrich policy template:", error);
     throw error;
+  }
+};
+
+export const enrichPolicyTemplateStream = async (
+  accessToken: string,
+  templateId: string,
+  parameters: Record<string, string>,
+  model: string,
+  onCompetitor: (name: string) => void,
+  onDone: (result: {
+    competitors: string[];
+    competitor_variations: Record<string, string[]>;
+    guardrailDefinitions: any[];
+  }) => void,
+  onError?: (error: string) => void,
+  options?: { instruction?: string; existingCompetitors?: string[] },
+  onStatus?: (message: string) => void
+) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/policy/templates/enrich/stream`
+    : `/policy/templates/enrich/stream`;
+  const body: any = { template_id: templateId, parameters, model };
+  if (options?.instruction) body.instruction = options.instruction;
+  if (options?.existingCompetitors) body.competitors = options.existingCompetitors;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const event = JSON.parse(line.slice(6));
+        if (event.type === "competitor") {
+          onCompetitor(event.name);
+        } else if (event.type === "status") {
+          onStatus?.(event.message);
+        } else if (event.type === "done") {
+          onDone(event);
+        } else if (event.type === "error") {
+          onError?.(event.message);
+        }
+      } catch {
+        // skip malformed events
+      }
+    }
   }
 };
 

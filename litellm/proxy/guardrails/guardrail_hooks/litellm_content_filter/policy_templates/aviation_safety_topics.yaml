@@ -51,6 +51,11 @@ additional_block_words:
   - "break into cockpit"
   - "cockpit intrusion"
   - "cockpit breach"
+  - "locking mechanism"
+  - "open the cockpit"
+  - "cockpit door open"
+  - "enter the cockpit"
+  - "access the cockpit"
   # Aircraft vulnerabilities
   - "vulnerability"
   - "exploit"
@@ -115,6 +120,3 @@ exceptions:
   - "how to report"
   - "incident report"
   - "safety culture"
-  - "what is"
-  - "explain"
-  - "research on"

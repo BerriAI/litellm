@@ -587,3 +587,256 @@ class TestApplyPoliciesDirectGuardrailNames:
         # Sorted order: direct_guardrail then from_policy; final output is from_policy
         assert result["inputs"] == first_output
         assert result["guardrail_errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for competitor enrichment helper functions
+# ---------------------------------------------------------------------------
+from litellm.proxy.management_endpoints.policy_endpoints import (
+    _build_all_names_per_competitor,
+    _build_comparison_blocked_words,
+    _build_competitor_guardrail_definitions,
+    _build_name_blocked_words,
+    _build_recommendation_blocked_words,
+    _build_refinement_prompt,
+    _clean_competitor_line,
+    _parse_variations_response,
+)
+
+
+class TestCleanCompetitorLine:
+    """Tests for _clean_competitor_line."""
+
+    def test_strips_bullets_and_dashes(self):
+        assert _clean_competitor_line("- United Airlines") == "United Airlines"
+        assert _clean_competitor_line("  - JetBlue  ") == "JetBlue"
+
+    def test_strips_trailing_punctuation(self):
+        assert _clean_competitor_line("Delta Airlines.") == "Delta Airlines"
+        assert _clean_competitor_line("Southwest)") == "Southwest"
+
+    def test_returns_none_for_empty(self):
+        assert _clean_competitor_line("") is None
+        assert _clean_competitor_line("   ") is None
+
+    def test_returns_none_for_single_char(self):
+        assert _clean_competitor_line("A") is None
+        assert _clean_competitor_line(" - ") is None
+
+    def test_plain_name(self):
+        assert _clean_competitor_line("Qatar Airways") == "Qatar Airways"
+
+
+class TestParseVariationsResponse:
+    """Tests for _parse_variations_response."""
+
+    def test_parses_standard_format(self):
+        raw = "Delta Airlines: Delta Air Lines, DeltaAirlines, Delta\nUnited Airlines: United, UAL"
+        competitors = ["Delta Airlines", "United Airlines"]
+        result = _parse_variations_response(raw, competitors)
+        assert "Delta Airlines" in result
+        assert "Delta Air Lines" in result["Delta Airlines"]
+        assert "United" in result["United Airlines"]
+
+    def test_case_insensitive_matching(self):
+        raw = "delta airlines: Delta Air Lines, DeltaAirlines"
+        competitors = ["Delta Airlines"]
+        result = _parse_variations_response(raw, competitors)
+        assert "Delta Airlines" in result
+        assert len(result["Delta Airlines"]) == 2
+
+    def test_skips_lines_without_colon(self):
+        raw = "This is a header\nDelta Airlines: Delta Air Lines"
+        competitors = ["Delta Airlines"]
+        result = _parse_variations_response(raw, competitors)
+        assert len(result) == 1
+
+    def test_skips_unknown_competitors(self):
+        raw = "Unknown Corp: Foo, Bar\nDelta Airlines: Delta"
+        competitors = ["Delta Airlines"]
+        result = _parse_variations_response(raw, competitors)
+        assert "Unknown Corp" not in result
+        assert "Delta Airlines" in result
+
+    def test_filters_out_self_reference(self):
+        raw = "Delta Airlines: Delta Airlines, Delta Air Lines"
+        competitors = ["Delta Airlines"]
+        result = _parse_variations_response(raw, competitors)
+        # "Delta Airlines" should be filtered out (same as canonical)
+        assert "Delta Airlines" not in result["Delta Airlines"]
+        assert "Delta Air Lines" in result["Delta Airlines"]
+
+    def test_empty_input(self):
+        assert _parse_variations_response("", []) == {}
+
+
+class TestBuildRefinementPrompt:
+    """Tests for _build_refinement_prompt."""
+
+    def test_includes_brand_name(self):
+        prompt = _build_refinement_prompt("add 10 more", ["Delta"], "Emirates")
+        assert "Emirates" in prompt
+
+    def test_includes_existing_competitors(self):
+        prompt = _build_refinement_prompt("add more", ["Delta", "United"], "Emirates")
+        assert "Delta" in prompt
+        assert "United" in prompt
+
+    def test_includes_instruction(self):
+        prompt = _build_refinement_prompt("add 10 from Asia", ["Delta"], "Emirates")
+        assert "add 10 from Asia" in prompt
+
+    def test_asks_for_new_names_only(self):
+        prompt = _build_refinement_prompt("add more", ["Delta"], "Emirates")
+        assert "NEW" in prompt
+
+
+class TestBuildAllNamesPerCompetitor:
+    """Tests for _build_all_names_per_competitor."""
+
+    def test_includes_canonical_and_variations(self):
+        result = _build_all_names_per_competitor(
+            ["Delta Airlines"], {"Delta Airlines": ["Delta", "DeltaAir"]}
+        )
+        assert result["Delta Airlines"] == ["Delta Airlines", "Delta", "DeltaAir"]
+
+    def test_no_variations(self):
+        result = _build_all_names_per_competitor(["Delta Airlines"], {})
+        assert result["Delta Airlines"] == ["Delta Airlines"]
+
+    def test_multiple_competitors(self):
+        result = _build_all_names_per_competitor(
+            ["Delta", "United"],
+            {"Delta": ["DL"], "United": ["UA"]},
+        )
+        assert len(result) == 2
+        assert result["Delta"] == ["Delta", "DL"]
+        assert result["United"] == ["United", "UA"]
+
+
+class TestBuildNameBlockedWords:
+    """Tests for _build_name_blocked_words."""
+
+    def test_basic_output(self):
+        all_names = {"Delta": ["Delta", "DL"]}
+        result = _build_name_blocked_words(["Delta"], all_names)
+        keywords = [r["keyword"] for r in result]
+        assert "Delta" in keywords
+        assert "DL" in keywords
+        assert all(r["action"] == "BLOCK" for r in result)
+
+    def test_descriptions_differ_for_variations(self):
+        all_names = {"Delta": ["Delta", "DL"]}
+        result = _build_name_blocked_words(["Delta"], all_names)
+        descs = {r["keyword"]: r["description"] for r in result}
+        assert "Competitor: Delta" == descs["Delta"]
+        assert "variation" in descs["DL"].lower()
+
+
+class TestBuildRecommendationBlockedWords:
+    """Tests for _build_recommendation_blocked_words."""
+
+    def test_generates_prefix_combinations(self):
+        all_names = {"Delta": ["Delta"]}
+        result = _build_recommendation_blocked_words(["Delta"], all_names)
+        keywords = [r["keyword"] for r in result]
+        assert "try Delta" in keywords
+        assert "use Delta" in keywords
+        assert "switch to Delta" in keywords
+        assert "consider Delta" in keywords
+
+    def test_includes_variations(self):
+        all_names = {"Delta": ["Delta", "DL"]}
+        result = _build_recommendation_blocked_words(["Delta"], all_names)
+        keywords = [r["keyword"] for r in result]
+        assert "try DL" in keywords
+
+
+class TestBuildComparisonBlockedWords:
+    """Tests for _build_comparison_blocked_words."""
+
+    def test_generates_competitor_comparisons(self):
+        all_names = {"Delta": ["Delta"]}
+        result = _build_comparison_blocked_words(["Delta"], all_names, "Emirates")
+        keywords = [r["keyword"] for r in result]
+        assert "Delta is better" in keywords
+
+    def test_generates_brand_comparisons_once(self):
+        all_names = {"Delta": ["Delta"], "United": ["United"]}
+        result = _build_comparison_blocked_words(["Delta", "United"], all_names, "Emirates")
+        keywords = [r["keyword"] for r in result]
+        # Brand-level entries should appear exactly once
+        assert keywords.count("better than Emirates") == 1
+        assert keywords.count("Emirates is worse") == 1
+
+    def test_includes_variation_comparisons(self):
+        all_names = {"Delta": ["Delta", "DL"]}
+        result = _build_comparison_blocked_words(["Delta"], all_names, "Emirates")
+        keywords = [r["keyword"] for r in result]
+        assert "DL is better" in keywords
+
+
+class TestBuildCompetitorGuardrailDefinitions:
+    """Tests for _build_competitor_guardrail_definitions."""
+
+    def test_populates_blocked_words_for_known_guardrail_names(self):
+        definitions = [
+            {
+                "guardrail_name": "competitor-name-blocker",
+                "litellm_params": {"blocked_words": []},
+            },
+            {
+                "guardrail_name": "competitor-recommendation-filter",
+                "litellm_params": {"blocked_words": []},
+            },
+        ]
+        result = _build_competitor_guardrail_definitions(
+            definitions, ["Delta"], "Emirates", {"Delta": ["DL"]}
+        )
+        # Name blocker should have entries
+        name_blocker = next(d for d in result if d["guardrail_name"] == "competitor-name-blocker")
+        assert len(name_blocker["litellm_params"]["blocked_words"]) > 0
+
+        # Recommendation filter should have entries
+        rec_filter = next(d for d in result if d["guardrail_name"] == "competitor-recommendation-filter")
+        assert len(rec_filter["litellm_params"]["blocked_words"]) > 0
+
+    def test_does_not_modify_unknown_guardrail_names(self):
+        definitions = [
+            {
+                "guardrail_name": "some-other-guardrail",
+                "litellm_params": {"blocked_words": ["original"]},
+            },
+        ]
+        result = _build_competitor_guardrail_definitions(
+            definitions, ["Delta"], "Emirates"
+        )
+        assert result[0]["litellm_params"]["blocked_words"] == ["original"]
+
+    def test_does_not_mutate_original_definitions(self):
+        definitions = [
+            {
+                "guardrail_name": "competitor-name-blocker",
+                "litellm_params": {"blocked_words": []},
+            },
+        ]
+        _build_competitor_guardrail_definitions(definitions, ["Delta"], "Emirates")
+        # Original should be unchanged
+        assert definitions[0]["litellm_params"]["blocked_words"] == []
+
+    def test_handles_input_and_output_blocker_variants(self):
+        definitions = [
+            {
+                "guardrail_name": "competitor-name-input-blocker",
+                "litellm_params": {"blocked_words": []},
+            },
+            {
+                "guardrail_name": "competitor-name-output-blocker",
+                "litellm_params": {"blocked_words": []},
+            },
+        ]
+        result = _build_competitor_guardrail_definitions(
+            definitions, ["Delta"], "Emirates"
+        )
+        for defn in result:
+            assert len(defn["litellm_params"]["blocked_words"]) > 0
