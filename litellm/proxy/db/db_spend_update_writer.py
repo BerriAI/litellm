@@ -12,7 +12,7 @@ import os
 import random
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast, overload
 
 import litellm
@@ -792,7 +792,10 @@ class DBSpendUpdateWriter:
                             ) in key_list_transactions.items():
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "last_active": datetime.now(timezone.utc),
+                                    },
                                 )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
