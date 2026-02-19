@@ -71,7 +71,9 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import SEP_986_URL
+    from mcp.shared.tool_name_validation import (
+        SEP_986_URL,
+    )
 except ImportError:
     from pydantic import BaseModel
 
@@ -608,6 +610,7 @@ class MCPServerManager:
             alias=getattr(mcp_server, "alias", None),
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
+            spec_path=getattr(mcp_server, "spec_path", None),
             transport=cast(MCPTransportType, mcp_server.transport),
             auth_type=auth_type,
             authentication_token=auth_value,

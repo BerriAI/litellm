@@ -567,6 +567,25 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             )}
 
             {!isStdioTransport && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    OpenAPI Spec URL (optional)
+                    <Tooltip title="Provide an OpenAPI spec URL to automatically generate MCP tools from the API endpoints. When set, tools are generated from the spec instead of connecting to an MCP server.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="spec_path"
+              >
+                <Input
+                  placeholder="https://api.example.com/openapi.json"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {!isStdioTransport && (
               <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
                 <Select>
                   <Select.Option value="none">None</Select.Option>

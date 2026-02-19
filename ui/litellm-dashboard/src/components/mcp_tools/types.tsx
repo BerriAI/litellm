@@ -143,6 +143,7 @@ export interface MCPServer {
    * For `stdio`, the backend can return null/undefined.
    */
   url?: string | null;
+  spec_path?: string | null;
   transport?: string | null;
   auth_type?: string | null;
   authorization_url?: string | null;

@@ -564,12 +564,31 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
                 name="url"
                 rules={[
-                  { required: true, message: "Please enter a server URL" },
                   { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
                 <Input
                   placeholder="https://your-mcp-server.com"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {/* OpenAPI Spec URL - only show for HTTP and SSE */}
+            {transportType !== "stdio" && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    OpenAPI Spec URL (optional)
+                    <Tooltip title="Provide an OpenAPI spec URL to automatically generate MCP tools from the API endpoints. When set, tools are generated from the spec instead of connecting to an MCP server.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="spec_path"
+              >
+                <Input
+                  placeholder="https://api.example.com/openapi.json"
                   className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                 />
               </Form.Item>
