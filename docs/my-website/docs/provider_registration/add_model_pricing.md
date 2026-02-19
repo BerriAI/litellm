@@ -13,6 +13,7 @@ Here's the full specification with all available fields:
 ```json
 {
     "sample_spec": {
+        "aliases": ["optional list of alternate names for this model, e.g. dated versions like sample_spec-20250101"],
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
         "computer_use_output_cost_per_1k_tokens": 0.0,
