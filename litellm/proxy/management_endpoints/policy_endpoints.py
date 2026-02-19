@@ -14,6 +14,7 @@ import os
 from typing import TYPE_CHECKING, List, Literal, Optional, TypedDict, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
@@ -511,6 +512,8 @@ async def get_policy_templates(
 class EnrichTemplateRequest(BaseModel):
     template_id: str
     parameters: dict
+    model: Optional[str] = None
+    competitors: Optional[list] = None
 
 
 @router.post(
@@ -549,28 +552,199 @@ async def enrich_policy_template(
             detail=f"Parameter '{llm_enrichment['parameter']}' is required",
         )
 
-    prompt = llm_enrichment["prompt"].replace(
-        "{{" + llm_enrichment["parameter"] + "}}", brand_name
-    )
+    if data.competitors:
+        # Free-form mode: use user-provided competitor list directly
+        competitors = data.competitors
+    else:
+        # AI mode: discover competitors via LLM
+        prompt = llm_enrichment["prompt"].replace(
+            "{{" + llm_enrichment["parameter"] + "}}", brand_name
+        )
+        model = data.model or "gpt-4o-mini"
+        competitors = await _discover_competitors_via_llm(prompt, model=model)
 
-    competitors = await _discover_competitors_via_llm(prompt)
+    # Generate common variations/misspellings for each competitor
+    model = data.model or "gpt-4o-mini"
+    variations_map = await _generate_competitor_variations(competitors, model=model)
 
     enriched_definitions = _build_competitor_guardrail_definitions(
         template.get("guardrailDefinitions", []),
         competitors,
         brand_name,
+        variations_map,
     )
 
-    return {"guardrailDefinitions": enriched_definitions, "competitors": competitors}
+    return {
+        "guardrailDefinitions": enriched_definitions,
+        "competitors": competitors,
+        "competitor_variations": variations_map,
+    }
 
 
-async def _discover_competitors_via_llm(prompt: str) -> list:
+@router.post(
+    "/policy/templates/enrich/stream",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def enrich_policy_template_stream(
+    data: EnrichTemplateRequest,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Stream competitor names as SSE events as the LLM generates them.
+
+    Events:
+    - data: {"type": "competitor", "name": "..."}  — each competitor as discovered
+    - data: {"type": "done", "competitors": [...], "competitor_variations": {...}, "guardrailDefinitions": [...]}
+    """
+    import litellm
+
+    templates = _load_policy_templates_from_local_backup()
+    template = next((t for t in templates if t.get("id") == data.template_id), None)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Template '{data.template_id}' not found")
+
+    llm_enrichment = template.get("llm_enrichment")
+    if llm_enrichment is None:
+        raise HTTPException(status_code=400, detail="Template does not support LLM enrichment")
+
+    brand_name = data.parameters.get(llm_enrichment["parameter"], "")
+    if not brand_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Parameter '{llm_enrichment['parameter']}' is required",
+        )
+
+    model = data.model or "gpt-4o-mini"
+
+    async def event_generator():
+        competitors: list[str] = []
+
+        if data.competitors:
+            # Free-form mode — emit all at once
+            competitors = data.competitors
+            for comp in competitors:
+                yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
+        else:
+            # AI mode — stream from LLM
+            prompt = llm_enrichment["prompt"].replace(
+                "{{" + llm_enrichment["parameter"] + "}}", brand_name
+            )
+            try:
+                response = await litellm.acompletion(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    stream=True,
+                )
+                buffer = ""
+                async for chunk in response:  # type: ignore[union-attr]
+                    delta = chunk.choices[0].delta.content or ""
+                    buffer += delta
+                    # Parse complete lines as they come in
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        name = line.strip().strip(".-) ").strip()
+                        if name and len(name) > 1 and len(competitors) < 30:
+                            competitors.append(name)
+                            yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
+                # Handle remaining buffer
+                if buffer.strip():
+                    name = buffer.strip().strip(".-) ").strip()
+                    if name and len(name) > 1 and len(competitors) < 30:
+                        competitors.append(name)
+                        yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
+            except Exception as e:
+                verbose_proxy_logger.error("LLM competitor streaming failed: %s", e)
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                return
+
+        # Generate variations
+        variations_map = await _generate_competitor_variations(competitors, model=model)
+
+        # Build enriched definitions
+        enriched_definitions = _build_competitor_guardrail_definitions(
+            template.get("guardrailDefinitions", []),
+            competitors,
+            brand_name,
+            variations_map,
+        )
+
+        # Send final event with all data
+        yield f"data: {json.dumps({'type': 'done', 'competitors': competitors, 'competitor_variations': variations_map, 'guardrailDefinitions': enriched_definitions})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _generate_competitor_variations(
+    competitors: list, model: str = "gpt-4o-mini"
+) -> dict:
+    """Generate common misspellings, abbreviations, and alternate names for each competitor."""
+    import litellm
+
+    if not competitors:
+        return {}
+
+    names_list = "\n".join(competitors)
+    prompt = (
+        "For each company/brand name below, list 3-5 common misspellings, abbreviations, "
+        "and alternate names that people might type. Include typos, missing spaces, "
+        "wrong suffixes (e.g. 'Airlines' vs 'Airways' vs 'Airline'), and common shortcuts.\n\n"
+        f"Names:\n{names_list}\n\n"
+        "Return the result as one line per variation in the format:\n"
+        "OriginalName: variation1, variation2, variation3\n"
+        "Use the EXACT original name before the colon. No numbering, no extra text."
+    )
+
+    try:
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content or ""  # type: ignore
+
+        variations_map: dict[str, list[str]] = {}
+        for line in raw.strip().split("\n"):
+            if ":" not in line:
+                continue
+            name, _, variations_str = line.partition(":")
+            name = name.strip()
+            # Match to original competitor name (case-insensitive)
+            matched_name = None
+            for comp in competitors:
+                if comp.lower() == name.lower():
+                    matched_name = comp
+                    break
+            if matched_name is None:
+                continue
+            variations = [
+                v.strip() for v in variations_str.split(",") if v.strip()
+            ]
+            # Filter out variations that are identical to the original
+            variations = [
+                v for v in variations if v.lower() != matched_name.lower()
+            ]
+            variations_map[matched_name] = variations
+
+        return variations_map
+    except Exception as e:
+        verbose_proxy_logger.error("LLM competitor variation generation failed: %s", e)
+        return {}
+
+
+async def _discover_competitors_via_llm(prompt: str, model: str = "gpt-4o-mini") -> list:
     """Call an onboarded LLM to discover competitor names."""
     import litellm
 
     try:
         response = await litellm.acompletion(
-            model="gpt-4o-mini",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
@@ -580,7 +754,7 @@ async def _discover_competitors_via_llm(prompt: str) -> list:
             for line in raw.strip().split("\n")
             if line.strip() and len(line.strip()) > 1
         ]
-        return competitors[:15]
+        return competitors[:30]
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor discovery failed: %s", e)
         return []
@@ -590,37 +764,43 @@ def _build_competitor_guardrail_definitions(
     definitions: list,
     competitors: list,
     brand_name: str,
+    variations_map: Optional[dict] = None,
 ) -> list:
-    """Build enriched guardrailDefinitions with competitor names populated."""
+    """Build enriched guardrailDefinitions with competitor names and variations populated."""
     import copy
 
+    variations_map = variations_map or {}
     enriched = copy.deepcopy(definitions)
 
-    output_blocked = [
-        {"keyword": comp, "action": "BLOCK", "description": f"Competitor: {comp}"}
-        for comp in competitors
-    ]
+    # Build list of all names (canonical + variations) for each competitor
+    all_names_per_competitor: dict[str, list[str]] = {}
+    for comp in competitors:
+        names = [comp]
+        names.extend(variations_map.get(comp, []))
+        all_names_per_competitor[comp] = names
+
+    output_blocked = []
+    for comp in competitors:
+        for name in all_names_per_competitor[comp]:
+            desc = f"Competitor: {comp}" if name == comp else f"Competitor variation ({comp}): {name}"
+            output_blocked.append(
+                {"keyword": name, "action": "BLOCK", "description": desc}
+            )
 
     recommendation_blocked = []
     for comp in competitors:
-        recommendation_blocked.append(
-            {"keyword": f"try {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
-        recommendation_blocked.append(
-            {"keyword": f"use {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
-        recommendation_blocked.append(
-            {"keyword": f"switch to {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
-        recommendation_blocked.append(
-            {"keyword": f"consider {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
+        for name in all_names_per_competitor[comp]:
+            for prefix in ["try", "use", "switch to", "consider"]:
+                recommendation_blocked.append(
+                    {"keyword": f"{prefix} {name}", "action": "BLOCK", "description": f"Recommendation to competitor ({comp})"}
+                )
 
     comparison_blocked = []
     for comp in competitors:
-        comparison_blocked.append(
-            {"keyword": f"{comp} is better", "action": "BLOCK", "description": "Unfavorable comparison"}
-        )
+        for name in all_names_per_competitor[comp]:
+            comparison_blocked.append(
+                {"keyword": f"{name} is better", "action": "BLOCK", "description": f"Unfavorable comparison ({comp})"}
+            )
         comparison_blocked.append(
             {"keyword": f"better than {brand_name}", "action": "BLOCK", "description": "Unfavorable comparison"}
         )
@@ -630,8 +810,16 @@ def _build_competitor_guardrail_definitions(
 
     blocked_words_map = {
         "competitor-output-blocker": output_blocked,
+        "competitor-input-blocker": output_blocked,
+        "competitor-name-blocker": output_blocked,
+        "competitor-name-input-blocker": output_blocked,
+        "competitor-name-output-blocker": output_blocked,
         "competitor-recommendation-filter": recommendation_blocked,
+        "competitor-recommendation-input-filter": recommendation_blocked,
+        "competitor-recommendation-output-filter": recommendation_blocked,
         "competitor-comparison-filter": comparison_blocked,
+        "competitor-comparison-input-filter": comparison_blocked,
+        "competitor-comparison-output-filter": comparison_blocked,
     }
 
     for defn in enriched:
