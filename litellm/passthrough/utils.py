@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Mapping, Optional, Union
 from urllib.parse import parse_qs
 
 import httpx
@@ -10,7 +10,7 @@ class BasePassthroughUtils:
     @staticmethod
     def get_merged_query_parameters(
         existing_url: httpx.URL,
-        request_query_params: Dict[str, Union[str, list]],
+        request_query_params: Mapping[str, Union[str, list]],
         default_query_params: Optional[Dict[str, Union[str, list]]] = None
     ) -> Dict[str, Union[str, List[str]]]:
         # Get the existing query params from the target URL
