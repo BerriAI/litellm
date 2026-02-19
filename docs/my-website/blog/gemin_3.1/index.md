@@ -37,7 +37,7 @@ LiteLLM now supports `gemini-3.1-pro-preview` and all the new API changes along 
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:main-v1.80.8-stable.1
+ghcr.io/berriai/litellm:main-v1.81.9-stable.gemini.3.1-pro
 ```
 
 </TabItem>
@@ -45,7 +45,7 @@ ghcr.io/berriai/litellm:main-v1.80.8-stable.1
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.80.8.post1
+pip install litellm==v1.81.9-stable.gemini.3.1-pro
 ```
 
 </TabItem>
