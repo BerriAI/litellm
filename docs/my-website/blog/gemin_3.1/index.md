@@ -62,7 +62,7 @@ LiteLLM automatically maps the OpenAI `reasoning_effort` parameter to Gemini's `
 ---
 ## Supported Endpoints
 
-LiteLLM provides **full end-to-end support** for Gemini 3 Flash on:
+LiteLLM provides **full end-to-end support** for Gemini 3.1 Pro on:
 
 - ✅ `/v1/chat/completions` - OpenAI-compatible chat completions endpoint
 - ✅ `/v1/responses` - OpenAI Responses API endpoint (streaming and non-streaming)
