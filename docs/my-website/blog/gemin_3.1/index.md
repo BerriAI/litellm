@@ -28,10 +28,6 @@ import TabItem from '@theme/TabItem';
 
 LiteLLM now supports `gemini-3.1-pro-preview` and all the new API changes along with it.
 
-:::note
-If you only want cost tracking, you need no change in your current Litellm version. But if you want the support for new features introduced along with it like thinking levels, you will need to use (version here) or above.
-:::
-
 ## Deploy this version
 
 <Tabs>
@@ -112,6 +108,9 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.1-pro-preview
       api_key: os.environ/GEMINI_API_KEY
+  - model_name: vertex-gemini-3.1-pro-preview
+    litellm_params:
+      model: vertex_ai/gemini-3.1-pro-preview
 ```
 
 **2. Start proxy**
