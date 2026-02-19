@@ -137,10 +137,29 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
-        Support translating video files from file_id or file_data to video_url
+        Support translating:
+        - video files from file_id or file_data to video_url
+        - thinking_blocks on assistant messages to content blocks
         """
         for message in messages:
-            if message["role"] == "user":
+            if message["role"] == "assistant":
+                thinking_blocks = message.pop("thinking_blocks", None)  # type: ignore
+                if thinking_blocks:
+                    new_content: list = [
+                        {"type": block["type"], "thinking": block.get("thinking", "")}
+                        if block.get("type") == "thinking"
+                        else {"type": block["type"], "data": block.get("data", "")}
+                        for block in thinking_blocks
+                    ]
+                    existing_content = message.get("content")
+                    if isinstance(existing_content, str):
+                        new_content.append(
+                            {"type": "text", "text": existing_content}
+                        )
+                    elif isinstance(existing_content, list):
+                        new_content.extend(existing_content)
+                    message["content"] = new_content  # type: ignore
+            elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):
                     replaced_content_items: List[
