@@ -11,7 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import httpx
 
