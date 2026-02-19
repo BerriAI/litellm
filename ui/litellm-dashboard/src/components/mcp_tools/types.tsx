@@ -22,6 +22,7 @@ export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
   STDIO: "stdio",
+  OPENAPI: "openapi",
 };
 
 export const handleTransport = (transport?: string | null): string => {
