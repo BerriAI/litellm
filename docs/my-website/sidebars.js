@@ -1122,6 +1122,7 @@ const sidebars = {
           type: "category",
           label: "Performance / Latency",
           items: [
+            "troubleshoot/latency_overhead",
             "troubleshoot/cpu_issues",
             "troubleshoot/memory_issues",
             "troubleshoot/spend_queue_warnings",
