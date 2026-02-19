@@ -49,6 +49,19 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 
+# Maximum number of base64 characters to keep in logging payloads.
+# Data URIs exceeding this are replaced with a size placeholder.
+# Set to 0 to disable truncation.
+MAX_BASE64_LENGTH_FOR_LOGGING = int(
+    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
+)
+
+# When true, adds detailed per-phase timing breakdown headers to responses.
+# Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
+LITELLM_DETAILED_TIMING = (
+    os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
+)
+
 # Model cost map validation constants
 MODEL_COST_MAP_MIN_MODEL_COUNT = int(
     os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
@@ -1474,3 +1487,9 @@ MICROSOFT_USER_FIRST_NAME_ATTRIBUTE = str(
 MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "surname")
 )
+
+# Maximum payload size (in bytes) to fully serialize for DEBUG logging.
+# Payloads larger than this are truncated to avoid multi-second json.dumps blocking the response.
+MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
+    os.getenv("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400)
+)  # 100 KB
