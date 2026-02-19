@@ -582,10 +582,10 @@ class ProxyBaseLLMRequestProcessing:
             ] = queue_time_seconds
 
         self.data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
+            user_model  # model name passed via cli args
             or model  # for azure deployments
             or self.data.get("model", None)  # default passed in http request
+            or general_settings.get("completion_model", None)  # server default
         )
 
         # override with user settings, these are params passed via cli
@@ -619,7 +619,7 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
-        
+
         ### AUTO STREAM USAGE TRACKING ###
         # If always_include_stream_usage is enabled and this is a streaming request
         # automatically add stream_options={'include_usage': True} if not already set
@@ -635,7 +635,7 @@ class ProxyBaseLLMRequestProcessing:
                 and "include_usage" not in self.data["stream_options"]
             ):
                 self.data["stream_options"]["include_usage"] = True
-        
+
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -885,9 +885,9 @@ class ProxyBaseLLMRequestProcessing:
             # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
             # what the client sent.
             if requested_model_from_client:
-                self.data["_litellm_client_requested_model"] = (
-                    requested_model_from_client
-                )
+                self.data[
+                    "_litellm_client_requested_model"
+                ] = requested_model_from_client
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -1482,9 +1482,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
