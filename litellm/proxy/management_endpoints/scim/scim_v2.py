@@ -1128,6 +1128,12 @@ def _apply_patch_ops(
         value = op.value
         op_type = op.op
 
+        # Handle SCIM operations without path where value contains the fields
+        if not path and isinstance(value, dict):
+            if "active" in value:
+                _handle_active_update(op_type, value["active"], metadata)
+            continue
+
         if path == "displayname":
             _handle_displayname_update(op_type, value, update_data)
         elif path == "externalid":
