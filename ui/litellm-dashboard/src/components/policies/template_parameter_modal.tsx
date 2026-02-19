@@ -42,6 +42,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
   const [refinementInput, setRefinementInput] = useState("");
   const [isRefining, setIsRefining] = useState(false);
   const [hasGenerated, setHasGenerated] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
 
   const parameters: TemplateParameter[] = template?.parameters || [];
   const hasEnrichment = !!template?.llm_enrichment;
@@ -66,6 +67,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       setRefinementInput("");
       setIsRefining(false);
       setHasGenerated(false);
+      setStatusMessage("");
     }
   }, [visible, template]);
 
@@ -101,6 +103,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     setIsGenerating(true);
     setCompetitorTags([]);
     setVariationsMap({});
+    setStatusMessage("");
     try {
       await enrichPolicyTemplateStream(
         accessToken,
@@ -115,11 +118,15 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
           setVariationsMap(result.competitor_variations || {});
           setIsGenerating(false);
           setHasGenerated(true);
+          setStatusMessage("");
         },
         (error) => {
           console.error("Streaming error:", error);
           setIsGenerating(false);
-        }
+          setStatusMessage("");
+        },
+        undefined,
+        (status) => setStatusMessage(status),
       );
     } catch (error) {
       console.error("Error generating competitor names:", error);
@@ -131,6 +138,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     if (!accessToken || !selectedModel || !template || !refinementInput.trim()) return;
 
     setIsRefining(true);
+    setStatusMessage("");
     try {
       await enrichPolicyTemplateStream(
         accessToken,
@@ -148,15 +156,18 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
           setVariationsMap(result.competitor_variations || {});
           setIsRefining(false);
           setRefinementInput("");
+          setStatusMessage("");
         },
         (error) => {
           console.error("Refinement error:", error);
           setIsRefining(false);
+          setStatusMessage("");
         },
         {
           instruction: refinementInput.trim(),
           existingCompetitors: competitorTags,
-        }
+        },
+        (status) => setStatusMessage(status),
       );
     } catch (error) {
       console.error("Error refining competitor names:", error);
@@ -192,7 +203,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       }
       open={visible}
       onCancel={onCancel}
-      width={550}
+      width={700}
       footer={[
         <Button key="cancel" variant="secondary" onClick={onCancel} disabled={isLoading}>
           Cancel
@@ -322,7 +333,13 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               <p className="text-xs text-gray-500 mt-1">
                 Type a name and press Enter to add. Click ✕ to remove.
               </p>
-              {Object.keys(variationsMap).length > 0 && (
+              {statusMessage && (
+                <div className="flex items-center gap-2 mt-2 p-2 bg-blue-50 rounded border border-blue-100">
+                  <Spin size="small" />
+                  <span className="text-xs text-blue-700">{statusMessage}</span>
+                </div>
+              )}
+              {Object.keys(variationsMap).length > 0 && !statusMessage && (
                 <p className="text-xs text-green-600 mt-1">
                   ✓ {Object.values(variationsMap).flat().length} alternate spellings & variations auto-generated for guardrail matching
                 </p>
