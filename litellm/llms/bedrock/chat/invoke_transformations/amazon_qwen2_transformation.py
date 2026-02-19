@@ -11,6 +11,7 @@ from typing import Any, List, Optional
 
 import httpx
 
+from litellm.types.utils import Usage
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
     AmazonQwen3Config,
 )
@@ -79,10 +80,11 @@ class AmazonQwen2Config(AmazonQwen3Config):
             # Set usage information if available in response
             if "usage" in response_data:
                 usage_data = response_data["usage"]
-                if hasattr(model_response, 'usage'):
-                    model_response.usage.prompt_tokens = usage_data.get("prompt_tokens", 0)
-                    model_response.usage.completion_tokens = usage_data.get("completion_tokens", 0)
-                    model_response.usage.total_tokens = usage_data.get("total_tokens", 0)
+                model_response.usage = Usage(
+                    prompt_tokens=usage_data.get("prompt_tokens", 0),
+                    completion_tokens=usage_data.get("completion_tokens", 0),
+                    total_tokens=usage_data.get("total_tokens", 0),
+                )
             
             return model_response
             

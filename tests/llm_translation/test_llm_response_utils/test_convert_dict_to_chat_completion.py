@@ -1246,3 +1246,47 @@ def test_convert_to_model_response_object_with_error_code_only():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+
+def test_convert_to_model_response_object_default_usage_overwritten():
+    """
+    Regression test: convert_to_model_response_object must properly set Usage
+    on a ModelResponse that only has the default Usage from ModelResponse.__init__()
+    (i.e. no extra litellm.Usage() set via setattr beforehand).
+
+    This validates the optimization of removing the redundant
+    `setattr(model_response, "usage", litellm.Usage())` in completion().
+    """
+    mr = ModelResponse()
+    # usage is not set by default (optimization: avoid constructing throwaway Usage)
+    assert not hasattr(mr, "usage")
+
+    response_object = {
+        "id": "chatcmpl-usage-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 7,
+            "total_tokens": 22,
+        },
+        "model": "gpt-4o",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=mr,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 15
+    assert result.usage.completion_tokens == 7
+    assert result.usage.total_tokens == 22
