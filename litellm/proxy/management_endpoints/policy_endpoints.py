@@ -530,7 +530,11 @@ class EnrichTemplateRequest(BaseModel):
     competitors: Optional[List[str]] = Field(
         default=None,
         max_length=MAX_COMPETITOR_NAMES,
-        description="Optional list of competitor names (max 30)",
+        description="Optional list of competitor names",
+    )
+    instruction: Optional[str] = Field(
+        default=None,
+        description="Refinement instruction for modifying the competitor list (e.g. 'add 10 more from Asia')",
     )
 
 
@@ -610,6 +614,63 @@ async def enrich_policy_template(
     }
 
 
+def _build_refinement_prompt(
+    instruction: str,
+    existing_competitors: list[str],
+    brand_name: str,
+) -> str:
+    """Build a prompt for refining the competitor list based on user instruction."""
+    existing_list = ", ".join(existing_competitors)
+    return (
+        f"I have a brand called '{brand_name}' and the following competitor list:\n"
+        f"{existing_list}\n\n"
+        f"User instruction: {instruction}\n\n"
+        "Return ONLY the NEW names to add (not the existing ones), one per line, "
+        "no numbering, no explanations. If the instruction asks to remove names, "
+        "return nothing."
+    )
+
+
+async def _stream_llm_competitor_names(
+    prompt: str,
+    model: str,
+    existing: list[str],
+) -> AsyncIterator[tuple[Optional[str], bool]]:
+    """
+    Stream competitor names from LLM. Yields (name, is_error) tuples.
+
+    Deduplicates against existing names (case-insensitive).
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        raise ValueError("LLM router not initialized")
+
+    existing_lower = {n.lower() for n in existing}
+    response = await llm_router.acompletion(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=COMPETITOR_LLM_TEMPERATURE,
+        stream=True,
+    )
+    buffer = ""
+    count = len(existing)
+    async for chunk in response:  # type: ignore[union-attr]
+        delta = chunk.choices[0].delta.content or ""
+        buffer += delta
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            name = _clean_competitor_line(line)
+            if name and name.lower() not in existing_lower and count < MAX_COMPETITOR_NAMES:
+                existing_lower.add(name.lower())
+                count += 1
+                yield name, False
+    # Handle remaining buffer
+    name = _clean_competitor_line(buffer)
+    if name and name.lower() not in existing_lower and count < MAX_COMPETITOR_NAMES:
+        yield name, False
+
+
 async def _stream_competitor_events(
     data: EnrichTemplateRequest,
     template: dict,
@@ -618,42 +679,43 @@ async def _stream_competitor_events(
     model: str,
 ) -> AsyncIterator[str]:
     """Stream competitor names as SSE events, then emit a final 'done' event."""
-    competitors: list[str] = []
+    competitors: list[str] = list(data.competitors or [])
 
-    if data.competitors:
-        competitors = data.competitors
+    if data.instruction and competitors:
+        # Refinement mode: keep existing, stream only new names
+        for comp in competitors:
+            yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
+
+        refinement_prompt = _build_refinement_prompt(
+            data.instruction, competitors, brand_name
+        )
+        try:
+            async for name, _ in _stream_llm_competitor_names(
+                refinement_prompt, model, competitors
+            ):
+                if name:
+                    competitors.append(name)
+                    yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
+        except Exception as e:
+            verbose_proxy_logger.error("LLM competitor refinement failed: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            return
+    elif data.competitors and not data.instruction:
+        # Free-form mode (no instruction): just emit existing
         for comp in competitors:
             yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
     else:
+        # Initial discovery mode
         prompt = llm_enrichment["prompt"].replace(
             "{{" + llm_enrichment["parameter"] + "}}", brand_name
         )
         try:
-            from litellm.proxy.proxy_server import llm_router
-
-            if llm_router is None:
-                raise ValueError("LLM router not initialized")
-            response = await llm_router.acompletion(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=COMPETITOR_LLM_TEMPERATURE,
-                stream=True,
-            )
-            buffer = ""
-            async for chunk in response:  # type: ignore[union-attr]
-                delta = chunk.choices[0].delta.content or ""
-                buffer += delta
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    name = _clean_competitor_line(line)
-                    if name and len(competitors) < MAX_COMPETITOR_NAMES:
-                        competitors.append(name)
-                        yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
-            # Handle remaining buffer
-            name = _clean_competitor_line(buffer)
-            if name and len(competitors) < MAX_COMPETITOR_NAMES:
-                competitors.append(name)
-                yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
+            async for name, _ in _stream_llm_competitor_names(
+                prompt, model, []
+            ):
+                if name:
+                    competitors.append(name)
+                    yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
         except Exception as e:
             verbose_proxy_logger.error("LLM competitor streaming failed: %s", e)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
