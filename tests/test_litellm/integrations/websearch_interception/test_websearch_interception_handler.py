@@ -100,3 +100,176 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     # Verify regular kwargs are preserved
     assert kwargs_for_followup["temperature"] == 0.7
     assert kwargs_for_followup["max_tokens"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
+    """Test that async_pre_call_deployment_hook finds custom_llm_provider at top-level kwargs.
+
+    Regression test for bug where the hook only checked kwargs["litellm_params"]["custom_llm_provider"]
+    but the router places custom_llm_provider at the top level of kwargs.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    # Simulate kwargs as they arrive from the router path:
+    # custom_llm_provider is at the TOP LEVEL (not nested under litellm_params)
+    kwargs = {
+        "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+            {"type": "function", "function": {"name": "other_tool", "parameters": {}}},
+        ],
+        "custom_llm_provider": "bedrock",
+        "api_key": "fake-key",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    # Should NOT be None — the hook should have triggered
+    assert result is not None
+    # The web_search tool should be converted to litellm_web_search (OpenAI format)
+    assert any(
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        for t in result["tools"]
+    )
+    # The non-web-search tool should be preserved
+    assert any(
+        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool"
+        for t in result["tools"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_returns_full_kwargs():
+    """Test that async_pre_call_deployment_hook returns the full kwargs dict, not a partial one.
+
+    Regression test for bug where the hook returned {"tools": converted_tools} instead of
+    the full kwargs dict, causing model/messages/api_key/etc. to be lost.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Search for something"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search"},
+        ],
+        "custom_llm_provider": "openai",
+        "api_key": "sk-fake",
+        "temperature": 0.7,
+        "metadata": {"user": "test"},
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    # All original keys must be preserved
+    assert result["model"] == "gpt-4o"
+    assert result["messages"] == [{"role": "user", "content": "Search for something"}]
+    assert result["api_key"] == "sk-fake"
+    assert result["temperature"] == 0.7
+    assert result["metadata"] == {"user": "test"}
+    assert result["custom_llm_provider"] == "openai"
+    # Tools should be converted
+    assert any(
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        for t in result["tools"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_skips_disabled_provider():
+    """Test that the hook returns None for providers not in enabled_providers."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "test"}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        "custom_llm_provider": "openai",  # Not in enabled_providers
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_skips_no_websearch_tools():
+    """Test that the hook returns None when no web search tools are present."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "test"}],
+        "tools": [
+            {"type": "function", "function": {"name": "calculator", "parameters": {}}},
+        ],
+        "custom_llm_provider": "openai",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
+    """Test that the hook still works when custom_llm_provider is in nested litellm_params.
+
+    This is the Anthropic experimental pass-through path where litellm_params is
+    explicitly constructed with custom_llm_provider inside it.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "messages": [{"role": "user", "content": "test"}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+        "litellm_params": {
+            "custom_llm_provider": "bedrock",
+        },
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    assert any(
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        for t in result["tools"]
+    )
+    # Full kwargs preserved
+    assert result["model"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_provider_derived_from_model_name():
+    """Test that async_pre_call_deployment_hook derives custom_llm_provider from the model name.
+
+    Regression test for the router _acompletion path where custom_llm_provider is NOT
+    in kwargs at all — neither at top-level nor in litellm_params. The hook must derive
+    the provider from the model name (e.g., "openai/gpt-4o-mini" → "openai").
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["openai"])
+
+    # Simulate kwargs as they arrive from router._acompletion:
+    # NO custom_llm_provider key anywhere — only model name contains the provider
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Search the web for LiteLLM"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+        ],
+        "api_key": "fake-key",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
+    assert result is not None
+    assert any(
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        for t in result["tools"]
+    )
+    # Full kwargs preserved
+    assert result["model"] == "openai/gpt-4o-mini"
+    assert result["api_key"] == "fake-key"

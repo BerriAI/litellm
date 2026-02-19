@@ -211,6 +211,7 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
+            "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -1349,7 +1350,7 @@ class LiteLLMCompletionResponsesConfig:
                 result.append(tool)  # type: ignore
                 continue
             if tool.get("type") == "function":
-                fn: Dict[str, Any] = cast(Dict[str, Any], tool.get("function") or {})
+                fn = cast(Dict[str, Any], tool.get("function") or {})
                 parameters = dict(fn.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"

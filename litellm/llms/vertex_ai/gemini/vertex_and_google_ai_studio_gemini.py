@@ -767,14 +767,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            # For gemini-3-flash-preview, medium maps to "medium", otherwise "high"
-            if is_gemini3flash:
                 return {"thinkingLevel": "medium", "includeThoughts": True}
-            else:
-                return {
-                    "thinkingLevel": "high",
-                    "includeThoughts": True,
-                }  # medium is not out yet for other models
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":

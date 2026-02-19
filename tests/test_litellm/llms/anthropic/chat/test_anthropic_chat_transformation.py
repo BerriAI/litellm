@@ -2582,6 +2582,94 @@ def test_compaction_block_with_other_content_types():
     assert tool_calls[0]["function"]["name"] == "get_weather"
 
 
+def test_map_openai_context_management_to_anthropic():
+    """
+    Test mapping OpenAI Responses API context_management format to Anthropic format.
+    """
+    config = AnthropicConfig()
+    
+    # Test OpenAI list format with compaction
+    openai_format = [{"type": "compaction", "compact_threshold": 200000}]
+    result = config.map_openai_context_management_to_anthropic(openai_format)
+    
+    assert result is not None
+    assert "edits" in result
+    assert len(result["edits"]) == 1
+    assert result["edits"][0]["type"] == "compact_20260112"
+    assert result["edits"][0]["trigger"]["type"] == "input_tokens"
+    assert result["edits"][0]["trigger"]["value"] == 200000
+
+    # Test OpenAI format with instructions
+    openai_format_with_instructions = [{
+        "type": "compaction",
+        "compact_threshold": 150000,
+        "instructions": "Focus on preserving code snippets"
+    }]
+    result = config.map_openai_context_management_to_anthropic(openai_format_with_instructions)
+    
+    assert result is not None
+    assert result["edits"][0]["trigger"]["value"] == 150000
+    assert result["edits"][0]["instructions"] == "Focus on preserving code snippets"
+    
+    # Test Anthropic format (should pass through)
+    anthropic_format = {
+        "edits": [{
+            "type": "compact_20260112",
+            "trigger": {"type": "input_tokens", "value": 150000}
+        }]
+    }
+    result = config.map_openai_context_management_to_anthropic(anthropic_format)
+    
+    assert result == anthropic_format
+
+
+def test_map_openai_params_with_context_management():
+    """
+    Test that map_openai_params correctly transforms context_management from OpenAI to Anthropic format.
+    """
+    config = AnthropicConfig()
+    
+    # Test with OpenAI list format
+    non_default_params = {
+        "context_management": [{"type": "compaction", "compact_threshold": 200000}]
+    }
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-opus-4-6",
+        drop_params=False
+    )
+    
+    assert "context_management" in result
+    assert "edits" in result["context_management"]
+    assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
+    assert result["context_management"]["edits"][0]["trigger"]["value"] == 200000
+    
+    # Test with Anthropic dict format (should pass through)
+    non_default_params_anthropic = {
+        "context_management": {
+            "edits": [{
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 150000},
+                "instructions": "Focus on preserving code"
+            }]
+        }
+    }
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params_anthropic,
+        optional_params=optional_params,
+        model="claude-opus-4-6",
+        drop_params=False
+    )
+    
+    assert "context_management" in result
+    assert result["context_management"] == non_default_params_anthropic["context_management"]
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
