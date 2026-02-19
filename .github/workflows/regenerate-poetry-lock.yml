@@ -50,7 +50,7 @@ jobs:
           git checkout -b "$BRANCH"
           git add poetry.lock
           git commit -m "chore: regenerate poetry.lock to match pyproject.toml"
-          git push origin "$BRANCH"
+          git push -f origin "$BRANCH"
           gh pr create \
             --title "chore: regenerate poetry.lock to match pyproject.toml" \
             --body "$(cat <<'EOF'
