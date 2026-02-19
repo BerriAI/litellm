@@ -3750,11 +3750,10 @@ async def test_sso_role_preserved_without_role_mappings():
             ), "user_defined_values should retain the SSO role after insert_sso_user"
 
     finally:
-        if original_default_params is not None:
-            litellm.default_internal_user_params = original_default_params
-        else:
-            if hasattr(litellm, "default_internal_user_params"):
-                delattr(litellm, "default_internal_user_params")
+        # Restore original default_internal_user_params (always assign, never delattr —
+        # deleting the attribute causes AttributeError in subsequent tests because
+        # litellm.__getattr__ has no handler for this name)
+        litellm.default_internal_user_params = original_default_params
 
 
 class TestSSOReadinessEndpoint:
