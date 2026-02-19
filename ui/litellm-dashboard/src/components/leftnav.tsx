@@ -27,7 +27,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { ConfigProvider, Layout, Menu } from "antd";
+import { Badge, ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
@@ -112,6 +112,18 @@ const menuGroups: MenuGroup[] = [
         label: (
           <span className="flex items-center gap-4">
             Policies
+          </span>
+        ),
+        icon: <AuditOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "approvals",
+        page: "approvals",
+        label: (
+          <span className="flex items-center gap-4">
+            Approvals
+            <Badge count={5} style={{ backgroundColor: "#faad14" }} />
           </span>
         ),
         icon: <AuditOutlined />,
