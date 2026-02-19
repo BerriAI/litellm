@@ -205,12 +205,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Load categories if provided
         if categories:
             self._load_categories(categories)
-        else:
-            verbose_proxy_logger.warning(
-                "ContentFilterGuardrail has no content categories configured. "
-                "Toxic/abuse and other category-based keyword filtering will not run. "
-                "Add categories (e.g. harm_toxic_abuse) in the guardrail config to enable them."
-            )
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
         normalized_patterns: List[ContentFilterPattern] = []

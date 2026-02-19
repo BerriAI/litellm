@@ -736,6 +736,16 @@ def get_end_user_id_from_request_body(
         user_id_from_metadata_field = metadata_dict.get("user_id")
         if user_id_from_metadata_field is not None:
             return str(user_id_from_metadata_field)
+        
+    
+    # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
+    # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
+    # Only use this for end-user identification in trusted environments where you control
+    # the calling application. For untrusted callers, prefer using headers or server-side
+    # middleware to set the end_user_id to prevent impersonation.
+    if request_body.get("safety_identifier") is not None:
+        user_from_body_user_field = request_body["safety_identifier"]
+        return str(user_from_body_user_field)
 
     return None
 

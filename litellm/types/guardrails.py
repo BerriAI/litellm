@@ -70,6 +70,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    MCP_END_USER_PERMISSION = "mcp_end_user_permission"
 
 
 class Role(Enum):
