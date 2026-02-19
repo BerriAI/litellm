@@ -68,7 +68,9 @@ router = APIRouter()
 pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
-_registered_pass_through_routes: Dict[str, Dict[str, Union[str, Dict[str, Any]]]] = {}
+_registered_pass_through_routes: Dict[
+    str, Dict[str, Union[str, List[str], Dict[str, Any]]]
+] = {}
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
@@ -498,6 +500,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_project_id=user_api_key_dict.project_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
@@ -964,7 +967,7 @@ async def pass_through_request(  # noqa: PLR0915
 
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
+                message=getattr(e, "message", str(getattr(e, "detail", str(e)))),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
@@ -1107,7 +1110,9 @@ def create_pass_through_route(
             fastapi_response: Response,
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
-            custom_body: Optional[dict] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
+            custom_body: Optional[
+                dict
+            ] = None,  # accepted for signature compatibility with URL-based path; not forwarded because chat_completion_pass_through_endpoint does not support it
         ):
             return await chat_completion_pass_through_endpoint(
                 fastapi_response=fastapi_response,
@@ -1150,8 +1155,7 @@ def create_pass_through_route(
 
             passthrough_params = (
                 InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                    route=path,
-                    method=request.method
+                    route=path, method=request.method
                 )
             )
             target_params = {
@@ -1865,7 +1869,7 @@ class InitPassThroughEndpointHelpers:
         # Default to all methods if none specified (backward compatibility)
         if methods is None or len(methods) == 0:
             methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
-        
+
         # Create route key that includes methods for uniqueness
         methods_str = ",".join(sorted(methods))
         route_key = f"{endpoint_id}:exact:{path}:{methods_str}"
@@ -1873,7 +1877,7 @@ class InitPassThroughEndpointHelpers:
         # Check if this exact route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
-                "Updating duplicate exact pass through endpoint: %s with methods %s (already registered)",
+                "Updating duplicate exact pass through endpoint: %s (already registered)",
                 path,
                 methods,
             )
@@ -1941,7 +1945,7 @@ class InitPassThroughEndpointHelpers:
         # Default to all methods if none specified (backward compatibility)
         if methods is None or len(methods) == 0:
             methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
-        
+
         wildcard_path = f"{path}/{{subpath:path}}"
         methods_str = ",".join(sorted(methods))
         route_key = f"{endpoint_id}:subpath:{path}:{methods_str}"
@@ -2066,8 +2070,8 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
                 if route_type == "exact" and route == registered_path:
                     return True
@@ -2080,16 +2084,18 @@ class InitPassThroughEndpointHelpers:
         return False
 
     @staticmethod
-    def get_registered_pass_through_route(route: str, method: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_registered_pass_through_route(
+        route: str, method: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
         for key in _registered_pass_through_routes.keys():
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
-                    parts[2]
+                registered_path = (
+                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
-                
+
                 # Get the methods for this route
                 route_methods = _registered_pass_through_routes[key].get("methods", [])
 
@@ -2098,12 +2104,18 @@ class InitPassThroughEndpointHelpers:
                 if route_type == "exact" and route == registered_path:
                     path_matches = True
                 elif route_type == "subpath":
-                    if route == registered_path or route.startswith(registered_path + "/"):
+                    if route == registered_path or route.startswith(
+                        registered_path + "/"
+                    ):
                         path_matches = True
-                
+
                 # If path matches and method filter is provided, check if method is allowed
                 if path_matches:
-                    if method is None or not route_methods or method in route_methods:
+                    if (
+                        method is None
+                        or not route_methods
+                        or method in route_methods
+                    ):
                         return _registered_pass_through_routes[key]
 
         return None
@@ -2204,7 +2216,7 @@ async def initialize_pass_through_endpoints(
 
         # Get guardrails config if present
         _guardrails = endpoint.get("guardrails", None)
-        
+
         # Get methods list if present (None means all methods for backward compatibility)
         _methods = endpoint.get("methods", None)
 
@@ -2228,7 +2240,9 @@ async def initialize_pass_through_endpoints(
         )
 
         # Generate route key with methods for tracking
-        methods_for_key = _methods if _methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        methods_for_key = (
+            _methods if _methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        )
         methods_str = ",".join(sorted(methods_for_key))
         visited_endpoints.add(f"{endpoint_id}:exact:{_path}:{methods_str}")
 
@@ -2427,9 +2441,7 @@ async def get_pass_through_endpoints(
 
     # Merge: config endpoints not in DB + all DB endpoints (DB overrides config for same path)
     db_paths = {ep.path for ep in db_endpoints}
-    config_only_endpoints = [
-        ep for ep in config_endpoints if ep.path not in db_paths
-    ]
+    config_only_endpoints = [ep for ep in config_endpoints if ep.path not in db_paths]
     if endpoint_id is not None:
         # When filtering by endpoint_id, only return if found in DB (config endpoints use generated IDs)
         pass_through_endpoints = db_endpoints

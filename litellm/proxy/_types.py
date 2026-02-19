@@ -198,6 +198,7 @@ class Litellm_EntityType(enum.Enum):
     TEAM = "team"
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"
+    PROJECT = "project"
     TAG = "tag"
 
     # global proxy level entity
@@ -236,6 +237,9 @@ class KeyManagementRoutes(str, enum.Enum):
 
     # list routes
     KEY_LIST = "/key/list"
+
+    # team usage routes
+    TEAM_DAILY_ACTIVITY = "/team/daily/activity"
 
 
 class LiteLLMRoutes(enum.Enum):
@@ -505,6 +509,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
     ]
 
     management_routes = [
@@ -925,6 +930,7 @@ class GenerateKeyRequest(KeyRequestBase):
         description="How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True",
     )
     organization_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -934,6 +940,7 @@ class GenerateKeyResponse(KeyRequestBase):
     user_id: Optional[str] = None
     token_id: Optional[str] = None
     organization_id: Optional[str] = None
+    project_id: Optional[str] = None
     litellm_budget_table: Optional[Any] = None
     token: Optional[str] = None
     created_by: Optional[str] = None
@@ -2179,6 +2186,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     config: Dict = {}
     user_id: Optional[str] = None
     team_id: Optional[str] = None
+    project_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Dict = {}
     tpm_limit: Optional[int] = None
@@ -2527,6 +2535,116 @@ class NewOrganizationResponse(LiteLLM_OrganizationTable):
     organization_id: str  # type: ignore
     created_at: datetime
     updated_at: datetime
+
+
+### PROJECT MANAGEMENT TYPES ###
+
+
+class ProjectBase(LiteLLMPydanticObjectBase):
+    """Base fields shared by project create/update requests"""
+
+    project_id: Optional[str] = None
+    project_alias: Optional[str] = None
+    team_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    models: Optional[List[str]] = None
+    blocked: bool = False
+
+
+class NewProjectRequest(LiteLLM_BudgetTable):
+    """Request model for POST /project/new"""
+
+    project_id: Optional[str] = None
+    project_alias: Optional[str] = None
+    description: Optional[str] = None
+    team_id: str
+    budget_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    models: List[str] = []
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
+    blocked: bool = False
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_model_info(cls, values):
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if values.get(field) is not None:
+                if values.get("metadata") is None:
+                    values.update({"metadata": {}})
+                values["metadata"][field] = values.get(field)
+                values.pop(field)
+        return values
+
+
+class UpdateProjectRequest(LiteLLM_BudgetTable):
+    """Request model for POST /project/update"""
+
+    project_id: str
+    project_alias: Optional[str] = None
+    description: Optional[str] = None
+    team_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    models: Optional[List[str]] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
+    blocked: Optional[bool] = None
+    budget_id: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_model_info(cls, values):
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if values.get(field) is not None:
+                if values.get("metadata") is None:
+                    values.update({"metadata": {}})
+                values["metadata"][field] = values.get(field)
+                values.pop(field)
+        return values
+
+
+class DeleteProjectRequest(LiteLLMPydanticObjectBase):
+    """Request model for DELETE /project/delete"""
+
+    project_ids: List[str]
+
+
+class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
+    """Database model representation for project"""
+
+    project_id: str
+    project_alias: Optional[str] = None
+    description: Optional[str] = None
+    team_id: Optional[str] = None
+    budget_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    models: List[str] = []
+    spend: float = 0.0
+    model_spend: Optional[dict] = None
+    model_rpm_limit: Optional[dict] = None
+    model_tpm_limit: Optional[dict] = None
+    blocked: bool = False
+    object_permission_id: Optional[str] = None
+    created_by: str
+    updated_by: str
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+
+
+class NewProjectResponse(LiteLLM_ProjectTable):
+    """Response model for POST /project/new"""
+
+    project_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class LiteLLM_ProjectTableCachedObj(LiteLLM_ProjectTable):
+    """Cached version for auth checks. Mirrors LiteLLM_TeamTableCachedObj pattern."""
+
+    last_refreshed_at: Optional[float] = None
 
 
 class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
@@ -2900,6 +3018,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key: Optional[str]
     user_api_key_alias: Optional[str]
     user_api_key_team_id: Optional[str]
+    user_api_key_project_id: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -3137,6 +3256,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the model
     """
 
+    project_model_access_denied = "project_model_access_denied"
+    """
+    Project does not have access to the model
+    """
+
     expired_key = "expired_key"
     """
     Key has expired
@@ -3199,7 +3323,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team", "org"]
+        cls, object_type: Literal["key", "user", "team", "org", "project"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -3212,6 +3336,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.user_model_access_denied
         elif object_type == "org":
             return cls.org_model_access_denied
+        elif object_type == "project":
+            return cls.project_model_access_denied
 
     @classmethod
     def get_vector_store_access_error_type_for_object(
@@ -3974,8 +4100,8 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     file_object: Optional[OpenAIFileObject] = None
     model_mappings: Dict[str, str]
     flat_model_file_ids: List[str]
-    created_by: Optional[str]
-    updated_by: Optional[str]
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
 
@@ -3993,8 +4119,8 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     resource_object: Optional[Any] = None  # VectorStoreCreateResponse
     model_mappings: Dict[str, str]
     flat_model_resource_ids: List[str]
-    created_by: Optional[str]
-    updated_by: Optional[str]
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
 
