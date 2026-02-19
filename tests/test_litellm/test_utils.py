@@ -56,6 +56,55 @@ def test_check_provider_match_azure_ai_allows_openai_and_azure():
     ) is False
 
 
+def test_check_provider_match_github_allows_upstream_provider_metadata():
+    """
+    Test that github provider can match upstream provider metadata.
+    GitHub Models can provide models from multiple providers.
+    """
+    assert _check_provider_match(
+        model_info={"litellm_provider": "openai"},
+        custom_llm_provider="github",
+    ) is True
+
+    assert _check_provider_match(
+        model_info={"litellm_provider": "github"},
+        custom_llm_provider="github",
+    ) is True
+
+    assert _check_provider_match(
+        model_info={"litellm_provider": "anthropic"},
+        custom_llm_provider="github",
+    ) is True
+
+
+def test_supports_function_calling_github_openai_alias():
+    assert litellm.utils.supports_function_calling(model="github/gpt-4o-mini") is True
+    assert (
+        litellm.utils.supports_function_calling(
+            model="gpt-4o-mini", custom_llm_provider="github"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_github_anthropic_alias():
+    assert (
+        litellm.utils.supports_function_calling(
+            model="github/claude-3-5-sonnet-latest"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_unknown_github_alias_returns_false():
+    assert (
+        litellm.utils.supports_function_calling(
+            model="github/non-existent-model-for-capability-check"
+        )
+        is False
+    )
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
