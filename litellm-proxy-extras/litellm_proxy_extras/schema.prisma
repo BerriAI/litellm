@@ -306,6 +306,7 @@ model LiteLLM_VerificationToken {
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
+    last_active     DateTime?  // When this key was last used
     rotation_count   Int?       @default(0) // Number of times key has been rotated
     auto_rotate      Boolean?   @default(false) // Whether this key should be auto-rotated
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
@@ -376,6 +377,7 @@ model LiteLLM_DeletedVerificationToken {
     created_by              String?   // Original creator
     updated_at              DateTime? // Last update timestamp before deletion
     updated_by              String?   // Last user who updated before deletion
+    last_active             DateTime? // When this key was last used before deletion
     rotation_count          Int?      @default(0)
     auto_rotate             Boolean?  @default(false)
     rotation_interval       String?
