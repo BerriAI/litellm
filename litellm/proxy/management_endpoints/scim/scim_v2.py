@@ -1130,8 +1130,19 @@ def _apply_patch_ops(
 
         # Handle SCIM operations without path where value contains the fields
         if not path and isinstance(value, dict):
-            if "active" in value:
-                _handle_active_update(op_type, value["active"], metadata)
+            for key, val in value.items():
+                key_lower = key.lower()
+                if key_lower == "active":
+                    _handle_active_update(op_type, val, metadata)
+                elif key_lower == "displayname":
+                    _handle_displayname_update(op_type, val, update_data)
+                elif key_lower == "externalid":
+                    _handle_externalid_update(op_type, val, update_data)
+                elif key_lower == "name" and isinstance(val, dict):
+                    for name_key, name_val in val.items():
+                        name_key_lower = name_key.lower()
+                        if name_key_lower in ("givenname", "familyname"):
+                            _handle_name_update(f"name.{name_key_lower}", op_type, name_val, scim_metadata)
             continue
 
         if path == "displayname":
