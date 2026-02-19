@@ -23,6 +23,7 @@ import {
   ApiOutlined,
 } from "@ant-design/icons";
 import KeyValueInput from "./key_value_input";
+import QueryParamInput from "./query_param_input";
 import { passThroughItem } from "./pass_through_settings";
 import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -292,6 +293,34 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                 }
               >
                 <KeyValueInput />
+              </Form.Item>
+            </Card>
+
+            {/* Default Query Parameters Section */}
+            <Card className="p-6">
+              <Title className="text-lg font-semibold text-gray-900 mb-2">Default Query Parameters</Title>
+              <Subtitle className="text-gray-600 mb-6">
+                Add query parameters that will be automatically sent with every request to the target API
+              </Subtitle>
+
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    Default Query Parameters (Optional)
+                    <Tooltip title="Query parameters that will be added to all requests. Clients can override these by providing their own values.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="default_query_params"
+                extra={
+                  <div className="text-xs text-gray-500 mt-2">
+                    <div className="font-medium mb-1">Parameters are sent with all GET, POST, PUT, PATCH requests</div>
+                    <div>Client parameters override defaults. Examples: version=v1, format=json, key=default</div>
+                  </div>
+                }
+              >
+                <QueryParamInput />
               </Form.Item>
             </Card>
 
