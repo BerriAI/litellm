@@ -11,6 +11,9 @@ on:
       - pyproject.toml
   workflow_dispatch:
 
+permissions:
+  contents: read  # GITHUB_TOKEN is not used for writes; GH_TOKEN (PAT) handles push + PR creation
+
 jobs:
   regenerate-lock:
     runs-on: ubuntu-latest
