@@ -527,7 +527,11 @@ class EnrichTemplateRequest(BaseModel):
     template_id: str
     parameters: dict
     model: Optional[str] = None
-    competitors: Optional[list] = None
+    competitors: Optional[List[str]] = Field(
+        default=None,
+        max_length=MAX_COMPETITOR_NAMES,
+        description="Optional list of competitor names (max 30)",
+    )
 
 
 def _validate_enrichment_request(data: EnrichTemplateRequest) -> tuple[dict, dict, str]:
@@ -544,6 +548,13 @@ def _validate_enrichment_request(data: EnrichTemplateRequest) -> tuple[dict, dic
     llm_enrichment = template.get("llm_enrichment")
     if llm_enrichment is None:
         raise HTTPException(status_code=400, detail="Template does not support LLM enrichment")
+
+    # Validate competitors list size if provided
+    if data.competitors and len(data.competitors) > MAX_COMPETITOR_NAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"competitors list exceeds maximum of {MAX_COMPETITOR_NAMES}",
+        )
 
     brand_name = data.parameters.get(llm_enrichment["parameter"], "")
     if not brand_name:
@@ -699,7 +710,9 @@ async def _generate_competitor_variations(
     if not competitors:
         return {}
 
-    names_list = "\n".join(competitors)
+    # Cap the list to prevent oversized prompts
+    capped = competitors[:MAX_COMPETITOR_NAMES]
+    names_list = "\n".join(capped)
     prompt = (
         "For each company/brand name below, list 3-5 common misspellings, abbreviations, "
         "and alternate names that people might type. Include typos, missing spaces, "
@@ -721,7 +734,7 @@ async def _generate_competitor_variations(
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
         raw = response.choices[0].message.content or ""  # type: ignore
-        return _parse_variations_response(raw, competitors)
+        return _parse_variations_response(raw, capped)
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor variation generation failed: %s", e)
         return {}
