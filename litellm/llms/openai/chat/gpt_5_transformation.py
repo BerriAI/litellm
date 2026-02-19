@@ -24,6 +24,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return "gpt-5" in model and "gpt-5-chat" not in model
 
     @classmethod
+    def is_model_gpt_5_search_model(cls, model: str) -> bool:
+        """Check if the model is a GPT-5 search variant (e.g. gpt-5-search-api)."""
+        return "gpt-5" in model and "search" in model
+
+    @classmethod
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:
         """Check if the model is specifically a GPT-5 Codex variant."""
         return "gpt-5-codex" in model
@@ -60,6 +65,23 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         return model_name.startswith("gpt-5.2")
 
     def get_supported_openai_params(self, model: str) -> list:
+        if self.is_model_gpt_5_search_model(model):
+            return [
+                "max_tokens",
+                "max_completion_tokens",
+                "stream",
+                "stream_options",
+                "web_search_options",
+                "service_tier",
+                "safety_identifier",
+                "response_format",
+                "user",
+                "store",
+                "verbosity",
+                "max_retries",
+                "extra_headers",
+            ]
+
         from litellm.utils import supports_tool_choice
 
         base_gpt_series_params = super().get_supported_openai_params(model=model)
@@ -90,6 +112,18 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        if self.is_model_gpt_5_search_model(model):
+            if "max_tokens" in non_default_params:
+                optional_params["max_completion_tokens"] = non_default_params.pop(
+                    "max_tokens"
+                )
+            return super()._map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+
         reasoning_effort = (
             non_default_params.get("reasoning_effort")
             or optional_params.get("reasoning_effort")
