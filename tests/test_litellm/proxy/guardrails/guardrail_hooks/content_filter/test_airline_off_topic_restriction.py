@@ -142,11 +142,23 @@ class TestAirlineOffTopicRestriction:
         assert exc_info.value.status_code == 403
 
     def test_off_topic_movie_conditional(self):
-        """Movie recommendations should be blocked via conditional matching."""
+        """Movie questions with a block word should be blocked."""
         guardrail = _make_guardrail()
         with pytest.raises(HTTPException) as exc_info:
-            guardrail._filter_single_text("Recommend me a good movie to watch")
+            guardrail._filter_single_text("What is the top movie to watch on Netflix?")
         assert exc_info.value.status_code == 403
+
+    def test_on_topic_recommend_seat(self):
+        """Airline recommendation questions should pass (not false-positive)."""
+        guardrail = _make_guardrail()
+        result = guardrail._filter_single_text("Can you recommend the best seat?")
+        assert "recommend" in result.lower()
+
+    def test_on_topic_explain_booking(self):
+        """Explain questions about airline topics should pass."""
+        guardrail = _make_guardrail()
+        result = guardrail._filter_single_text("Can you explain my booking details?")
+        assert "explain" in result.lower()
 
     def test_off_topic_stock_conditional(self):
         """Stock market questions should be blocked via conditional matching."""
