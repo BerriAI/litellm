@@ -1047,6 +1047,8 @@ For long-running conversations, you can enable **server-side compaction** so tha
 
 Supported on the OpenAI Responses API when using the `openai` or `azure` provider. Pass `context_management` with a compaction entry and `compact_threshold` (token count; minimum 1000). When the context crosses the threshold, the server compacts in-stream and continues. Chain turns with `previous_response_id` or by appending output items to your next input array. See [OpenAI Compaction guide](https://developers.openai.com/api/docs/guides/compaction) for details.
 
+> **Note:** You can use openai `context_management` format with Anthropic models via LiteLLM via responses API. LiteLLM will automatically translate this format for Anthropic and handle context management for you.
+
 For explicit control over when compaction runs, use the standalone compact endpoint (`POST /v1/responses/compact`) instead.
 
 ### Python SDK

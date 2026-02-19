@@ -11,8 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union,
-                    cast)
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -21,27 +20,42 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import (CLI_JWT_EXPIRATION_HOURS, CLI_JWT_TOKEN_NAME,
-                               DEFAULT_ACCESS_GROUP_CACHE_TTL,
-                               DEFAULT_IN_MEMORY_TTL,
-                               DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-                               DEFAULT_MAX_RECURSE_DEPTH,
-                               EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE)
+from litellm.constants import (
+    CLI_JWT_EXPIRATION_HOURS,
+    CLI_JWT_TOKEN_NAME,
+    DEFAULT_ACCESS_GROUP_CACHE_TTL,
+    DEFAULT_IN_MEMORY_TTL,
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    DEFAULT_MAX_RECURSE_DEPTH,
+    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.proxy._types import (RBAC_ROLES, CallInfo,
-                                  LiteLLM_AccessGroupTable,
-                                  LiteLLM_BudgetTable, LiteLLM_EndUserTable,
-                                  Litellm_EntityType, LiteLLM_JWTAuth,
-                                  LiteLLM_ObjectPermissionTable,
-                                  LiteLLM_OrganizationMembershipTable,
-                                  LiteLLM_OrganizationTable, LiteLLM_TagTable,
-                                  LiteLLM_TeamMembership, LiteLLM_TeamTable,
-                                  LiteLLM_TeamTableCachedObj,
-                                  LiteLLM_UserTable, LiteLLMRoutes,
-                                  LitellmUserRoles, NewTeamRequest,
-                                  ProxyErrorTypes, ProxyException,
-                                  RoleBasedPermissions, SpecialModelNames,
-                                  UserAPIKeyAuth)
+from litellm.proxy._types import (
+    RBAC_ROLES,
+    CallInfo,
+    LiteLLM_AccessGroupTable,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_OrganizationMembershipTable,
+    LiteLLM_OrganizationTable,
+    LiteLLM_TagTable,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_UserTable,
+    LiteLLMRoutes,
+    LitellmUserRoles,
+    NewTeamRequest,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
@@ -64,6 +78,7 @@ db_cache_expiry = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 all_routes = LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.management_routes.value
 
+
 def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     """
     Log a warning when budget lookup fails; cache will not be populated.
@@ -81,38 +96,41 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
         x in err_str
         for x in ("column", "schema", "does not exist", "prisma", "migrate")
     ):
-        hint = " Run `prisma db push` or `prisma migrate deploy` to fix schema mismatches."
+        hint = (
+            " Run `prisma db push` or `prisma migrate deploy` to fix schema mismatches."
+        )
     verbose_proxy_logger.error(
         f"Budget lookup failed for {entity}; cache will not be populated. "
         f"Each request will hit the database. Error: {error}.{hint}"
     )
+
 
 def _is_model_cost_zero(
     model: Optional[Union[str, List[str]]], llm_router: Optional[Router]
 ) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
-    
+
     Uses the router's get_model_group_info method to get pricing information.
-    
+
     Args:
         model: The model name or list of model names
         llm_router: The LiteLLM router instance
-    
+
     Returns:
         bool: True if all costs for the model are zero, False otherwise
     """
     if model is None or llm_router is None:
         return False
-    
+
     # Handle list of models
     model_list = [model] if isinstance(model, str) else model
-    
+
     for model_name in model_list:
         try:
             # Use router's get_model_group_info method directly for better reliability
             model_group_info = llm_router.get_model_group_info(model_group=model_name)
-            
+
             if model_group_info is None:
                 # Model not found or no pricing info available
                 # Conservative approach: assume it has cost
@@ -120,40 +138,85 @@ def _is_model_cost_zero(
                     f"No model group info found for {model_name}, assuming it has cost"
                 )
                 return False
-            
+
             # Check costs for this model
             # Only allow bypass if BOTH costs are explicitly set to 0 (not None)
             input_cost = model_group_info.input_cost_per_token
             output_cost = model_group_info.output_cost_per_token
-            
+
             # If costs are not explicitly configured (None), assume it has cost
             if input_cost is None or output_cost is None:
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has undefined cost (input: {input_cost}, output: {output_cost}), assuming it has cost"
                 )
                 return False
-            
+
             # If either cost is non-zero, return False
             if input_cost > 0 or output_cost > 0:
                 verbose_proxy_logger.debug(
                     f"Model {model_name} has non-zero cost (input: {input_cost}, output: {output_cost})"
                 )
                 return False
-            
+
             # This model has zero cost explicitly configured
             verbose_proxy_logger.debug(
                 f"Model {model_name} has zero cost explicitly configured (input: {input_cost}, output: {output_cost})"
             )
-            
+
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
             verbose_proxy_logger.debug(
                 f"Error checking cost for model {model_name}: {str(e)}, assuming it has cost"
             )
             return False
-    
+
     # All models checked have zero cost
     return True
+
+
+async def _run_project_checks(
+    project_object: Optional[LiteLLM_ProjectTableCachedObj],
+    _model: Optional[Union[str, List[str]]],
+    llm_router: Optional[Router],
+    skip_budget_checks: bool,
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """
+    Run all project-level checks: blocked, model access, budget, soft budget.
+    Extracted from common_checks() to keep statement count manageable.
+    """
+    if project_object is None:
+        return
+
+    # 1.1. If project is blocked
+    if project_object.blocked is True:
+        raise Exception(
+            f"Project={project_object.project_id} is blocked. Update via `/project/update` if you're an admin."
+        )
+
+    # 2.2 If project can call model
+    if _model and len(project_object.models) > 0:
+        can_project_access_model(
+            model=_model,
+            project_object=project_object,
+            llm_router=llm_router,
+        )
+
+    if not skip_budget_checks:
+        # 3.0.2. If project is in budget
+        await _project_max_budget_check(
+            project_object=project_object,
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        # 3.0.3. If project is over soft budget (alert only, doesn't block)
+        await _project_soft_budget_check(
+            project_object=project_object,
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
 
 async def common_checks(
@@ -169,13 +232,18 @@ async def common_checks(
     valid_token: Optional[UserAPIKeyAuth],
     request: Request,
     skip_budget_checks: bool = False,
+    project_object: Optional[LiteLLM_ProjectTableCachedObj] = None,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
 
     1. If team is blocked
+    1.1. If project is blocked
     2. If team can call model
+    2.2 If project can call model
     3. If team is in budget
+    3.0.2. If project is in budget
+    3.0.3. If project is over soft budget (alert only)
     4. If user passed in (JWT or key.user_id) - is in budget
     5. If end_user (either via JWT or 'user' passed to /chat/completions, /embeddings endpoint) is in budget
     6. [OPTIONAL] If 'enforce_end_user' enabled - did developer pass in 'user' param for openai endpoints
@@ -219,6 +287,16 @@ async def common_checks(
             llm_router=llm_router,
             user_object=user_object,
         )
+
+    # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
+    await _run_project_checks(
+        project_object=project_object,
+        _model=_model,
+        llm_router=llm_router,
+        skip_budget_checks=skip_budget_checks,
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
@@ -279,7 +357,10 @@ async def common_checks(
         )
 
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
-        if end_user_object is not None and end_user_object.litellm_budget_table is not None:
+        if (
+            end_user_object is not None
+            and end_user_object.litellm_budget_table is not None
+        ):
             end_user_budget = end_user_object.litellm_budget_table.max_budget
             if end_user_budget is not None and end_user_object.spend > end_user_budget:
                 raise litellm.BudgetExceededError(
@@ -353,8 +434,7 @@ async def common_checks(
     _request_metadata: dict = request_body.get("metadata", {}) or {}
     if _request_metadata.get("guardrails"):
         # check if team allowed to modify guardrails
-        from litellm.proxy.guardrails.guardrail_helpers import \
-            can_modify_guardrails
+        from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
 
         can_modify: bool = can_modify_guardrails(team_object)
         if can_modify is False:
@@ -529,11 +609,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 
 
 def allowed_routes_check(
-    user_role: Literal[
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.TEAM,
-        LitellmUserRoles.INTERNAL_USER,
-    ],
+    user_role: LitellmUserRoles,
     user_route: str,
     litellm_proxy_roles: LiteLLM_JWTAuth,
 ) -> bool:
@@ -1358,7 +1434,7 @@ async def _get_team_object_from_user_api_key_cache(
         raise Exception
 
     _response = LiteLLM_TeamTableCachedObj(**response.dict())
-    
+
     # Load object_permission if object_permission_id exists but object_permission is not loaded
     if _response.object_permission_id and not _response.object_permission:
         try:
@@ -1373,7 +1449,7 @@ async def _get_team_object_from_user_api_key_cache(
             verbose_proxy_logger.debug(
                 f"Failed to load object_permission for team {team_id} with object_permission_id={_response.object_permission_id}: {e}"
             )
-    
+
     # save the team object to cache
     await _cache_team_object(
         team_id=team_id,
@@ -1800,8 +1876,9 @@ class ExperimentalUIJWTToken:
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            encrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
 
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
@@ -1847,8 +1924,9 @@ class ExperimentalUIJWTToken:
         """
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            encrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            encrypt_value_helper,
+        )
 
         if user_info.user_role is None:
             raise Exception("User role is required for CLI JWT login")
@@ -1887,8 +1965,9 @@ class ExperimentalUIJWTToken:
         import json
 
         from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
-            decrypt_value_helper
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            decrypt_value_helper,
+        )
 
         decrypted_token = decrypt_value_helper(
             hashed_token, key="ui_hash_key", exception_type="debug"
@@ -2136,10 +2215,8 @@ async def _get_resources_from_access_groups(
     # Lazy import to avoid circular imports
     if prisma_client is None or user_api_key_cache is None:
         from litellm.proxy.proxy_server import prisma_client as _prisma_client
-        from litellm.proxy.proxy_server import \
-            proxy_logging_obj as _proxy_logging_obj
-        from litellm.proxy.proxy_server import \
-            user_api_key_cache as _user_api_key_cache
+        from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+        from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
 
         prisma_client = prisma_client or _prisma_client
         user_api_key_cache = user_api_key_cache or _user_api_key_cache
@@ -2280,7 +2357,7 @@ def _can_object_call_model(
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
     team_id: Optional[str] = None,
-    object_type: Literal["user", "team", "key", "org"] = "user",
+    object_type: Literal["user", "team", "key", "org", "project"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
     """
@@ -2472,6 +2549,24 @@ async def can_team_access_model(
                     object_type="team",
                 )
         raise
+
+
+def can_project_access_model(
+    model: Union[str, List[str]],
+    project_object: LiteLLM_ProjectTableCachedObj,
+    llm_router: Optional[Router],
+) -> Literal[True]:
+    """
+    Returns True if the project can access a specific model.
+
+    Raises ProxyException if access is denied.
+    """
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=project_object.models if project_object else [],
+        object_type="project",
+    )
 
 
 async def can_user_call_model(
@@ -2774,14 +2869,26 @@ async def _team_soft_budget_check(
         if valid_token:
             # Extract alert emails from team metadata
             alert_emails: Optional[List[str]] = None
-            if team_object.metadata is not None and isinstance(team_object.metadata, dict):
-                soft_budget_alert_emails = team_object.metadata.get("soft_budget_alerting_emails")
+            if team_object.metadata is not None and isinstance(
+                team_object.metadata, dict
+            ):
+                soft_budget_alert_emails = team_object.metadata.get(
+                    "soft_budget_alerting_emails"
+                )
                 if soft_budget_alert_emails is not None:
                     if isinstance(soft_budget_alert_emails, list):
-                        alert_emails = [email for email in soft_budget_alert_emails if isinstance(email, str) and email.strip()]
+                        alert_emails = [
+                            email
+                            for email in soft_budget_alert_emails
+                            if isinstance(email, str) and email.strip()
+                        ]
                     elif isinstance(soft_budget_alert_emails, str):
                         # Handle comma-separated string
-                        alert_emails = [email.strip() for email in soft_budget_alert_emails.split(",") if email.strip()]
+                        alert_emails = [
+                            email.strip()
+                            for email in soft_budget_alert_emails.split(",")
+                            if email.strip()
+                        ]
                     # Filter out empty strings
                     if alert_emails:
                         alert_emails = [email for email in alert_emails if email]
@@ -2818,6 +2925,150 @@ async def _team_soft_budget_check(
                     user_info=call_info,
                 )
             )
+
+
+async def _project_max_budget_check(
+    project_object: Optional[LiteLLM_ProjectTableCachedObj],
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Check if the project is over its max budget.
+
+    Raises:
+        BudgetExceededError if the project is over its max budget.
+        Triggers a budget alert if the project is over its max budget.
+    """
+    if project_object is None:
+        return
+
+    max_budget = None
+    if project_object.litellm_budget_table is not None:
+        max_budget = project_object.litellm_budget_table.max_budget
+
+    if (
+        max_budget is not None
+        and project_object.spend is not None
+        and project_object.spend > max_budget
+    ):
+        if valid_token:
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=project_object.spend,
+                max_budget=max_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                event_group=Litellm_EntityType.PROJECT,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="project_budget",
+                    user_info=call_info,
+                )
+            )
+
+        raise litellm.BudgetExceededError(
+            current_cost=project_object.spend,
+            max_budget=max_budget,
+            message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_object.spend}, Max budget: {max_budget}",
+        )
+
+
+async def _project_soft_budget_check(
+    project_object: Optional[LiteLLM_ProjectTableCachedObj],
+    valid_token: Optional[UserAPIKeyAuth],
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Triggers a budget alert if the project is over its soft budget.
+
+    Mirrors _team_soft_budget_check() pattern.
+    """
+    if project_object is None:
+        return
+
+    soft_budget = None
+    if project_object.litellm_budget_table is not None:
+        soft_budget = project_object.litellm_budget_table.soft_budget
+
+    if (
+        soft_budget is not None
+        and project_object.spend is not None
+        and project_object.spend >= soft_budget
+    ):
+        verbose_proxy_logger.debug(
+            "Crossed Soft Budget for project %s, spend %s, soft_budget %s",
+            project_object.project_id,
+            project_object.spend,
+            soft_budget,
+        )
+        if valid_token:
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=project_object.spend,
+                max_budget=None,
+                soft_budget=soft_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                event_group=Litellm_EntityType.PROJECT,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="soft_budget",
+                    user_info=call_info,
+                )
+            )
+
+
+async def get_project_object(
+    project_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> Optional[LiteLLM_ProjectTableCachedObj]:
+    """
+    Fetch project object from cache or DB.
+
+    Follows get_team_object() caching pattern with TTL and last_refreshed_at.
+
+    Returns LiteLLM_ProjectTableCachedObj or None if not found.
+    """
+    if prisma_client is None:
+        return None
+
+    # Check cache first
+    cache_key = "project_id:{}".format(project_id)
+    cached_obj = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached_obj is not None:
+        if isinstance(cached_obj, dict):
+            return LiteLLM_ProjectTableCachedObj(**cached_obj)
+        elif isinstance(cached_obj, LiteLLM_ProjectTableCachedObj):
+            return cached_obj
+
+    # Fetch from DB
+    project_row = await prisma_client.db.litellm_projecttable.find_unique(
+        where={"project_id": project_id},
+        include={"litellm_budget_table": True},
+    )
+    if project_row is None:
+        return None
+
+    project_obj = LiteLLM_ProjectTableCachedObj(**project_row.model_dump())
+
+    # Cache with TTL following _cache_management_object pattern
+    project_obj.last_refreshed_at = time.time()
+    await _cache_management_object(
+        key=cache_key,
+        value=project_obj,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return project_obj
 
 
 async def _organization_max_budget_check(
@@ -2921,8 +3172,7 @@ async def _tag_max_budget_check(
         BudgetExceededError if any tag is over its max budget.
         Triggers a budget alert if any tag is over its max budget.
     """
-    from litellm.proxy.common_utils.http_parsing_utils import \
-        get_tags_from_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
     if prisma_client is None:
         return
