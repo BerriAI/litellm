@@ -30,9 +30,9 @@ jobs:
         run: pip install poetry
 
       - name: Regenerate poetry.lock
-        # --no-update: re-solve only what pyproject.toml requires without
-        # upgrading packages that are already in the lock file.
-        run: poetry lock --no-update
+        # Resolves dependencies to match pyproject.toml without unnecessarily
+        # upgrading already-locked packages (--no-update was removed in Poetry 2.x).
+        run: poetry lock
 
       - name: Check whether poetry.lock actually changed
         id: diff
