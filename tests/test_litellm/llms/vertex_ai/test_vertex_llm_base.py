@@ -12,6 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -1059,7 +1060,7 @@ class TestVertexBase:
             "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
             "aws_region_name": "us-east-1",
         }
-        result = VertexBase._extract_aws_params(json_with_role)
+        result = VertexAIAwsWifAuth.extract_aws_params(json_with_role)
         assert result == {
             "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
             "aws_region_name": "us-east-1",
@@ -1071,7 +1072,7 @@ class TestVertexBase:
             "audience": "//iam.googleapis.com/...",
             "credential_source": {"environment_id": "aws1"},
         }
-        assert VertexBase._extract_aws_params(json_standard) == {}
+        assert VertexAIAwsWifAuth.extract_aws_params(json_standard) == {}
 
         # Case 3: Ignores unrecognized aws_* keys (e.g. aws_bedrock_runtime_endpoint)
         json_with_unknown = {
@@ -1081,7 +1082,7 @@ class TestVertexBase:
             "aws_unknown_field": "should-be-ignored",
             "aws_bedrock_runtime_endpoint": "should-also-be-ignored",
         }
-        result = VertexBase._extract_aws_params(json_with_unknown)
+        result = VertexAIAwsWifAuth.extract_aws_params(json_with_unknown)
         assert result == {
             "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
             "aws_region_name": "us-east-1",
@@ -1089,8 +1090,6 @@ class TestVertexBase:
 
     def test_credentials_from_aws_with_explicit_auth(self):
         """Test that explicit AWS auth creates credentials via supplier, not metadata."""
-        vertex_base = VertexBase()
-
         json_obj = {
             "type": "external_account",
             "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/aws",
@@ -1131,7 +1130,7 @@ class TestVertexBase:
             MockBaseAWSLLM.return_value = mock_base_aws
             MockAwsCredentials.return_value = mock_gcp_creds
 
-            result = vertex_base._credentials_from_aws_with_explicit_auth(
+            result = VertexAIAwsWifAuth.credentials_from_explicit_aws(
                 json_obj, aws_params, scopes
             )
 
@@ -1154,8 +1153,6 @@ class TestVertexBase:
 
     def test_credentials_from_aws_with_explicit_auth_requires_region(self):
         """Test that explicit AWS auth raises ValueError when region is missing."""
-        vertex_base = VertexBase()
-
         json_obj = {
             "type": "external_account",
             "audience": "//iam.googleapis.com/...",
@@ -1167,22 +1164,10 @@ class TestVertexBase:
         }
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
-        mock_boto3_creds = MagicMock()
-        mock_boto3_creds.access_key = "AKIAIOSFODNN7EXAMPLE"
-        mock_boto3_creds.secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        mock_boto3_creds.token = "FwoGZXIvYXdzEBYaDHqa0AP"
-
-        with patch(
-            "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM"
-        ) as MockBaseAWSLLM:
-            mock_base_aws = MagicMock()
-            mock_base_aws.get_credentials.return_value = mock_boto3_creds
-            MockBaseAWSLLM.return_value = mock_base_aws
-
-            with pytest.raises(ValueError, match="aws_region_name is required"):
-                vertex_base._credentials_from_aws_with_explicit_auth(
-                    json_obj, aws_params, scopes
-                )
+        with pytest.raises(ValueError, match="aws_region_name is required"):
+            VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                json_obj, aws_params, scopes
+            )
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
@@ -1207,9 +1192,8 @@ class TestVertexBase:
         mock_creds.expired = False
         mock_creds.project_id = "test-project"
 
-        with patch.object(
-            vertex_base,
-            "_credentials_from_aws_with_explicit_auth",
+        with patch(
+            "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
             return_value=mock_creds,
         ) as mock_explicit_auth, patch.object(
             vertex_base,
@@ -1267,9 +1251,8 @@ class TestVertexBase:
         mock_creds.expired = False
         mock_creds.project_id = "test-project"
 
-        with patch.object(
-            vertex_base,
-            "_credentials_from_aws_with_explicit_auth",
+        with patch(
+            "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
         ) as mock_explicit_auth, patch.object(
             vertex_base,
             "_credentials_from_identity_pool_with_aws",
