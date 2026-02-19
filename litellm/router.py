@@ -6755,7 +6755,13 @@ class Router:
             credential_values = CredentialAccessor.get_credential_values(
                 deployment.litellm_params.litellm_credential_name
             )
+            if not credential_values:
+                verbose_router_logger.warning(
+                    f"Credential '{deployment.litellm_params.litellm_credential_name}' not found in credential_list"
+                )
             credentials.update(credential_values)
+            # Remove the credential name since we've resolved it
+            credentials.pop("litellm_credential_name", None)
 
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
