@@ -163,7 +163,7 @@ class GenerateContentToCompletionHandler:
                     return generate_content_response
                 else:
                     # Transform streaming completion response to generate_content format
-                    transformed_stream = GOOGLE_GENAI_ADAPTER.translate_completion_output_params_streaming(
+                    transformed_stream = GOOGLE_GENAI_ADAPTER.sync_translate_completion_output_params_streaming(
                         completion_response
                     )
                     if transformed_stream is not None:
