@@ -229,10 +229,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         - maxItems/minItems: Not supported for array types
         - minimum/maximum: Not supported for numeric types
         - minLength/maxLength: Not supported for string types
-        
+
         This mirrors the transformation done by the Anthropic Python SDK.
         See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
-        
+
         The SDK approach:
         1. Remove unsupported constraints from schema
         2. Add constraint info to description (e.g., "Must be at least 100")
@@ -242,8 +242,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         Returns:
             A new dictionary with unsupported fields removed and descriptions updated
-            
-        Related issues: 
+
+        Related issues:
         - https://github.com/BerriAI/litellm/issues/19444
         """
         if not isinstance(schema, dict):
@@ -252,7 +252,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # All numeric/string/array constraints not supported by Anthropic
         unsupported_fields = {
             "maxItems", "minItems",           # array constraints
-            "minimum", "maximum",             # numeric constraints  
+            "minimum", "maximum",             # numeric constraints
             "exclusiveMinimum", "exclusiveMaximum",  # numeric constraints
             "minLength", "maxLength",         # string constraints
         }
@@ -1373,7 +1373,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     raise ValueError(
                         f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
                     )
-                if effort == "max" and not self._is_claude_opus_4_6(model):
+                if effort == "max" and not self._is_claude_4_6_model(model):
                     raise ValueError(
                         f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
                     )
