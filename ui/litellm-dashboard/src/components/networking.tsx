@@ -5627,6 +5627,41 @@ export const suggestPolicyTemplates = async (
   }
 };
 
+export const testPolicyTemplate = async (
+  accessToken: string,
+  guardrailDefinitions: any[],
+  text: string
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policy/templates/test`
+      : `/policy/templates/test`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        guardrail_definitions: guardrailDefinitions,
+        text,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error("Failed to test policy template:", error);
+    throw error;
+  }
+};
+
 export const enrichPolicyTemplateStream = async (
   accessToken: string,
   templateId: string,
