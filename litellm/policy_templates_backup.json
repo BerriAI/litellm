@@ -1845,6 +1845,51 @@
     ]
   },
   {
+    "id": "airline-off-topic-restriction",
+    "title": "Airline Off-Topic Restriction",
+    "description": "Restricts an airline chatbot to airline-related topics only. Blocks off-topic questions about news, sports, coding, politics, entertainment, finance, recipes, homework, and general knowledge using keyword-based detection with no additional LLM calls.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-orange-500",
+    "iconBg": "bg-orange-50",
+    "guardrails": [
+      "airline-off-topic-filter"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "airline-off-topic-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "airline_off_topic_restriction",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/airline_off_topic_restriction.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks off-topic questions unrelated to airline services (news, sports, coding, politics, entertainment, finance, recipes, etc.)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "airline-off-topic-restriction",
+      "description": "Restricts chatbot to airline-related topics. Blocks off-topic questions using keyword matching with no extra LLM calls.",
+      "guardrails_add": [
+        "airline-off-topic-filter"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Aviation",
+      "Topic Restriction"
+    ]
+  },
+  {
     "id": "uae-regulatory-compliance",
     "title": "UAE Regulatory Compliance",
     "description": "Compliance with UAE Federal Decree-Law No. 45/2021 (Data Protection) and Federal Decree-Law No. 2/2015 (Anti-Discrimination). Protects Emirates ID numbers, UAE phone numbers, and ensures cultural sensitivity including royal family references and religious content policies.",
