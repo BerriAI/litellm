@@ -66,6 +66,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [pendingTemplate, setPendingTemplate] = useState<any>(null);
   const [isAiSuggestionModalOpen, setIsAiSuggestionModalOpen] = useState(false);
   const [loadedTemplates, setLoadedTemplates] = useState<any[]>([]);
+  const [templateQueue, setTemplateQueue] = useState<any[]>([]);
+  const [templateQueueProgress, setTemplateQueueProgress] = useState<{ current: number; total: number } | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -328,8 +330,23 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`
         );
       }
+
+      // Process next template in queue if any
+      if (templateQueue.length > 0) {
+        const [nextTemplate, ...remaining] = templateQueue;
+        setTemplateQueue(remaining);
+        setTemplateQueueProgress((prev) =>
+          prev ? { ...prev, current: prev.current + 1 } : null
+        );
+        // Small delay so user can see the success message
+        setTimeout(() => handleUseTemplate(nextTemplate), 500);
+      } else {
+        setTemplateQueueProgress(null);
+      }
     } catch (error) {
       setIsCreatingGuardrails(false);
+      setTemplateQueue([]);
+      setTemplateQueueProgress(null);
       console.error("Error creating guardrails:", error);
       message.error("Failed to create guardrails. Please try again.");
     }
@@ -338,6 +355,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const handleGuardrailSelectionCancel = () => {
     setIsGuardrailSelectionModalOpen(false);
     setSelectedTemplate(null);
+    setTemplateQueue([]);
+    setTemplateQueueProgress(null);
   };
 
   return (
@@ -500,6 +519,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               onConfirm={handleGuardrailSelectionConfirm}
               onCancel={handleGuardrailSelectionCancel}
               isLoading={isCreatingGuardrails}
+              progressInfo={templateQueueProgress}
             />
 
             <TemplateParameterModal
@@ -592,7 +612,15 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         onSelectTemplates={(selectedTemplates) => {
           setIsAiSuggestionModalOpen(false);
           if (selectedTemplates.length > 0) {
-            handleUseTemplate(selectedTemplates[0]);
+            // Queue all templates: process first immediately, queue the rest
+            const [first, ...rest] = selectedTemplates;
+            setTemplateQueue(rest);
+            setTemplateQueueProgress(
+              selectedTemplates.length > 1
+                ? { current: 1, total: selectedTemplates.length }
+                : null
+            );
+            handleUseTemplate(first);
           }
         }}
         onCancel={() => setIsAiSuggestionModalOpen(false)}
