@@ -25,6 +25,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
     "object": "list",
@@ -94,6 +95,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
 
     client = TestClient(app)
     response = client.post(
@@ -261,6 +263,11 @@ def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
         lambda *args, **kwargs: False,
+    )
+    # Mock premium_user to bypass enterprise check (prevents 403 Forbidden)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
     )
     monkeypatch.setenv("UI_USERNAME", "admin")
 
@@ -668,39 +675,44 @@ def test_team_info_masking():
     assert "public-test-key" not in str(exc_info.value)
 
 
-@mock_patch_aembedding()
-def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
+def test_embedding_input_array_of_tokens(client_no_auth):
     """
     Test to bypass decoding input as array of tokens for selected providers
 
     Ref: https://github.com/BerriAI/litellm/issues/10113
     """
+    from litellm.proxy import proxy_server
+
+    # The client_no_auth fixture should initialize the router
+    # Assert this to catch any router initialization regressions
+    assert proxy_server.llm_router is not None, (
+        "llm_router is None after client_no_auth fixture initialized. "
+        "This indicates a router initialization issue that should be investigated."
+    )
+
     try:
-        test_data = {
-            "model": "vllm_embed_model",
-            "input": [[2046, 13269, 158208]],
-        }
+        with mock.patch.object(
+            proxy_server.llm_router,
+            "aembedding",
+            return_value=example_embedding_result,
+        ) as mock_aembedding:
+            test_data = {
+                "model": "vllm_embed_model",
+                "input": [[2046, 13269, 158208]],
+            }
 
-        response = client_no_auth.post("/v1/embeddings", json=test_data)
+            response = client_no_auth.post("/v1/embeddings", json=test_data)
 
-        # DEPRECATED - mock_aembedding.assert_called_once_with is too strict, and will fail when new kwargs are added to embeddings
-        # mock_aembedding.assert_called_once_with(
-        #     model="vllm_embed_model",
-        #     input=[[2046, 13269, 158208]],
-        #     metadata=mock.ANY,
-        #     proxy_server_request=mock.ANY,
-        #     secret_fields=mock.ANY,
-        # )
-        # Assert that aembedding was called, and that input was not modified
-        mock_aembedding.assert_called_once()
-        call_args, call_kwargs = mock_aembedding.call_args
-        assert call_kwargs["model"] == "vllm_embed_model"
-        assert call_kwargs["input"] == [[2046, 13269, 158208]]
+            # Assert that aembedding was called, and that input was not modified
+            mock_aembedding.assert_called_once()
+            call_args, call_kwargs = mock_aembedding.call_args
+            assert call_kwargs["model"] == "vllm_embed_model"
+            assert call_kwargs["input"] == [[2046, 13269, 158208]]
 
-        assert response.status_code == 200
-        result = response.json()
-        print(len(result["data"][0]["embedding"]))
-        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
+            assert response.status_code == 200
+            result = response.json()
+            print(len(result["data"][0]["embedding"]))
+            assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -1733,30 +1745,39 @@ class TestPriceDataReloadAPI:
 
     def test_reload_model_cost_map_admin_access(self, client_with_auth):
         """Test that admin users can access the reload endpoint"""
-        with patch(
-            "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
-        ) as mock_get_map:
-            mock_get_map.return_value = {
-                "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
-            }
-            # Mock the database connection
-            with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+        # Save the original model_cost so the endpoint's direct assignment
+        # (litellm.model_cost = new_model_cost_map) does not contaminate
+        # subsequent tests running in the same worker process.
+        original_model_cost = litellm.model_cost.copy()
+        try:
+            with patch(
+                "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map"
+            ) as mock_get_map:
+                mock_get_map.return_value = {
+                    "gpt-3.5-turbo": {"input_cost_per_token": 0.001}
+                }
+                # Mock the database connection
+                with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+                    mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
-                response = client_with_auth.post("/reload/model_cost_map")
+                    response = client_with_auth.post("/reload/model_cost_map")
 
-                assert response.status_code == 200
-                data = response.json()
-                assert data["status"] == "success"
-                assert "message" in data
-                assert "timestamp" in data
-                assert "models_count" in data
-                # The new implementation immediately reloads and returns the count
-                assert (
-                    "Price data reloaded successfully! 1 models updated."
-                    in data["message"]
-                )
-                assert data["models_count"] == 1
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["status"] == "success"
+                    assert "message" in data
+                    assert "timestamp" in data
+                    assert "models_count" in data
+                    # The new implementation immediately reloads and returns the count
+                    assert (
+                        "Price data reloaded successfully! 1 models updated."
+                        in data["message"]
+                    )
+                    assert data["models_count"] == 1
+        finally:
+            # Restore the full model cost map so subsequent tests are not affected
+            litellm.model_cost = original_model_cost
+            _invalidate_model_cost_lowercase_map()
 
     def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot access the reload endpoint"""
@@ -2996,9 +3017,13 @@ async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Mock os.path operations
+    # Mock os.path operations - exists=False for assets_dir so makedirs gets called
+    def exists_side_effect(path):
+        return False if path == "/var/lib/litellm/assets" else True
+
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
-         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
          patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
@@ -3038,14 +3063,16 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
 
     def exists_side_effect(path):
         exists_calls.append(path)
-        # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
-        if "/var/lib/litellm/assets/logo.jpg" in path:
+        # Return False for /var/lib/litellm/assets* so: makedirs is called, logo fallback
+        # triggers, and we don't return early with cached file
+        if "/var/lib/litellm/assets" in path:
             return False
         return True
 
     # Mock os.path operations
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
          patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
          patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
@@ -3323,3 +3350,296 @@ class TestInvitationEndpoints:
         # ProxyException handler returns {"error": {...}}, HTTPException returns {"detail": {...}}
         error_content = body.get("error", body.get("detail", body))
         assert "not allowed" in str(error_content).lower()
+
+
+# ============================================================================
+# store_model_in_db DB Config Override Tests
+# ============================================================================
+
+
+def test_store_model_in_db_in_config_general_settings():
+    """
+    Verify store_model_in_db is a valid field in ConfigGeneralSettings
+    and validates correctly for True/False values.
+    """
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    assert "store_model_in_db" in ConfigGeneralSettings.model_fields
+
+    # Should validate with True
+    config = ConfigGeneralSettings(store_model_in_db=True)
+    assert config.store_model_in_db is True
+
+    # Should validate with False
+    config = ConfigGeneralSettings(store_model_in_db=False)
+    assert config.store_model_in_db is False
+
+    # Should validate with None (default)
+    config = ConfigGeneralSettings(store_model_in_db=None)
+    assert config.store_model_in_db is None
+
+    # Should validate with no value
+    config = ConfigGeneralSettings()
+    assert config.store_model_in_db is None
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_store_model_in_db_true():
+    """
+    Verify _update_general_settings sets global store_model_in_db to True
+    when DB general_settings has store_model_in_db=True.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch(
+        "litellm.proxy.proxy_server.store_model_in_db", False
+    ) as mock_store, patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    ) as mock_gs:
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": True}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is True
+        assert ps.general_settings["store_model_in_db"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_store_model_in_db_false():
+    """
+    Verify _update_general_settings sets global store_model_in_db to False
+    when DB general_settings has store_model_in_db=False.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch(
+        "litellm.proxy.proxy_server.store_model_in_db", True
+    ), patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": False}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is False
+        assert ps.general_settings["store_model_in_db"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_store_model_in_db_string_normalization():
+    """
+    Verify _update_general_settings normalizes string values for store_model_in_db.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test "true" string
+    with patch(
+        "litellm.proxy.proxy_server.store_model_in_db", False
+    ), patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": "true"}
+        )
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is True
+
+    # Test "True" string
+    with patch(
+        "litellm.proxy.proxy_server.store_model_in_db", False
+    ), patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": "True"}
+        )
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is True
+
+    # Test "false" string
+    with patch(
+        "litellm.proxy.proxy_server.store_model_in_db", True
+    ), patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": "false"}
+        )
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is False
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_store_model_in_db_none_keeps_current():
+    """
+    Verify _update_general_settings does not change store_model_in_db
+    when DB value is None.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # When current is True and DB sends None, should stay True
+    with patch(
+        "litellm.proxy.proxy_server.store_model_in_db", True
+    ), patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": None}
+        )
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is True
+
+    # When current is False and DB sends None, should stay False
+    with patch(
+        "litellm.proxy.proxy_server.store_model_in_db", False
+    ), patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": None}
+        )
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is False
+
+
+@pytest.mark.asyncio
+async def test_store_model_in_db_db_override_when_config_false():
+    """
+    Verify the early DB check in initialize_scheduled_background_jobs
+    overrides store_model_in_db=False when DB has True.
+    """
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+
+    # Mock DB returning store_model_in_db=True in general_settings
+    mock_db_record = MagicMock()
+    mock_db_record.param_value = {"store_model_in_db": True}
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_record
+    )
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+    ), patch(
+        "litellm.proxy.proxy_server.store_model_in_db", False
+    ), patch(
+        "litellm.proxy.proxy_server.get_secret_bool", return_value=False
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        # store_model_in_db should now be True (overridden by DB)
+        assert ps.store_model_in_db is True
+
+        # add_deployment and get_credentials should have been called
+        # since store_model_in_db is now True
+        assert mock_proxy_config.add_deployment.call_count == 1
+        assert mock_proxy_config.get_credentials.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch):
+    """
+    Verify the early DB check is skipped when store_model_in_db is already True.
+    The DB query for the early check should not be called.
+    """
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+    ), patch(
+        "litellm.proxy.proxy_server.store_model_in_db", True
+    ), patch(
+        "litellm.proxy.proxy_server.get_secret_bool", return_value=True
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        # The early DB check uses find_first with param_name="general_settings".
+        # When store_model_in_db is already True, the early check should be skipped.
+        # However, add_deployment may also call find_first.
+        # We just verify that store_model_in_db stays True and jobs are scheduled.
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is True
+        assert mock_proxy_config.add_deployment.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_store_model_in_db_db_failure_graceful(monkeypatch):
+    """
+    Verify the early DB check handles DB failures gracefully
+    without crashing and keeps store_model_in_db as False.
+    """
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    # Simulate DB failure
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        side_effect=Exception("DB connection error")
+    )
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+    ), patch(
+        "litellm.proxy.proxy_server.store_model_in_db", False
+    ), patch(
+        "litellm.proxy.proxy_server.get_secret_bool", return_value=False
+    ):
+        # Should not raise an exception
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        # store_model_in_db should remain False
+        assert ps.store_model_in_db is False
+
+        # add_deployment should NOT have been called since store_model_in_db is False
+        mock_proxy_config.add_deployment.assert_not_called()

@@ -175,3 +175,23 @@ export interface MCPServerProps {
   userRole: string | null;
   userID: string | null;
 }
+
+// Discoverable MCP server from the curated registry
+export interface DiscoverableMCPServer {
+  name: string;
+  title: string;
+  description: string;
+  icon_url?: string | null;
+  category: string;
+  registry_url?: string | null;
+  transport: string;
+  url?: string | null;
+  command?: string | null;
+  args?: string[] | null;
+  env_vars?: Array<{ name: string; description?: string; secret?: boolean }> | null;
+}
+
+export interface DiscoverMCPServersResponse {
+  servers: DiscoverableMCPServer[];
+  categories: string[];
+}

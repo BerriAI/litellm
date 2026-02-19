@@ -177,8 +177,13 @@ def get_available_content_categories() -> List[Dict[str, str]]:
                             ),
                         }
                     )
-            except Exception:
-                # Skip files that can't be loaded
+            except Exception as e:
+                # Skip files that can't be loaded but log the error for debugging
+                from litellm._logging import verbose_proxy_logger
+
+                verbose_proxy_logger.warning(
+                    f"Failed to load category file {filename}: {str(e)}"
+                )
                 continue
         elif filename.endswith(".json"):
             # JSON category files (e.g. harm_toxic_abuse.json) - no YAML header, use filename

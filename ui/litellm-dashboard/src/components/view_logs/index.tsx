@@ -1,16 +1,14 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import moment from "moment";
-import { useCallback, useEffect, useRef, useState } from "react";
-
+import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
-import { SettingOutlined } from "@ant-design/icons";
+import { SettingOutlined, SyncOutlined } from "@ant-design/icons";
 import { Row } from "@tanstack/react-table";
 import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Button, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
-import NewBadge from "../common_components/NewBadge";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
@@ -20,7 +18,7 @@ import FilterComponent, { FilterOption } from "../molecules/filter";
 import { allEndUsersCall, keyInfoV1Call, keyListCall, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
-import { columns, LogEntry } from "./columns";
+import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
 import { ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
@@ -28,7 +26,6 @@ import { ErrorViewer } from "./ErrorViewer";
 import { useLogFilterLogic } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { getTimeRangeDisplay } from "./logs_utils";
-import { prefetchLogDetails } from "./prefetch";
 import { RequestResponsePanel } from "./RequestResponsePanel";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
 import { DataTable } from "./table";
@@ -49,11 +46,6 @@ export interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
-}
-
-interface PrefetchedLog {
-  messages: any[];
-  response: any;
 }
 
 export default function SpendLogsTable({
@@ -83,7 +75,7 @@ export default function SpendLogsTable({
   const [tempKeyHash, setTempKeyHash] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [selectedKeyHash, setSelectedKeyHash] = useState("");
-  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedModelId, setSelectedModelId] = useState("");
   const [selectedKeyInfo, setSelectedKeyInfo] = useState<KeyResponse | null>(null);
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState("");
@@ -95,6 +87,9 @@ export default function SpendLogsTable({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
+
+  const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   const queryClient = useQueryClient();
 
@@ -174,7 +169,9 @@ export default function SpendLogsTable({
       selectedKeyHash,
       filterByCurrentUser ? userID : null,
       selectedStatus,
-      selectedModel,
+      selectedModelId,
+      sortBy,
+      sortOrder,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -193,47 +190,39 @@ export default function SpendLogsTable({
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
       // Get base response from API
-      const response = await uiSpendLogsCall(
+      // NOTE: We only fetch the list of logs here (lightweight).
+      // Log details (messages/response) are fetched on-demand when user clicks a row.
+      const response = await uiSpendLogsCall({
         accessToken,
-        selectedKeyHash || undefined,
-        selectedTeamId || undefined,
-        undefined,
-        formattedStartTime,
-        formattedEndTime,
-        currentPage,
-        pageSize,
-        filterByCurrentUser ? userID : undefined,
-        selectedEndUser,
-        selectedStatus,
-        undefined,
-        selectedModel || undefined,
-      );
-
-      // Trigger prefetch for all logs
-      await prefetchLogDetails(response.data, formattedStartTime, accessToken, queryClient);
-
-      // Update logs with prefetched data if available
-      response.data = response.data.map((log: LogEntry) => {
-        const prefetchedData = queryClient.getQueryData<PrefetchedLog>([
-          "logDetails",
-          log.request_id,
-          formattedStartTime,
-        ]);
-
-        if (prefetchedData?.messages && prefetchedData?.response) {
-          log.messages = prefetchedData.messages;
-          log.response = prefetchedData.response;
-          return log;
-        }
-        return log;
+        start_date: formattedStartTime,
+        end_date: formattedEndTime,
+        page: currentPage,
+        page_size: pageSize,
+        params: {
+          api_key: selectedKeyHash || undefined,
+          team_id: selectedTeamId || undefined,
+          user_id: filterByCurrentUser ? userID ?? undefined : undefined,
+          end_user: selectedEndUser || undefined,
+          status_filter: selectedStatus || undefined,
+          model_id: selectedModelId || undefined,
+          sort_by: sortBy,
+          sort_order: sortOrder,
+        },
       });
 
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
     refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
+    placeholderData: keepPreviousData,
     refetchIntervalInBackground: true,
   });
+
+  // Defer the transition from "Fetching" to "Fetch" so the button stays loading until
+  // the table has rendered with the new data (avoids the visual gap where the button
+  // exits loading state before the table updates)
+  const isFetchingDeferred = useDeferredValue(logs.isFetching);
+  const isButtonLoading = logs.isFetching || isFetchingDeferred;
 
   const logsData = logs.data || {
     data: [],
@@ -249,7 +238,7 @@ export default function SpendLogsTable({
     allTeams: hookAllTeams,
     allKeyAliases,
     handleFilterChange,
-    handleFilterReset,
+    handleFilterReset: handleFilterResetFromHook,
   } = useLogFilterLogic({
     logs: logsData,
     accessToken,
@@ -260,6 +249,9 @@ export default function SpendLogsTable({
     setCurrentPage,
     userID,
     userRole,
+    sortBy,
+    sortOrder,
+    currentPage,
   });
 
   const fetchKeyHashForAlias = useCallback(
@@ -281,6 +273,16 @@ export default function SpendLogsTable({
     [accessToken, currentPage, pageSize],
   );
 
+  const handleFilterReset = useCallback(() => {
+    handleFilterResetFromHook();
+    // Reset custom time range to default (last 24 hours)
+    setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
+    setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+    setIsCustomDate(false);
+    setSelectedTimeInterval({ value: 24, unit: "hours" });
+    setCurrentPage(1);
+  }, [handleFilterResetFromHook]);
+
   // Add this effect to update selected filters when filter changes
   useEffect(() => {
     if (!accessToken) return;
@@ -291,7 +293,7 @@ export default function SpendLogsTable({
       setSelectedTeamId("");
     }
     setSelectedStatus(filters["Status"] || "");
-    setSelectedModel(filters["Model"] || "");
+    setSelectedModelId(filters["Model"] || "");
     setSelectedEndUser(filters["End User"] || "");
 
     if (filters["Key Hash"]) {
@@ -511,11 +513,11 @@ export default function SpendLogsTable({
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold">Request Logs</h1>
-              <NewBadge dot><Button
+              <Button
                 icon={<SettingOutlined />}
                 onClick={() => setIsSpendLogsSettingsModalVisible(true)}
                 title="Spend Logs Settings"
-              /></NewBadge>
+              />
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
@@ -619,26 +621,15 @@ export default function SpendLogsTable({
 
                           <LiveTailControls />
 
-                          <button
+                          <Button
+                            type="default"
+                            icon={<SyncOutlined spin={isButtonLoading} />}
                             onClick={handleRefresh}
-                            className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                            title="Refresh data"
+                            disabled={isButtonLoading}
+                            title="Fetch data"
                           >
-                            <svg
-                              className={`w-4 h-4 ${logs.isFetching ? "animate-spin" : ""}`}
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                              />
-                            </svg>
-                            <span>Refresh</span>
-                          </button>
+                            {isButtonLoading ? "Fetching" : "Fetch"}
+                          </Button>
                         </div>
 
                         {isCustomDate && (
@@ -717,9 +708,18 @@ export default function SpendLogsTable({
                     </div>
                   )}
                   <DataTable
-                    columns={columns}
+                    columns={createColumns({
+                      sortBy,
+                      sortOrder,
+                      onSortChange: (newSortBy, newSortOrder) => {
+                        setSortBy(newSortBy);
+                        setSortOrder(newSortOrder);
+                        setCurrentPage(1);
+                      },
+                    })}
                     data={filteredData}
                     onRowClick={handleRowClick}
+                    isLoading={logs.isLoading}
                   />
                 </div>
               </>
@@ -751,6 +751,7 @@ export default function SpendLogsTable({
         onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
         allLogs={filteredData}
         onSelectLog={handleSelectLog}
+        startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
       />
     </div>
   );

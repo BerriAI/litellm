@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space } from "antd";
+import { Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space, Spin } from "antd";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
+import CompliancePanel from "../GuardrailViewer/CompliancePanel";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -38,6 +39,9 @@ const { Text } = Typography;
 export interface LogDetailContentProps {
   logEntry: LogEntry;
   onOpenSettings?: () => void;
+  /** When true, log details (messages/response) are still being lazy-loaded. */
+  isLoadingDetails?: boolean;
+  accessToken?: string | null;
 }
 
 /**
@@ -48,14 +52,15 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
 
   const hasMessages = checkHasMessages(logEntry.messages);
   const hasResponse = checkHasResponse(logEntry.response);
-  const missingData = !hasMessages && !hasResponse && !hasError;
+  // Don't show "missing data" warning while details are still loading
+  const missingData = !hasMessages && !hasResponse && !hasError && !isLoadingDetails;
 
   // Guardrail data
   const guardrailInfo = metadata?.guardrail_information;
@@ -145,16 +150,37 @@ export function LogDetailContent({ logEntry, onOpenSettings }: LogDetailContentP
       )}
 
       {/* Request/Response JSON */}
-      <RequestResponseSection
-        hasResponse={hasResponse}
-        hasError={hasError}
-        getRawRequest={getRawRequest}
-        getFormattedResponse={getFormattedResponse}
-        logEntry={logEntry}
-      />
+      {isLoadingDetails ? (
+        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6 p-8 text-center">
+          <Spin size="default" />
+          <div style={{ marginTop: 8, color: "#999" }}>Loading request &amp; response data...</div>
+        </div>
+      ) : (
+        <RequestResponseSection
+          hasResponse={hasResponse}
+          hasError={hasError}
+          getRawRequest={getRawRequest}
+          getFormattedResponse={getFormattedResponse}
+          logEntry={logEntry}
+        />
+      )}
 
       {/* Guardrail Data */}
-      {hasGuardrailData && <GuardrailViewer data={guardrailInfo} />}
+      {hasGuardrailData && (
+        <div id="guardrail-section">
+          <GuardrailViewer
+            data={guardrailInfo}
+            accessToken={accessToken ?? null}
+            logEntry={{
+              request_id: logEntry.request_id,
+              user: logEntry.user,
+              model: logEntry.model,
+              startTime: logEntry.startTime,
+              metadata: logEntry.metadata,
+            }}
+          />
+        </div>
+      )}
 
       {/* Vector Store Data */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
@@ -209,9 +235,14 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
 }
 
 function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: number }) {
+  const handleClick = () => {
+    const el = document.getElementById("guardrail-section");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
     <Space size={SPACING_MEDIUM}>
-      <span>{label}</span>
+      <a onClick={handleClick} style={{ cursor: "pointer" }}>{label}</a>
       {maskedCount > 0 && (
         <Tag color="blue">
           {maskedCount} masked
@@ -395,6 +426,42 @@ function RequestResponseSection({
           },
         ]}
       />
+    </div>
+  );
+}
+
+export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
+  const allPassed = guardrailEntries.every((e) => {
+    const status = e?.guardrail_status || e?.status;
+    return status === "pass" || status === "passed" || status === "success";
+  });
+
+  const handleClick = () => {
+    const el = document.getElementById("guardrail-section");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
+  return (
+    <div style={{ textAlign: "left", marginBottom: 12 }}>
+      <div
+        onClick={handleClick}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 12px",
+          borderRadius: 16,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 500,
+          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
+          color: allPassed ? "#15803d" : "#b91c1c",
+          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
+        }}
+      >
+        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+        <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
+      </div>
     </div>
   );
 }

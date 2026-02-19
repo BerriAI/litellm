@@ -109,6 +109,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [selectedPatterns, setSelectedPatterns] = useState<any[]>([]);
   const [blockedWords, setBlockedWords] = useState<any[]>([]);
   const [selectedContentCategories, setSelectedContentCategories] = useState<any[]>([]);
+  const [pendingCategorySelection, setPendingCategorySelection] = useState<string>("");
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
     rules: [],
     default_action: "deny",
@@ -168,6 +169,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedCategories([]);
     setGlobalSeverityThreshold(2);
     setCategorySpecificThresholds({});
+
+    // Reset Content Filter selections
+    setSelectedPatterns([]);
+    setBlockedWords([]);
+    setSelectedContentCategories([]);
+    setPendingCategorySelection("");
 
     setToolPermissionConfig({
       rules: [],
@@ -247,6 +254,39 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setCurrentStep(currentStep - 1);
   };
 
+  const handleAddAndContinue = () => {
+    if (!pendingCategorySelection || !guardrailSettings) return;
+
+    const contentFilterSettings = guardrailSettings.content_filter_settings;
+    if (!contentFilterSettings) return;
+
+    const category = contentFilterSettings.content_categories?.find((c) => c.name === pendingCategorySelection);
+    if (!category) return;
+
+    // Check if already added
+    if (selectedContentCategories.some((c) => c.category === pendingCategorySelection)) {
+      setPendingCategorySelection("");
+      setCurrentStep(currentStep + 1);
+      return;
+    }
+
+    // Add the category
+    setSelectedContentCategories([
+      ...selectedContentCategories,
+      {
+        id: `category-${Date.now()}`,
+        category: category.name,
+        display_name: category.display_name,
+        action: category.default_action as "BLOCK" | "MASK",
+        severity_threshold: "medium",
+      },
+    ]);
+
+    // Clear pending selection and advance to next step
+    setPendingCategorySelection("");
+    setCurrentStep(currentStep + 1);
+  };
+
   const resetForm = () => {
     form.resetFields();
     setSelectedProvider(null);
@@ -258,6 +298,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setSelectedPatterns([]);
     setBlockedWords([]);
     setSelectedContentCategories([]);
+    setPendingCategorySelection("");
     setToolPermissionConfig({
       rules: [],
       default_action: "deny",
@@ -324,6 +365,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
       // For Content Filter, add patterns, blocked words, and categories
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
+        // Validate that at least one content filter setting is configured
+        if (selectedPatterns.length === 0 && blockedWords.length === 0 && selectedContentCategories.length === 0) {
+          NotificationsManager.fromBackend(
+            "Please configure at least one content filter setting (category, pattern, or keyword)"
+          );
+          setLoading(false);
+          return;
+        }
+
         if (selectedPatterns.length > 0) {
           guardrailData.litellm_params.patterns = selectedPatterns.map((p) => ({
             pattern_type: p.type === "prebuilt" ? "prebuilt" : "regex",
@@ -658,6 +708,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c))
           );
         }}
+        pendingCategorySelection={pendingCategorySelection}
+        onPendingCategorySelectionChange={setPendingCategorySelection}
         accessToken={accessToken}
         showStep={step}
       />
@@ -720,6 +772,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const renderStepButtons = () => {
     const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 4 : 2;
     const isLastStep = currentStep === totalSteps - 1;
+    const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
+    const hasPendingCategory = pendingCategorySelection !== "";
 
     return (
       <div className="flex justify-end space-x-2 mt-4">
@@ -728,11 +782,30 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             Previous
           </Button>
         )}
-        {!isLastStep && <Button type="primary" onClick={nextStep}>Next</Button>}
-        {isLastStep && (
-          <Button type="primary" onClick={handleSubmit} loading={loading}>
-            Create Guardrail
-          </Button>
+        {isCategoriesStep ? (
+          <>
+            <Button onClick={nextStep}>
+              Skip
+            </Button>
+            <Button 
+              type="primary" 
+              onClick={handleAddAndContinue}
+              disabled={!hasPendingCategory}
+            >
+              Add & Continue →
+            </Button>
+          </>
+        ) : (
+          <>
+            {!isLastStep && (
+              <Button type="primary" onClick={nextStep}>Next</Button>
+            )}
+            {isLastStep && (
+              <Button type="primary" onClick={handleSubmit} loading={loading}>
+                Create Guardrail
+              </Button>
+            )}
+          </>
         )}
         <Button onClick={handleClose}>
           Cancel

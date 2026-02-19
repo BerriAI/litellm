@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TextInput, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
-import OAuthFormFields from "./OAuthFormFields";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";

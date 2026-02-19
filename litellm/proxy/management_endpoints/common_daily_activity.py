@@ -327,13 +327,44 @@ async def get_api_key_metadata(
     prisma_client: PrismaClient,
     api_keys: Set[str],
 ) -> Dict[str, Dict[str, Any]]:
-    """Update api key metadata for a single record."""
+    """Get api key metadata, falling back to deleted keys table for keys not found in active table.
+
+    This ensures that key_alias and team_id are preserved in historical activity logs
+    even after a key is deleted or regenerated.
+    """
     key_records = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"token": {"in": list(api_keys)}}
     )
-    return {
-        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
+    result = {
+        k.token: {"key_alias": k.key_alias, "team_id": k.team_id}
+        for k in key_records
     }
+
+    # For any keys not found in the active table, check the deleted keys table
+    missing_keys = api_keys - set(result.keys())
+    if missing_keys:
+        try:
+            deleted_key_records = (
+                await prisma_client.db.litellm_deletedverificationtoken.find_many(
+                    where={"token": {"in": list(missing_keys)}},
+                    order={"deleted_at": "desc"},
+                )
+            )
+            # Use the most recent deleted record for each token (ordered by deleted_at desc)
+            for k in deleted_key_records:
+                if k.token not in result:
+                    result[k.token] = {
+                        "key_alias": k.key_alias,
+                        "team_id": k.team_id,
+                    }
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to fetch deleted key metadata for %d missing keys: %s",
+                len(missing_keys),
+                e,
+            )
+
+    return result
 
 
 def _adjust_dates_for_timezone(

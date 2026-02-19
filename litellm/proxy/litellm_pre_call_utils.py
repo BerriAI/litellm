@@ -40,10 +40,12 @@ service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+    from litellm.types.proxy.policy_engine import PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+    PolicyMatchContext = Any
 
 
 def parse_cache_control(cache_control):
@@ -237,6 +239,8 @@ def clean_headers(
     """
     Removes litellm api key from headers
     """
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
     clean_headers = {}
     litellm_key_lower = (
         litellm_key_header_name.lower() if litellm_key_header_name is not None else None
@@ -244,8 +248,13 @@ def clean_headers(
 
     for header, value in headers.items():
         header_lower = header.lower()
+        # Preserve Authorization header if it contains Anthropic OAuth token (sk-ant-oat*)
+        # This allows OAuth tokens to be forwarded to Anthropic-compatible providers
+        # via add_provider_specific_headers_to_request()
+        if header_lower == "authorization" and is_anthropic_oauth_key(value):
+            clean_headers[header] = value
         # Check if header should be excluded: either in special headers cache or matches custom litellm key
-        if header_lower not in _SPECIAL_HEADERS_CACHE and (
+        elif header_lower not in _SPECIAL_HEADERS_CACHE and (
             litellm_key_lower is None or header_lower != litellm_key_lower
         ):
             clean_headers[header] = value
@@ -871,7 +880,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         general_settings, user_api_key_dict, _headers
     )
 
-    # Parse user info from headers
+    # Parse user info from headers (fallback to general_settings.user_header_name)
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
     if user is not None:
         if user_api_key_dict.end_user_id is None:
@@ -1516,75 +1525,24 @@ def move_guardrails_to_metadata(
             ] = request_body_guardrail_config
 
 
-def add_guardrails_from_policy_engine(
+def _match_and_track_policies(
     data: dict,
-    metadata_variable_name: str,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
+    context: "PolicyMatchContext",
+    request_body_policies: Any,
+) -> tuple[list[str], dict[str, str]]:
     """
-    Add guardrails from the policy engine based on request context.
+    Match policies via attachments and request body, track them in metadata.
 
-    This function:
-    1. Extracts "policies" from request body (if present) for dynamic policy application
-    2. Gets matching policies based on team_alias, key_alias, and model (via attachments)
-    3. Combines dynamic policies with attachment-based policies
-    4. Resolves guardrails from all policies (including inheritance)
-    5. Adds guardrails to request metadata
-    6. Tracks applied policies in metadata for response headers
-    7. Removes "policies" from request body so it's not forwarded to LLM provider
-
-    Args:
-        data: The request data to update
-        metadata_variable_name: The name of the metadata field in data
-        user_api_key_dict: The user's API key authentication info
+    Returns:
+        Tuple of (applied_policy_names, policy_reasons)
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_utils.callback_utils import (
         add_policy_sources_to_metadata,
         add_policy_to_applied_policies_header,
     )
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        get_tags_from_request_body,
-    )
-    from litellm.proxy.policy_engine.attachment_registry import (
-        get_attachment_registry,
-    )
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
-    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
-    from litellm.types.proxy.policy_engine import PolicyMatchContext
-
-    # Extract dynamic policies from request body (if present)
-    # These will be combined with attachment-based policies
-    request_body_policies = data.pop("policies", None)
-
-    registry = get_policy_registry()
-    verbose_proxy_logger.debug(
-        f"Policy engine: registry initialized={registry.is_initialized()}, "
-        f"policy_count={len(registry.get_all_policies())}"
-    )
-    if not registry.is_initialized():
-        verbose_proxy_logger.debug(
-            "Policy engine not initialized, skipping policy matching"
-        )
-        return
-
-    # Extract tags using the shared helper (handles metadata / litellm_metadata,
-    # top-level tags, deduplication, and type filtering).
-
-    all_tags = get_tags_from_request_body(data) or None
-
-    context = PolicyMatchContext(
-        team_alias=user_api_key_dict.team_alias,
-        key_alias=user_api_key_dict.key_alias,
-        model=data.get("model"),
-        tags=all_tags,
-    )
-
-    verbose_proxy_logger.debug(
-        f"Policy engine: matching policies for context team_alias={context.team_alias}, "
-        f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
-    )
 
     # Get matching policies via attachments (with match reasons for attribution)
     attachment_registry = get_attachment_registry()
@@ -1592,7 +1550,6 @@ def add_guardrails_from_policy_engine(
         context
     )
     matching_policy_names = [m["policy_name"] for m in matches_with_reasons]
-    # Build reasons map: {"hipaa-policy": "tag:healthcare", ...}
     policy_reasons = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
 
     verbose_proxy_logger.debug(
@@ -1608,7 +1565,7 @@ def add_guardrails_from_policy_engine(
         )
 
     if not all_policy_names:
-        return
+        return [], {}
 
     # Filter to only policies whose conditions match the context
     applied_policy_names = PolicyMatcher.get_policies_with_matching_conditions(
@@ -1636,6 +1593,18 @@ def add_guardrails_from_policy_engine(
         request_data=data, policy_sources=applied_reasons
     )
 
+    return applied_policy_names, policy_reasons
+
+
+def _apply_resolved_guardrails_to_metadata(
+    data: dict,
+    metadata_variable_name: str,
+    context: "PolicyMatchContext",
+) -> None:
+    """Apply resolved guardrails and pipelines to request metadata."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+
     # Resolve guardrails from matching policies
     resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context)
 
@@ -1643,20 +1612,40 @@ def add_guardrails_from_policy_engine(
         f"Policy engine: resolved guardrails: {resolved_guardrails}"
     )
 
-    if not resolved_guardrails:
-        return
+    # Resolve pipelines from matching policies
+    pipelines = PolicyResolver.resolve_pipelines_for_context(context=context)
 
     # Add resolved guardrails to request metadata
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
+
+    # Track pipeline-managed guardrails to exclude from independent execution
+    pipeline_managed_guardrails: set = set()
+    if pipelines:
+        pipeline_managed_guardrails = PolicyResolver.get_pipeline_managed_guardrails(
+            pipelines
+        )
+        data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
+        data[metadata_variable_name]["_pipeline_managed_guardrails"] = (
+            pipeline_managed_guardrails
+        )
+        verbose_proxy_logger.debug(
+            f"Policy engine: resolved {len(pipelines)} pipeline(s), "
+            f"managed guardrails: {pipeline_managed_guardrails}"
+        )
+
+    if not resolved_guardrails and not pipelines:
+        return
 
     existing_guardrails = data[metadata_variable_name].get("guardrails", [])
     if not isinstance(existing_guardrails, list):
         existing_guardrails = []
 
     # Combine existing guardrails with policy-resolved guardrails (no duplicates)
+    # Exclude pipeline-managed guardrails from the flat list
     combined = set(existing_guardrails)
     combined.update(resolved_guardrails)
+    combined -= pipeline_managed_guardrails
     data[metadata_variable_name]["guardrails"] = list(combined)
 
     verbose_proxy_logger.debug(
@@ -1664,10 +1653,76 @@ def add_guardrails_from_policy_engine(
     )
 
 
+def add_guardrails_from_policy_engine(
+    data: dict,
+    metadata_variable_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Add guardrails from the policy engine based on request context.
+
+    This function:
+    1. Extracts "policies" from request body (if present) for dynamic policy application
+    2. Gets matching policies based on team_alias, key_alias, and model (via attachments)
+    3. Combines dynamic policies with attachment-based policies
+    4. Resolves guardrails from all policies (including inheritance)
+    5. Adds guardrails to request metadata
+    6. Tracks applied policies in metadata for response headers
+    7. Removes "policies" from request body so it's not forwarded to LLM provider
+
+    Args:
+        data: The request data to update
+        metadata_variable_name: The name of the metadata field in data
+        user_api_key_dict: The user's API key authentication info
+    """
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import PolicyMatchContext
+
+    # Extract dynamic policies from request body (if present)
+    request_body_policies = data.pop("policies", None)
+
+    registry = get_policy_registry()
+    verbose_proxy_logger.debug(
+        f"Policy engine: registry initialized={registry.is_initialized()}, "
+        f"policy_count={len(registry.get_all_policies())}"
+    )
+    if not registry.is_initialized():
+        verbose_proxy_logger.debug(
+            "Policy engine not initialized, skipping policy matching"
+        )
+        return
+
+    # Extract tags and build context
+    all_tags = get_tags_from_request_body(data) or None
+    context = PolicyMatchContext(
+        team_alias=user_api_key_dict.team_alias,
+        key_alias=user_api_key_dict.key_alias,
+        model=data.get("model"),
+        tags=all_tags,
+    )
+
+    verbose_proxy_logger.debug(
+        f"Policy engine: matching policies for context team_alias={context.team_alias}, "
+        f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
+    )
+
+    # Match and track policies based on attachments and request body
+    _match_and_track_policies(data, context, request_body_policies)
+
+    # Always resolve and apply guardrails, even if no policies matched above.
+    # PolicyResolver does its own independent matching and inheritance resolution,
+    # so guardrails can still be applied via inherited parent policies.
+    _apply_resolved_guardrails_to_metadata(data, metadata_variable_name, context)
+
+
 def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
     anthropic_headers = {}
     # boolean to indicate if a header was added
     added_header = False
@@ -1677,6 +1732,14 @@ def add_provider_specific_headers_to_request(
             anthropic_headers[header] = header_value
             added_header = True
 
+    # Check for Authorization header with Anthropic OAuth token (sk-ant-oat*)
+    # This needs to be handled via provider-specific headers to ensure it only
+    # goes to Anthropic-compatible providers, not all providers in the router
+    for header, value in headers.items():
+        if header.lower() == "authorization" and is_anthropic_oauth_key(value):
+            anthropic_headers[header] = value
+            added_header = True
+            break
     if added_header is True:
         # Anthropic headers work across multiple providers
         # Store as comma-separated list so retrieval can match any of them

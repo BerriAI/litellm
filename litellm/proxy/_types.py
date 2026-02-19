@@ -515,6 +515,8 @@ class LiteLLMRoutes(enum.Enum):
         "/user/delete",
         "/user/info",
         "/user/list",
+        "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         # team
         "/team/new",
         "/team/update",
@@ -527,6 +529,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/available",
         "/team/permissions_list",
         "/team/permissions_update",
+        "/team/daily/activity",
         # model
         "/model/new",
         "/model/update",
@@ -995,6 +998,9 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     new_master_key: Optional[str] = None
+    grace_period: Optional[
+        str
+    ] = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
 
 
 class ResetSpendRequest(LiteLLMPydanticObjectBase):
@@ -1406,12 +1412,13 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1433,12 +1440,13 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[
-        AllowedModelRegion
-    ] = None  # require all user requests to use models in this specific region
-    default_model: Optional[
-        str
-    ] = None  # if no equivalent model in allowed region - default all requests to this model
+    allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
@@ -2122,6 +2130,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
     )
+    store_model_in_db: Optional[bool] = Field(
+        None,
+        description="If True, models and config are stored in and loaded from the database. Default is False.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -2295,6 +2307,7 @@ class UserAPIKeyAuth(
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
+    end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -2639,6 +2652,8 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    object_permission_id: Optional[str] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -2672,6 +2687,21 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
         return values
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
+    access_group_id: str
+    access_group_name: str
+    description: Optional[str] = None
+    access_model_names: List[str] = []
+    access_mcp_server_ids: List[str] = []
+    access_agent_ids: List[str] = []
+    assigned_team_ids: List[str] = []
+    assigned_key_ids: List[str] = []
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
 
 class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
@@ -3895,7 +3925,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
 
     def __init__(self, **kwargs: Any) -> None:
         # get the attribute names for this Pydantic model
-        allowed_keys = self.__annotations__.keys()
+        allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
 
         invalid_keys = set(kwargs.keys()) - allowed_keys
         user_roles_jwt_field = kwargs.get("user_roles_jwt_field")
@@ -4069,6 +4099,18 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune", "response"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+
+
+class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
+    """Table for managing vector stores with target_model_names support."""
+    unified_resource_id: str
+    resource_object: Optional[Any] = None  # VectorStoreCreateResponse
+    model_mappings: Dict[str, str]
+    flat_model_resource_ids: List[str]
+    created_by: Optional[str]
+    updated_by: Optional[str]
+    storage_backend: Optional[str] = None
+    storage_url: Optional[str] = None
 
 
 class EnterpriseLicenseData(TypedDict, total=False):

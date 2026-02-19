@@ -49,15 +49,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
-    
+
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
         """
         Filter out x-anthropic-billing-header metadata from system parameter.
-        
+
         Args:
             system_param: Can be a string or a list of system message content blocks
-            
+
         Returns:
             Filtered system parameter (string or list), or None if all content was filtered
         """
@@ -74,7 +74,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     text = content_block.get("text", "")
                     content_type = content_block.get("type", "")
                     # Skip text blocks that start with billing header
-                    if content_type == "text" and text.startswith("x-anthropic-billing-header:"):
+                    if content_type == "text" and text.startswith(
+                        "x-anthropic-billing-header:"
+                    ):
                         continue
                     filtered_list.append(content_block)
                 else:
@@ -111,11 +113,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         import os
 
         # Check for Anthropic OAuth token in Authorization header
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(
+            headers=headers, api_key=api_key
+        )
         if api_key is None:
             api_key = os.getenv("ANTHROPIC_API_KEY")
 
-        if "x-api-key" not in headers and api_key:
+        if "x-api-key" not in headers and "authorization" not in headers and api_key:
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
@@ -149,7 +153,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message="max_tokens is required for Anthropic /v1/messages API",
                 status_code=400,
             )
-        
+
         # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")
         if system_param is not None:
@@ -159,7 +163,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else:
                 # Remove system parameter if all content was filtered out
                 anthropic_messages_optional_request_params.pop("system", None)
-        
+
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
@@ -244,25 +248,29 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             edits = context_management_param.get("edits", [])
             has_compact = False
             has_other = False
-            
+
             for edit in edits:
                 edit_type = edit.get("type", "")
                 if edit_type == "compact_20260112":
                     has_compact = True
                 else:
                     has_other = True
-            
+
             # Add compact header if any compact edits exist
             if has_compact:
                 beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
-            
+
             # Add context management header if any other edits exist
             if has_other:
-                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+                beta_values.add(
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                )
 
         # Check for structured outputs
         if optional_params.get("output_format") is not None:
-            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value)
+            beta_values.add(
+                ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
+            )
 
         # Check for fast mode
         if optional_params.get("speed") == "fast":

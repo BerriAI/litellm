@@ -145,7 +145,10 @@ class AgentRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """
-        Get allowed agents for a key from its object_permission.
+        Get allowed agents for a key.
+
+        1. First checks native key-level agent permissions (object_permission)
+        2. Also includes agents from key's access_group_ids (unified access groups)
 
         Note: object_permission is already loaded by get_key_object() in main auth flow.
         """
@@ -153,25 +156,37 @@ class AgentRequestHandler:
             return []
 
         try:
-            # Get key object permission (already loaded in main auth flow)
+            all_agents: List[str] = []
+
+            # 1. Get agents from object_permission (native permissions)
             key_object_permission = AgentRequestHandler._get_key_object_permission(
                 user_api_key_auth
             )
-            if key_object_permission is None:
-                return []
+            if key_object_permission is not None:
+                # Get direct agents
+                direct_agents = key_object_permission.agents or []
 
-            # Get direct agents
-            direct_agents = key_object_permission.agents or []
-
-            # Get agents from access groups
-            access_group_agents = (
-                await AgentRequestHandler._get_agents_from_access_groups(
-                    key_object_permission.agent_access_groups or []
+                # Get agents from access groups
+                access_group_agents = (
+                    await AgentRequestHandler._get_agents_from_access_groups(
+                        key_object_permission.agent_access_groups or []
+                    )
                 )
-            )
 
-            # Combine both lists
-            all_agents = direct_agents + access_group_agents
+                all_agents = direct_agents + access_group_agents
+
+            # 2. Fallback: get agent IDs from key's access_group_ids (unified access groups)
+            key_access_group_ids = user_api_key_auth.access_group_ids or []
+            if key_access_group_ids:
+                from litellm.proxy.auth.auth_checks import (
+                    _get_agent_ids_from_access_groups,
+                )
+
+                unified_agents = await _get_agent_ids_from_access_groups(
+                    access_group_ids=key_access_group_ids,
+                )
+                all_agents.extend(unified_agents)
+
             return list(set(all_agents))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed agents for key: {str(e)}")
@@ -182,9 +197,12 @@ class AgentRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """
-        Get allowed agents for a team from its object_permission.
+        Get allowed agents for a team.
 
-        Note: object_permission is already loaded by get_team_object() in main auth flow.
+        1. First checks native team-level agent permissions (object_permission)
+        2. Also includes agents from team's access_group_ids (unified access groups)
+
+        Fetches the team object once and reuses it for both permission sources.
         """
         if user_api_key_auth is None:
             return []
@@ -193,26 +211,57 @@ class AgentRequestHandler:
             return []
 
         try:
-            # Get team object permission (already loaded in main auth flow)
-            object_permissions = await AgentRequestHandler._get_team_object_permission(
-                user_api_key_auth
+            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
             )
 
-            if object_permissions is None:
+            if not prisma_client:
                 return []
 
-            # Get direct agents
-            direct_agents = object_permissions.agents or []
-
-            # Get agents from access groups
-            access_group_agents = (
-                await AgentRequestHandler._get_agents_from_access_groups(
-                    object_permissions.agent_access_groups or []
-                )
+            # Fetch the team object once for both permission sources
+            team_obj = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
-            # Combine both lists
-            all_agents = direct_agents + access_group_agents
+            if team_obj is None:
+                return []
+
+            all_agents: List[str] = []
+
+            # 1. Get agents from object_permission (native permissions)
+            object_permissions = team_obj.object_permission
+            if object_permissions is not None:
+                # Get direct agents
+                direct_agents = object_permissions.agents or []
+
+                # Get agents from access groups
+                access_group_agents = (
+                    await AgentRequestHandler._get_agents_from_access_groups(
+                        object_permissions.agent_access_groups or []
+                    )
+                )
+
+                all_agents = direct_agents + access_group_agents
+
+            # 2. Also include agents from team's access_group_ids (unified access groups)
+            team_access_group_ids = team_obj.access_group_ids or []
+            if team_access_group_ids:
+                from litellm.proxy.auth.auth_checks import (
+                    _get_agent_ids_from_access_groups,
+                )
+
+                unified_agents = await _get_agent_ids_from_access_groups(
+                    access_group_ids=team_access_group_ids,
+                )
+                all_agents.extend(unified_agents)
+
             return list(set(all_agents))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed agents for team: {str(e)}")
