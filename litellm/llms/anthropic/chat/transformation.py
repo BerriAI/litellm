@@ -1375,7 +1375,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     )
                 if effort == "max" and not self._is_claude_4_6_model(model):
                     raise ValueError(
-                        f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
+                        f"effort='max' is only supported by Claude 4.6 models (Opus 4.6, Sonnet 4.6). Got model: {model}"
                     )
                 data["output_config"] = output_config
 
