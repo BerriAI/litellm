@@ -456,6 +456,7 @@ def _load_policy_templates_from_local_backup() -> list:
         os.path.dirname(__file__),
         "..",
         "..",
+        "..",
         "policy_templates_backup.json",
     )
     path = os.path.abspath(backup_path)
