@@ -23,10 +23,8 @@ general_settings:
 
 ## 2. Start LiteLLM Proxy
 
-If your shell has `DATABASE_URL` set, unset it for this local test:
-
 ```bash showLineNumbers
-env -u DATABASE_URL poetry run litellm --config openclaw_proxy_config.yaml --port 4000
+poetry run litellm --config openclaw_proxy_config.yaml --port 4000
 ```
 
 ## 3. Test the proxy
