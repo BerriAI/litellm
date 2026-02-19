@@ -414,3 +414,62 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
+
+
+# GPT-5 unsupported params audit (validated via direct API calls)
+def test_gpt5_rejects_params_unsupported_by_openai(config: OpenAIConfig):
+    """Params that OpenAI rejects for all GPT-5 reasoning models."""
+    rejected_params = [
+        "logit_bias",
+        "modalities",
+        "prediction",
+        "audio",
+        "web_search_options",
+    ]
+    for model in ["gpt-5", "gpt-5-mini", "gpt-5-codex", "gpt-5.1", "gpt-5.2"]:
+        supported = config.get_supported_openai_params(model=model)
+        for param in rejected_params:
+            assert param not in supported, (
+                f"{param} should not be supported for {model}"
+            )
+
+
+def test_gpt5_1_supports_logprobs_top_p(config: OpenAIConfig):
+    """gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort='none'."""
+    for model in ["gpt-5.1", "gpt-5.2"]:
+        supported = config.get_supported_openai_params(model=model)
+        assert "logprobs" in supported, f"logprobs should be supported for {model}"
+        assert "top_p" in supported, f"top_p should be supported for {model}"
+        assert "top_logprobs" in supported, f"top_logprobs should be supported for {model}"
+
+
+def test_gpt5_base_does_not_support_logprobs_top_p(config: OpenAIConfig):
+    """Base gpt-5/gpt-5-mini do NOT support logprobs, top_p, top_logprobs."""
+    for model in ["gpt-5", "gpt-5-mini", "gpt-5-codex"]:
+        supported = config.get_supported_openai_params(model=model)
+        assert "logprobs" not in supported, f"logprobs should not be supported for {model}"
+        assert "top_p" not in supported, f"top_p should not be supported for {model}"
+        assert "top_logprobs" not in supported, f"top_logprobs should not be supported for {model}"
+
+
+def test_gpt5_1_logprobs_passthrough(config: OpenAIConfig):
+    """Test that logprobs passes through for gpt-5.1."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_logprobs": 3},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["logprobs"] is True
+    assert params["top_logprobs"] == 3
+
+
+def test_gpt5_1_top_p_passthrough(config: OpenAIConfig):
+    """Test that top_p passes through for gpt-5.1."""
+    params = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["top_p"] == 0.9
