@@ -1877,7 +1877,7 @@ class InitPassThroughEndpointHelpers:
         # Check if this exact route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
-                "Updating duplicate exact pass through endpoint: %s (already registered)",
+                "Updating duplicate exact pass through endpoint: %s with methods %s (already registered)",
                 path,
                 methods,
             )
