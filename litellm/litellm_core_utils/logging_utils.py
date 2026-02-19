@@ -43,7 +43,7 @@ _BYTES_PER_MIB = 1024 * 1024
 # Captures: group(1)=mime_type, group(2)=base64_payload
 _DATA_URI_RE = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
 
-# Maximum recursion depth for _truncate_base64_in_value to guard against
+# Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
 _MAX_TRUNCATION_DEPTH = 20
 
@@ -75,17 +75,53 @@ def _truncate_base64_in_string(value: str) -> str:
     return _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
 
 
-def _truncate_base64_in_value(value: Any, depth: int = 0) -> Any:
-    """Recursively truncate base64 data URIs in a JSON-like value (str/list/dict)."""
-    if depth > _MAX_TRUNCATION_DEPTH:
-        return value
+def _truncate_base64_in_value(value: Any) -> Any:
+    """Iteratively truncate base64 data URIs in a JSON-like value (str/list/dict).
+
+    Uses an explicit stack instead of recursion to satisfy the project's
+    recursive-function detector and avoid stack-overflow on deep payloads.
+    """
+    # Stack entries: (source_value, depth, parent_container, key_or_index)
+    # We mutate *copies* of dicts/lists in-place via parent references.
     if isinstance(value, str):
         return _truncate_base64_in_string(value)
-    if isinstance(value, dict):
-        return {k: _truncate_base64_in_value(v, depth + 1) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_truncate_base64_in_value(item, depth + 1) for item in value]
-    return value
+    if not isinstance(value, (dict, list)):
+        return value
+
+    # Shallow-copy the root so we don't mutate the caller's data.
+    root = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
+    stack: list = [(root, 0)]
+
+    while stack:
+        container, depth = stack.pop()
+        if depth > _MAX_TRUNCATION_DEPTH:
+            continue
+        if isinstance(container, dict):
+            for k, v in container.items():
+                if isinstance(v, str):
+                    container[k] = _truncate_base64_in_string(v)
+                elif isinstance(v, dict):
+                    copy = {ck: cv for ck, cv in v.items()}
+                    container[k] = copy
+                    stack.append((copy, depth + 1))
+                elif isinstance(v, list):
+                    copy = list(v)
+                    container[k] = copy
+                    stack.append((copy, depth + 1))
+        elif isinstance(container, list):
+            for i, v in enumerate(container):
+                if isinstance(v, str):
+                    container[i] = _truncate_base64_in_string(v)
+                elif isinstance(v, dict):
+                    copy = {ck: cv for ck, cv in v.items()}
+                    container[i] = copy
+                    stack.append((copy, depth + 1))
+                elif isinstance(v, list):
+                    copy = list(v)
+                    container[i] = copy
+                    stack.append((copy, depth + 1))
+
+    return root
 
 
 def truncate_base64_in_messages(
