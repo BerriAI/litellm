@@ -634,6 +634,23 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
+        
+        ### AUTO STREAM USAGE TRACKING ###
+        # If always_include_stream_usage is enabled and this is a streaming request
+        # automatically add stream_options={'include_usage': True} if not already set
+        if (
+            general_settings.get("always_include_stream_usage", False) is True
+            and self.data.get("stream", False) is True
+        ):
+            # Only set if stream_options is not already provided by the client
+            if "stream_options" not in self.data:
+                self.data["stream_options"] = {"include_usage": True}
+            elif (
+                isinstance(self.data["stream_options"], dict)
+                and "include_usage" not in self.data["stream_options"]
+            ):
+                self.data["stream_options"]["include_usage"] = True
+        
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -682,6 +699,24 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    def _debug_log_request_payload(self) -> None:
+        """Log request payload at DEBUG level, truncating if too large."""
+        if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            return
+        _payload_str = json.dumps(self.data, default=str)
+        if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
+                len(_payload_str),
+                MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+                list(self.data.keys()) if isinstance(self.data, dict) else type(self.data).__name__,
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM:\n%s",
+                json.dumps(self.data, indent=4, default=str),
+            )
 
     async def base_process_llm_request(
         self,
@@ -767,20 +802,7 @@ class ProxyBaseLLMRequestProcessing:
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
-        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-            _payload_str = json.dumps(self.data, default=str)
-            if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
-                verbose_proxy_logger.debug(
-                    "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
-                    len(_payload_str),
-                    MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                    list(self.data.keys()) if isinstance(self.data, dict) else type(self.data).__name__,
-                )
-            else:
-                verbose_proxy_logger.debug(
-                    "Request received by LiteLLM:\n%s",
-                    json.dumps(self.data, indent=4, default=str),
-                )
+        self._debug_log_request_payload()
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
             request=request,

@@ -591,7 +591,6 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
     "service_tier",
-    "store",
     "prompt_cache_key",
     "prompt_cache_retention",
     "safety_identifier",
@@ -657,6 +656,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "prompt_cache_retention": None,
     "store": None,
     "metadata": None,
+    "context_management": None,
 }
 
 openai_compatible_endpoints: List = [
@@ -1493,3 +1493,8 @@ MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
     os.getenv("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400)
 )  # 100 KB
+
+# Policy template enrichment
+MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
+COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
+DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
