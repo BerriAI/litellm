@@ -962,6 +962,7 @@ def _build_comparison_blocked_words(
 class SuggestTemplatesRequest(BaseModel):
     attack_examples: List[str] = Field(default_factory=list)
     description: str = Field(default="")
+    model: Optional[str] = None
 
 
 @router.post(
@@ -990,4 +991,5 @@ async def suggest_policy_templates(
         templates=templates,
         attack_examples=data.attack_examples,
         description=data.description,
+        model=data.model,
     )
