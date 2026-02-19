@@ -69,13 +69,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             base_gpt_series_params.remove("tool_choice")
 
         non_supported_params = [
-            "logprobs",
-            "top_p",
             "presence_penalty",
             "frequency_penalty",
-            "top_logprobs",
             "stop",
+            "logit_bias",
+            "modalities",
+            "prediction",
+            "audio",
+            "web_search_options",
         ]
+
+        # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"
+        if not self.is_model_gpt_5_1_model(model):
+            non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
 
         return [
             param
