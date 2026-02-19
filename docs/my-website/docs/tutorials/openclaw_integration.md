@@ -4,59 +4,131 @@ sidebar_label: "OpenClaw"
 
 # OpenClaw Integration
 
-Use OpenClaw with LiteLLM Proxy through an OpenAI-compatible endpoint.
+Use [OpenClaw](https://docs.openclaw.ai) with LiteLLM Proxy to route requests through 100+ LLM providers.
 
-## 1. Create a simple LiteLLM config
+## Prerequisites
 
-Create `openclaw_proxy_config.yaml`:
+- LiteLLM Proxy installed (`pip install 'litellm[proxy]'`)
+- OpenClaw installed (`npm install -g openclaw@latest`)
+- At least one LLM provider API key (OpenAI, Anthropic, Gemini, etc.)
 
-```yaml showLineNumbers title="openclaw_proxy_config.yaml"
+## 1. Create a LiteLLM config
+
+Create `litellm_config.yaml`:
+
+```yaml showLineNumbers title="litellm_config.yaml"
 model_list:
-  - model_name: openclaw-default
+  - model_name: gpt-5
     litellm_params:
-      model: openai/gpt-5-mini
+      model: openai/gpt-5
       api_key: os.environ/OPENAI_API_KEY
 
 general_settings:
   master_key: sk-1234
 ```
 
-## 2. Start LiteLLM Proxy
+:::tip
+You can add multiple models from different providers. See [LiteLLM proxy config docs](https://docs.litellm.ai/docs/proxy/configs) for all options.
+:::
+
+## 2. Start the proxy
 
 ```bash showLineNumbers
-poetry run litellm --config openclaw_proxy_config.yaml --port 4000
+litellm --config litellm_config.yaml --port 4000
 ```
 
-## 3. Test the proxy
-
-In another terminal:
+Verify it's running:
 
 ```bash showLineNumbers
-curl -s http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model":"openclaw-default",
-    "messages":[{"role":"user","content":"hello"}]
-  }'
+curl http://localhost:4000/health
 ```
 
-## 4. Connect OpenClaw
-
-Run:
+## 3. Connect OpenClaw
 
 ```bash showLineNumbers
 openclaw onboard --auth-choice litellm-api-key
 ```
 
-Use these values:
+Enter these values when prompted:
 
-- Base URL: `http://localhost:4000`
-- API key: `sk-1234`
-- API type: `openai-completions`
-- Model: `openclaw-default`
+| Field     | Value                    |
+|-----------|--------------------------|
+| Base URL  | `http://localhost:4000`  |
+| API key   | `sk-1234`               |
+| API type  | `openai-completions`    |
+| Model     | `gpt-5`           |
+
+## 4. Verify
+
+```bash showLineNumbers
+openclaw chat
+```
+
+Send a test message. If you get a response, the integration is working.
+
+## Alternative: Manual config
+
+If you prefer to configure OpenClaw directly instead of using `openclaw onboard`:
+
+```bash showLineNumbers
+export LITELLM_API_KEY="sk-1234"
+```
+
+Edit `~/.openclaw/openclaw.json`:
+
+```json showLineNumbers title="~/.openclaw/openclaw.json"
+{
+  "models": {
+    "providers": {
+      "litellm": {
+        "baseUrl": "http://localhost:4000",
+        "apiKey": "${LITELLM_API_KEY}",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "gpt-5",
+            "name": "GPT-4o Mini",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 16384
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "litellm/gpt-5" }
+    }
+  }
+}
+```
+
+Then restart the gateway:
+
+```bash showLineNumbers
+openclaw gateway restart
+```
+
+## Troubleshooting
+
+**OpenClaw uses a previous model (e.g., `Invalid model name`)**
+
+```bash showLineNumbers
+openclaw models set litellm/gpt-5
+openclaw gateway restart
+```
+
+**Starting from scratch**
+
+```bash showLineNumbers
+openclaw gateway stop
+rm -rf ~/.openclaw
+openclaw onboard --auth-choice litellm-api-key
+```
 
 ## References
 
-- OpenClaw docs: [https://docs.openclaw.ai/providers/litellm](https://docs.openclaw.ai/providers/litellm)
-- LiteLLM proxy docs: [https://docs.litellm.ai/docs/proxy/docker_quick_start](https://docs.litellm.ai/docs/proxy/docker_quick_start)
+- [OpenClaw LiteLLM provider docs](https://docs.openclaw.ai/providers/litellm)
+- [LiteLLM proxy configuration](https://docs.litellm.ai/docs/proxy/configs)
