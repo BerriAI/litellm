@@ -103,6 +103,7 @@ class HealthCheckHelpers:
             "batch",
             "responses",
             "ocr",
+            "image_edit",
         ],
         Callable,
     ]:
@@ -124,6 +125,9 @@ class HealthCheckHelpers:
         import litellm
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
+        )
+        from litellm.litellm_core_utils.image_utils.utils import (
+            get_image_for_health_check,
         )
         from litellm.litellm_core_utils.health_check_utils import _filter_model_params
         from litellm.realtime_api.main import _realtime_health_check
@@ -189,5 +193,10 @@ class HealthCheckHelpers:
                     "type": "document_url",
                     "document_url": TEST_PDF_URL,
                 },
+            ),
+            "image_edit": lambda: litellm.aimage_edit(
+                **_filter_model_params(model_params=model_params),
+                image=get_image_for_health_check(),
+                prompt=prompt or "test",
             ),
         }
