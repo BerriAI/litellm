@@ -1,11 +1,14 @@
 import asyncio
+import copy
 import functools
 import inspect
+import re
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -33,6 +36,75 @@ import litellm
 """
 Helper utils used for logging callbacks
 """
+
+# Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
+# Captures: group(1)=mime_type, group(2)=base64_payload
+_DATA_URI_RE = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=\s]+)")
+
+
+def _format_base64_size(num_chars: int) -> str:
+    """Return a human-readable byte-size estimate from a base64 character count."""
+    num_bytes = num_chars * 3 / 4
+    if num_bytes >= 1_048_576:
+        return f"{num_bytes / 1_048_576:.2f}MB"
+    if num_bytes >= 1024:
+        return f"{num_bytes / 1024:.1f}KB"
+    return f"{int(num_bytes)}B"
+
+
+def _truncate_base64_in_string(value: str) -> str:
+    """
+    Replace long base64 data-URI payloads in a string with a size placeholder.
+
+    Example:
+        "data:application/pdf;base64,AAAA...AAAA"
+        -> "data:application/pdf;base64,[base64_data truncated: 1.75MB]"
+    """
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return value
+
+    def _replacer(match: re.Match) -> str:
+        mime_type = match.group(1)
+        payload = match.group(2)
+        if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
+            return match.group(0)
+        size_str = _format_base64_size(len(payload))
+        return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
+
+    return _DATA_URI_RE.sub(_replacer, value)
+
+
+def _truncate_base64_in_value(value: Any) -> Any:
+    """Recursively truncate base64 data URIs in a JSON-like value (str/list/dict)."""
+    if isinstance(value, str):
+        return _truncate_base64_in_string(value)
+    if isinstance(value, dict):
+        return {k: _truncate_base64_in_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_truncate_base64_in_value(item) for item in value]
+    return value
+
+
+def truncate_base64_in_messages(
+    messages: Optional[Union[str, list, dict]],
+) -> Optional[Union[str, list, dict]]:
+    """
+    Return a copy of *messages* with long base64 data-URI payloads replaced
+    by human-readable size placeholders.
+
+    This is intended for logging payloads (e.g. StandardLoggingPayload.messages)
+    where the full base64 content is not useful and wastes memory/bandwidth.
+
+    The original messages object is never mutated; a new structure is returned
+    only when truncation actually occurs.
+    """
+    if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return messages
+    try:
+        return _truncate_base64_in_value(messages)
+    except Exception:
+        return messages
+
 
 # Global service logger instance to avoid recreating it
 _service_logger = None
