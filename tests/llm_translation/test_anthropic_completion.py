@@ -1039,8 +1039,8 @@ def test_anthropic_citations_api_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_thinking_output(model):
@@ -1068,9 +1068,9 @@ def test_anthropic_thinking_output(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        # "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        # "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_thinking_output_stream(model):
@@ -1152,8 +1152,8 @@ def test_anthropic_custom_headers():
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        # "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_thinking_in_assistant_message(model):
@@ -1189,8 +1189,8 @@ def test_anthropic_thinking_in_assistant_message(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-3-7-sonnet-20250219",
-        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic/claude-sonnet-4-5-20250929",
+        # "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_anthropic_redacted_thinking_in_assistant_message(model):
@@ -1226,7 +1226,7 @@ def test_just_system_message():
     litellm._turn_on_debug()
     litellm.modify_params = True
     params = {
-        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [{"role": "system", "content": "You are a helpful assistant."}],
     }
 
