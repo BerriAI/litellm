@@ -9,6 +9,7 @@ Permission logic:
 - end_user_id, no mcp_servers  → allow all (default)
 - end_user_id + mcp_servers    → allow only those servers
 """
+
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 
 from litellm._logging import verbose_proxy_logger
@@ -78,8 +79,10 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         if not tools:
             return inputs
 
-        allowed_mcp_servers = await self._get_allowed_mcp_servers_from_object_permission(
-            object_permission
+        allowed_mcp_servers = (
+            await self._get_allowed_mcp_servers_from_object_permission(
+                object_permission
+            )
         )
         if allowed_mcp_servers is None:
             return inputs  # No restrictions → pass through unchanged
@@ -93,7 +96,9 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
 
         for tool in tools:
             tool_name = self._get_tool_name_from_definition(tool)
-            server_name = self._extract_mcp_server_name(tool_name) if tool_name else None
+            server_name = (
+                self._extract_mcp_server_name(tool_name) if tool_name else None
+            )
 
             if server_name is None:
                 # Not an MCP tool (no prefix) or unrecognised format → keep
@@ -138,7 +143,9 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         end_user_object = await MCPEndUserPermissionGuardrail._fetch_end_user_object(
             end_user_id
         )
-        return end_user_object.object_permission if end_user_object is not None else None
+        return (
+            end_user_object.object_permission if end_user_object is not None else None
+        )
 
     @staticmethod
     def _get_end_user_id_from_request_data(request_data: dict) -> Optional[str]:
