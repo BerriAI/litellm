@@ -619,6 +619,23 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
+        
+        ### AUTO STREAM USAGE TRACKING ###
+        # If always_include_stream_usage is enabled and this is a streaming request
+        # automatically add stream_options={'include_usage': True} if not already set
+        if (
+            general_settings.get("always_include_stream_usage", False) is True
+            and self.data.get("stream", False) is True
+        ):
+            # Only set if stream_options is not already provided by the client
+            if "stream_options" not in self.data:
+                self.data["stream_options"] = {"include_usage": True}
+            elif (
+                isinstance(self.data["stream_options"], dict)
+                and "include_usage" not in self.data["stream_options"]
+            ):
+                self.data["stream_options"]["include_usage"] = True
+        
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
