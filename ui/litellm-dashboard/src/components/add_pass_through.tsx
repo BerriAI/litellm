@@ -30,6 +30,8 @@ import PassThroughSecuritySection from "./common_components/PassThroughSecurityS
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
 const { Option } = Select2;
 
+const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+
 interface AddFallbacksProps {
   //   models: string[] | undefined;
   accessToken: string;
@@ -52,12 +54,14 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [targetValue, setTargetValue] = useState("");
   const [includeSubpath, setIncludeSubpath] = useState(true);
   const [authEnabled, setAuthEnabled] = useState(false);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>([]);
   const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>({});
   const handleCancel = () => {
     form.resetFields();
     setPathValue("");
     setTargetValue("");
     setIncludeSubpath(true);
+    setSelectedMethods([]);
     setGuardrails({});
     setIsModalVisible(false);
   };
@@ -86,6 +90,11 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         formValues.guardrails = guardrails;
       }
       
+      // Add methods to formValues (only if specific methods are selected)
+      if (selectedMethods && selectedMethods.length > 0) {
+        formValues.methods = selectedMethods;
+      }
+      
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       const response = await createPassThroughEndpoint(accessToken, formValues);
@@ -101,6 +110,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       setPathValue("");
       setTargetValue("");
       setIncludeSubpath(true);
+      setSelectedMethods([]);
       setGuardrails({});
       setIsModalVisible(false);
     } catch (error) {
@@ -202,6 +212,41 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                       form.setFieldsValue({ target: e.target.value });
                     }}
                   />
+                </Form.Item>
+
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      HTTP Methods (Optional)
+                      <Tooltip title="Select specific HTTP methods. Leave empty to support all methods (GET, POST, PUT, DELETE, PATCH). Useful when the same path needs different targets for different methods.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="methods"
+                  extra={
+                    <div className="text-xs text-gray-500 mt-1">
+                      {selectedMethods.length === 0 
+                        ? "All HTTP methods supported (default)" 
+                        : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`}
+                    </div>
+                  }
+                  className="mb-4"
+                >
+                  <Select2
+                    mode="multiple"
+                    placeholder="Select methods (leave empty for all)"
+                    value={selectedMethods}
+                    onChange={setSelectedMethods}
+                    allowClear
+                    style={{ width: "100%" }}
+                  >
+                    {HTTP_METHODS.map((method) => (
+                      <Option key={method} value={method}>
+                        {method}
+                      </Option>
+                    ))}
+                  </Select2>
                 </Form.Item>
 
                 <div className="flex items-center justify-between py-3">
