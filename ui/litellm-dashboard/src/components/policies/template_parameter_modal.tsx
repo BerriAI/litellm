@@ -39,6 +39,9 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
   const [competitorTags, setCompetitorTags] = useState<string[]>([]);
   const [variationsMap, setVariationsMap] = useState<Record<string, string[]>>({});
   const [isGenerating, setIsGenerating] = useState(false);
+  const [refinementInput, setRefinementInput] = useState("");
+  const [isRefining, setIsRefining] = useState(false);
+  const [hasGenerated, setHasGenerated] = useState(false);
 
   const parameters: TemplateParameter[] = template?.parameters || [];
   const hasEnrichment = !!template?.llm_enrichment;
@@ -60,6 +63,9 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       setCompetitorTags([]);
       setVariationsMap({});
       setIsGenerating(false);
+      setRefinementInput("");
+      setIsRefining(false);
+      setHasGenerated(false);
     }
   }, [visible, template]);
 
@@ -108,6 +114,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
           setCompetitorTags(result.competitors);
           setVariationsMap(result.competitor_variations || {});
           setIsGenerating(false);
+          setHasGenerated(true);
         },
         (error) => {
           console.error("Streaming error:", error);
@@ -117,6 +124,43 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     } catch (error) {
       console.error("Error generating competitor names:", error);
       setIsGenerating(false);
+    }
+  };
+
+  const handleRefine = async () => {
+    if (!accessToken || !selectedModel || !template || !refinementInput.trim()) return;
+
+    setIsRefining(true);
+    try {
+      await enrichPolicyTemplateStream(
+        accessToken,
+        template.id,
+        parameterValues,
+        selectedModel,
+        (name) => {
+          setCompetitorTags((prev) => {
+            if (prev.some((t) => t.toLowerCase() === name.toLowerCase())) return prev;
+            return [...prev, name];
+          });
+        },
+        (result) => {
+          setCompetitorTags(result.competitors);
+          setVariationsMap(result.competitor_variations || {});
+          setIsRefining(false);
+          setRefinementInput("");
+        },
+        (error) => {
+          console.error("Refinement error:", error);
+          setIsRefining(false);
+        },
+        {
+          instruction: refinementInput.trim(),
+          existingCompetitors: competitorTags,
+        }
+      );
+    } catch (error) {
+      console.error("Error refining competitor names:", error);
+      setIsRefining(false);
     }
   };
 
@@ -284,6 +328,39 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                 </p>
               )}
             </div>
+
+            {/* Refinement input — shown after initial generation in AI mode */}
+            {competitorMode === "ai" && hasGenerated && competitorTags.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Refine List
+                </label>
+                <div className="flex gap-2">
+                  <TextInput
+                    placeholder="e.g. add 10 more from Asia, increase to 50 total..."
+                    value={refinementInput}
+                    onChange={(e) => setRefinementInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && refinementInput.trim() && !isRefining) {
+                        handleRefine();
+                      }
+                    }}
+                    disabled={isRefining}
+                  />
+                  <Button
+                    onClick={handleRefine}
+                    loading={isRefining}
+                    disabled={!refinementInput.trim() || isRefining}
+                    size="xs"
+                  >
+                    {isRefining ? "..." : "Send"}
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  Give instructions to add, remove, or change competitors. Press Enter to send.
+                </p>
+              </div>
+            )}
           </>
         )}
 
