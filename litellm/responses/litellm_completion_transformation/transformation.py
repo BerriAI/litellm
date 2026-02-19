@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
+from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
@@ -31,9 +32,7 @@ from litellm.types.llms.openai import (
     OpenAIWebSearchOptions,
     OpenAIWebSearchUserLocation,
     OutputTokensDetails,
-    Reasoning,
     ResponseAPIUsage,
-    ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStatus,
@@ -739,9 +738,25 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _ensure_tool_results_have_corresponding_tool_calls(
-        messages: List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionResponseMessage]],
+        messages: Sequence[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionResponseMessage,
+                ChatCompletionMessageToolCall,
+                Message,
+            ]
+        ],
         tools: Optional[List[Any]] = None,
-    ) -> List[Union[AllMessageValues, GenericChatCompletionMessage, ChatCompletionResponseMessage]]:
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+            ChatCompletionMessageToolCall,
+            Message,
+        ]
+    ]:
         """
         Ensure that tool_result messages have corresponding tool_calls in the previous assistant message.
         
@@ -756,11 +771,19 @@ class LiteLLMCompletionResponsesConfig:
             List of messages with tool_calls added to assistant messages when needed
         """
         if not messages:
-            return messages
-        
-        # Create a deep copy to avoid modifying the original
+            return list(messages)
+
+        # Create a deep copy to avoid modifying the original (use list() so we can mutate and return List)
         import copy
-        fixed_messages = copy.deepcopy(messages)
+        fixed_messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionResponseMessage,
+                ChatCompletionMessageToolCall,
+                Message,
+            ]
+        ] = list(copy.deepcopy(messages))
         messages_to_remove = []
         
         # Count non-tool messages to avoid removing all messages
@@ -1308,6 +1331,50 @@ class LiteLLMCompletionResponsesConfig:
         return chat_completion_tools, web_search_options
 
     @staticmethod
+    def transform_chat_completion_tool_params_to_responses_api_tools(
+        chat_completion_tools: Optional[
+            List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]]
+        ],
+    ) -> List[Dict[str, Any]]:
+        """
+        Transform Chat Completion tool params (e.g. from guardrail output) back to
+        Responses API request tool format. Inverse of
+        transform_responses_api_tools_to_chat_completion_tools for the tools list.
+        """
+        if chat_completion_tools is None or not chat_completion_tools:
+            return []
+        result: List[Dict[str, Any]] = []
+        for tool in chat_completion_tools:
+            if not isinstance(tool, dict):
+                result.append(tool)  # type: ignore
+                continue
+            if tool.get("type") == "function":
+                fn = tool.get("function") or {}
+                parameters = dict(fn.get("parameters", {}) or {})
+                if not parameters or "type" not in parameters:
+                    parameters["type"] = "object"
+                responses_tool: Dict[str, Any] = {
+                    "type": "function",
+                    "name": fn.get("name") or "",
+                    "description": fn.get("description") or "",
+                    "parameters": parameters,
+                    "strict": fn.get("strict", False) or False,
+                }
+                if tool.get("cache_control") is not None:
+                    responses_tool["cache_control"] = tool.get("cache_control")
+                if tool.get("defer_loading") is not None:
+                    responses_tool["defer_loading"] = tool.get("defer_loading")
+                if tool.get("allowed_callers") is not None:
+                    responses_tool["allowed_callers"] = tool.get("allowed_callers")
+                if tool.get("input_examples") is not None:
+                    responses_tool["input_examples"] = tool.get("input_examples")
+                result.append(responses_tool)
+            else:
+                # mcp or other: pass through unchanged
+                result.append(dict(tool))
+        return result
+
+    @staticmethod
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
     ) -> List[ResponseFunctionToolCall]:
@@ -1500,7 +1567,7 @@ class LiteLLMCompletionResponsesConfig:
             previous_response_id=getattr(
                 chat_completion_response, "previous_response_id", None
             ),
-            reasoning=Reasoning(),
+            reasoning=None,
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),
@@ -1512,6 +1579,12 @@ class LiteLLMCompletionResponsesConfig:
             user=getattr(chat_completion_response, "user", None),
         )
         responses_api_response._hidden_params = getattr(chat_completion_response, "_hidden_params", {})
+
+        # Surface provider-specific fields (generic passthrough from any provider)
+        provider_fields = responses_api_response._hidden_params.get("provider_specific_fields")
+        if provider_fields:
+            setattr(responses_api_response, "provider_specific_fields", provider_fields)
+
         return responses_api_response
 
     @staticmethod

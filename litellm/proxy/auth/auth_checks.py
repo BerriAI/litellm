@@ -11,7 +11,8 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union,
+                    cast)
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -20,40 +21,27 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.constants import (
-    CLI_JWT_EXPIRATION_HOURS,
-    CLI_JWT_TOKEN_NAME,
-    DEFAULT_IN_MEMORY_TTL,
-    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-    DEFAULT_MAX_RECURSE_DEPTH,
-    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
-)
+from litellm.constants import (CLI_JWT_EXPIRATION_HOURS, CLI_JWT_TOKEN_NAME,
+                               DEFAULT_ACCESS_GROUP_CACHE_TTL,
+                               DEFAULT_IN_MEMORY_TTL,
+                               DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+                               DEFAULT_MAX_RECURSE_DEPTH,
+                               EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.proxy._types import (
-    RBAC_ROLES,
-    CallInfo,
-    LiteLLM_BudgetTable,
-    LiteLLM_EndUserTable,
-    Litellm_EntityType,
-    LiteLLM_JWTAuth,
-    LiteLLM_ObjectPermissionTable,
-    LiteLLM_OrganizationMembershipTable,
-    LiteLLM_OrganizationTable,
-    LiteLLM_ProjectTableCachedObj,
-    LiteLLM_TagTable,
-    LiteLLM_TeamMembership,
-    LiteLLM_TeamTable,
-    LiteLLM_TeamTableCachedObj,
-    LiteLLM_UserTable,
-    LiteLLMRoutes,
-    LitellmUserRoles,
-    NewTeamRequest,
-    ProxyErrorTypes,
-    ProxyException,
-    RoleBasedPermissions,
-    SpecialModelNames,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import (RBAC_ROLES, CallInfo,
+                                  LiteLLM_AccessGroupTable,
+                                  LiteLLM_BudgetTable, LiteLLM_EndUserTable,
+                                  Litellm_EntityType, LiteLLM_JWTAuth,
+                                  LiteLLM_ObjectPermissionTable,
+                                  LiteLLM_OrganizationMembershipTable,
+                                  LiteLLM_OrganizationTable, LiteLLM_TagTable,
+                                  LiteLLM_TeamMembership, LiteLLM_TeamTable,
+                                  LiteLLM_TeamTableCachedObj,
+                                  LiteLLM_UserTable, LiteLLMRoutes,
+                                  LitellmUserRoles, NewTeamRequest,
+                                  ProxyErrorTypes, ProxyException,
+                                  RoleBasedPermissions, SpecialModelNames,
+                                  UserAPIKeyAuth)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
@@ -265,7 +253,7 @@ async def common_checks(
 
     # 2. If team can call model
     if _model and team_object:
-        if not can_team_access_model(
+        if not await can_team_access_model(
             model=_model,
             team_object=team_object,
             llm_router=llm_router,
@@ -432,7 +420,8 @@ async def common_checks(
     _request_metadata: dict = request_body.get("metadata", {}) or {}
     if _request_metadata.get("guardrails"):
         # check if team allowed to modify guardrails
-        from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+        from litellm.proxy.guardrails.guardrail_helpers import \
+            can_modify_guardrails
 
         can_modify: bool = can_modify_guardrails(team_object)
         if can_modify is False:
@@ -858,7 +847,7 @@ async def get_end_user_object(
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
             where={"user_id": end_user_id},
-            include={"litellm_budget_table": True},
+            include={"litellm_budget_table": True, "object_permission": True},
         )
 
         if response is None:
@@ -1567,6 +1556,110 @@ async def get_team_object(
         )
 
 
+async def _cache_access_object(
+    access_group_id: str,
+    access_group_table: LiteLLM_AccessGroupTable,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+):
+    key = "access_group_id:{}".format(access_group_id)
+    await user_api_key_cache.async_set_cache(
+        key=key,
+        value=access_group_table,
+        ttl=DEFAULT_ACCESS_GROUP_CACHE_TTL,
+    )
+
+
+async def _delete_cache_access_object(
+    access_group_id: str,
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+):
+    key = "access_group_id:{}".format(access_group_id)
+
+    user_api_key_cache.delete_cache(key=key)
+
+    ## UPDATE REDIS CACHE ##
+    if proxy_logging_obj is not None:
+        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(
+            key=key
+        )
+
+
+@log_db_metrics
+async def get_access_object(
+    access_group_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> LiteLLM_AccessGroupTable:
+    """
+    - Check if access_group_id in proxy AccessGroupTable
+    - Always checks cache first, then DB only when not found in cache
+    - if valid, return LiteLLM_AccessGroupTable object
+    - if not, then raise an error
+
+    Unlike get_team_object, this has no check_cache_only or check_db_only flags;
+    it always follows cache-first-then-db semantics.
+
+    Raises:
+        - HTTPException: If access group doesn't exist in db or cache (status_code=404)
+    """
+    if prisma_client is None:
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    key = "access_group_id:{}".format(access_group_id)
+
+    # Always check cache first
+    cached_access_obj = await user_api_key_cache.async_get_cache(key=key)
+    if cached_access_obj is not None:
+        if isinstance(cached_access_obj, dict):
+            return LiteLLM_AccessGroupTable(**cached_access_obj)
+        elif isinstance(cached_access_obj, LiteLLM_AccessGroupTable):
+            return cached_access_obj
+
+    # Not in cache - fetch from DB
+    try:
+        response = await prisma_client.db.litellm_accessgrouptable.find_unique(
+            where={"access_group_id": access_group_id}
+        )
+
+        if response is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Access group doesn't exist in db. Access group={access_group_id}."
+                },
+            )
+
+        _response = LiteLLM_AccessGroupTable(**response.dict())
+
+        # Save to cache
+        await _cache_access_object(
+            access_group_id=access_group_id,
+            access_group_table=_response,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        return _response
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Error getting access group for access_group_id: %s",
+            access_group_id,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"Access group doesn't exist in db. Access group={access_group_id}. Error: {e}"
+            },
+        )
+
+
 @log_db_metrics
 async def get_team_object_by_alias(
     team_alias: str,
@@ -1774,9 +1867,8 @@ class ExperimentalUIJWTToken:
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            encrypt_value_helper,
-        )
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
+            encrypt_value_helper
 
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
@@ -1822,9 +1914,8 @@ class ExperimentalUIJWTToken:
         """
         from datetime import timedelta
 
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            encrypt_value_helper,
-        )
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
+            encrypt_value_helper
 
         if user_info.user_role is None:
             raise Exception("User role is required for CLI JWT login")
@@ -1863,9 +1954,8 @@ class ExperimentalUIJWTToken:
         import json
 
         from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            decrypt_value_helper,
-        )
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import \
+            decrypt_value_helper
 
         decrypted_token = decrypt_value_helper(
             hashed_token, key="ui_hash_key", exception_type="debug"
@@ -2081,6 +2171,126 @@ async def get_org_object(
         )
 
 
+async def _get_resources_from_access_groups(
+    access_group_ids: List[str],
+    resource_field: Literal[
+        "access_model_names", "access_mcp_server_ids", "access_agent_ids"
+    ],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[DualCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Fetch access groups by their IDs (from cache or DB) and collect
+    the specified resource field across all of them.
+
+    Args:
+        access_group_ids: List of access group IDs to fetch
+        resource_field: Which resource list to extract from each access group
+            - "access_model_names": model names (for model access checks)
+            - "access_mcp_server_ids": MCP server IDs (for MCP access checks)
+            - "access_agent_ids": agent IDs (for agent access checks)
+        prisma_client: Optional PrismaClient (lazy-imported from proxy_server if None)
+        user_api_key_cache: Optional DualCache (lazy-imported from proxy_server if None)
+        proxy_logging_obj: Optional ProxyLogging (lazy-imported from proxy_server if None)
+
+    Returns:
+        Deduplicated list of resource identifiers from all resolved access groups.
+    """
+    if not access_group_ids:
+        return []
+
+    # Lazy import to avoid circular imports
+    if prisma_client is None or user_api_key_cache is None:
+        from litellm.proxy.proxy_server import prisma_client as _prisma_client
+        from litellm.proxy.proxy_server import \
+            proxy_logging_obj as _proxy_logging_obj
+        from litellm.proxy.proxy_server import \
+            user_api_key_cache as _user_api_key_cache
+
+        prisma_client = prisma_client or _prisma_client
+        user_api_key_cache = user_api_key_cache or _user_api_key_cache
+        proxy_logging_obj = proxy_logging_obj or _proxy_logging_obj
+
+    if user_api_key_cache is None:
+        return []
+
+    resources: List[str] = []
+    for ag_id in access_group_ids:
+        try:
+            ag = await get_access_object(
+                access_group_id=ag_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            resources.extend(getattr(ag, resource_field, []))
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Could not fetch access group %s for resource field %s",
+                ag_id,
+                resource_field,
+            )
+    return list(set(resources))
+
+
+async def _get_models_from_access_groups(
+    access_group_ids: List[str],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[DualCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Collect model names from unified access groups.
+    Models are matched by model name for backwards compatibility.
+    """
+    return await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_model_names",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _get_mcp_server_ids_from_access_groups(
+    access_group_ids: List[str],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[DualCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Collect MCP server IDs from unified access groups.
+    MCPs are matched by server ID.
+    """
+    return await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_mcp_server_ids",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _get_agent_ids_from_access_groups(
+    access_group_ids: List[str],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[DualCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Collect agent IDs from unified access groups.
+    Agents are matched by agent ID.
+    """
+    return await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_agent_ids",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Optional[Router],
@@ -2233,20 +2443,41 @@ async def can_key_call_model(
     """
     Checks if token can call a given model
 
+    1. First checks native key-level model permissions (current implementation)
+    2. If not allowed natively, falls back to access_group_ids on the key
+
     Returns:
         - True: if token allowed to call model
 
     Raises:
         - Exception: If token not allowed to call model
     """
-    return _can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=valid_token.models,
-        team_model_aliases=valid_token.team_model_aliases,
-        team_id=valid_token.team_id,
-        object_type="key",
-    )
+    try:
+        return _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=valid_token.models,
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            object_type="key",
+        )
+    except ProxyException:
+        # Fallback: check key's access_group_ids
+        key_access_group_ids = valid_token.access_group_ids or []
+        if key_access_group_ids:
+            models_from_groups = await _get_models_from_access_groups(
+                access_group_ids=key_access_group_ids,
+            )
+            if models_from_groups:
+                return _can_object_call_model(
+                    model=model,
+                    llm_router=llm_router,
+                    models=models_from_groups,
+                    team_model_aliases=valid_token.team_model_aliases,
+                    team_id=valid_token.team_id,
+                    object_type="key",
+                )
+        raise
 
 
 def can_org_access_model(
@@ -2268,7 +2499,7 @@ def can_org_access_model(
     )
 
 
-def can_team_access_model(
+async def can_team_access_model(
     model: Union[str, List[str]],
     team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
@@ -2277,15 +2508,37 @@ def can_team_access_model(
     """
     Returns True if the team can access a specific model.
 
+    1. First checks native team-level model permissions (current implementation)
+    2. If not allowed natively, falls back to access_group_ids on the team
     """
-    return _can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=team_object.models if team_object else [],
-        team_model_aliases=team_model_aliases,
-        team_id=team_object.team_id if team_object else None,
-        object_type="team",
-    )
+    try:
+        return _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=team_object.models if team_object else [],
+            team_model_aliases=team_model_aliases,
+            team_id=team_object.team_id if team_object else None,
+            object_type="team",
+        )
+    except ProxyException:
+        # Fallback: check team's access_group_ids
+        team_access_group_ids = (
+            (team_object.access_group_ids or []) if team_object else []
+        )
+        if team_access_group_ids:
+            models_from_groups = await _get_models_from_access_groups(
+                access_group_ids=team_access_group_ids,
+            )
+            if models_from_groups:
+                return _can_object_call_model(
+                    model=model,
+                    llm_router=llm_router,
+                    models=models_from_groups,
+                    team_model_aliases=team_model_aliases,
+                    team_id=team_object.team_id if team_object else None,
+                    object_type="team",
+                )
+        raise
 
 
 def can_project_access_model(
@@ -2909,7 +3162,8 @@ async def _tag_max_budget_check(
         BudgetExceededError if any tag is over its max budget.
         Triggers a budget alert if any tag is over its max budget.
     """
-    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import \
+        get_tags_from_request_body
 
     if prisma_client is None:
         return

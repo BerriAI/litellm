@@ -1170,16 +1170,24 @@ def test_team_callback_metadata_none_values(none_key):
     assert none_key not in resp
 
 
-def test_proxy_config_state_post_init_callback_call():
+def test_proxy_config_state_post_init_callback_call(monkeypatch):
     """
     Ensures team_id is still in config, after callback is called
 
     Addresses issue: https://github.com/BerriAI/litellm/issues/6787
 
     Where team_id was being popped from config, after callback was called
+
+    Note: Environment variables are mocked to avoid validation errors
+    in parallel execution where env vars may not be set.
     """
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy.proxy_server import ProxyConfig
+
+    # Mock environment variables to avoid Pydantic validation errors
+    # when env vars are resolved to None in parallel execution
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "test_public_key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "test_secret_key")
 
     pc = ProxyConfig()
 
@@ -1918,6 +1926,24 @@ def test_get_known_models_from_wildcard(
             print(f"Missing expected model: {model}")
 
     assert all(model in wildcard_models for model in expected_models)
+
+
+def test_get_known_models_from_wildcard_without_litellm_params():
+    """
+    Test wildcard expansion without litellm_params (BYOK case - team has openai/*
+    but no deployment in router config).
+    """
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="openai/*", litellm_params=None
+    )
+    # Should return expanded OpenAI models (gpt-4o, gpt-4o-mini, etc.)
+    assert len(wildcard_models) > 0
+    assert all(m.startswith("openai/") for m in wildcard_models)
+    # Check for common OpenAI models
+    model_ids = [m.split("/", 1)[1] for m in wildcard_models]
+    assert "gpt-4o" in model_ids or "gpt-3.5-turbo" in model_ids
 
 
 @pytest.mark.parametrize(

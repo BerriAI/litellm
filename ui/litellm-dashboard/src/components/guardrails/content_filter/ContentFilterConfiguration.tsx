@@ -69,6 +69,8 @@ interface ContentFilterConfigurationProps {
   onContentCategoryAdd?: (category: SelectedContentCategory) => void;
   onContentCategoryRemove?: (id: string) => void;
   onContentCategoryUpdate?: (id: string, field: string, value: any) => void;
+  pendingCategorySelection?: string;
+  onPendingCategorySelectionChange?: (value: string) => void;
 }
 
 const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
@@ -90,6 +92,8 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   onContentCategoryAdd,
   onContentCategoryRemove,
   onContentCategoryUpdate,
+  pendingCategorySelection,
+  onPendingCategorySelectionChange,
 }) => {
   const [patternModalVisible, setPatternModalVisible] = useState(false);
   const [keywordModalVisible, setKeywordModalVisible] = useState(false);
@@ -278,6 +282,8 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
           onCategoryRemove={onContentCategoryRemove}
           onCategoryUpdate={onContentCategoryUpdate}
           accessToken={accessToken}
+          pendingSelection={pendingCategorySelection}
+          onPendingSelectionChange={onPendingCategorySelectionChange}
         />
       )}
 

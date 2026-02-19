@@ -7,7 +7,7 @@ from pydantic import BaseModel
 class AccessGroupCreateRequest(BaseModel):
     access_group_name: str
     description: Optional[str] = None
-    access_model_ids: Optional[List[str]] = None
+    access_model_names: Optional[List[str]] = None
     access_mcp_server_ids: Optional[List[str]] = None
     access_agent_ids: Optional[List[str]] = None
     assigned_team_ids: Optional[List[str]] = None
@@ -15,8 +15,9 @@ class AccessGroupCreateRequest(BaseModel):
 
 
 class AccessGroupUpdateRequest(BaseModel):
+    access_group_name: Optional[str] = None
     description: Optional[str] = None
-    access_model_ids: Optional[List[str]] = None
+    access_model_names: Optional[List[str]] = None
     access_mcp_server_ids: Optional[List[str]] = None
     access_agent_ids: Optional[List[str]] = None
     assigned_team_ids: Optional[List[str]] = None
@@ -27,7 +28,7 @@ class AccessGroupResponse(BaseModel):
     access_group_id: str
     access_group_name: str
     description: Optional[str] = None
-    access_model_ids: List[str]
+    access_model_names: List[str]
     access_mcp_server_ids: List[str]
     access_agent_ids: List[str]
     assigned_team_ids: List[str]

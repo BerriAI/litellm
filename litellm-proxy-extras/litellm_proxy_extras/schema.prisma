@@ -310,6 +310,7 @@ model LiteLLM_ObjectPermissionTable {
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
   users                 LiteLLM_UserTable[]
+  end_users             LiteLLM_EndUserTable[]
 }
 
 // Holds the MCP server configuration 
@@ -404,6 +405,19 @@ model LiteLLM_VerificationToken {
     @@index([budget_reset_at, expires])
 }
 
+// Deprecated keys during grace period - allows old key to work until revoke_at
+model LiteLLM_DeprecatedVerificationToken {
+    id               String   @id @default(uuid())
+    token            String   // Hashed old key
+    active_token_id  String   // Current token hash in LiteLLM_VerificationToken
+    revoke_at        DateTime // When the old key stops working
+    created_at       DateTime @default(now()) @map("created_at")
+
+    @@unique([token])
+    @@index([token, revoke_at])
+    @@index([revoke_at])
+}
+
 // Audit table for deleted keys - preserves spend and key information for historical tracking
 model LiteLLM_DeletedVerificationToken {
     id                      String   @id @default(uuid())
@@ -469,7 +483,9 @@ model LiteLLM_EndUserTable {
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
   budget_id String?
+  object_permission_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
   blocked Boolean @default(false)
 }
 
@@ -849,6 +865,22 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([model_object_id])
 }
 
+model LiteLLM_ManagedVectorStoreTable {
+  id String @id @default(uuid())
+  unified_resource_id String @unique // The base64 encoded unified vector store ID
+  resource_object Json? // Stores the VectorStoreCreateResponse
+  model_mappings Json // Maps model_id -> provider_vector_store_id
+  flat_model_resource_ids String[] @default([]) // Flat list of provider vector store IDs for faster querying
+  storage_backend String? // Storage backend name (if applicable)
+  storage_url String? // Storage URL (if applicable)
+  created_at DateTime @default(now())
+  created_by String?
+  updated_at DateTime @updatedAt
+  updated_by String?
+
+  @@index([unified_resource_id])
+}
+
 model LiteLLM_ManagedVectorStoresTable {
   vector_store_id String @id
   custom_llm_provider String
@@ -983,6 +1015,7 @@ model LiteLLM_PolicyTable {
   guardrails_add   String[]  @default([])
   guardrails_remove String[] @default([])
   condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
@@ -1011,7 +1044,7 @@ model LiteLLM_AccessGroupTable {
   description        String?
   
   // Resource memberships - explicit arrays per type
-  access_model_ids        String[] @default([])
+  access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
   access_agent_ids        String[] @default([])
 
