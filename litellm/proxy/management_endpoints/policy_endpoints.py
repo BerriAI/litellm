@@ -14,7 +14,7 @@ import os
 from typing import TYPE_CHECKING, List, Literal, Optional, TypedDict, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -24,20 +24,21 @@ from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
-from litellm.types.proxy.policy_engine import (PolicyGuardrailsResponse,
-                                               PolicyInfoResponse,
-                                               PolicyListResponse,
-                                               PolicyMatchContext,
-                                               PolicyScopeResponse,
-                                               PolicySummaryItem,
-                                               PolicyTestResponse,
-                                               PolicyValidateRequest,
-                                               PolicyValidationResponse)
+from litellm.types.proxy.policy_engine import (
+    PolicyGuardrailsResponse,
+    PolicyInfoResponse,
+    PolicyListResponse,
+    PolicyMatchContext,
+    PolicyScopeResponse,
+    PolicySummaryItem,
+    PolicyTestResponse,
+    PolicyValidateRequest,
+    PolicyValidationResponse,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 router = APIRouter()
 
@@ -194,8 +195,7 @@ async def test_policies_and_guardrails(
     Returns inputs (possibly modified) and any guardrail errors so the UI can show which
     guardrails failed and why.
     """
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.proxy.utils import handle_exception_on_proxy
 
@@ -490,8 +490,7 @@ async def get_policy_templates(
         return _load_policy_templates_from_local_backup()
 
     try:
-        from litellm.llms.custom_httpx.http_handler import \
-            get_async_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.llms.custom_http import httpxSpecialProvider
 
         async_client = get_async_httpx_client(
