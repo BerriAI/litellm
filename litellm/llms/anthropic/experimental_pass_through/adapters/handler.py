@@ -2,6 +2,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Iterator,
     Coroutine,
     Dict,
     List,
@@ -292,6 +293,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     ) -> Union[
         AnthropicMessagesResponse,
         AsyncIterator[Any],
+        Iterator[Any],
         Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
     ]:
         """Handle non-Anthropic models using the adapter."""
@@ -339,7 +341,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         if stream:
             transformed_stream = (
-                ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
+                ANTHROPIC_ADAPTER.sync_translate_completion_output_params_streaming(
                     completion_response,
                     model=model,
                     tool_name_mapping=tool_name_mapping,

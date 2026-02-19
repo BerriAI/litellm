@@ -321,6 +321,16 @@ class GoogleGenAIAdapter:
         )
         # Return the SSE-wrapped version for proper event formatting
         return google_genai_wrapper.async_google_genai_sse_wrapper()
+    
+    def sync_translate_completion_output_params_streaming(
+        self,
+        completion_stream: Any,
+    ) -> Union[Iterator[bytes], None]:
+        """Sync version of transform streaming completion output to Google GenAI format"""
+        google_genai_wrapper = GoogleGenAIStreamWrapper(
+            completion_stream=completion_stream
+        )
+        return google_genai_wrapper.google_genai_sse_wrapper()    
 
     def _transform_google_genai_tools_to_openai(
         self,

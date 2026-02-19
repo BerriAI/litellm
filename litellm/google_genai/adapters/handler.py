@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import Any, Iterator, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm.types.router import GenericLiteLLMParams
@@ -121,6 +121,7 @@ class GenerateContentToCompletionHandler:
     ) -> Union[
         Dict[str, Any],
         AsyncIterator[bytes],
+        Iterator[bytes],
         Coroutine[Any, Any, Union[Dict[str, Any], AsyncIterator[bytes]]],
     ]:
         """Handle generate_content call using completion adapter"""

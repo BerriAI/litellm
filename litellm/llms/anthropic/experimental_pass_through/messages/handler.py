@@ -8,7 +8,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import Any, Iterator, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -183,7 +183,7 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, AsyncIterator, Iterator]:
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
@@ -308,6 +308,7 @@ def anthropic_messages_handler(
 ) -> Union[
     AnthropicMessagesResponse,
     AsyncIterator[Any],
+    Iterator[Any],
     Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
 ]:
     """
