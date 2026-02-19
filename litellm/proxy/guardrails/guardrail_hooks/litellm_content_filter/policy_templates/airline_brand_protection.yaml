@@ -11,7 +11,11 @@ identifier_words:
   - "airline"
   - "carrier"
   - "airways"
+  - "flight"
   - "flights"
+  - "Emirates"
+  - "Etihad"
+  - "Qatar Airways"
 
 additional_block_words:
   # Fake incident reports
@@ -57,6 +61,25 @@ additional_block_words:
   - "unsafe"
   - "dangerous"
   - "negligence"
+  # Competitor recommendations
+  - "consider etihad"
+  - "try qatar"
+  - "switch to"
+  - "better value"
+  - "better product"
+  - "best product"
+  - "caught up"
+  - "competitors have"
+  - "recommend qatar"
+  - "recommend etihad"
+  - "consider switching"
+  # Ops data leakage
+  - "crew roster"
+  - "crew schedule"
+  - "crew list"
+  - "pilot names"
+  - "gate assignment"
+  - "cabin crew"
 
 always_block_keywords:
   - keyword: "plane crash"
@@ -73,13 +96,20 @@ always_block_keywords:
     severity: "high"
   - keyword: "fleet grounded"
     severity: "high"
+  - keyword: "crew roster"
+    severity: "high"
+  - keyword: "crew schedule"
+    severity: "high"
+  - keyword: "pilot names"
+    severity: "high"
+  - keyword: "gate assignment"
+    severity: "high"
 
 exceptions:
   - "how safe is"
   - "safety record"
   - "safety rating"
-  - "what is"
-  - "explain"
+  - "what is the baggage"
   - "historical"
   - "aviation history"
   - "customer review"
