@@ -210,6 +210,72 @@ def test_vertex_ai_response_schema_defs():
     }
 
 
+def test_vertex_ai_response_json_schema_preserves_refs_for_gemini_2():
+    """
+    Test that $defs and $ref are preserved for Gemini 2.0+ models using responseJsonSchema.
+
+    Gemini 2.0+ supports standard JSON Schema with $ref/$defs natively.
+    Unpacking them inflates nesting depth and can exceed Gemini's limit.
+    """
+    v = VertexGeminiConfig()
+
+    schema = cast(dict, v.get_json_schema_from_pydantic_object(MathReasoning))
+
+    # Pydantic generates $defs with $ref — verify our test input has them
+    assert "$defs" in schema["json_schema"]["schema"]
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": schema,
+        },
+        optional_params={},
+        model="gemini-2.5-flash",  # Gemini 2.0+ uses responseJsonSchema
+        drop_params=False,
+    )
+
+    # $defs and $ref should be preserved (not unpacked)
+    assert "response_json_schema" in transformed_request
+    result_schema = transformed_request["response_json_schema"]
+    assert "$defs" in result_schema, "responseJsonSchema should preserve $defs for Gemini 2.0+"
+
+
+def test_vertex_ai_get_json_schema_preserves_refs_for_nested_pydantic():
+    """
+    Test that get_json_schema_from_pydantic_object uses model_json_schema()
+    (which preserves $ref/$defs) instead of OpenAI's to_strict_json_schema()
+    (which inlines all $ref, inflating nesting depth).
+
+    This is the root cause fix for https://github.com/BerriAI/litellm/issues/21014
+    """
+    from pydantic import Field
+
+    class Inner(BaseModel):
+        value: str = Field(description="A value")
+
+    class Outer(BaseModel):
+        first: Inner = Field(description="First inner")
+        second: Inner = Field(description="Second inner")
+
+    # VertexGeminiConfig override should preserve $ref
+    config = VertexGeminiConfig()
+    result = config.get_json_schema_from_pydantic_object(Outer)
+
+    assert result is not None
+    schema = result["json_schema"]["schema"]
+    schema_str = json.dumps(schema)
+
+    # model_json_schema() produces $ref/$defs; to_strict_json_schema() inlines them
+    assert "$defs" in schema, "Schema should have $defs (not inlined)"
+    assert "$ref" in schema_str, "Schema should have $ref references (not inlined)"
+
+    # GoogleAIStudioGeminiConfig inherits the same behavior
+    gemini_config = GoogleAIStudioGeminiConfig()
+    result2 = gemini_config.get_json_schema_from_pydantic_object(Outer)
+    schema2 = result2["json_schema"]["schema"]
+    assert "$defs" in schema2, "GoogleAIStudioGeminiConfig should also preserve $defs"
+
+
 def test_vertex_ai_response_json_schema_for_gemini_2():
     """
     Test that Gemini 2.0+ models automatically use responseJsonSchema.
