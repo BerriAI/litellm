@@ -87,7 +87,7 @@ Edit `~/.openclaw/openclaw.json`:
         "models": [
           {
             "id": "gpt-5",
-            "name": "GPT-4o Mini",
+            "name": "GPT-5",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 128000,
