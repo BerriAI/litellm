@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Spin } from "antd";
+import { Modal, Spin, Radio, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
+import { modelHubCall, enrichPolicyTemplateStream } from "../networking";
 
 interface TemplateParameter {
   name: string;
@@ -13,9 +14,13 @@ interface TemplateParameter {
 interface TemplateParameterModalProps {
   visible: boolean;
   template: any;
-  onConfirm: (parameters: Record<string, string>) => void;
+  onConfirm: (
+    parameters: Record<string, string>,
+    enrichmentOptions?: { model?: string; competitors?: string[] }
+  ) => void;
   onCancel: () => void;
   isLoading?: boolean;
+  accessToken: string;
 }
 
 const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
@@ -24,10 +29,24 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
   onConfirm,
   onCancel,
   isLoading = false,
+  accessToken,
 }) => {
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
+  const [competitorMode, setCompetitorMode] = useState<"ai" | "manual">("ai");
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [competitorTags, setCompetitorTags] = useState<string[]>([]);
+  const [variationsMap, setVariationsMap] = useState<Record<string, string[]>>({});
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const parameters: TemplateParameter[] = template?.parameters || [];
+  const hasEnrichment = !!template?.llm_enrichment;
+  const enrichmentParam = hasEnrichment ? template.llm_enrichment.parameter : null;
+
+  const nonEnrichmentParams = hasEnrichment
+    ? parameters.filter((p) => p.name !== enrichmentParam)
+    : parameters;
 
   useEffect(() => {
     if (visible && template) {
@@ -36,15 +55,85 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
         initial[p.name] = "";
       });
       setParameterValues(initial);
+      setCompetitorMode("ai");
+      setSelectedModel(undefined);
+      setCompetitorTags([]);
+      setVariationsMap({});
+      setIsGenerating(false);
     }
   }, [visible, template]);
 
-  const allRequiredFilled = parameters
+  useEffect(() => {
+    if (visible && hasEnrichment && competitorMode === "ai" && availableModels.length === 0) {
+      loadModels();
+    }
+  }, [visible, hasEnrichment, competitorMode]);
+
+  const loadModels = async () => {
+    if (!accessToken) return;
+    setIsLoadingModels(true);
+    try {
+      const fetchedModels = await modelHubCall(accessToken);
+      if (fetchedModels?.data?.length > 0) {
+        const models = fetchedModels.data
+          .map((item: any) => item.model_group as string)
+          .sort();
+        setAvailableModels(models);
+      }
+    } catch (error) {
+      console.error("Error fetching models:", error);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  };
+
+  const handleGenerateNames = async () => {
+    if (!accessToken || !selectedModel || !template) return;
+    const brandName = (parameterValues[enrichmentParam || "brand_name"] || "").trim();
+    if (!brandName) return;
+
+    setIsGenerating(true);
+    setCompetitorTags([]);
+    setVariationsMap({});
+    try {
+      await enrichPolicyTemplateStream(
+        accessToken,
+        template.id,
+        parameterValues,
+        selectedModel,
+        (name) => {
+          setCompetitorTags((prev) => [...prev, name]);
+        },
+        (result) => {
+          setCompetitorTags(result.competitors);
+          setVariationsMap(result.competitor_variations || {});
+          setIsGenerating(false);
+        },
+        (error) => {
+          console.error("Streaming error:", error);
+          setIsGenerating(false);
+        }
+      );
+    } catch (error) {
+      console.error("Error generating competitor names:", error);
+      setIsGenerating(false);
+    }
+  };
+
+  const allNonEnrichmentFilled = nonEnrichmentParams
     .filter((p) => p.required)
     .every((p) => (parameterValues[p.name] || "").trim().length > 0);
 
+  const brandNameFilled = enrichmentParam
+    ? (parameterValues[enrichmentParam] || "").trim().length > 0
+    : true;
+
+  const canContinue = hasEnrichment
+    ? allNonEnrichmentFilled && brandNameFilled && competitorTags.length > 0
+    : allNonEnrichmentFilled && brandNameFilled;
+
   const handleConfirm = () => {
-    onConfirm(parameterValues);
+    onConfirm(parameterValues, { competitors: competitorTags });
   };
 
   return (
@@ -53,15 +142,13 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
         <div>
           <h3 className="text-lg font-semibold mb-1">{template?.title}</h3>
           <p className="text-sm text-gray-500 font-normal">
-            {template?.llm_enrichment
-              ? "Enter your brand name to auto-discover competitors and configure guardrails"
-              : "Configure template parameters"}
+            Configure competitor blocking for your brand
           </p>
         </div>
       }
       open={visible}
       onCancel={onCancel}
-      width={500}
+      width={550}
       footer={[
         <Button key="cancel" variant="secondary" onClick={onCancel} disabled={isLoading}>
           Cancel
@@ -70,18 +157,14 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
           key="confirm"
           onClick={handleConfirm}
           loading={isLoading}
-          disabled={!allRequiredFilled || isLoading}
+          disabled={!canContinue || isLoading}
         >
-          {isLoading
-            ? template?.llm_enrichment
-              ? "Discovering competitors..."
-              : "Processing..."
-            : "Continue"}
+          {isLoading ? "Creating guardrails..." : "Continue"}
         </Button>,
       ]}
     >
       <div className="py-4 space-y-4">
-        {parameters.map((param) => (
+        {nonEnrichmentParams.map((param) => (
           <div key={param.name}>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               {param.label}
@@ -100,25 +183,129 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
           </div>
         ))}
 
-        {template?.llm_enrichment && (
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
-            <p className="text-sm text-blue-800">
-              This template uses AI to automatically discover your competitors and configure
-              guardrails. An onboarded LLM will be called to identify competitor names.
-            </p>
-          </div>
+        {hasEnrichment && (
+          <>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Competitor Discovery
+              </label>
+              <Radio.Group
+                value={competitorMode}
+                onChange={(e) => setCompetitorMode(e.target.value)}
+                className="w-full"
+              >
+                <div className="flex gap-3">
+                  <Radio.Button value="ai" className="flex-1 text-center">
+                    ✨ Use AI
+                  </Radio.Button>
+                  <Radio.Button value="manual" className="flex-1 text-center">
+                    Enter Manually
+                  </Radio.Button>
+                </div>
+              </Radio.Group>
+            </div>
+
+            {/* Brand Name */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Your Brand Name
+                <span className="text-red-500 ml-1">*</span>
+              </label>
+              <TextInput
+                placeholder="e.g. Acme Airlines"
+                value={parameterValues[enrichmentParam || "brand_name"] || ""}
+                onChange={(e) =>
+                  setParameterValues((prev) => ({
+                    ...prev,
+                    [enrichmentParam || "brand_name"]: e.target.value,
+                  }))
+                }
+              />
+            </div>
+
+            {competitorMode === "ai" && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Select Model
+                    <span className="text-red-500 ml-1">*</span>
+                  </label>
+                  <Select
+                    placeholder="Select a model to generate names"
+                    value={selectedModel}
+                    onChange={(value) => setSelectedModel(value)}
+                    loading={isLoadingModels}
+                    showSearch
+                    className="w-full"
+                    options={availableModels.map((m) => ({ label: m, value: m }))}
+                    filterOption={(input, option) =>
+                      (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                    }
+                  />
+                </div>
+
+                <Button
+                  onClick={handleGenerateNames}
+                  loading={isGenerating}
+                  disabled={!selectedModel || !brandNameFilled || isGenerating}
+                  className="w-full"
+                >
+                  {isGenerating ? "✨ Generating names..." : "✨ Generate Competitor Names"}
+                </Button>
+              </>
+            )}
+
+            {/* Competitor Tags */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Competitor Names
+                {competitorTags.length > 0 && (
+                  <span className="text-gray-400 font-normal ml-2">
+                    ({competitorTags.length})
+                  </span>
+                )}
+              </label>
+              <Select
+                mode="tags"
+                style={{ width: "100%" }}
+                placeholder="Type a name and press Enter to add"
+                value={competitorTags}
+                onChange={(values) => setCompetitorTags(values)}
+                tokenSeparators={[","]}
+                open={false}
+                suffixIcon={null}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Type a name and press Enter to add. Click ✕ to remove.
+              </p>
+              {Object.keys(variationsMap).length > 0 && (
+                <p className="text-xs text-green-600 mt-1">
+                  ✓ {Object.values(variationsMap).flat().length} alternate spellings & variations auto-generated for guardrail matching
+                </p>
+              )}
+            </div>
+          </>
         )}
 
-        {isLoading && (
-          <div className="flex items-center gap-3 mt-4 p-3 bg-gray-50 rounded-lg">
-            <Spin size="small" />
-            <span className="text-sm text-gray-600">
-              {template?.llm_enrichment
-                ? "Using AI to discover competitors..."
-                : "Processing template..."}
-            </span>
-          </div>
-        )}
+        {!hasEnrichment &&
+          parameters.map((param) => (
+            <div key={param.name}>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {param.label}
+                {param.required && <span className="text-red-500 ml-1">*</span>}
+              </label>
+              <TextInput
+                placeholder={param.placeholder || ""}
+                value={parameterValues[param.name] || ""}
+                onChange={(e) =>
+                  setParameterValues((prev) => ({
+                    ...prev,
+                    [param.name]: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          ))}
       </div>
     </Modal>
   );
