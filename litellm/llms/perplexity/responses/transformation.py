@@ -1,5 +1,5 @@
 """
-Transformation logic for Perplexity Agentic Research API (Responses API)
+Transformation logic for Perplexity Agent API (Responses API)
 
 This module handles the translation between OpenAI's Responses API format
 and Perplexity's Responses API format, which supports:
@@ -32,10 +32,10 @@ from litellm.types.utils import LlmProviders
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     """
-    Configuration for Perplexity Agentic Research API (Responses API)
+    Configuration for Perplexity Agent API (Responses API)
 
     
-    Reference: https://docs.perplexity.ai/agentic-research/quickstart
+    Reference: https://docs.perplexity.ai/docs/agent-api/overview
     """
 
     @property
@@ -47,6 +47,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         Perplexity Responses API supports a different set of parameters
         
         Ref: https://docs.perplexity.ai/api-reference/responses-post
+        Params aligned with response-echo fields and Open Responses spec.
         """
         return [
             "max_output_tokens",
@@ -58,6 +59,23 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             "preset",
             "instructions",
             "models",  # Model fallback support
+            "tool_choice",
+            "parallel_tool_calls",
+            "max_tool_calls",
+            "text",
+            "previous_response_id",
+            "store",
+            "background",
+            "truncation",
+            "metadata",
+            "safety_identifier",
+            "user",
+            "stream_options",
+            "top_logprobs",
+            "prompt_cache_key",
+            "frequency_penalty",
+            "presence_penalty",
+            "service_tier",
         ]
 
     def validate_environment(
@@ -142,35 +160,75 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             tools_list = [dict(tool) if hasattr(tool, '__dict__') else tool for tool in tools]  # type: ignore
             mapped_params["tools"] = self._transform_tools(tools_list)  # type: ignore
         
+        # Tool control
+        if response_api_optional_params.get("tool_choice"):
+            mapped_params["tool_choice"] = response_api_optional_params["tool_choice"]
+        if response_api_optional_params.get("parallel_tool_calls") is not None:
+            mapped_params["parallel_tool_calls"] = response_api_optional_params["parallel_tool_calls"]
+        if response_api_optional_params.get("max_tool_calls"):
+            mapped_params["max_tool_calls"] = response_api_optional_params["max_tool_calls"]
+        
+        # Structured outputs
+        text_param = response_api_optional_params.get("text")
+        if text_param:
+            mapped_params["text"] = text_param
+        
+        # Conversation continuity
+        if response_api_optional_params.get("previous_response_id"):
+            mapped_params["previous_response_id"] = response_api_optional_params["previous_response_id"]
+        
+        # Storage and lifecycle
+        if response_api_optional_params.get("store") is not None:
+            mapped_params["store"] = response_api_optional_params["store"]
+        if response_api_optional_params.get("background") is not None:
+            mapped_params["background"] = response_api_optional_params["background"]
+        if response_api_optional_params.get("truncation"):
+            mapped_params["truncation"] = response_api_optional_params["truncation"]
+        
+        # Metadata
+        if response_api_optional_params.get("metadata"):
+            mapped_params["metadata"] = response_api_optional_params["metadata"]
+        if response_api_optional_params.get("safety_identifier"):
+            mapped_params["safety_identifier"] = response_api_optional_params["safety_identifier"]
+        if response_api_optional_params.get("user"):
+            mapped_params["user"] = response_api_optional_params["user"]
+        
+        # Additional
+        if response_api_optional_params.get("top_logprobs") is not None:
+            mapped_params["top_logprobs"] = response_api_optional_params["top_logprobs"]
+        if response_api_optional_params.get("prompt_cache_key"):
+            mapped_params["prompt_cache_key"] = response_api_optional_params["prompt_cache_key"]
+        if response_api_optional_params.get("frequency_penalty") is not None:
+            mapped_params["frequency_penalty"] = response_api_optional_params["frequency_penalty"]
+        if response_api_optional_params.get("presence_penalty") is not None:
+            mapped_params["presence_penalty"] = response_api_optional_params["presence_penalty"]
+        if response_api_optional_params.get("service_tier"):
+            mapped_params["service_tier"] = response_api_optional_params["service_tier"]
+        
         return mapped_params
-
+    
     def _transform_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Transform tools to Perplexity format
+        Transform tools to Perplexity format.
         
-        Perplexity supports:
+        Perplexity supports (per public OpenAPI spec):
         - web_search: Performs web searches
         - fetch_url: Fetches content from URLs
+        - function: Function Calling
         """
         perplexity_tools = []
         
         for tool in tools:
             if isinstance(tool, dict):
-                tool_type = tool.get("type")
+                tool_type = tool.get("type", "")
                 
                 # Direct Perplexity tool format
                 if tool_type in ["web_search", "fetch_url"]:
                     perplexity_tools.append(tool)
                 
-                # OpenAI function format - try to map to Perplexity tools
+                # Function tools: Perplexity supports them natively
                 elif tool_type == "function":
-                    function = tool.get("function", {})
-                    function_name = function.get("name", "")
-                    
-                    if function_name == "web_search" or "search" in function_name.lower():
-                        perplexity_tools.append({"type": "web_search"})
-                    elif function_name == "fetch_url" or "fetch" in function_name.lower():
-                        perplexity_tools.append({"type": "fetch_url"})
+                    perplexity_tools.append(tool)
         
         return perplexity_tools
 
