@@ -5601,12 +5601,15 @@ export const enrichPolicyTemplateStream = async (
     competitor_variations: Record<string, string[]>;
     guardrailDefinitions: any[];
   }) => void,
-  onError?: (error: string) => void
+  onError?: (error: string) => void,
+  options?: { instruction?: string; existingCompetitors?: string[] }
 ) => {
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/policy/templates/enrich/stream`
     : `/policy/templates/enrich/stream`;
   const body: any = { template_id: templateId, parameters, model };
+  if (options?.instruction) body.instruction = options.instruction;
+  if (options?.existingCompetitors) body.competitors = options.existingCompetitors;
 
   const response = await fetch(url, {
     method: "POST",
