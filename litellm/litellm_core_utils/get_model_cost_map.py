@@ -11,6 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
+from typing import Dict, List
 
 import httpx
 
@@ -151,6 +152,52 @@ class GetModelCostMap:
         return response.json()
 
 
+def _expand_model_aliases(model_cost: dict) -> dict:
+    """
+    Expand ``aliases`` lists in model cost entries into top-level entries.
+
+    Each alias gets a reference to the **same** dict object as the canonical
+    entry (zero memory overhead).  The ``aliases`` key is removed from the
+    entry so downstream code never sees it.
+
+    If an alias collides with an existing canonical entry the alias is
+    silently skipped and a warning is logged.
+    """
+    aliases_to_add: Dict[str, dict] = {}
+    keys_with_aliases: List[str] = []
+
+    for model_name, model_info in model_cost.items():
+        aliases: list | None = model_info.get("aliases")
+        if not aliases:
+            continue
+        keys_with_aliases.append(model_name)
+        for alias in aliases:
+            if alias in model_cost:
+                verbose_logger.warning(
+                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
+                    "already exists as a canonical entry — skipping.",
+                    alias,
+                    model_name,
+                )
+                continue
+            if alias in aliases_to_add:
+                verbose_logger.warning(
+                    "LiteLLM model alias conflict: alias '%s' (from '%s') "
+                    "was already claimed by another entry — skipping.",
+                    alias,
+                    model_name,
+                )
+                continue
+            aliases_to_add[alias] = model_info  # same dict reference
+
+    # Remove the ``aliases`` key from entries so it doesn't pollute model info
+    for key in keys_with_aliases:
+        model_cost[key].pop("aliases", None)
+
+    model_cost.update(aliases_to_add)
+    return model_cost
+
+
 def get_model_cost_map(url: str) -> dict:
     """
     Public entry point — returns the model cost map dict.
@@ -166,7 +213,7 @@ def get_model_cost_map(url: str) -> dict:
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
-        return GetModelCostMap.load_local_model_cost_map()
+        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
     try:
         content = GetModelCostMap.fetch_remote_model_cost_map(url)
@@ -177,7 +224,7 @@ def get_model_cost_map(url: str) -> dict:
             url,
             str(e),
         )
-        return GetModelCostMap.load_local_model_cost_map()
+        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
@@ -189,6 +236,6 @@ def get_model_cost_map(url: str) -> dict:
             "Using local backup instead. url=%s",
             url,
         )
-        return GetModelCostMap.load_local_model_cost_map()
+        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
-    return content
+    return _expand_model_aliases(content)
