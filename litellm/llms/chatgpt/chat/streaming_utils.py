@@ -22,9 +22,9 @@ class ChatGPTToolCallNormalizer:
 
     def __init__(self, stream: Any):
         self._stream = stream
-        self._seen_ids: dict[str, int] = {}  # tool_call_id -> assigned_index
+        self._seen_ids: Dict[str, int] = {}  # tool_call_id -> assigned_index
         self._next_index: int = 0
-        self._last_id: str | None = None  # tracks which tool call the next delta belongs to
+        self._last_id: Optional[str] = None  # tracks which tool call the next delta belongs to
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._stream, name)
