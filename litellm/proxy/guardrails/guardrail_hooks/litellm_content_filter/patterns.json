@@ -452,6 +452,47 @@
       "pattern": "\\b\\d{1,6}\\s+[A-Za-z0-9][A-Za-z0-9\\s.'-]*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\\b",
       "category": "PII Patterns",
       "description": "Detects street addresses (number + street name + street type)"
+    },
+    {
+      "name": "airline_pnr",
+      "display_name": "Airline PNR / Booking Reference",
+      "pattern": "\\b[A-Z]{6}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects airline PNR / booking references (6 uppercase alpha characters) when near booking context",
+      "keyword_pattern": "\\b(?:PNR|booking\\s*(?:reference|ref|code|number|confirmation)|reservation\\s*(?:code|number|ref)|record\\s*locator|confirmation\\s*(?:code|number)|itinerary\\s*(?:number|ref))\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "skywards_number",
+      "display_name": "Emirates Skywards / Frequent Flyer Number",
+      "pattern": "\\b(?:EK\\s?)?\\d{9,10}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects Emirates Skywards frequent flyer numbers (9-10 digits, optional EK prefix) when near loyalty/frequent flyer context",
+      "keyword_pattern": "\\b(?:[Ss]kywards|frequent\\s*flyer|FF\\s*(?:number|no|#)|loyalty\\s*(?:number|id|member)|member\\s*(?:number|id|#)|miles\\s*(?:account|number)|tier\\s*(?:number|status))\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uae_emirates_id",
+      "display_name": "UAE Emirates ID",
+      "pattern": "\\b784-?\\d{4}-?\\d{7}-?\\d\\b",
+      "category": "UAE PII Patterns",
+      "description": "Detects UAE Emirates ID numbers (784-YYYY-NNNNNNN-C format, 15 digits starting with 784)"
+    },
+    {
+      "name": "uae_phone",
+      "display_name": "Phone Number (UAE)",
+      "pattern": "(?<!\\d)(?:\\+971|00971|0)\\s?(?:2|3|4|6|7|9|50|52|54|55|56|58)\\s?\\d{3}\\s?\\d{4}\\b",
+      "category": "UAE PII Patterns",
+      "description": "Detects UAE phone numbers (+971/00971/0 prefix, landline and mobile)"
+    },
+    {
+      "name": "flight_number",
+      "display_name": "Airline Flight Number",
+      "pattern": "\\b(?:EK|QF|BA|AA|LH|AF|SQ|CX|QR|EY|FZ|WY|GF|KU|SV|MS|RJ|ME|PK|AI|UL|WS|9W|6E)\\s?\\d{1,4}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects airline flight numbers (major IATA 2-letter codes + 1-4 digit flight number) when near flight context",
+      "keyword_pattern": "\\b(?:flight|departure|arrival|gate|boarding|schedule|operate|route|aircraft|plane|outbound|inbound|leg|sector|flying)\\b",
+      "allow_word_numbers": false
     }
   ]
 }

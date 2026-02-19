@@ -2127,6 +2127,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
     )
+    store_model_in_db: Optional[bool] = Field(
+        None,
+        description="If True, models and config are stored in and loaded from the database. Default is False.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

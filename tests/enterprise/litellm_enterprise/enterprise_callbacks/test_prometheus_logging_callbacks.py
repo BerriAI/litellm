@@ -792,7 +792,8 @@ async def test_async_post_call_success_hook(prometheus_logger):
     """
     Test for the async_post_call_success_hook method
 
-    it should increment the litellm_proxy_total_requests_metric
+    litellm_proxy_total_requests_metric is NOT incremented here to avoid double-counting.
+    It is incremented in async_log_success_event instead.
     """
     # Mock the prometheus metric
     prometheus_logger.litellm_proxy_total_requests_metric = MagicMock()
@@ -817,23 +818,8 @@ async def test_async_post_call_success_hook(prometheus_logger):
         data=data, user_api_key_dict=user_api_key_dict, response=response
     )
 
-    # Assert total requests metric was incremented with correct labels
-    prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_called_once_with(
-        end_user=None,
-        hashed_api_key="test_key",
-        api_key_alias="test_alias",
-        requested_model="gpt-3.5-turbo",
-        team="test_team",
-        team_alias="test_team_alias",
-        user="test_user",
-        status_code="200",
-        user_email=None,
-        route=user_api_key_dict.request_route,
-        model_id=None,
-        client_ip=None,
-        user_agent=None,
-    )
-    prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
+    # Assert total requests metric was NOT incremented (moved to async_log_success_event)
+    prometheus_logger.litellm_proxy_total_requests_metric.labels.assert_not_called()
 
 
 def test_set_llm_deployment_success_metrics(prometheus_logger):

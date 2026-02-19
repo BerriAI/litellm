@@ -1072,7 +1072,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
-            elif param == "web_search_options" and value and isinstance(value, dict):
+            elif param == "web_search_options" and isinstance(value, dict):
                 _tools = self._map_web_search_options(value)
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]

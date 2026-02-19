@@ -10,8 +10,8 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.openai.chat.gpt_transformation import (
-    OpenAIGPTConfig,
     OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
 )
 
 
@@ -203,6 +203,81 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.id == "gen-123"
         assert result.choices[0].delta.content == "Hello"
         assert not hasattr(result, "usage") or result.usage is None
+
+    def test_chunk_parser_maps_reasoning_to_reasoning_content(self):
+        """
+        Test that chunk_parser maps 'reasoning' field to 'reasoning_content'.
+        
+        Some OpenAI-compatible providers (e.g., GLM-5, hosted_vllm) return
+        delta.reasoning, but LiteLLM expects delta.reasoning_content.
+        
+        Regression test for: Streaming responses with delta.reasoning field
+        coming back empty when using openai/ or hosted_vllm/ providers.
+        """
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        # Simulate a chunk with reasoning field (as returned by GLM-5)
+        chunk = {
+            "id": "chatcmpl-8e3d624de9b12528",
+            "object": "chat.completion.chunk",
+            "created": 1771411455,
+            "model": "glm-5",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "reasoning": "The capital of France",
+                        "role": None,
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        }
+
+        # Parse the chunk
+        parsed_chunk = handler.chunk_parser(chunk)
+
+        # Verify that reasoning was mapped to reasoning_content
+        assert parsed_chunk.choices[0].delta.reasoning_content == "The capital of France"
+        # Verify that the original 'reasoning' field was removed
+        assert not hasattr(parsed_chunk.choices[0].delta, "reasoning")
+
+    def test_chunk_parser_reasoning_field_not_present(self):
+        """
+        Test that chunks without reasoning field still work correctly.
+        """
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        # Simulate a chunk without reasoning field
+        chunk = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1769511767,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "delta": {
+                        "content": "Regular content",
+                        "role": "assistant",
+                    },
+                    "finish_reason": None,
+                    "index": 0,
+                }
+            ],
+        }
+
+        # Parse the chunk
+        parsed_chunk = handler.chunk_parser(chunk)
+
+        # Verify that content is present
+        assert parsed_chunk.choices[0].delta.content == "Regular content"
+        assert parsed_chunk.choices[0].delta.role == "assistant"
+        # Verify that reasoning_content is not set (it should be deleted by Delta.__init__)
+        assert not hasattr(parsed_chunk.choices[0].delta, "reasoning_content")
 
 
 class TestPromptCacheKeyIntegration:

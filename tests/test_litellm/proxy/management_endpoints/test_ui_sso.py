@@ -1542,9 +1542,15 @@ class TestSSOHandlerIntegration:
             SSOAuthenticationHandler.should_use_sso_handler(None, None, None) is False
         )
 
+    @patch.dict(os.environ, {}, clear=False)
     def test_get_redirect_url_for_sso(self):
         """Test the redirect URL generation for SSO"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        # Remove env vars that override request base_url so the test is
+        # isolated from local settings.
+        os.environ.pop("PROXY_BASE_URL", None)
+        os.environ.pop("SERVER_ROOT_PATH", None)
 
         # Mock request object
         mock_request = MagicMock()
@@ -3625,19 +3631,6 @@ async def test_role_mappings_override_default_internal_user_params():
             "models": [],
         }
 
-        # Mock Prisma client with SSO config that has role_mappings configured
-        mock_prisma = MagicMock()
-        mock_sso_config = MagicMock()
-        mock_sso_config.sso_settings = {
-            "role_mappings": {
-                "Admin": "proxy_admin",
-                "User": "internal_user",
-            }
-        }
-        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
-            return_value=mock_sso_config
-        )
-
         # Mock new_user function
         mock_new_user_response = NewUserResponse(
             user_id="test-user-123",
@@ -3646,9 +3639,6 @@ async def test_role_mappings_override_default_internal_user_params():
         )
 
         with patch(
-            "litellm.proxy.utils.get_prisma_client_or_throw",
-            return_value=mock_prisma,
-        ), patch(
             "litellm.proxy.management_endpoints.ui_sso.new_user",
             return_value=mock_new_user_response,
         ) as mock_new_user:
@@ -3676,13 +3666,90 @@ async def test_role_mappings_override_default_internal_user_params():
                 new_user_request.budget_duration == "30d"
             ), "budget_duration from default_internal_user_params should be applied"
 
-            # Note: models are applied via _update_internal_new_user_params inside new_user,
-            # not in insert_sso_user, so we verify user_defined_values was updated correctly
-            # by checking that the function completed successfully and other defaults were applied
-            # The models will be applied when new_user processes the request
+    finally:
+        # Restore original default_internal_user_params (always assign, never delattr —
+        # the attribute is defined in litellm/__init__.py and delattr-ing it breaks parallel tests)
+        litellm.default_internal_user_params = original_default_params
+
+
+@pytest.mark.asyncio
+async def test_sso_role_preserved_without_role_mappings():
+    """
+    Test that SSO-extracted role is preserved even when role_mappings is NOT configured.
+
+    This covers the case where the role comes from Microsoft app_roles or
+    GENERIC_USER_ROLE_ATTRIBUTE (not from LiteLLM's role_mappings feature).
+    Previously, the role was only preserved when role_mappings was configured,
+    causing admin users to be downgraded to internal_user.
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+
+    try:
+        # Set default_internal_user_params (as most deployments do)
+        litellm.default_internal_user_params = {
+            "user_role": "internal_user",
+            "max_budget": 50,
+        }
+
+        # Mock SSO result from Microsoft with app_roles-derived admin role
+        mock_result_openid = CustomOpenID(
+            id="msft-user-456",
+            email="admin@company.com",
+            display_name="Admin User",
+            provider="microsoft",
+            team_ids=["group-1"],
+            user_role=None,  # role is in user_defined_values, not on the OpenID result
+        )
+
+        # User defined values with role from Microsoft app_roles (NOT role_mappings)
+        user_defined_values: SSOUserDefinedValues = {
+            "user_id": "msft-user-456",
+            "user_email": "admin@company.com",
+            "user_role": "proxy_admin",  # Role from Microsoft app_roles
+            "max_budget": None,
+            "budget_duration": None,
+            "models": [],
+        }
+
+        mock_new_user_response = NewUserResponse(
+            user_id="msft-user-456",
+            key="sk-xxxxx",
+            teams=None,
+        )
+
+        # No role_mappings configured anywhere - the role came from app_roles
+        with patch(
+            "litellm.proxy.management_endpoints.ui_sso.new_user",
+            return_value=mock_new_user_response,
+        ) as mock_new_user:
+            _ = await insert_sso_user(
+                result_openid=mock_result_openid,
+                user_defined_values=user_defined_values,
+            )
+
+            mock_new_user.assert_called_once()
+            call_args = mock_new_user.call_args
+            new_user_request = call_args.kwargs["data"]
+
+            # SSO role should be preserved even without role_mappings configured
+            assert (
+                new_user_request.user_role == "proxy_admin"
+            ), "SSO role from app_roles should not be overwritten by default_internal_user_params"
+
+            # Other defaults should still apply
+            assert (
+                new_user_request.max_budget == 50
+            ), "max_budget from default_internal_user_params should be applied"
+
+            # Verify user_defined_values was also updated (it's mutated in-place)
+            assert (
+                user_defined_values["user_role"] == "proxy_admin"
+            ), "user_defined_values should retain the SSO role after insert_sso_user"
 
     finally:
-        # Restore original default_internal_user_params
         if original_default_params is not None:
             litellm.default_internal_user_params = original_default_params
         else:

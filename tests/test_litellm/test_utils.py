@@ -580,6 +580,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
+                "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
