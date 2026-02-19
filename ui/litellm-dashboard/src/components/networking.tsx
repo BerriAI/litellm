@@ -5490,6 +5490,39 @@ export const getPolicyTemplates = async (accessToken: string) => {
   }
 };
 
+export const enrichPolicyTemplate = async (
+  accessToken: string,
+  templateId: string,
+  parameters: Record<string, string>
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policy/templates/enrich`
+      : `/policy/templates/enrich`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ template_id: templateId, parameters }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to enrich policy template:", error);
+    throw error;
+  }
+};
+
 export const createPolicyCall = async (accessToken: string, policyData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/policies` : `/policies`;
