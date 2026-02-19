@@ -5602,7 +5602,8 @@ export const enrichPolicyTemplateStream = async (
     guardrailDefinitions: any[];
   }) => void,
   onError?: (error: string) => void,
-  options?: { instruction?: string; existingCompetitors?: string[] }
+  options?: { instruction?: string; existingCompetitors?: string[] },
+  onStatus?: (message: string) => void
 ) => {
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/policy/templates/enrich/stream`
@@ -5647,6 +5648,8 @@ export const enrichPolicyTemplateStream = async (
         const event = JSON.parse(line.slice(6));
         if (event.type === "competitor") {
           onCompetitor(event.name);
+        } else if (event.type === "status") {
+          onStatus?.(event.message);
         } else if (event.type === "done") {
           onDone(event);
         } else if (event.type === "error") {
