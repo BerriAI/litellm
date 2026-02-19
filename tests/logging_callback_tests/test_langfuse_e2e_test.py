@@ -149,17 +149,26 @@ class TestLangfuseLogging:
 
         # Verify the call
         assert mock_post.call_count >= 1
-        url = mock_post.call_args[0][0]
-        request_body = mock_post.call_args[1].get("content")
 
-        # Parse the JSON string into a dict for assertions
-        actual_request_body = json.loads(request_body)
+        # Aggregate batch items from ALL calls (langfuse may split trace-create
+        # and generation-create across separate HTTP requests)
+        all_batch_items = []
+        last_metadata = None
+        for call in mock_post.call_args_list:
+            url = call[0][0]
+            assert url == "https://us.cloud.langfuse.com/api/public/ingestion"
+            body = json.loads(call[1].get("content"))
+            all_batch_items.extend(body.get("batch", []))
+            last_metadata = body.get("metadata", last_metadata)
+
+        actual_request_body = {
+            "batch": all_batch_items,
+            "metadata": last_metadata,
+        }
 
         print("\nMocked Request Details:")
-        print(f"URL: {url}")
         print(f"Request Body: {json.dumps(actual_request_body, indent=4)}")
 
-        assert url == "https://us.cloud.langfuse.com/api/public/ingestion"
         assert_langfuse_request_matches_expected(
             actual_request_body,
             expected_file_name,

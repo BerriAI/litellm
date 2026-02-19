@@ -433,7 +433,7 @@ def test_anthropic_web_search_in_model_info():
         "anthropic/claude-sonnet-4-5-20250929",
         "anthropic/claude-3-5-sonnet-20241022",
         "anthropic/claude-3-5-haiku-20241022",
-        "anthropic/claude-3-5-haiku-latest",
+        "anthropic/claude-haiku-4-5-20251001",
     ]
     for model in supported_models:
         from litellm.utils import get_model_info
