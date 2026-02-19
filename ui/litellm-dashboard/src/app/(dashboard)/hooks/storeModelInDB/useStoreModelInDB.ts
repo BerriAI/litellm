@@ -15,7 +15,7 @@ const performStoreModelInDB = async (
   params: StoreModelInDBParams
 ): Promise<StoreModelInDBResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/config/update` : `/config/update`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/update` : `/config/field/update`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -24,9 +24,9 @@ const performStoreModelInDB = async (
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      general_settings: {
-        store_model_in_db: params.store_model_in_db,
-      },
+      field_name: "store_model_in_db",
+      field_value: params.store_model_in_db,
+      config_type: "general_settings",
     }),
   });
 
