@@ -1919,8 +1919,10 @@ class CustomStreamWrapper:
                     self.rules.post_call_rules(
                         input=self.response_uptil_now, model=self.model
                     )
-                    self.chunks.append(processed_chunk)
-                    
+                    # Store a shallow copy so usage stripping below
+                    # does not mutate the stored chunk.
+                    self.chunks.append(processed_chunk.model_copy())
+
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
@@ -1929,14 +1931,11 @@ class CustomStreamWrapper:
                         hasattr(processed_chunk, "usage")
                         and getattr(processed_chunk, "usage", None) is not None
                     ):
-                        # Set usage to None so model_dump_json(exclude_none=True)
-                        # drops it. The original usage is already preserved in
-                        # self.chunks (appended above) for calculate_total_usage().
+                        # Strip usage from the outgoing chunk so
+                        # model_dump_json(exclude_none=True) drops it.
+                        # The copy in self.chunks retains usage for
+                        # calculate_total_usage().
                         processed_chunk.usage = None  # type: ignore
-                        # After nullifying usage, check if the chunk has any
-                        # remaining content (delta, finish_reason, etc.).
-                        # is_model_response_stream_empty sees usage=None and
-                        # correctly skips it, only checking meaningful fields.
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
                         )
