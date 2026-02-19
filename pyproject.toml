@@ -64,7 +64,7 @@ a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
 <<<<<<< HEAD
 litellm-proxy-extras = {version = "0.4.41", optional = true}
 =======
-litellm-proxy-extras = {version = "0.4.42", optional = true}
+litellm-proxy-extras = {version = "0.4.43", optional = true}
 >>>>>>> origin
 rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.32", optional = true}
