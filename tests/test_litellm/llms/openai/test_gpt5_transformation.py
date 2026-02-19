@@ -473,3 +473,39 @@ def test_gpt5_1_top_p_passthrough(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["top_p"] == 0.9
+
+
+def test_gpt5_1_logprobs_rejected_with_reasoning_effort(config: OpenAIConfig):
+    """logprobs/top_p/top_logprobs are rejected when reasoning_effort != 'none'."""
+    for effort in ["low", "medium", "high"]:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"logprobs": True, "reasoning_effort": effort},
+                optional_params={},
+                model="gpt-5.1",
+                drop_params=False,
+            )
+
+
+def test_gpt5_1_top_p_rejected_with_reasoning_effort(config: OpenAIConfig):
+    """top_p is rejected when reasoning_effort != 'none'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"top_p": 0.9, "reasoning_effort": "high"},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_1_logprobs_dropped_with_reasoning_effort(config: OpenAIConfig):
+    """logprobs/top_p are dropped when reasoning_effort != 'none' and drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_p": 0.9, "reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "logprobs" not in params
+    assert "top_p" not in params
+    assert params["reasoning_effort"] == "high"

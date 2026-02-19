@@ -124,6 +124,24 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 "max_tokens"
             )
 
+        # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
+        if self.is_model_gpt_5_1_model(model):
+            sampling_params = ["logprobs", "top_logprobs", "top_p"]
+            has_sampling = any(p in non_default_params for p in sampling_params)
+            if has_sampling and reasoning_effort not in (None, "none"):
+                if litellm.drop_params or drop_params:
+                    for p in sampling_params:
+                        non_default_params.pop(p, None)
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            "gpt-5.1/5.2 only support logprobs, top_p, top_logprobs when "
+                            "reasoning_effort='none'. Current reasoning_effort='{}'. "
+                            "To drop unsupported params set `litellm.drop_params = True`"
+                        ).format(reasoning_effort),
+                        status_code=400,
+                    )
+
         if "temperature" in non_default_params:
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
