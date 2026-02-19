@@ -73,4 +73,7 @@ jobs:
             --head "$BRANCH" \
             --base main
         env:
-          GH_TOKEN: ${{ github.token }}
+          # github.token cannot create PRs when "Allow GitHub Actions to create
+          # and approve pull requests" is disabled in repo settings.
+          # PAT_TOKEN_2 bypasses that restriction.
+          GH_TOKEN: ${{ secrets.PAT_TOKEN_2 }}
