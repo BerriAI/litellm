@@ -1142,7 +1142,8 @@ def create_pass_through_route(
 
             passthrough_params = (
                 InitPassThroughEndpointHelpers.get_registered_pass_through_route(
-                    route=path
+                    route=path,
+                    method=request.method
                 )
             )
             target_params = {
@@ -1847,20 +1848,29 @@ class InitPassThroughEndpointHelpers:
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
+        methods: Optional[List[str]] = None,
     ):
         """Add exact path route for pass-through endpoint"""
-        route_key = f"{endpoint_id}:exact:{path}"
+        # Default to all methods if none specified (backward compatibility)
+        if methods is None or len(methods) == 0:
+            methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        
+        # Create route key that includes methods for uniqueness
+        methods_str = ",".join(sorted(methods))
+        route_key = f"{endpoint_id}:exact:{path}:{methods_str}"
 
         # Check if this exact route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
                 "Updating duplicate exact pass through endpoint: %s (already registered)",
                 path,
+                methods,
             )
 
         verbose_proxy_logger.debug(
-            "adding exact pass through endpoint: %s, dependencies: %s",
+            "adding exact pass through endpoint: %s, methods: %s, dependencies: %s",
             path,
+            methods,
             dependencies,
         )
 
@@ -1878,7 +1888,7 @@ class InitPassThroughEndpointHelpers:
                 cost_per_request=cost_per_request,
                 guardrails=guardrails,
             ),
-            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+            methods=methods,
             dependencies=dependencies,
         )
 
@@ -1887,6 +1897,7 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "exact",
+            "methods": methods,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -1910,21 +1921,29 @@ class InitPassThroughEndpointHelpers:
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
+        methods: Optional[List[str]] = None,
     ):
         """Add wildcard route for sub-paths"""
+        # Default to all methods if none specified (backward compatibility)
+        if methods is None or len(methods) == 0:
+            methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        
         wildcard_path = f"{path}/{{subpath:path}}"
-        route_key = f"{endpoint_id}:subpath:{path}"
+        methods_str = ",".join(sorted(methods))
+        route_key = f"{endpoint_id}:subpath:{path}:{methods_str}"
 
         # Check if this subpath route is already registered
         if route_key in _registered_pass_through_routes:
             verbose_proxy_logger.debug(
-                "Updating duplicate wildcard pass through endpoint: %s (already registered)",
+                "Updating duplicate wildcard pass through endpoint: %s with methods %s (already registered)",
                 wildcard_path,
+                methods,
             )
 
         verbose_proxy_logger.debug(
-            "adding wildcard pass through endpoint: %s, dependencies: %s",
+            "adding wildcard pass through endpoint: %s, methods: %s, dependencies: %s",
             wildcard_path,
+            methods,
             dependencies,
         )
 
@@ -1943,7 +1962,7 @@ class InitPassThroughEndpointHelpers:
                 cost_per_request=cost_per_request,
                 guardrails=guardrails,
             ),
-            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+            methods=methods,
             dependencies=dependencies,
         )
 
@@ -1952,6 +1971,7 @@ class InitPassThroughEndpointHelpers:
             "endpoint_id": endpoint_id,
             "path": path,
             "type": "subpath",
+            "methods": methods,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2023,11 +2043,12 @@ class InitPassThroughEndpointHelpers:
                 return True
 
         # Fast path: check if any registered route key contains this path
-        # Keys are in format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
+        # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
+        # For backward compatibility, also support old format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
         # Extract unique paths from keys for quick checking
         for key in _registered_pass_through_routes.keys():
-            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
-            if len(parts) == 3:
+            parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
+            if len(parts) >= 3:
                 route_type = parts[1]
                 registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
                     parts[2]
@@ -2043,22 +2064,30 @@ class InitPassThroughEndpointHelpers:
         return False
 
     @staticmethod
-    def get_registered_pass_through_route(route: str) -> Optional[Dict[str, Any]]:
-        """Get passthrough params for a given route"""
+    def get_registered_pass_through_route(route: str, method: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get passthrough params for a given route and optionally filter by HTTP method"""
         for key in _registered_pass_through_routes.keys():
-            parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
-            if len(parts) == 3:
+            parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
+            if len(parts) >= 3:
                 route_type = parts[1]
                 registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
                     parts[2]
                 )
+                
+                # Get the methods for this route
+                route_methods = _registered_pass_through_routes[key].get("methods", [])
 
+                # Check if path matches
+                path_matches = False
                 if route_type == "exact" and route == registered_path:
-                    return _registered_pass_through_routes[key]
+                    path_matches = True
                 elif route_type == "subpath":
-                    if route == registered_path or route.startswith(
-                        registered_path + "/"
-                    ):
+                    if route == registered_path or route.startswith(registered_path + "/"):
+                        path_matches = True
+                
+                # If path matches and method filter is provided, check if method is allowed
+                if path_matches:
+                    if method is None or not route_methods or method in route_methods:
                         return _registered_pass_through_routes[key]
 
         return None
@@ -2158,6 +2187,9 @@ async def initialize_pass_through_endpoints(
 
         # Get guardrails config if present
         _guardrails = endpoint.get("guardrails", None)
+        
+        # Get methods list if present (None means all methods for backward compatibility)
+        _methods = endpoint.get("methods", None)
 
         # Add exact path route
         verbose_proxy_logger.debug(
@@ -2174,9 +2206,13 @@ async def initialize_pass_through_endpoints(
             cost_per_request=endpoint.get("cost_per_request", None),
             endpoint_id=endpoint_id,
             guardrails=_guardrails,
+            methods=_methods,
         )
 
-        visited_endpoints.add(f"{endpoint_id}:exact:{_path}")
+        # Generate route key with methods for tracking
+        methods_for_key = _methods if _methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        methods_str = ",".join(sorted(methods_for_key))
+        visited_endpoints.add(f"{endpoint_id}:exact:{_path}:{methods_str}")
 
         # Add wildcard route for sub-paths
         if endpoint.get("include_subpath", False) is True:
@@ -2191,9 +2227,10 @@ async def initialize_pass_through_endpoints(
                 cost_per_request=endpoint.get("cost_per_request", None),
                 endpoint_id=endpoint_id,
                 guardrails=_guardrails,
+                methods=_methods,
             )
 
-            visited_endpoints.add(f"{endpoint_id}:subpath:{_path}")
+            visited_endpoints.add(f"{endpoint_id}:subpath:{_path}:{methods_str}")
 
         verbose_proxy_logger.debug(
             "Added new pass through endpoint: %s (ID: %s)", _path, endpoint_id
@@ -2508,6 +2545,7 @@ async def update_pass_through_endpoints(
             cost_per_request=updated_endpoint.cost_per_request,
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
+            methods=updated_endpoint.methods,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2521,6 +2559,7 @@ async def update_pass_through_endpoints(
             cost_per_request=updated_endpoint.cost_per_request,
             endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
+            methods=updated_endpoint.methods,
         )
 
     return PassThroughEndpointResponse(
@@ -2597,6 +2636,7 @@ async def create_pass_through_endpoints(
             cost_per_request=created_endpoint.cost_per_request,
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
+            methods=created_endpoint.methods,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2610,6 +2650,7 @@ async def create_pass_through_endpoints(
             cost_per_request=created_endpoint.cost_per_request,
             endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
+            methods=created_endpoint.methods,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])

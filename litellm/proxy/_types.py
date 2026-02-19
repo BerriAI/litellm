@@ -1929,6 +1929,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=False,
         description="True if this endpoint is defined in the config file, False if from DB. Config-defined endpoints cannot be edited via the UI.",
     )
+    methods: Optional[List[str]] = Field(
+        default=None,
+        description="List of HTTP methods this endpoint handles (e.g., ['GET', 'POST']). If None or empty, all methods (GET, POST, PUT, DELETE, PATCH) are supported for backward compatibility. This allows the same path to have different targets for different HTTP methods.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):
