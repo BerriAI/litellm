@@ -31,11 +31,15 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import GuardrailTracingDetail, ModelResponseStream
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+    ModelResponseStream,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 from litellm.types.guardrails import (
     BlockedWord,
@@ -201,12 +205,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Load categories if provided
         if categories:
             self._load_categories(categories)
-        else:
-            verbose_proxy_logger.warning(
-                "ContentFilterGuardrail has no content categories configured. "
-                "Toxic/abuse and other category-based keyword filtering will not run. "
-                "Add categories (e.g. harm_toxic_abuse) in the guardrail config to enable them."
-            )
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
         normalized_patterns: List[ContentFilterPattern] = []
@@ -1546,8 +1544,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
-        from litellm.types.utils import GuardrailStatus
-
         start_time = datetime.now()
         detections: List[ContentFilterDetection] = []
         masked_entity_count: Dict[str, int] = {}

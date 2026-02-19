@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import ChatUI from "@/components/playground/chat_ui/ChatUI";
 import CompareUI from "@/components/playground/compareUI/CompareUI";
+import ComplianceUI from "@/components/playground/complianceUI/ComplianceUI";
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
@@ -37,6 +38,7 @@ export default function PlaygroundPage() {
       <TabList className="mb-0">
         <Tab>Chat</Tab>
         <Tab>Compare</Tab>
+        <Tab>Compliance</Tab>
       </TabList>
       <TabPanels className="h-full">
         <TabPanel className="h-full">
@@ -51,6 +53,9 @@ export default function PlaygroundPage() {
         </TabPanel>
         <TabPanel className="h-full">
           <CompareUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
+        </TabPanel>
+        <TabPanel className="h-full">
+          <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
         </TabPanel>
       </TabPanels>
     </TabGroup>

@@ -644,7 +644,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if team_object is not None
                     else None,
                 )
-                
+
                 # Check if model has zero cost - if so, skip all budget checks
                 model = get_model_from_request(request_data, route)
                 skip_budget_checks = False
@@ -831,6 +831,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token=valid_token, end_user_params=end_user_params
             )
             valid_token.parent_otel_span = parent_otel_span
+            if _end_user_object is not None:
+                valid_token.end_user_object_permission = _end_user_object.object_permission
 
             return valid_token
 
@@ -1277,6 +1279,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
+                valid_token_dict["end_user_object_permission"] = (
+                    _end_user_object.object_permission
+                )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions

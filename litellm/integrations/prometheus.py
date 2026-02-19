@@ -22,6 +22,10 @@ from typing import (
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.proxy._types import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_TeamTable,
@@ -1055,16 +1059,16 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
         )
 
-        if (
-            standard_logging_payload["stream"] is True
-        ):  # log successful streaming requests from logging event hook.
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_proxy_total_requests_metric"
-                ),
-                enum_values=enum_values,
-            )
-            self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
+        # increment litellm_proxy_total_requests_metric for all successful requests
+        # (both streaming and non-streaming) in this single location to prevent
+        # double-counting that occurs when async_post_call_success_hook also increments
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_proxy_total_requests_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
 
     def _increment_token_metrics(
         self,
@@ -1085,13 +1089,6 @@ class PrometheusLogger(CustomLogger):
             standard_logging_payload, dict
         ):
             _tags = standard_logging_payload["request_tags"]
-
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_proxy_total_requests_metric"
-            ),
-            enum_values=enum_values,
-        )
 
         _labels = prometheus_label_factory(
             supported_enum_labels=self.get_labels_for_metric(
@@ -1655,49 +1652,12 @@ class PrometheusLogger(CustomLogger):
     ):
         """
         Proxy level tracking - triggered when the proxy responds with a success response to the client
+
+        Note: litellm_proxy_total_requests_metric is NOT incremented here to avoid
+        double-counting. It is incremented in async_log_success_event which fires
+        for all successful requests (both streaming and non-streaming).
         """
-        try:
-            from litellm.litellm_core_utils.litellm_logging import (
-                StandardLoggingPayloadSetup,
-            )
-
-            if self._should_skip_metrics_for_invalid_key(
-                user_api_key_dict=user_api_key_dict
-            ):
-                return
-
-            _metadata = data.get("metadata", {}) or {}
-            enum_values = UserAPIKeyLabelValues(
-                end_user=user_api_key_dict.end_user_id,
-                hashed_api_key=user_api_key_dict.api_key,
-                api_key_alias=user_api_key_dict.key_alias,
-                requested_model=data.get("model", ""),
-                team=user_api_key_dict.team_id,
-                team_alias=user_api_key_dict.team_alias,
-                user=user_api_key_dict.user_id,
-                user_email=user_api_key_dict.user_email,
-                status_code="200",
-                route=user_api_key_dict.request_route,
-                tags=StandardLoggingPayloadSetup._get_request_tags(
-                    litellm_params=data,
-                    proxy_server_request=data.get("proxy_server_request", {}),
-                ),
-                client_ip=_metadata.get("requester_ip_address"),
-                user_agent=_metadata.get("user_agent"),
-            )
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_proxy_total_requests_metric"
-                ),
-                enum_values=enum_values,
-            )
-            self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
-
-        except Exception as e:
-            verbose_logger.exception(
-                "prometheus Layer Error(): Exception occured - {}".format(str(e))
-            )
-            pass
+        pass
 
     def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
         """Get value from dict or Pydantic model."""
@@ -2004,7 +1964,7 @@ class PrometheusLogger(CustomLogger):
 
             api_base = standard_logging_payload["api_base"]
             _litellm_params = request_kwargs.get("litellm_params", {}) or {}
-            _metadata = _litellm_params.get("metadata", {})
+            _metadata = get_litellm_metadata_from_kwargs(request_kwargs)
             litellm_model_name = request_kwargs.get("model", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
             _model_info = _metadata.get("model_info") or {}
@@ -2220,7 +2180,8 @@ class PrometheusLogger(CustomLogger):
             original_model_group,
             kwargs,
         )
-        _metadata = kwargs.get("metadata", {})
+        _metadata_key = get_metadata_variable_name_from_kwargs(kwargs)
+        _metadata = kwargs.get(_metadata_key) or {}
         standard_metadata: StandardLoggingMetadata = (
             StandardLoggingPayloadSetup.get_standard_logging_metadata(
                 metadata=_metadata
@@ -2265,7 +2226,8 @@ class PrometheusLogger(CustomLogger):
             kwargs,
         )
         _new_model = kwargs.get("model")
-        _metadata = kwargs.get("metadata", {})
+        _metadata_key = get_metadata_variable_name_from_kwargs(kwargs)
+        _metadata = kwargs.get(_metadata_key) or {}
         _tags = cast(List[str], kwargs.get("tags") or [])
         standard_metadata: StandardLoggingMetadata = (
             StandardLoggingPayloadSetup.get_standard_logging_metadata(

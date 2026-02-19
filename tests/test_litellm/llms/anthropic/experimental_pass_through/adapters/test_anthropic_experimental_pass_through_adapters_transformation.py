@@ -1811,3 +1811,131 @@ def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
     # Validate: input_tokens should equal prompt_tokens when no caching
     assert anthropic_response["usage"]["input_tokens"] == 100
     assert anthropic_response["usage"]["output_tokens"] == 50
+
+
+# =====================================================================
+# Web Search Tool Transformation Tests
+# =====================================================================
+
+
+def test_is_web_search_tool():
+    """Test detection of Anthropic web search tools."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    # Tool with type starting with "web_search" should be detected
+    web_search_tool_with_type = {
+        "type": "web_search_20260209",
+        "name": "web_search",
+    }
+    assert adapter._is_web_search_tool(web_search_tool_with_type) is True
+
+    # Tool with name "web_search" should be detected
+    web_search_tool_with_name = {
+        "name": "web_search",
+    }
+    assert adapter._is_web_search_tool(web_search_tool_with_name) is True
+
+    # Regular function tool should not be detected
+    regular_tool = {
+        "name": "get_weather",
+        "description": "Get weather info",
+        "input_schema": {"type": "object"},
+    }
+    assert adapter._is_web_search_tool(regular_tool) is False
+
+
+def test_translate_anthropic_to_openai_with_web_search_tool():
+    """
+    Test that Anthropic web search tools are converted to web_search_options parameter.
+
+    When a user sends an Anthropic /v1/messages request with {"type": "web_search_20260209"}
+    tool, it should be transformed to OpenAI format with web_search_options: {} parameter.
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="gemini-2.5-flash-lite",
+        max_tokens=4096,
+        messages=[
+            {
+                "role": "user",
+                "content": "Search for the current prices of AAPL and GOOGL",
+            }
+        ],
+        tools=[
+            {
+                "type": "web_search_20260209",
+                "name": "web_search",
+            }
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, tool_name_mapping = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    # web_search_options should be added
+    assert "web_search_options" in openai_request
+    assert openai_request["web_search_options"] == {}
+
+    # web search tool should NOT be in the tools array
+    assert "tools" not in openai_request or openai_request.get("tools") == []
+
+    # tool_name_mapping should be empty since no regular tools were present
+    assert tool_name_mapping == {}
+
+
+def test_translate_anthropic_to_openai_with_mixed_tools():
+    """
+    Test that web search tools are separated from regular tools.
+
+    When a request has both web search tools and regular function tools,
+    only the regular tools should be in the tools array, and web_search_options
+    should be added.
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    anthropic_request = AnthropicMessagesRequest(
+        model="gemini-2.5-flash-lite",
+        max_tokens=4096,
+        messages=[
+            {
+                "role": "user",
+                "content": "Get weather and search the web",
+            }
+        ],
+        tools=[
+            {
+                "type": "web_search_20260209",
+                "name": "web_search",
+            },
+            {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                },
+            },
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, tool_name_mapping = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    # web_search_options should be added
+    assert "web_search_options" in openai_request
+    assert openai_request["web_search_options"] == {}
+
+    # Only get_weather tool should be in the tools array
+    assert "tools" in openai_request
+    assert len(openai_request["tools"]) == 1
+    assert openai_request["tools"][0]["function"]["name"] == "get_weather"
+
+    # tool_name_mapping should be empty for short tool names
+    assert tool_name_mapping == {}

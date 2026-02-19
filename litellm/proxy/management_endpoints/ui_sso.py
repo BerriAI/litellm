@@ -1407,50 +1407,22 @@ async def insert_sso_user(
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
 
-    # Check if role_mappings is configured in SSO settings
-    role_mappings_configured = False
-    try:
-        from litellm.proxy.utils import get_prisma_client_or_throw
-
-        prisma_client = get_prisma_client_or_throw(
-            "Prisma client is None, connect a database to your proxy"
-        )
-
-        # Get SSO config from dedicated table
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
-            where={"id": "sso_config"}
-        )
-
-        if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            role_mappings_data = sso_settings_dict.get("role_mappings")
-            role_mappings_configured = role_mappings_data is not None
-        generic_user_role_mappings = os.getenv("GENERIC_USER_ROLE_MAPPINGS", None)
-        if generic_user_role_mappings is not None:
-            role_mappings_configured = True
-
-    except Exception as e:
-        # If we can't check role_mappings, continue with existing logic
-        verbose_proxy_logger.debug(
-            f"Could not check role_mappings configuration: {e}. Using default behavior."
-        )
-
     # Apply default_internal_user_params
     if litellm.default_internal_user_params:
-        # If role_mappings is configured and user_role is already set from SSO, preserve it
-        if (
-            role_mappings_configured
-            and user_defined_values.get("user_role") is not None
-        ):
+        # Preserve the SSO-extracted role if it's a valid LiteLLM role,
+        # regardless of how it was determined (role_mappings, Microsoft app_roles,
+        # GENERIC_USER_ROLE_ATTRIBUTE, custom SSO handler, etc.)
+        sso_role = user_defined_values.get("user_role")
+        if _should_use_role_from_sso_response(sso_role):
             # Preserve the SSO-extracted role, but apply other defaults
-            preserved_role = user_defined_values.get("user_role")
+            preserved_role = sso_role
             user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
             user_defined_values["user_role"] = preserved_role  # Restore preserved role
             verbose_proxy_logger.debug(
-                f"Preserved SSO-extracted role '{preserved_role}' (role_mappings configured)"
+                f"Preserved SSO-extracted role '{preserved_role}'"
             )
         else:
-            # Default behavior: update all values including role
+            # SSO didn't provide a valid role, apply all defaults including role
             user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
 
     # Set budget for internal users
