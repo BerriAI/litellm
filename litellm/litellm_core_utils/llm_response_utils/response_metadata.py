@@ -1,6 +1,7 @@
 import datetime
 from typing import Any, Optional, Union
 
+from litellm.constants import LITELLM_DETAILED_TIMING
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.logging_utils import LiteLLMLoggingObject
@@ -108,7 +109,18 @@ class ResponseMetadata:
             )
 
         #########################################################
-        # 3. Add duration for reading from cache
+        # 3. Add callback processing duration
+        #########################################################
+        callback_duration_ms = getattr(logging_obj, "callback_duration_ms", None)
+        if callback_duration_ms is not None:
+            self._update_hidden_params(
+                {
+                    "callback_duration_ms": round(callback_duration_ms, 4),
+                }
+            )
+
+        #########################################################
+        # 4. Add duration for reading from cache
         # In this case overhead from litellm is the difference between the cache read duration and the total response time
         #########################################################
         if (
@@ -127,6 +139,31 @@ class ResponseMetadata:
                     "litellm_overhead_time_ms": overhead_ms,
                 }
             )
+
+        #########################################################
+        # 5. Detailed per-phase timing (opt-in via env var)
+        #########################################################
+        if LITELLM_DETAILED_TIMING and llm_api_duration_ms is not None:
+            detailed: dict = {
+                "timing_llm_api_ms": round(llm_api_duration_ms, 4),
+            }
+
+            # message copy time from Logging.__init__()
+            msg_copy_ms = getattr(logging_obj, "message_copy_duration_ms", None)
+            if msg_copy_ms is not None:
+                detailed["timing_message_copy_ms"] = round(msg_copy_ms, 4)
+
+            # pre-processing = time from request start to LLM API call start
+            api_call_start = logging_obj.model_call_details.get("api_call_start_time")
+            if api_call_start is not None and start_time is not None:
+                pre_ms = (api_call_start - start_time).total_seconds() * 1000
+                detailed["timing_pre_processing_ms"] = round(pre_ms, 4)
+
+                # post-processing = total - pre - llm_api
+                post_ms = total_response_time_ms - pre_ms - llm_api_duration_ms
+                detailed["timing_post_processing_ms"] = round(max(post_ms, 0), 4)
+
+            self._update_hidden_params(detailed)
 
     def apply(self) -> None:
         """Apply metadata to the response object"""
