@@ -641,11 +641,25 @@ class MCPServerManager:
         )
         return new_server
 
+    async def _maybe_register_openapi_tools(self, server: MCPServer):
+        """Register OpenAPI tools if the server has a spec_path configured."""
+        if server.spec_path:
+            verbose_logger.info(
+                f"Loading OpenAPI spec from {server.spec_path} for server {server.name}"
+            )
+            await self._register_openapi_tools(
+                spec_path=server.spec_path,
+                server=server,
+                base_url=server.url or "",
+            )
+            self.initialize_tool_name_to_mcp_server_name_mapping()
+
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -657,6 +671,7 @@ class MCPServerManager:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -2245,9 +2260,9 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
-            new_registry[server.server_id] = await self.build_mcp_server_from_table(
-                server
-            )
+            new_server = await self.build_mcp_server_from_table(server)
+            new_registry[server.server_id] = new_server
+            await self._maybe_register_openapi_tools(new_server)
 
         self.registry = new_registry
 
