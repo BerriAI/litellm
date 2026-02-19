@@ -5590,6 +5590,43 @@ export const enrichPolicyTemplate = async (
   }
 };
 
+export const suggestPolicyTemplates = async (
+  accessToken: string,
+  attackExamples: string[],
+  description: string,
+  model: string
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policy/templates/suggest`
+      : `/policy/templates/suggest`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        attack_examples: attackExamples.filter((e) => e.trim()),
+        description,
+        model,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error("Failed to suggest policy templates:", error);
+    throw error;
+  }
+};
+
 export const enrichPolicyTemplateStream = async (
   accessToken: string,
   templateId: string,
