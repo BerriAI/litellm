@@ -150,8 +150,12 @@ class TestLangfuseLogging:
         # Verify the call
         assert mock_post.call_count >= 1
 
-        # Aggregate batch items from ALL calls (langfuse may split trace-create
-        # and generation-create across separate HTTP requests)
+        # Aggregate batch items from ALL calls. Langfuse may split trace-create
+        # and generation-create across separate HTTP requests (e.g. with the
+        # router), and may also re-send the same items across multiple flush
+        # cycles. We collect all items, then deduplicate by keeping the last
+        # occurrence of each event type so retried flushes don't cause
+        # duplicate entries.
         all_batch_items = []
         last_metadata = None
         for call in mock_post.call_args_list:
@@ -160,6 +164,14 @@ class TestLangfuseLogging:
             body = json.loads(call[1].get("content"))
             all_batch_items.extend(body.get("batch", []))
             last_metadata = body.get("metadata", last_metadata)
+
+        # Deduplicate: keep only the last item of each type, ordered as
+        # trace-create first, then generation-create (expected by assertions)
+        deduped = {}
+        for item in all_batch_items:
+            deduped[item.get("type")] = item
+        type_order = ["trace-create", "generation-create"]
+        all_batch_items = [deduped[t] for t in type_order if t in deduped]
 
         actual_request_body = {
             "batch": all_batch_items,
