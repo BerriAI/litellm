@@ -1726,6 +1726,54 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["custom_llm_provider"] == "bedrock"
 
 
+def test_get_deployment_credentials_with_provider_resolves_credential_name():
+    """
+    Test that get_deployment_credentials_with_provider correctly resolves
+    litellm_credential_name to actual credential values (for UI-created models).
+    """
+    from litellm.types.utils import CredentialItem
+    
+    # Setup credential list with a test credential
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="test-azure-cred",
+            credential_info={"custom_llm_provider": "azure"},
+            credential_values={
+                "api_key": "resolved-api-key",
+                "api_base": "https://resolved.openai.azure.com",
+                "api_version": "2024-02-01"
+            }
+        )
+    ]
+    
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "litellm_credential_name": "test-azure-cred",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="azure-gpt-4"
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "resolved-api-key"
+    assert credentials["api_base"] == "https://resolved.openai.azure.com"
+    assert credentials["api_version"] == "2024-02-01"
+    assert credentials["custom_llm_provider"] == "azure"
+    # Ensure credential name is removed after resolution
+    assert "litellm_credential_name" not in credentials
+    
+    # Cleanup
+    litellm.credential_list = []
+
+
 def test_get_available_guardrail_single_deployment():
     """
     Test get_available_guardrail returns the single guardrail when only one exists.
