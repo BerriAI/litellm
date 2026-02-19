@@ -2998,6 +2998,10 @@ async def delete_verification_tokens(
 
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
+                if deleted_tokens is not None and len(deleted_tokens) != len(tokens):
+                    failed_tokens = [
+                        token for token in tokens if token not in deleted_tokens
+                    ]
             else:
                 deletion_tasks = [
                     prisma_client.delete_data(tokens=[key.token])
