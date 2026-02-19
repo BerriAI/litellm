@@ -74,7 +74,7 @@ All endpoints support:
 - Function calling with thought signatures
 - Multi-turn conversations
 - All Gemini 3-specific features
-- Converstion of provider specific thinking related param to thinkingLevel
+- Conversion of provider specific thinking related param to thinkingLevel
 
 ## Quick Start
 
