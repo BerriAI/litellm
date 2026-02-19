@@ -24,20 +24,21 @@ from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
-from litellm.types.proxy.policy_engine import (PolicyGuardrailsResponse,
-                                               PolicyInfoResponse,
-                                               PolicyListResponse,
-                                               PolicyMatchContext,
-                                               PolicyScopeResponse,
-                                               PolicySummaryItem,
-                                               PolicyTestResponse,
-                                               PolicyValidateRequest,
-                                               PolicyValidationResponse)
+from litellm.types.proxy.policy_engine import (
+    PolicyGuardrailsResponse,
+    PolicyInfoResponse,
+    PolicyListResponse,
+    PolicyMatchContext,
+    PolicyScopeResponse,
+    PolicySummaryItem,
+    PolicyTestResponse,
+    PolicyValidateRequest,
+    PolicyValidationResponse,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 router = APIRouter()
 
@@ -194,8 +195,7 @@ async def test_policies_and_guardrails(
     Returns inputs (possibly modified) and any guardrail errors so the UI can show which
     guardrails failed and why.
     """
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.proxy.utils import handle_exception_on_proxy
 
@@ -490,8 +490,7 @@ async def get_policy_templates(
         return _load_policy_templates_from_local_backup()
 
     try:
-        from litellm.llms.custom_httpx.http_handler import \
-            get_async_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.llms.custom_http import httpxSpecialProvider
 
         async_client = get_async_httpx_client(
@@ -507,3 +506,137 @@ async def get_policy_templates(
         )
 
     return _load_policy_templates_from_local_backup()
+
+
+class EnrichTemplateRequest(BaseModel):
+    template_id: str
+    parameters: dict
+
+
+@router.post(
+    "/policy/templates/enrich",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def enrich_policy_template(
+    data: EnrichTemplateRequest,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> dict:
+    """
+    Enrich a policy template with LLM-discovered data (e.g. competitor names).
+
+    Calls an onboarded LLM to discover competitors for the given brand name,
+    then returns enriched guardrailDefinitions with the discovered data populated.
+    """
+    templates = _load_policy_templates_from_local_backup()
+    template = next((t for t in templates if t.get("id") == data.template_id), None)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Template '{data.template_id}' not found")
+
+    llm_enrichment = template.get("llm_enrichment")
+    if llm_enrichment is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Template does not support LLM enrichment",
+        )
+
+    brand_name = data.parameters.get(llm_enrichment["parameter"], "")
+    if not brand_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Parameter '{llm_enrichment['parameter']}' is required",
+        )
+
+    prompt = llm_enrichment["prompt"].replace(
+        "{{" + llm_enrichment["parameter"] + "}}", brand_name
+    )
+
+    competitors = await _discover_competitors_via_llm(prompt)
+
+    enriched_definitions = _build_competitor_guardrail_definitions(
+        template.get("guardrailDefinitions", []),
+        competitors,
+        brand_name,
+    )
+
+    return {"guardrailDefinitions": enriched_definitions, "competitors": competitors}
+
+
+async def _discover_competitors_via_llm(prompt: str) -> list:
+    """Call an onboarded LLM to discover competitor names."""
+    import litellm
+
+    try:
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content or ""  # type: ignore
+        competitors = [
+            line.strip().strip(".-) ").strip()
+            for line in raw.strip().split("\n")
+            if line.strip() and len(line.strip()) > 1
+        ]
+        return competitors[:15]
+    except Exception as e:
+        verbose_proxy_logger.error("LLM competitor discovery failed: %s", e)
+        return []
+
+
+def _build_competitor_guardrail_definitions(
+    definitions: list,
+    competitors: list,
+    brand_name: str,
+) -> list:
+    """Build enriched guardrailDefinitions with competitor names populated."""
+    import copy
+
+    enriched = copy.deepcopy(definitions)
+
+    output_blocked = [
+        {"keyword": comp, "action": "BLOCK", "description": f"Competitor: {comp}"}
+        for comp in competitors
+    ]
+
+    recommendation_blocked = []
+    for comp in competitors:
+        recommendation_blocked.append(
+            {"keyword": f"try {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
+        )
+        recommendation_blocked.append(
+            {"keyword": f"use {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
+        )
+        recommendation_blocked.append(
+            {"keyword": f"switch to {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
+        )
+        recommendation_blocked.append(
+            {"keyword": f"consider {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
+        )
+
+    comparison_blocked = []
+    for comp in competitors:
+        comparison_blocked.append(
+            {"keyword": f"{comp} is better", "action": "BLOCK", "description": "Unfavorable comparison"}
+        )
+        comparison_blocked.append(
+            {"keyword": f"better than {brand_name}", "action": "BLOCK", "description": "Unfavorable comparison"}
+        )
+        comparison_blocked.append(
+            {"keyword": f"{brand_name} is worse", "action": "BLOCK", "description": "Unfavorable comparison"}
+        )
+
+    blocked_words_map = {
+        "competitor-output-blocker": output_blocked,
+        "competitor-recommendation-filter": recommendation_blocked,
+        "competitor-comparison-filter": comparison_blocked,
+    }
+
+    for defn in enriched:
+        guardrail_name = defn.get("guardrail_name", "")
+        if guardrail_name in blocked_words_map:
+            defn["litellm_params"]["blocked_words"] = blocked_words_map[guardrail_name]
+
+    return enriched
