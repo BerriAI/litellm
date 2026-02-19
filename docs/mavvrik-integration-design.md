@@ -208,8 +208,13 @@ The Redis lock prevents duplicate API calls to Mavvrik and duplicate GCS uploads
 ### Activation Requirements
 
 The scheduler starts automatically when **both** conditions are met:
-1. `success_callback: ["mavvrik"]` present in proxy config YAML
+1. `success_callback: ["mavvrik"]` or `callbacks: ["mavvrik"]` present in proxy config YAML
 2. Settings exist in `LiteLLM_Config` (via `/mavvrik/init` endpoint)
+
+**Callback field options:**
+- `success_callback: ["mavvrik"]` — logs successful API calls only (recommended for cost tracking)
+- `callbacks: ["mavvrik"]` — logs both successful and failed calls
+- `failure_callback: ["mavvrik"]` — logs failed calls only (not useful for cost data)
 
 If either condition is missing, the integration remains dormant.
 

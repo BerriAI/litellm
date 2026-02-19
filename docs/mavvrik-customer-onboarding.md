@@ -20,7 +20,8 @@ Add your Mavvrik credentials to the proxy configuration file.
 
 ```yaml
 litellm_settings:
-  success_callback: ["mavvrik"]  # Add "mavvrik" to the list
+  success_callback: ["mavvrik"]  # Logs successful API calls only (recommended)
+  # Alternative: callbacks: ["mavvrik"]  # Logs both success and failure
 
 environment_variables:
   MAVVRIK_TENANT_ID: "your-tenant-id"
@@ -44,7 +45,10 @@ litellm --config /path/to/proxy_server_config.yaml
 
 ```
 Initialized Success Callbacks - ['mavvrik']
+# Or if using callbacks: ['mavvrik']
 ```
+
+**Note:** Use `success_callback` to log only successful API calls (recommended for cost tracking). Use `callbacks` to log both successful and failed calls.
 
 ## Step 3: Verify the Integration
 
