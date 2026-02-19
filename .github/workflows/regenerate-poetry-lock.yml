@@ -32,7 +32,7 @@ jobs:
       - name: Regenerate poetry.lock
         # --no-update: re-solve only what pyproject.toml requires without
         # upgrading packages that are already in the lock file.
-        run: poetry lock --no-update
+        run: poetry lock
 
       - name: Check whether poetry.lock actually changed
         id: diff
@@ -64,7 +64,7 @@ jobs:
           Run `poetry lock` to fix the lock file.
           ```
 
-          Regenerated with `poetry lock --no-update` (existing package versions are preserved; only the lock file metadata is updated to match the new constraints).
+          Regenerated with `poetry lock` (existing package versions are preserved; only the lock file metadata is updated to match the new constraints).
           BODY
 
           gh pr create \
