@@ -1,16 +1,21 @@
 """
 Prometheus Auth Middleware
+
+Pure ASGI middleware — avoids Starlette's BaseHTTPMiddleware which wraps
+streaming responses with receive_or_disconnect per chunk, blocking the
+event loop and causing severe throughput degradation under concurrent
+streaming load.
 """
-from fastapi import Request
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 import litellm
 from litellm.proxy._types import SpecialHeaders
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
-class PrometheusAuthMiddleware(BaseHTTPMiddleware):
+class PrometheusAuthMiddleware:
     """
     Middleware to authenticate requests to the metrics endpoint
 
@@ -24,8 +29,15 @@ class PrometheusAuthMiddleware(BaseHTTPMiddleware):
     ```
     """
 
-    async def dispatch(self, request: Request, call_next):
-        # Check if this is a request to the metrics endpoint
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
 
         if self._is_prometheus_metrics_endpoint(request):
             if self._should_run_auth_on_metrics_endpoint() is True:
@@ -38,15 +50,14 @@ class PrometheusAuthMiddleware(BaseHTTPMiddleware):
                         or "",
                     )
                 except Exception as e:
-                    return JSONResponse(
+                    response = JSONResponse(
                         status_code=401,
                         content=f"Unauthorized access to metrics endpoint: {getattr(e, 'message', str(e))}",
                     )
+                    await response(scope, receive, send)
+                    return
 
-        # Process the request and get the response
-        response = await call_next(request)
-
-        return response
+        await self.app(scope, receive, send)
 
     @staticmethod
     def _is_prometheus_metrics_endpoint(request: Request):
