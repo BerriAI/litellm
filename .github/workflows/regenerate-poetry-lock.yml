@@ -12,15 +12,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read  # GITHUB_TOKEN is not used for writes; PAT_TOKEN_2 handles push + PR creation
+  contents: write       # needed to push the auto/regenerate-poetry-lock-* branch
+  pull-requests: write  # needed to open the PR
 
 jobs:
   regenerate-lock:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.PAT_TOKEN_2 }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -74,4 +73,4 @@ jobs:
             --head "$BRANCH" \
             --base main
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN_2 }}
+          GH_TOKEN: ${{ github.token }}
