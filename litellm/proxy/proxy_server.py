@@ -2808,6 +2808,7 @@ class ProxyConfig:
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
                 store_model_in_db = False
+            general_settings["store_model_in_db"] = store_model_in_db
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
@@ -3845,7 +3846,7 @@ class ProxyConfig:
         """
         Pull from DB, read general settings value
         """
-        global general_settings
+        global general_settings, store_model_in_db
         if db_general_settings is None:
             return
         _general_settings = dict(db_general_settings)
@@ -3896,6 +3897,19 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        ## STORE MODEL IN DB ##
+        if "store_model_in_db" in _general_settings:
+            value = _general_settings["store_model_in_db"]
+            if value is None:
+                pass  # Don't change store_model_in_db to None; keep current value
+            elif isinstance(value, bool):
+                store_model_in_db = value
+            elif isinstance(value, str):
+                store_model_in_db = value.lower() == "true"
+            else:
+                store_model_in_db = bool(value)
+            general_settings["store_model_in_db"] = store_model_in_db
 
         ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
         if "maximum_spend_logs_retention_period" in _general_settings:
@@ -5428,6 +5442,31 @@ class ProxyStartupEvent:
         store_model_in_db = (
             get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
         )
+
+        # If store_model_in_db is still False, check DB for override.
+        # This breaks the chicken-and-egg where DB has store_model_in_db=True
+        # but YAML config has False.
+        if store_model_in_db is not True and prisma_client is not None:
+            try:
+                _db_gs_record = await prisma_client.db.litellm_config.find_first(
+                    where={"param_name": "general_settings"}
+                )
+                if _db_gs_record is not None and isinstance(
+                    _db_gs_record.param_value, dict
+                ):
+                    _db_val = _db_gs_record.param_value.get("store_model_in_db")
+                    if _db_val is True or (
+                        isinstance(_db_val, str)
+                        and _db_val.lower() == "true"
+                    ):
+                        store_model_in_db = True
+                        verbose_proxy_logger.info(
+                            "store_model_in_db=True loaded from DB, overriding config/env"
+                        )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "Failed to check DB for store_model_in_db: %s", str(e)
+                )
 
         if store_model_in_db is True:
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
@@ -11317,6 +11356,7 @@ async def get_config_list(
         "max_request_size_mb": {"type": "Integer"},
         "max_response_size_mb": {"type": "Integer"},
         "pass_through_endpoints": {"type": "PydanticModel"},
+        "store_model_in_db": {"type": "Boolean"},
         "store_prompts_in_spend_logs": {"type": "Boolean"},
         "maximum_spend_logs_retention_period": {"type": "String"},
         "mcp_internal_ip_ranges": {"type": "List"},
