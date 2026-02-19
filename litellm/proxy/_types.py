@@ -237,6 +237,9 @@ class KeyManagementRoutes(str, enum.Enum):
     # list routes
     KEY_LIST = "/key/list"
 
+    # team usage routes
+    TEAM_DAILY_ACTIVITY = "/team/daily/activity"
+
 
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
@@ -505,6 +508,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
     ]
 
     management_routes = [
