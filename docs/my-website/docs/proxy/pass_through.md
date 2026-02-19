@@ -166,6 +166,7 @@ general_settings:
       auth: boolean                   # Enable LiteLLM authentication (Enterprise)
       forward_headers: boolean        # Forward all incoming headers
       include_subpath: boolean        # If true, forwards requests to sub-paths (default: false)
+      methods: list[string]           # Optional: HTTP methods (e.g., ["GET", "POST"]). If not specified, all methods are supported.
       headers:                        # Custom headers to add
         Authorization: string         # Auth header for target API
         content-type: string         # Request content type
@@ -198,6 +199,48 @@ general_settings:
 |---------|----------|
 | `include_subpath: false` (default) | Only `/custom-api` is forwarded |
 | `include_subpath: true` | `/custom-api`, `/custom-api/v1/chat`, `/custom-api/anything` are all forwarded |
+
+---
+
+### Method-Specific Routing
+
+You can configure different target URLs for the same path using different HTTP methods. This is useful when different backends handle different operations:
+
+<Image 
+  img={require('../../img/passthrough_method_setup.png')}
+  style={{width: '60%', display: 'block', margin: '2rem auto'}}
+/>
+
+```yaml
+general_settings:
+  pass_through_endpoints:
+    # GET requests to /azure/kb go to read API
+    - path: "/azure/kb"
+      target: "https://read-api.example.com/knowledge-base"
+      methods: ["GET"]
+      headers:
+        Authorization: "bearer os.environ/READ_API_KEY"
+    
+    # POST requests to /azure/kb go to write API
+    - path: "/azure/kb"
+      target: "https://write-api.example.com/knowledge-base"
+      methods: ["POST"]
+      headers:
+        Authorization: "bearer os.environ/WRITE_API_KEY"
+    
+    # PUT requests to /azure/kb go to update API
+    - path: "/azure/kb"
+      target: "https://update-api.example.com/knowledge-base"
+      methods: ["PUT"]
+      headers:
+        Authorization: "bearer os.environ/UPDATE_API_KEY"
+```
+
+**Key Points:**
+- If `methods` is not specified, the endpoint supports all HTTP methods (GET, POST, PUT, DELETE, PATCH)
+- Multiple endpoints can share the same path as long as they have different methods
+- You can specify multiple methods for a single endpoint: `methods: ["GET", "POST"]`
+- This allows you to route to different backends based on the operation type
 
 ---
 
