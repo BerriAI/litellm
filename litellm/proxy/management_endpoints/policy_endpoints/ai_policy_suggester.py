@@ -4,9 +4,10 @@ based on user-provided attack examples and descriptions.
 """
 
 import json
-from typing import List
+from typing import List, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
 SUGGEST_TOOL = {
     "type": "function",
@@ -53,15 +54,20 @@ class AiPolicySuggester:
         templates: list,
         attack_examples: List[str],
         description: str,
+        model: Optional[str] = None,
     ) -> dict:
-        import litellm
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            raise ValueError("LLM router not initialized")
 
         system_prompt = self._build_system_prompt(templates)
         user_prompt = self._build_user_prompt(attack_examples, description)
+        model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
         try:
-            response = await litellm.acompletion(
-                model="gpt-4o-mini",
+            response = await llm_router.acompletion(
+                model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
