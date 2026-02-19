@@ -1931,11 +1931,16 @@ class CustomStreamWrapper:
                         hasattr(processed_chunk, "usage")
                         and getattr(processed_chunk, "usage", None) is not None
                     ):
-                        # Strip usage from the outgoing chunk so
-                        # model_dump_json(exclude_none=True) drops it.
-                        # The copy in self.chunks retains usage for
-                        # calculate_total_usage().
-                        processed_chunk.usage = None  # type: ignore
+                        # Strip usage from the outgoing chunk so it's not sent twice
+                        # (once in the chunk, once in _hidden_params).
+                        # Create a new object without usage, matching sync behavior.
+                        # The copy in self.chunks retains usage for calculate_total_usage().
+                        obj_dict = processed_chunk.model_dump()
+                        if "usage" in obj_dict:
+                            del obj_dict["usage"]
+                        processed_chunk = self.model_response_creator(
+                            chunk=obj_dict, hidden_params=processed_chunk._hidden_params
+                        )
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
                         )

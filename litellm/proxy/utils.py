@@ -1238,7 +1238,8 @@ class ProxyLogging:
 
         if result.terminal_action == "modify_response":
             raise ModifyResponseException(
-                message=result.modify_response_message or "Response modified by pipeline",
+                message=result.modify_response_message
+                or "Response modified by pipeline",
                 model=data.get("model", "unknown"),
                 request_data=data,
                 guardrail_name=f"pipeline:{policy_name}",
@@ -1336,7 +1337,10 @@ class ProxyLogging:
                     and data is not None
                 ):
                     # Skip guardrails managed by a pipeline
-                    if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                    if (
+                        _callback.guardrail_name
+                        and _callback.guardrail_name in pipeline_managed
+                    ):
                         continue
 
                     result = await self._process_guardrail_callback(
@@ -1490,6 +1494,7 @@ class ProxyLogging:
             "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
+            "project_budget",
         ],
         user_info: CallInfo,
     ):
@@ -1883,7 +1888,6 @@ class ProxyLogging:
         """
 
         from litellm.types.guardrails import GuardrailEventHooks
-
 
         guardrail_callbacks: List[CustomGuardrail] = []
         other_callbacks: List[CustomLogger] = []

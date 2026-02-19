@@ -591,6 +591,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
+            user_api_key_project_id=user_api_key_dict.project_id,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
@@ -879,7 +880,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         general_settings, user_api_key_dict, _headers
     )
 
-    # Parse user info from headers
+    # Parse user info from headers (fallback to general_settings.user_header_name)
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
     if user is not None:
         if user_api_key_dict.end_user_id is None:
@@ -1540,9 +1541,7 @@ def _match_and_track_policies(
         add_policy_sources_to_metadata,
         add_policy_to_applied_policies_header,
     )
-    from litellm.proxy.policy_engine.attachment_registry import (
-        get_attachment_registry,
-    )
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
     # Get matching policies via attachments (with match reasons for attribution)
@@ -1677,9 +1676,7 @@ def add_guardrails_from_policy_engine(
         user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        get_tags_from_request_body,
-    )
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 

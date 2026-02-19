@@ -410,6 +410,7 @@ const sidebars = {
           items: [
             "proxy/users",
             "proxy/team_budgets",
+            "proxy/project_management",
             "proxy/ui_team_soft_budget_alerts",
             "proxy/tag_budgets",
             "proxy/customers",
@@ -781,13 +782,13 @@ const sidebars = {
             "providers/bedrock_batches",
             "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
-        "providers/bedrock_vector_store",
-      ]
-    },
-    "providers/litellm_proxy",
-    "providers/abliteration",
-    "providers/ai21",
-    "providers/aiml",
+            "providers/bedrock_vector_store",
+          ]
+        },
+        "providers/litellm_proxy",
+        "providers/abliteration",
+        "providers/ai21",
+        "providers/aiml",
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
@@ -1121,6 +1122,7 @@ const sidebars = {
           type: "category",
           label: "Performance / Latency",
           items: [
+            "troubleshoot/latency_overhead",
             "troubleshoot/cpu_issues",
             "troubleshoot/memory_issues",
             "troubleshoot/spend_queue_warnings",

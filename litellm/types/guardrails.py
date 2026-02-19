@@ -71,6 +71,7 @@ class SupportedGuardrailIntegrations(Enum):
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
     SEMANTIC_GUARD = "semantic_guard"
+    MCP_END_USER_PERMISSION = "mcp_end_user_permission"
 
 
 class Role(Enum):

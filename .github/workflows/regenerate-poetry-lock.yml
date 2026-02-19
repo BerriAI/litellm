@@ -1,0 +1,77 @@
+name: Regenerate poetry.lock
+
+# Runs whenever pyproject.toml is merged into main (the most common cause of
+# the "pyproject.toml changed significantly since poetry.lock was last generated"
+# CI failure).  Can also be triggered manually.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read  # GITHUB_TOKEN is not used for writes; GH_TOKEN (PAT) handles push + PR creation
+
+jobs:
+  regenerate-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Regenerate poetry.lock
+        # --no-update: re-solve only what pyproject.toml requires without
+        # upgrading packages that are already in the lock file.
+        run: poetry lock --no-update
+
+      - name: Check whether poetry.lock actually changed
+        id: diff
+        run: |
+          if git diff --quiet poetry.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR with the refreshed lock file
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          BRANCH="auto/regenerate-poetry-lock-$(date +'%Y%m%d%H%M%S')"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add poetry.lock
+          git commit -m "chore: regenerate poetry.lock to match pyproject.toml"
+          git push -f origin "$BRANCH"
+
+          # Write body to a temp file to avoid heredoc/quoting issues in YAML
+          cat > /tmp/pr-body.md << 'BODY'
+          Automated regeneration of `poetry.lock` after `pyproject.toml` was updated on `main`.
+
+          Fixes the recurring CI failure:
+          ```
+          pyproject.toml changed significantly since poetry.lock was last generated.
+          Run `poetry lock` to fix the lock file.
+          ```
+
+          Regenerated with `poetry lock --no-update` (existing package versions are preserved; only the lock file metadata is updated to match the new constraints).
+          BODY
+
+          gh pr create \
+            --title "chore: regenerate poetry.lock to match pyproject.toml" \
+            --body-file /tmp/pr-body.md \
+            --head "$BRANCH" \
+            --base main
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}

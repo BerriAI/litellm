@@ -24,6 +24,7 @@ model LiteLLM_BudgetTable {
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
   organization LiteLLM_OrganizationTable[] // multiple orgs can have the same budget
+  projects LiteLLM_ProjectTable[] // multiple projects can have the same budget
   keys LiteLLM_VerificationToken[] // multiple keys can have the same budget
   end_users LiteLLM_EndUserTable[] // multiple end-users can have the same budget
   tags LiteLLM_TagTable[] // multiple tags can have the same budget
@@ -135,6 +136,81 @@ model LiteLLM_TeamTable {
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_model_table LiteLLM_ModelTable? @relation(fields: [model_id], references: [id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    projects LiteLLM_ProjectTable[]
+}
+
+// Projects sit between teams and keys for use-case management
+model LiteLLM_ProjectTable {
+  project_id           String   @id @default(uuid())
+  project_alias        String?
+  description          String?
+  team_id              String?
+  budget_id            String?
+  metadata             Json     @default("{}")
+  models               String[]
+  spend                Float    @default(0.0)
+  model_spend          Json     @default("{}")
+  model_rpm_limit      Json     @default("{}")
+  model_tpm_limit      Json     @default("{}")
+  blocked              Boolean  @default(false)
+  object_permission_id String?
+  created_at           DateTime @default(now()) @map("created_at")
+  created_by           String
+  updated_at           DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by           String
+  
+  // Relations
+  litellm_team_table   LiteLLM_TeamTable?   @relation(fields: [team_id], references: [team_id])
+  litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
+  keys                 LiteLLM_VerificationToken[]
+  object_permission    LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
+}
+
+// Audit table for deleted teams - preserves spend and team information for historical tracking
+model LiteLLM_DeletedTeamTable {
+    id                      String   @id @default(uuid())
+    team_id                 String   // Original team_id
+    team_alias              String?
+    organization_id         String?
+    object_permission_id    String?
+    admins                  String[]
+    members                 String[]
+    members_with_roles      Json     @default("{}")
+    metadata                Json     @default("{}")
+    max_budget              Float?
+    soft_budget             Float?
+    spend                   Float    @default(0.0)
+    models                  String[]
+    max_parallel_requests   Int?
+    tpm_limit               BigInt?
+    rpm_limit               BigInt?
+    budget_duration         String?
+    budget_reset_at         DateTime?
+    blocked                 Boolean  @default(false)
+    model_spend             Json     @default("{}")
+    model_max_budget        Json     @default("{}")
+    router_settings  Json? @default("{}")
+    team_member_permissions String[] @default([])
+    access_group_ids String[] @default([])
+    policies                String[] @default([])
+    model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
+    allow_team_guardrail_config Boolean @default(false)
+
+    // Original timestamps from team creation/updates
+    created_at              DateTime? @map("created_at")
+    updated_at              DateTime? @map("updated_at")
+    
+    // Deletion metadata
+    deleted_at              DateTime  @default(now()) @map("deleted_at")
+    deleted_by              String?   @map("deleted_by") // User who deleted the team
+    deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
+    litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
+    
+    @@index([team_id])
+    @@index([deleted_at])
+    @@index([organization_id])
+    @@index([team_alias])
+    @@index([created_at])
 }
 
 // Audit table for deleted teams - preserves spend and team information for historical tracking
@@ -230,9 +306,11 @@ model LiteLLM_ObjectPermissionTable {
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
   teams                 LiteLLM_TeamTable[]
+  projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
   users                 LiteLLM_UserTable[]
+  end_users             LiteLLM_EndUserTable[]
 }
 
 // Holds the MCP server configuration 
@@ -283,6 +361,7 @@ model LiteLLM_VerificationToken {
     router_settings Json? @default("{}")
     user_id    String?
     team_id    String?
+    project_id String?
     permissions Json @default("{}")
     max_parallel_requests Int?
     metadata   Json  @default("{}")
@@ -305,6 +384,7 @@ model LiteLLM_VerificationToken {
     created_by String?
     updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
     updated_by String?
+    last_active     DateTime?  // When this key was last used
     rotation_count   Int?       @default(0) // Number of times key has been rotated
     auto_rotate      Boolean?   @default(false) // Whether this key should be auto-rotated
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
@@ -312,6 +392,7 @@ model LiteLLM_VerificationToken {
     key_rotation_at  DateTime?  // When this key should next be rotated
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
+    litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
 
     // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
@@ -352,6 +433,7 @@ model LiteLLM_DeletedVerificationToken {
     config                  Json     @default("{}")
     user_id                 String?
     team_id                 String?
+    project_id              String?
     permissions             Json     @default("{}")
     max_parallel_requests   Int?
     metadata                Json     @default("{}")
@@ -375,6 +457,7 @@ model LiteLLM_DeletedVerificationToken {
     created_by              String?   // Original creator
     updated_at              DateTime? // Last update timestamp before deletion
     updated_by              String?   // Last user who updated before deletion
+    last_active             DateTime? // When this key was last used before deletion
     rotation_count          Int?      @default(0)
     auto_rotate             Boolean?  @default(false)
     rotation_interval       String?
@@ -403,7 +486,9 @@ model LiteLLM_EndUserTable {
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
   budget_id String?
+  object_permission_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
+  object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
   blocked Boolean @default(false)
 }
 
@@ -445,7 +530,7 @@ model LiteLLM_SpendLogs {
   custom_llm_provider String?   @default("") // litellm used custom_llm_provider
   api_base            String?   @default("")
   user                String?   @default("")
-  metadata            Json?     @default("{}")
+  metadata            Json?     @default("{}") // project_id stored here
   cache_hit           String?   @default("")
   cache_key           String?   @default("")
   request_tags        Json?     @default("[]")
