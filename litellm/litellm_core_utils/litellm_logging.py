@@ -335,9 +335,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages = new_messages
 
         self.model = model
-        # Use shallow copy instead of deepcopy to avoid blocking the request path
-        # for large payloads (e.g. 2.3MB base64 images). Messages are not mutated
-        # by the logging layer, so a shallow copy is sufficient to prevent aliasing.
+        # Shallow copy of the outer list only (inner message dicts are shared).
+        # Safe because the logging layer does not mutate individual message dicts.
         _copy_start = time.time()
         self.messages = copy.copy(messages) if messages is not None else None
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
@@ -1634,19 +1633,28 @@ class Logging(LiteLLMLoggingBaseClass):
                 result=logging_result
             )
 
-        _slp_start = time.time()
         self.model_call_details[
             "standard_logging_object"
-        ] = get_standard_logging_object_payload(
+        ] = self._build_standard_logging_payload(
+            logging_result, start_time, end_time
+        )
+
+    def _build_standard_logging_payload(
+        self, init_response_obj: Any, start_time: Any, end_time: Any
+    ) -> Any:
+        """Build StandardLoggingPayload and accumulate its construction time."""
+        _start = time.time()
+        payload = get_standard_logging_object_payload(
             kwargs=self.model_call_details,
-            init_response_obj=logging_result,
+            init_response_obj=init_response_obj,
             start_time=start_time,
             end_time=end_time,
             logging_obj=self,
             status="success",
             standard_built_in_tools_params=self.standard_built_in_tools_params,
         )
-        self.callback_duration_ms += (time.time() - _slp_start) * 1000
+        self.callback_duration_ms += (time.time() - _start) * 1000
+        return payload
 
     def _transform_usage_objects(self, result):
         if isinstance(result, ResponsesAPIResponse):
@@ -1739,19 +1747,11 @@ class Logging(LiteLLMLoggingBaseClass):
                         end_time=end_time,
                     )
                 elif isinstance(result, dict) or isinstance(result, list):
-                    _slp_start = time.time()
                     self.model_call_details[
                         "standard_logging_object"
-                    ] = get_standard_logging_object_payload(
-                        kwargs=self.model_call_details,
-                        init_response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        logging_obj=self,
-                        status="success",
-                        standard_built_in_tools_params=self.standard_built_in_tools_params,
+                    ] = self._build_standard_logging_payload(
+                        result, start_time, end_time
                     )
-                    self.callback_duration_ms += (time.time() - _slp_start) * 1000
             elif standard_logging_object is not None:
                 self.model_call_details[
                     "standard_logging_object"
@@ -1920,19 +1920,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     "response_cost"
                 ] = self._response_cost_calculator(result=complete_streaming_response)
                 ## STANDARDIZED LOGGING PAYLOAD
-                _slp_start = time.time()
                 self.model_call_details[
                     "standard_logging_object"
-                ] = get_standard_logging_object_payload(
-                    kwargs=self.model_call_details,
-                    init_response_obj=complete_streaming_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                    logging_obj=self,
-                    status="success",
-                    standard_built_in_tools_params=self.standard_built_in_tools_params,
+                ] = self._build_standard_logging_payload(
+                    complete_streaming_response, start_time, end_time
                 )
-                self.callback_duration_ms += (time.time() - _slp_start) * 1000
                 if (
                     standard_logging_payload := self.model_call_details.get(
                         "standard_logging_object"
@@ -2446,19 +2438,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["response_cost"] = None
 
             ## STANDARDIZED LOGGING PAYLOAD
-            _slp_start = time.time()
             self.model_call_details[
                 "standard_logging_object"
-            ] = get_standard_logging_object_payload(
-                kwargs=self.model_call_details,
-                init_response_obj=complete_streaming_response,
-                start_time=start_time,
-                end_time=end_time,
-                logging_obj=self,
-                status="success",
-                standard_built_in_tools_params=self.standard_built_in_tools_params,
+            ] = self._build_standard_logging_payload(
+                complete_streaming_response, start_time, end_time
             )
-            self.callback_duration_ms += (time.time() - _slp_start) * 1000
 
             # print standard logging payload
             if (
@@ -2478,19 +2462,11 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = None
 
             ## STANDARDIZED LOGGING PAYLOAD
-            _slp_start = time.time()
             self.model_call_details[
                 "standard_logging_object"
-            ] = get_standard_logging_object_payload(
-                kwargs=self.model_call_details,
-                init_response_obj=result,
-                start_time=start_time,
-                end_time=end_time,
-                logging_obj=self,
-                status="success",
-                standard_built_in_tools_params=self.standard_built_in_tools_params,
+            ] = self._build_standard_logging_payload(
+                result, start_time, end_time
             )
-            self.callback_duration_ms += (time.time() - _slp_start) * 1000
 
             # print standard logging payload
             if (

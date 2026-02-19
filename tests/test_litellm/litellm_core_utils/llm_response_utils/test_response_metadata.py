@@ -8,10 +8,15 @@ through _hidden_params to the x-litellm-callback-duration-ms response header.
 import datetime
 from unittest.mock import MagicMock
 
+import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
+import litellm.proxy.common_request_processing as common_request_processing_mod
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
     update_response_metadata,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.utils import ModelResponse
 
 
@@ -91,11 +96,6 @@ class TestCallbackDurationInCustomHeaders:
     """Test that callback_duration_ms flows into get_custom_headers."""
 
     def test_header_present_when_callback_duration_in_hidden_params(self):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
-
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
             "_response_ms": 1000.0,
@@ -112,11 +112,6 @@ class TestCallbackDurationInCustomHeaders:
         assert headers["x-litellm-callback-duration-ms"] == "7.25"
 
     def test_header_absent_when_no_callback_duration(self):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
-
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
             "_response_ms": 1000.0,
@@ -153,9 +148,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_present_when_enabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is true, detailed timing keys appear in hidden_params."""
-        import litellm.litellm_core_utils.llm_response_utils.response_metadata as mod
-
-        monkeypatch.setattr(mod, "LITELLM_DETAILED_TIMING", True)
+        monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
 
         result = ModelResponse()
         start = datetime.datetime(2025, 1, 1, 0, 0, 0)
@@ -180,9 +173,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no detailed timing keys."""
-        import litellm.litellm_core_utils.llm_response_utils.response_metadata as mod
-
-        monkeypatch.setattr(mod, "LITELLM_DETAILED_TIMING", False)
+        monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", False)
 
         result = ModelResponse()
         start = datetime.datetime(2025, 1, 1, 0, 0, 0)
@@ -199,14 +190,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_in_custom_headers(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is true, headers flow to get_custom_headers."""
-        import litellm.proxy.common_request_processing as crp_mod
-
-        monkeypatch.setattr(crp_mod, "LITELLM_DETAILED_TIMING", True)
-
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -229,14 +213,7 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no timing headers emitted."""
-        import litellm.proxy.common_request_processing as crp_mod
-
-        monkeypatch.setattr(crp_mod, "LITELLM_DETAILED_TIMING", False)
-
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
+        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False)
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -257,8 +234,6 @@ class TestLoggingInitCallbackDuration:
     """Test that Logging.__init__ tracks deep copy time in callback_duration_ms."""
 
     def test_logging_init_sets_callback_duration_ms(self):
-        from litellm.litellm_core_utils.litellm_logging import Logging
-
         obj = Logging(
             model="gpt-4",
             messages=[{"role": "user", "content": "hello " * 100}],
@@ -274,8 +249,6 @@ class TestLoggingInitCallbackDuration:
         assert obj.callback_duration_ms >= 0
 
     def test_logging_init_callback_duration_zero_for_none_messages(self):
-        from litellm.litellm_core_utils.litellm_logging import Logging
-
         obj = Logging(
             model="gpt-4",
             messages=None,
