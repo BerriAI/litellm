@@ -167,7 +167,7 @@ def _expand_model_aliases(model_cost: dict) -> dict:
     keys_with_aliases: List[str] = []
 
     for model_name, model_info in model_cost.items():
-        aliases: list | None = model_info.get("aliases")
+        aliases: Optional[list] = model_info.get("aliases")
         if not aliases:
             continue
         keys_with_aliases.append(model_name)
