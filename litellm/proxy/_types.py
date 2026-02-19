@@ -4079,6 +4079,21 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
     agent_id: str
 
 
+class DailyGuardrailMetricsTransaction(TypedDict):
+    """Transaction for daily guardrail metrics aggregation."""
+    guardrail_name: str
+    guardrail_provider: str
+    guardrail_mode: str
+    date: str  # YYYY-MM-DD
+    api_key: str
+    total_requests: int
+    success_count: int
+    intervened_count: int
+    failed_count: int
+    not_run_count: int
+    total_latency_ms: float
+
+
 class DBSpendUpdateTransactions(TypedDict):
     """
     Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database

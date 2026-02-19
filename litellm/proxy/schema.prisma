@@ -747,11 +747,11 @@ model LiteLLM_DailyTeamSpend {
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
   request_id          String?
-  tag                 String?   
+  tag                 String?
   date                String
-  api_key             String   
+  api_key             String
   model               String?
-  model_group         String?  
+  model_group         String?
   custom_llm_provider String?
   mcp_namespaced_tool_name String?
   endpoint               String?
@@ -775,6 +775,35 @@ model LiteLLM_DailyTagSpend {
   @@index([endpoint])
 }
 
+// Track daily guardrail metrics per guardrail
+model LiteLLM_DailyGuardrailMetrics {
+  id                      String   @id @default(uuid())
+  guardrail_name          String
+  guardrail_provider      String?
+  guardrail_mode          String?  // pre_call, post_call, during_call
+  date                    String   // YYYY-MM-DD format
+  api_key                 String   // for per-key breakdowns
+
+  // Aggregated counts
+  total_requests          BigInt   @default(0)
+  success_count           BigInt   @default(0)  // guardrail_status = "success"
+  intervened_count        BigInt   @default(0)  // guardrail_status = "guardrail_intervened"
+  failed_count            BigInt   @default(0)  // guardrail_status = "guardrail_failed_to_respond"
+  not_run_count           BigInt   @default(0)  // guardrail_status = "not_run"
+
+  // Aggregated latency (guardrail execution overhead only)
+  total_latency_ms        Float    @default(0.0) // sum of guardrail durations in milliseconds
+
+  created_at              DateTime @default(now())
+  updated_at              DateTime @updatedAt
+
+  // Unique constraint: one row per guardrail per day per api_key
+  @@unique([guardrail_name, guardrail_provider, guardrail_mode, date, api_key], name: "guardrail_daily_unique")
+  @@index([date])
+  @@index([guardrail_name])
+  @@index([guardrail_provider])
+  @@index([api_key])
+}
 
 // Track the status of cron jobs running. Only allow one pod to run the job at a time
 model LiteLLM_CronJob {
