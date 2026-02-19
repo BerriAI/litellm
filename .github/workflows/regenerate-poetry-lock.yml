@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read  # GITHUB_TOKEN is not used for writes; GH_TOKEN (PAT) handles push + PR creation
+  contents: read  # GITHUB_TOKEN is not used for writes; PAT_TOKEN_2 handles push + PR creation
 
 jobs:
   regenerate-lock:
