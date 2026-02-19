@@ -859,14 +859,18 @@ def test_anthropic_structured_output_beta_header():
     [
         "claude-opus-4-6-20250918",
         "claude-opus-4.6-20250918",
+        "claude-opus_4.6-20250918",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4.6",
         "claude-opus-4-5-20251101",
         "claude-opus-4.5-20251101",
     ],
 )
 def test_opus_uses_native_structured_output(model_name):
     """
-    Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
-    (output_format) rather than the tool-based workaround.
+    Test that Claude 4.5/4.6 Opus and Sonnet models use native
+    Anthropic structured outputs (output_format) rather than the
+    tool-based workaround.
     """
     config = AnthropicConfig()
 
@@ -1644,16 +1648,49 @@ def test_effort_validation_with_opus_46():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    for effort in ["high", "medium", "low", "max"]:
-        optional_params = {"output_config": {"effort": effort}}
-        result = config.transform_request(
-            model="claude-opus-4-6-20260205",
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params={},
-            headers={}
-        )
-        assert result["output_config"]["effort"] == effort
+    for model_name in ["claude-opus-4-6-20260205", "claude-opus-4.6-20260205"]:
+        for effort in ["high", "medium", "low", "max"]:
+            optional_params = {"output_config": {"effort": effort}}
+            result = config.transform_request(
+                model=model_name,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={}
+            )
+            assert result["output_config"]["effort"] == effort
+
+
+def test_effort_validation_with_sonnet_46():
+    """Test effort levels for Claude Sonnet 4.6."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    for model_name in ["claude-sonnet-4-6", "claude-sonnet-4.6"]:
+        for effort in ["high", "medium", "low"]:
+            optional_params = {"output_config": {"effort": effort}}
+            result = config.transform_request(
+                model=model_name,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={}
+            )
+            assert result["output_config"]["effort"] == effort
+
+        with pytest.raises(
+            ValueError,
+            match="effort='max' is only supported by Claude Opus 4.6",
+        ):
+            optional_params = {"output_config": {"effort": "max"}}
+            config.transform_request(
+                model=model_name,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={}
+            )
 
 
 def test_max_effort_rejected_for_opus_45():
@@ -2031,6 +2068,29 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_opus_4_6():
         # Should not have budget_tokens for adaptive type
         assert "budget_tokens" not in result["thinking"]
         # reasoning_effort should not be in the result (it's transformed to thinking)
+        assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_maps_to_adaptive_thinking_for_sonnet_4_6():
+    """
+    Test that reasoning_effort maps to adaptive thinking type for Claude Sonnet 4.6.
+    """
+    config = AnthropicConfig()
+
+    for effort in ["low", "medium", "high", "minimal"]:
+        non_default_params = {"reasoning_effort": effort}
+        optional_params = {}
+
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="claude-sonnet-4-6",
+            drop_params=False
+        )
+
+        assert "thinking" in result
+        assert result["thinking"]["type"] == "adaptive"
+        assert "budget_tokens" not in result["thinking"]
         assert "reasoning_effort" not in result
 
 
