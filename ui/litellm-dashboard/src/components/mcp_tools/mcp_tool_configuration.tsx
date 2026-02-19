@@ -71,7 +71,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   };
 
   // Don't show anything if required fields aren't filled
-  if (!canFetchTools && !formValues.url) {
+  if (!canFetchTools && !formValues.url && !formValues.spec_path) {
     return null;
   }
 
@@ -130,7 +130,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
         )}
 
         {/* Incomplete form state */}
-        {!canFetchTools && formValues.url && (
+        {!canFetchTools && (formValues.url || formValues.spec_path) && (
           <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
             <ToolOutlined className="text-2xl mb-2" />
             <Text>Complete required fields to configure tools</Text>
