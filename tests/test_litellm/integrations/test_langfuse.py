@@ -478,6 +478,7 @@ def test_max_langfuse_clients_limit():
     mock_langfuse = MagicMock()
     mock_langfuse.version.__version__ = "3.0.0"
     # Set max clients to 2 for testing
+    original_initialized_langfuse_clients = litellm.initialized_langfuse_clients
     with patch.dict("sys.modules", {"langfuse": mock_langfuse}), patch.object(
         langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2
     ):
@@ -513,3 +514,5 @@ def test_max_langfuse_clients_limit():
 
         # Counter should still be 2 (third client failed to initialize)
         assert litellm.initialized_langfuse_clients == 2
+
+    litellm.initialized_langfuse_clients = original_initialized_langfuse_clients

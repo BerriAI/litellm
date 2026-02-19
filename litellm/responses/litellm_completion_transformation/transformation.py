@@ -1349,7 +1349,7 @@ class LiteLLMCompletionResponsesConfig:
                 result.append(tool)  # type: ignore
                 continue
             if tool.get("type") == "function":
-                fn = tool.get("function") or {}
+                fn: Dict[str, Any] = cast(Dict[str, Any], tool.get("function") or {})
                 parameters = dict(fn.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
