@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union, Final
 
 import httpx
 
@@ -16,10 +16,20 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+# Known internal parameters that should never be sent to provider APIs
+INTERNAL_PARAMS: Final = {
+    "skip_mcp_handler",
+    "mcp_handler_context",
+    "_skip_mcp_handler",
+}
 
-def safe_divide_seconds(
-    seconds: float, denominator: float, default: Optional[float] = None
-) -> Optional[float]:
+# Known internal parameters prefixes that should never be sent to provider APIs
+INTERNAL_PARAMS_PREFIXES: Final = {
+    "_websearch_interception",
+}
+
+
+def safe_divide_seconds(seconds: float, denominator: float, default: Optional[float] = None) -> Optional[float]:
     """
     Safely divide seconds by denominator, handling zero division.
 
@@ -71,9 +81,7 @@ def map_finish_reason(
         return "length"
     elif finish_reason == "ERROR_TOXIC":
         return "content_filter"
-    elif (
-        finish_reason == "ERROR"
-    ):  # openai currently doesn't support an 'error' finish reason
+    elif finish_reason == "ERROR":  # openai currently doesn't support an 'error' finish reason
         return "stop"
     # huggingface mapping https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/generate_stream
     elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
@@ -107,9 +115,7 @@ def remove_index_from_tool_calls(
             _tool_calls = message.get("tool_calls")
             if _tool_calls is not None and isinstance(_tool_calls, list):
                 for tool_call in _tool_calls:
-                    if (
-                        isinstance(tool_call, dict) and "index" in tool_call
-                    ):  # Type guard to ensure it's a dict
+                    if isinstance(tool_call, dict) and "index" in tool_call:  # Type guard to ensure it's a dict
                         tool_call.pop("index", None)
 
     return
@@ -124,9 +130,7 @@ def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) 
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(
-    litellm_metadata: dict, metadata: dict
-) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -168,9 +172,7 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
         metadata = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
         if litellm_metadata and metadata:
-            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(
-                litellm_metadata, metadata
-            )
+            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(litellm_metadata, metadata)
         if litellm_metadata:
             return litellm_metadata
         elif metadata:
@@ -219,9 +221,7 @@ def _get_parent_otel_span_from_kwargs(
             return kwargs["litellm_parent_otel_span"]
         return None
     except Exception as e:
-        verbose_logger.exception(
-            "Error in _get_parent_otel_span_from_kwargs: " + str(e)
-        )
+        verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
 
 
@@ -235,9 +235,7 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
             openai_headers[k] = v
-        if k.startswith(
-            "llm_provider-"
-        ):  # return raw provider headers (incl. openai-compatible ones)
+        if k.startswith("llm_provider-"):  # return raw provider headers (incl. openai-compatible ones)
             processed_headers[k] = v
         else:
             additional_headers["{}-{}".format("llm_provider", k)] = v
@@ -288,13 +286,8 @@ def safe_deep_copy(data):
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
             data["metadata"]["litellm_parent_otel_span"] = "placeholder"
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            litellm_parent_otel_span = data["litellm_metadata"].pop(
-                "litellm_parent_otel_span"
-            )
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            litellm_parent_otel_span = data["litellm_metadata"].pop("litellm_parent_otel_span")
             data["litellm_metadata"]["litellm_parent_otel_span"] = "placeholder"
 
     # Step 2: Per-key deepcopy with fallback
@@ -315,13 +308,8 @@ def safe_deep_copy(data):
     if isinstance(data, dict) and litellm_parent_otel_span is not None:
         if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
             data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            data["litellm_metadata"][
-                "litellm_parent_otel_span"
-            ] = litellm_parent_otel_span
+        if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
+            data["litellm_metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
 
 
@@ -374,9 +362,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         result_list: list[Any] = []
         for item in data:
             # Skip exception and callable items
-            if isinstance(item, Exception) or (
-                callable(item) and not isinstance(item, type)
-            ):
+            if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
             try:
                 filtered = filter_exceptions_from_params(item, max_depth - 1)
@@ -390,9 +376,28 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return data
 
 
-def filter_internal_params(
-    data: dict, additional_internal_params: Optional[set] = None
-) -> dict:
+def _is_param_internal(param: str, additional_internal_params: Optional[set]) -> bool:
+    """
+    Check if a parameter is internal and should not be sent to provider APIs.
+
+    Args:
+        param: Parameter name to check
+        additional_internal_params: Optional set of extra internal param names
+
+    Returns:
+        True if param matches INTERNAL_PARAMS, additional_internal_params,
+        or starts with any INTERNAL_PARAMS_PREFIXES
+    """
+    if param in INTERNAL_PARAMS:
+        return True
+    if additional_internal_params and param in additional_internal_params:
+        return True
+    if any(param.startswith(prefix) for prefix in INTERNAL_PARAMS_PREFIXES):
+        return True
+    return False
+
+
+def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
 
@@ -409,16 +414,4 @@ def filter_internal_params(
     if not isinstance(data, dict):
         return data
 
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
-
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
-    return {k: v for k, v in data.items() if k not in internal_params}
+    return {k: v for k, v in data.items() if not _is_param_internal(k, additional_internal_params)}

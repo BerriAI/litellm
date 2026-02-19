@@ -6352,6 +6352,11 @@ class Router:
             ):
                 raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
+            # Store custom_llm_provider in litellm_params so it's available to callbacks
+            # after alias resolution (e.g., websearch_interception pre-call hooks)
+            if custom_llm_provider:
+                deployment.litellm_params.custom_llm_provider = custom_llm_provider
+
         #### DEPLOYMENT NAMES INIT ########
         self.deployment_names.append(deployment.litellm_params.model)
         ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########

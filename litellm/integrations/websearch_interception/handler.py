@@ -14,6 +14,7 @@ from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import filter_internal_params
 from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool,
     is_web_search_tool,
@@ -59,16 +60,11 @@ class WebSearchInterceptionLogger(CustomLogger):
         if enabled_providers is None:
             self.enabled_providers = [LlmProviders.BEDROCK.value]
         else:
-            self.enabled_providers = [
-                p.value if isinstance(p, LlmProviders) else p
-                for p in enabled_providers
-            ]
+            self.enabled_providers = [p.value if isinstance(p, LlmProviders) else p for p in enabled_providers]
         self.search_tool_name = search_tool_name
         self._request_has_websearch = False  # Track if current request has web search
 
-    async def async_pre_call_deployment_hook(
-        self, kwargs: Dict[str, Any], call_type: Optional[Any]
-    ) -> Optional[dict]:
+    async def async_pre_call_deployment_hook(self, kwargs: Dict[str, Any], call_type: Optional[Any]) -> Optional[dict]:
         """
         Pre-call hook to convert native Anthropic web_search tools to regular tools.
 
@@ -76,8 +72,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         Instead, we convert it to a regular tool so the model returns tool_use blocks
         that we can intercept and execute ourselves.
         """
-        # Check if this is for an enabled provider
+        # Get provider from litellm_params (set by router in _add_deployment)
         custom_llm_provider = kwargs.get("litellm_params", {}).get("custom_llm_provider", "")
+
         if custom_llm_provider not in self.enabled_providers:
             return None
 
@@ -92,9 +89,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         if not has_websearch:
             return None
 
-        verbose_logger.debug(
-            "WebSearchInterception: Converting native web_search tools to LiteLLM standard"
-        )
+        verbose_logger.debug("WebSearchInterception: Converting native web_search tools to LiteLLM standard")
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools = []
@@ -111,13 +106,12 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # Keep other tools as-is
                 converted_tools.append(tool)
 
-        # Return modified kwargs with converted tools
-        return {"tools": converted_tools}
+        # Return full kwargs with modified tools - spread preserves all other
+        # parameters (model, messages, etc.) for the pre_api_call hook contract
+        return {**kwargs, "tools": converted_tools}
 
     @classmethod
-    def from_config_yaml(
-        cls, config: WebSearchInterceptionConfig
-    ) -> "WebSearchInterceptionLogger":
+    def from_config_yaml(cls, config: WebSearchInterceptionConfig) -> "WebSearchInterceptionLogger":
         """
         Initialize WebSearchInterceptionLogger from proxy config.yaml parameters.
 
@@ -160,9 +154,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_tool_name=search_tool_name,
         )
 
-    async def async_pre_request_hook(
-        self, model: str, messages: List[Dict], kwargs: Dict
-    ) -> Optional[Dict]:
+    async def async_pre_request_hook(self, model: str, messages: List[Dict], kwargs: Dict) -> Optional[Dict]:
         """
         Pre-request hook to convert native web search tools to LiteLLM standard.
 
@@ -178,9 +170,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             Modified kwargs dict with converted tools, or None if no modifications needed
         """
         # Check if this request is for an enabled provider
-        custom_llm_provider = kwargs.get("litellm_params", {}).get(
-            "custom_llm_provider", ""
-        )
+        custom_llm_provider = kwargs.get("litellm_params", {}).get("custom_llm_provider", "")
 
         verbose_logger.debug(
             f"WebSearchInterception: Pre-request hook called"
@@ -204,9 +194,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         if not has_websearch:
             return None
 
-        verbose_logger.debug(
-            f"WebSearchInterception: Pre-request hook triggered for provider={custom_llm_provider}"
-        )
+        verbose_logger.debug(f"WebSearchInterception: Pre-request hook triggered for provider={custom_llm_provider}")
 
         # Convert native web search tools to LiteLLM standard
         converted_tools = []
@@ -229,9 +217,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         # Convert stream=True to stream=False for WebSearch interception
         if kwargs.get("stream"):
-            verbose_logger.debug(
-                "WebSearchInterception: Converting stream=True to stream=False"
-            )
+            verbose_logger.debug("WebSearchInterception: Converting stream=True to stream=False")
             kwargs["stream"] = False
             kwargs["_websearch_interception_converted_stream"] = True
 
@@ -249,7 +235,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Tuple[bool, Dict]:
         """
         Check if WebSearch tool interception is needed for Anthropic Messages API.
-        
+
         This is the legacy method for Anthropic-style responses.
         For chat completions, use async_should_run_chat_completion_agentic_loop instead.
         """
@@ -269,35 +255,34 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Check if tools include any web search tool (LiteLLM standard or native)
         has_websearch_tool = any(is_web_search_tool(t) for t in (tools or []))
         if not has_websearch_tool:
-            verbose_logger.debug(
-                "WebSearchInterception: No web search tool in request"
-            )
+            verbose_logger.debug("WebSearchInterception: No web search tool in request")
             return False, {}
 
         # Detect WebSearch tool_use in response (Anthropic format)
-        should_intercept, tool_calls = WebSearchTransformation.transform_request(
+        transformed = WebSearchTransformation.transform_request(
             response=response,
             stream=stream,
             response_format="anthropic",
         )
 
-        if not should_intercept:
-            verbose_logger.debug(
-                "WebSearchInterception: No WebSearch tool_use detected in response"
-            )
+        if not transformed.has_websearch:
+            verbose_logger.debug("WebSearchInterception: No WebSearch tool_use detected in response")
             return False, {}
 
         verbose_logger.debug(
-            f"WebSearchInterception: Detected {len(tool_calls)} WebSearch tool call(s), executing agentic loop"
+            f"WebSearchInterception: Detected {len(transformed.tool_calls)} WebSearch tool call(s), "
+            f"{len(transformed.thinking_blocks)} thinking block(s), executing agentic loop"
         )
 
-        # Return tools dict with tool calls
+        # Return tools dict with tool calls and thinking blocks (if any)
         tools_dict = {
-            "tool_calls": tool_calls,
+            "tool_calls": transformed.tool_calls,
             "tool_type": "websearch",
             "provider": custom_llm_provider,
             "response_format": "anthropic",
         }
+        if transformed.thinking_blocks:
+            tools_dict["thinking_blocks"] = transformed.thinking_blocks
         return True, tools_dict
 
     async def async_should_run_chat_completion_agentic_loop(
@@ -312,11 +297,13 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Tuple[bool, Dict]:
         """
         Check if WebSearch tool interception is needed for Chat Completions API.
-        
+
         Similar to async_should_run_agentic_loop but for OpenAI-style chat completions.
         """
 
-        verbose_logger.debug(f"WebSearchInterception: Chat completion hook called! provider={custom_llm_provider}, stream={stream}")
+        verbose_logger.debug(
+            f"WebSearchInterception: Chat completion hook called! provider={custom_llm_provider}, stream={stream}"
+        )
         verbose_logger.debug(f"WebSearchInterception: Response type: {type(response)}")
 
         # Check if provider should be intercepted
@@ -329,35 +316,33 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Check if tools include any web search tool (strict check for chat completions)
         has_websearch_tool = any(is_web_search_tool_chat_completion(t) for t in (tools or []))
         if not has_websearch_tool:
-            verbose_logger.debug(
-                "WebSearchInterception: No litellm_web_search tool in request"
-            )
+            verbose_logger.debug("WebSearchInterception: No litellm_web_search tool in request")
             return False, {}
 
         # Detect WebSearch tool_calls in response (OpenAI format)
-        should_intercept, tool_calls = WebSearchTransformation.transform_request(
+        transformed = WebSearchTransformation.transform_request(
             response=response,
             stream=stream,
             response_format="openai",
         )
 
-        if not should_intercept:
-            verbose_logger.debug(
-                "WebSearchInterception: No WebSearch tool_calls detected in response"
-            )
+        if not transformed.has_websearch:
+            verbose_logger.debug("WebSearchInterception: No WebSearch tool_calls detected in response")
             return False, {}
 
         verbose_logger.debug(
-            f"WebSearchInterception: Detected {len(tool_calls)} WebSearch tool call(s), executing agentic loop"
+            f"WebSearchInterception: Detected {len(transformed.tool_calls)} WebSearch tool call(s), executing agentic loop"
         )
 
         # Return tools dict with tool calls
         tools_dict = {
-            "tool_calls": tool_calls,
+            "tool_calls": transformed.tool_calls,
             "tool_type": "websearch",
             "provider": custom_llm_provider,
             "response_format": "openai",
         }
+        if transformed.thinking_blocks:
+            tools_dict["thinking_blocks"] = transformed.thinking_blocks
         return True, tools_dict
 
     async def async_run_agentic_loop(
@@ -374,20 +359,20 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Any:
         """
         Execute agentic loop with WebSearch execution for Anthropic Messages API.
-        
+
         This is the legacy method for Anthropic-style responses.
         """
 
         tool_calls = tools["tool_calls"]
+        thinking_blocks = tools.get("thinking_blocks", [])
 
-        verbose_logger.debug(
-            f"WebSearchInterception: Executing agentic loop for {len(tool_calls)} search(es)"
-        )
+        verbose_logger.debug(f"WebSearchInterception: Executing agentic loop for {len(tool_calls)} search(es)")
 
         return await self._execute_agentic_loop(
             model=model,
             messages=messages,
             tool_calls=tool_calls,
+            thinking_blocks=thinking_blocks,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             logging_obj=logging_obj,
             stream=stream,
@@ -407,7 +392,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Any:
         """
         Execute agentic loop with WebSearch execution for Chat Completions API.
-        
+
         Similar to async_run_agentic_loop but for OpenAI-style chat completions.
         """
 
@@ -434,6 +419,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         model: str,
         messages: List[Dict],
         tool_calls: List[Dict],
+        thinking_blocks: List[Dict],
         anthropic_messages_optional_request_params: Dict,
         logging_obj: Any,
         stream: bool,
@@ -446,62 +432,46 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool_call in tool_calls:
             query = tool_call["input"].get("query")
             if query:
-                verbose_logger.debug(
-                    f"WebSearchInterception: Queuing search for query='{query}'"
-                )
+                verbose_logger.debug(f"WebSearchInterception: Queuing search for query='{query}'")
                 search_tasks.append(self._execute_search(query))
             else:
-                verbose_logger.warning(
-                    f"WebSearchInterception: Tool call {tool_call['id']} has no query"
-                )
+                verbose_logger.warning(f"WebSearchInterception: Tool call {tool_call['id']} has no query")
                 # Add empty result for tools without query
                 search_tasks.append(self._create_empty_search_result())
 
         # Execute searches in parallel
-        verbose_logger.debug(
-            f"WebSearchInterception: Executing {len(search_tasks)} search(es) in parallel"
-        )
+        verbose_logger.debug(f"WebSearchInterception: Executing {len(search_tasks)} search(es) in parallel")
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
         # Handle any exceptions in search results
         final_search_results: List[str] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
-                verbose_logger.error(
-                    f"WebSearchInterception: Search {i} failed with error: {str(result)}"
-                )
-                final_search_results.append(
-                    f"Search failed: {str(result)}"
-                )
+                verbose_logger.error(f"WebSearchInterception: Search {i} failed with error: {str(result)}")
+                final_search_results.append(f"Search failed: {str(result)}")
             elif isinstance(result, str):
                 # Explicitly cast to str for type checker
                 final_search_results.append(cast(str, result))
             else:
                 # Should never happen, but handle for type safety
-                verbose_logger.warning(
-                    f"WebSearchInterception: Unexpected result type {type(result)} at index {i}"
-                )
+                verbose_logger.warning(f"WebSearchInterception: Unexpected result type {type(result)} at index {i}")
                 final_search_results.append(str(result))
 
         # Build assistant and user messages using transformation
+        # Include thinking_blocks to satisfy Anthropic's thinking mode requirements
         assistant_message, user_message = WebSearchTransformation.transform_response(
             tool_calls=tool_calls,
             search_results=final_search_results,
+            thinking_blocks=thinking_blocks,
         )
 
         # Make follow-up request with search results
         # Type cast: user_message is a Dict for Anthropic format (default response_format)
         follow_up_messages = messages + [assistant_message, cast(Dict, user_message)]
 
-        verbose_logger.debug(
-            "WebSearchInterception: Making follow-up request with search results"
-        )
-        verbose_logger.debug(
-            f"WebSearchInterception: Follow-up messages count: {len(follow_up_messages)}"
-        )
-        verbose_logger.debug(
-            f"WebSearchInterception: Last message (tool_result): {user_message}"
-        )
+        verbose_logger.debug("WebSearchInterception: Making follow-up request with search results")
+        verbose_logger.debug(f"WebSearchInterception: Follow-up messages count: {len(follow_up_messages)}")
+        verbose_logger.debug(f"WebSearchInterception: Last message (tool_result): {user_message}")
 
         # Use anthropic_messages.acreate for follow-up request
         try:
@@ -509,25 +479,19 @@ class WebSearchInterceptionLogger(CustomLogger):
             # max_tokens is a required parameter for anthropic_messages.acreate()
             max_tokens = anthropic_messages_optional_request_params.get(
                 "max_tokens",
-                kwargs.get("max_tokens", 1024)  # Default to 1024 if not found
+                kwargs.get("max_tokens", 1024),  # Default to 1024 if not found
             )
 
-            verbose_logger.debug(
-                f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request"
-            )
+            verbose_logger.debug(f"WebSearchInterception: Using max_tokens={max_tokens} for follow-up request")
 
             # Create a copy of optional params without max_tokens (since we pass it explicitly)
             optional_params_without_max_tokens = {
-                k: v for k, v in anthropic_messages_optional_request_params.items()
-                if k != 'max_tokens'
+                k: v for k, v in anthropic_messages_optional_request_params.items() if k != "max_tokens"
             }
 
             # Remove internal websearch interception flags from kwargs before follow-up request
             # These flags are used internally and should not be passed to the LLM provider
-            kwargs_for_followup = {
-                k: v for k, v in kwargs.items()
-                if not k.startswith('_websearch_interception')
-            }
+            kwargs_for_followup = filter_internal_params(kwargs)
 
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
@@ -535,10 +499,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             if logging_obj is not None:
                 agentic_params = logging_obj.model_call_details.get("agentic_loop_params", {})
                 full_model_name = agentic_params.get("model", model)
-            verbose_logger.debug(
-                f"WebSearchInterception: Using model name: {full_model_name}"
-            )
-            
+            verbose_logger.debug(f"WebSearchInterception: Using model name: {full_model_name}")
+
             final_response = await anthropic_messages.acreate(
                 max_tokens=max_tokens,
                 messages=follow_up_messages,
@@ -549,14 +511,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Follow-up request completed, response type: {type(final_response)}"
             )
-            verbose_logger.debug(
-                f"WebSearchInterception: Final response: {final_response}"
-            )
+            verbose_logger.debug(f"WebSearchInterception: Final response: {final_response}")
             return final_response
         except Exception as e:
-            verbose_logger.exception(
-                f"WebSearchInterception: Follow-up request failed: {str(e)}"
-            )
+            verbose_logger.exception(f"WebSearchInterception: Follow-up request failed: {str(e)}")
             raise
 
     async def _execute_search(self, query: str) -> str:
@@ -578,7 +536,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if self.search_tool_name:
                     # Find specific search tool by name
                     matching_tools = [
-                        tool for tool in llm_router.search_tools
+                        tool
+                        for tool in llm_router.search_tools
                         if tool.get("search_tool_name") == self.search_tool_name
                     ]
                     if matching_tools:
@@ -613,9 +572,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(
-                query=query, search_provider=search_provider
-            )
+            result = await litellm.asearch(query=query, search_provider=search_provider)
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
@@ -625,12 +582,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             return search_result_text
         except Exception as e:
-            verbose_logger.error(
-                f"WebSearchInterception: Search failed for '{query}': {str(e)}"
-            )
+            verbose_logger.error(f"WebSearchInterception: Search failed for '{query}': {str(e)}")
             raise
 
-    async def _execute_chat_completion_agentic_loop( # noqa: PLR0915
+    async def _execute_chat_completion_agentic_loop(  # noqa: PLR0915
         self,
         model: str,
         messages: List[Dict],
@@ -656,41 +611,29 @@ class WebSearchInterceptionLogger(CustomLogger):
                     args = func.get("arguments", {})
                     if isinstance(args, dict):
                         query = args.get("query")
-                    
+
             if query:
-                verbose_logger.debug(
-                    f"WebSearchInterception: Queuing search for query='{query}'"
-                )
+                verbose_logger.debug(f"WebSearchInterception: Queuing search for query='{query}'")
                 search_tasks.append(self._execute_search(query))
             else:
-                verbose_logger.warning(
-                    f"WebSearchInterception: Tool call {tool_call.get('id')} has no query"
-                )
+                verbose_logger.warning(f"WebSearchInterception: Tool call {tool_call.get('id')} has no query")
                 # Add empty result for tools without query
                 search_tasks.append(self._create_empty_search_result())
 
         # Execute searches in parallel
-        verbose_logger.debug(
-            f"WebSearchInterception: Executing {len(search_tasks)} search(es) in parallel"
-        )
+        verbose_logger.debug(f"WebSearchInterception: Executing {len(search_tasks)} search(es) in parallel")
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
         # Handle any exceptions in search results
         final_search_results: List[str] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
-                verbose_logger.error(
-                    f"WebSearchInterception: Search {i} failed with error: {str(result)}"
-                )
-                final_search_results.append(
-                    f"Search failed: {str(result)}"
-                )
+                verbose_logger.error(f"WebSearchInterception: Search {i} failed with error: {str(result)}")
+                final_search_results.append(f"Search failed: {str(result)}")
             elif isinstance(result, str):
                 final_search_results.append(cast(str, result))
             else:
-                verbose_logger.warning(
-                    f"WebSearchInterception: Unexpected result type {type(result)} at index {i}"
-                )
+                verbose_logger.warning(f"WebSearchInterception: Unexpected result type {type(result)} at index {i}")
                 final_search_results.append(str(result))
 
         # Build assistant and tool messages using transformation
@@ -708,28 +651,25 @@ class WebSearchInterceptionLogger(CustomLogger):
             # For Anthropic format (shouldn't happen in this method, but handle it)
             follow_up_messages = messages + [assistant_message, cast(Dict, tool_messages_or_user)]
 
-        verbose_logger.debug(
-            "WebSearchInterception: Making follow-up chat completion request with search results"
-        )
-        verbose_logger.debug(
-            f"WebSearchInterception: Follow-up messages count: {len(follow_up_messages)}"
-        )
+        verbose_logger.debug("WebSearchInterception: Making follow-up chat completion request with search results")
+        verbose_logger.debug(f"WebSearchInterception: Follow-up messages count: {len(follow_up_messages)}")
 
         # Use litellm.acompletion for follow-up request
         try:
             # Remove internal parameters that shouldn't be passed to follow-up request
             internal_params = {
-                '_websearch_interception',
-                'acompletion',
-                'litellm_logging_obj',
-                'custom_llm_provider',
-                'model_alias_map',
-                'stream_response',
-                'custom_prompt_dict',
+                "_websearch_interception",
+                "acompletion",
+                "litellm_logging_obj",
+                "custom_llm_provider",
+                "model_alias_map",
+                "stream_response",
+                "custom_prompt_dict",
             }
             kwargs_for_followup = {
-                k: v for k, v in kwargs.items()
-                if not k.startswith('_websearch_interception') and k not in internal_params
+                k: v
+                for k, v in kwargs.items()
+                if not k.startswith("_websearch_interception") and k not in internal_params
             }
 
             # Get full model name from kwargs
@@ -741,21 +681,20 @@ class WebSearchInterceptionLogger(CustomLogger):
                     # Check if model already has a provider prefix
                     if "/" not in model:
                         full_model_name = f"{custom_llm_provider}/{model}"
-            
-            verbose_logger.debug(
-                f"WebSearchInterception: Using model name: {full_model_name}"
-            )
+
+            verbose_logger.debug(f"WebSearchInterception: Using model name: {full_model_name}")
 
             # Prepare tools for follow-up request (same as original)
             tools_param = optional_params.get("tools")
-            
+
             # Remove tools and extra_body from optional_params to avoid issues
             # extra_body often contains internal LiteLLM params that shouldn't be forwarded
             optional_params_clean = {
-                k: v for k, v in optional_params.items() 
-                if k not in {"tools", "extra_body", "model_alias_map","stream_response",  "custom_prompt_dict"   }
+                k: v
+                for k, v in optional_params.items()
+                if k not in {"tools", "extra_body", "model_alias_map", "stream_response", "custom_prompt_dict"}
             }
-            
+
             final_response = await litellm.acompletion(
                 model=full_model_name,
                 messages=follow_up_messages,
@@ -763,15 +702,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                 **optional_params_clean,
                 **kwargs_for_followup,
             )
-            
+
             verbose_logger.debug(
                 f"WebSearchInterception: Follow-up request completed, response type: {type(final_response)}"
             )
             return final_response
         except Exception as e:
-            verbose_logger.exception(
-                f"WebSearchInterception: Follow-up request failed: {str(e)}"
-            )
+            verbose_logger.exception(f"WebSearchInterception: Follow-up request failed: {str(e)}")
             raise
 
     async def _create_empty_search_result(self) -> str:
