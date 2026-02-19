@@ -181,6 +181,16 @@ def test_route_checks_is_llm_api_route():
     for route in mcp_routes:
         assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
 
+    # Test LiteLLM native RAG routes
+    rag_routes = [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
+    ]
+    for route in rag_routes:
+        assert RouteChecks.is_llm_api_route(route=route), f"Route {route} should be identified as LLM API route"
+
     # Test routes with placeholders
     placeholder_routes = [
         "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ",
