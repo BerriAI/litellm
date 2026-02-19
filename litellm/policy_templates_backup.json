@@ -1581,7 +1581,13 @@
     "guardrails": [
       "aviation-ops-data-protection",
       "aviation-safety-topic-filter",
-      "airline-brand-protection-filter"
+      "airline-brand-protection-filter",
+      "competitor-name-input-blocker",
+      "competitor-name-output-blocker",
+      "competitor-recommendation-input-filter",
+      "competitor-recommendation-output-filter",
+      "competitor-comparison-input-filter",
+      "competitor-comparison-output-filter"
     ],
     "complexity": "High",
     "parameters": [
@@ -1590,9 +1596,14 @@
         "label": "Your Airline / Brand Name",
         "type": "text",
         "required": true,
-        "placeholder": "e.g. Emirates"
+        "placeholder": "e.g. Acme Airlines"
       }
     ],
+    "llm_enrichment": {
+      "parameter": "brand_name",
+      "prompt": "List the top 30 direct competitors of {{brand_name}} in the airline industry. Include major international carriers, regional competitors, and low-cost carriers that operate on overlapping routes. Return ONLY airline/brand names, one per line, no numbering, no explanations.",
+      "result_key": "competitors"
+    },
     "guardrailDefinitions": [
       {
         "guardrail_name": "aviation-ops-data-protection",
@@ -1734,6 +1745,72 @@
         "guardrail_info": {
           "description": "Blocks AI-generated fake incident reports, unauthorized statements, and reputation-damaging content about your brand (runs on output)"
         }
+      },
+      {
+        "guardrail_name": "competitor-name-input-blocker",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitors_blocked_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs that mention competitor names (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-name-output-blocker",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitors_blocked_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI outputs that mention competitor names (post_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-recommendation-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_recommendation_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user requests asking to recommend competitors (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-recommendation-output-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitor_recommendation_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI from recommending or suggesting competitor services (post_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-comparison-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_comparison_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs requesting unfavorable brand comparisons (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-comparison-output-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitor_comparison_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI outputs with unfavorable brand comparisons (post_call)"
+        }
       }
     ],
     "templateData": {
@@ -1742,7 +1819,13 @@
       "guardrails_add": [
         "aviation-ops-data-protection",
         "aviation-safety-topic-filter",
-        "airline-brand-protection-filter"
+        "airline-brand-protection-filter",
+        "competitor-name-input-blocker",
+        "competitor-name-output-blocker",
+        "competitor-recommendation-input-filter",
+        "competitor-recommendation-output-filter",
+        "competitor-comparison-input-filter",
+        "competitor-comparison-output-filter"
       ],
       "guardrails_remove": []
     },
@@ -1883,9 +1966,12 @@
     "iconColor": "text-orange-500",
     "iconBg": "bg-orange-50",
     "guardrails": [
+      "competitor-input-blocker",
       "competitor-output-blocker",
-      "competitor-recommendation-filter",
-      "competitor-comparison-filter"
+      "competitor-recommendation-input-filter",
+      "competitor-recommendation-output-filter",
+      "competitor-comparison-input-filter",
+      "competitor-comparison-output-filter"
     ],
     "complexity": "Medium",
     "parameters": [
@@ -1894,15 +1980,26 @@
         "label": "Your Brand Name",
         "type": "text",
         "required": true,
-        "placeholder": "e.g. Emirates"
+        "placeholder": "e.g. Acme Airlines"
       }
     ],
     "llm_enrichment": {
       "parameter": "brand_name",
-      "prompt": "List the top 10 direct competitors of {{brand_name}} in the same industry. Return ONLY company/brand names, one per line, no numbering, no explanations.",
+      "prompt": "List the top 30 direct competitors of {{brand_name}} in the same industry. Return ONLY company/brand names, one per line, no numbering, no explanations.",
       "result_key": "competitors"
     },
     "guardrailDefinitions": [
+      {
+        "guardrail_name": "competitor-input-blocker",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitors_blocked_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs that mention competitor brands (pre_call)"
+        }
+      },
       {
         "guardrail_name": "competitor-output-blocker",
         "litellm_params": {
@@ -1911,39 +2008,64 @@
           "blocked_words": "{{competitors_blocked_words}}"
         },
         "guardrail_info": {
-          "description": "Blocks AI outputs that mention or promote competitor brands (auto-discovered via LLM)"
+          "description": "Blocks AI outputs that mention competitor brands (post_call)"
         }
       },
       {
-        "guardrail_name": "competitor-recommendation-filter",
+        "guardrail_name": "competitor-recommendation-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_recommendation_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user requests asking to recommend competitors (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-recommendation-output-filter",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "post_call",
           "blocked_words": "{{competitor_recommendation_words}}"
         },
         "guardrail_info": {
-          "description": "Blocks AI from recommending, suggesting, or directing users to competitor services"
+          "description": "Blocks AI from recommending or suggesting competitor services (post_call)"
         }
       },
       {
-        "guardrail_name": "competitor-comparison-filter",
+        "guardrail_name": "competitor-comparison-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_comparison_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs requesting unfavorable brand comparisons (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-comparison-output-filter",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "post_call",
           "blocked_words": "{{competitor_comparison_words}}"
         },
         "guardrail_info": {
-          "description": "Blocks unfavorable comparisons between your brand and competitors in AI outputs"
+          "description": "Blocks AI outputs with unfavorable brand comparisons (post_call)"
         }
       }
     ],
     "templateData": {
       "policy_name": "competitor-mention-detection",
-      "description": "Detects and blocks competitor mentions in AI outputs. Uses LLM-powered competitor discovery based on your brand name.",
+      "description": "Detects and blocks competitor mentions in both inputs and outputs. Uses LLM-powered competitor discovery based on your brand name.",
       "guardrails_add": [
+        "competitor-input-blocker",
         "competitor-output-blocker",
-        "competitor-recommendation-filter",
-        "competitor-comparison-filter"
+        "competitor-recommendation-input-filter",
+        "competitor-recommendation-output-filter",
+        "competitor-comparison-input-filter",
+        "competitor-comparison-output-filter"
       ],
       "guardrails_remove": []
     },

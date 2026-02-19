@@ -9,14 +9,29 @@ All /policy management endpoints
 /policy/templates - Get policy templates (GitHub with local fallback)
 """
 
+import copy
 import json
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, TypedDict, cast
+from typing import (
+    TYPE_CHECKING,
+    AsyncIterator,
+    List,
+    Literal,
+    Optional,
+    TypedDict,
+    cast,
+)
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    COMPETITOR_LLM_TEMPERATURE,
+    DEFAULT_COMPETITOR_DISCOVERY_MODEL,
+    MAX_COMPETITOR_NAMES,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -512,6 +527,48 @@ async def get_policy_templates(
 class EnrichTemplateRequest(BaseModel):
     template_id: str
     parameters: dict
+    model: Optional[str] = None
+    competitors: Optional[List[str]] = Field(
+        default=None,
+        max_length=MAX_COMPETITOR_NAMES,
+        description="Optional list of competitor names",
+    )
+    instruction: Optional[str] = Field(
+        default=None,
+        description="Refinement instruction for modifying the competitor list (e.g. 'add 10 more from Asia')",
+    )
+
+
+def _validate_enrichment_request(data: EnrichTemplateRequest) -> tuple[dict, dict, str]:
+    """
+    Validate enrichment request and return (template, llm_enrichment, brand_name).
+
+    Raises HTTPException on validation failure.
+    """
+    templates = _load_policy_templates_from_local_backup()
+    template = next((t for t in templates if t.get("id") == data.template_id), None)
+    if template is None:
+        raise HTTPException(status_code=404, detail=f"Template '{data.template_id}' not found")
+
+    llm_enrichment = template.get("llm_enrichment")
+    if llm_enrichment is None:
+        raise HTTPException(status_code=400, detail="Template does not support LLM enrichment")
+
+    # Validate competitors list size if provided
+    if data.competitors and len(data.competitors) > MAX_COMPETITOR_NAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"competitors list exceeds maximum of {MAX_COMPETITOR_NAMES}",
+        )
+
+    brand_name = data.parameters.get(llm_enrichment["parameter"], "")
+    if not brand_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Parameter '{llm_enrichment['parameter']}' is required",
+        )
+
+    return template, llm_enrichment, brand_name
 
 
 @router.post(
@@ -531,108 +588,311 @@ async def enrich_policy_template(
     Calls an onboarded LLM to discover competitors for the given brand name,
     then returns enriched guardrailDefinitions with the discovered data populated.
     """
-    templates = _load_policy_templates_from_local_backup()
-    template = next((t for t in templates if t.get("id") == data.template_id), None)
-    if template is None:
-        raise HTTPException(status_code=404, detail=f"Template '{data.template_id}' not found")
+    template, llm_enrichment, brand_name = _validate_enrichment_request(data)
+    model = data.model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
-    llm_enrichment = template.get("llm_enrichment")
-    if llm_enrichment is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Template does not support LLM enrichment",
+    if data.competitors:
+        competitors = data.competitors
+    else:
+        prompt = llm_enrichment["prompt"].replace(
+            "{{" + llm_enrichment["parameter"] + "}}", brand_name
         )
+        competitors = await _discover_competitors_via_llm(prompt, model=model)
 
-    brand_name = data.parameters.get(llm_enrichment["parameter"], "")
-    if not brand_name:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Parameter '{llm_enrichment['parameter']}' is required",
-        )
-
-    prompt = llm_enrichment["prompt"].replace(
-        "{{" + llm_enrichment["parameter"] + "}}", brand_name
-    )
-
-    competitors = await _discover_competitors_via_llm(prompt)
+    variations_map = await _generate_competitor_variations(competitors, model=model)
 
     enriched_definitions = _build_competitor_guardrail_definitions(
         template.get("guardrailDefinitions", []),
         competitors,
         brand_name,
+        variations_map,
     )
 
-    return {"guardrailDefinitions": enriched_definitions, "competitors": competitors}
+    return {
+        "guardrailDefinitions": enriched_definitions,
+        "competitors": competitors,
+        "competitor_variations": variations_map,
+    }
 
 
-async def _discover_competitors_via_llm(prompt: str) -> list:
-    """Call an onboarded LLM to discover competitor names."""
-    import litellm
+def _build_refinement_prompt(
+    instruction: str,
+    existing_competitors: list[str],
+    brand_name: str,
+) -> str:
+    """Build a prompt for refining the competitor list based on user instruction."""
+    existing_list = ", ".join(existing_competitors)
+    return (
+        f"I have a brand called '{brand_name}' and the following competitor list:\n"
+        f"{existing_list}\n\n"
+        f"User instruction: {instruction}\n\n"
+        "Return ONLY the NEW names to add (not the existing ones), one per line, "
+        "no numbering, no explanations. If the instruction asks to remove names, "
+        "return nothing."
+    )
+
+
+async def _stream_llm_competitor_names(
+    prompt: str,
+    model: str,
+    existing: list[str],
+) -> AsyncIterator[tuple[Optional[str], bool]]:
+    """
+    Stream competitor names from LLM. Yields (name, is_error) tuples.
+
+    Deduplicates against existing names (case-insensitive).
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        raise ValueError("LLM router not initialized")
+
+    existing_lower = {n.lower() for n in existing}
+    response = await llm_router.acompletion(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=COMPETITOR_LLM_TEMPERATURE,
+        stream=True,
+    )
+    buffer = ""
+    count = len(existing)
+    async for chunk in response:  # type: ignore[union-attr]
+        delta = chunk.choices[0].delta.content or ""
+        buffer += delta
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            name = _clean_competitor_line(line)
+            if name and name.lower() not in existing_lower and count < MAX_COMPETITOR_NAMES:
+                existing_lower.add(name.lower())
+                count += 1
+                yield name, False
+    # Handle remaining buffer
+    name = _clean_competitor_line(buffer)
+    if name and name.lower() not in existing_lower and count < MAX_COMPETITOR_NAMES:
+        yield name, False
+
+
+async def _stream_competitor_events(
+    data: EnrichTemplateRequest,
+    template: dict,
+    llm_enrichment: dict,
+    brand_name: str,
+    model: str,
+) -> AsyncIterator[str]:
+    """Stream competitor names as SSE events, then emit a final 'done' event."""
+    competitors: list[str] = list(data.competitors or [])
+
+    if data.instruction and competitors:
+        # Refinement mode: keep existing, stream only new names
+        for comp in competitors:
+            yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
+
+        refinement_prompt = _build_refinement_prompt(
+            data.instruction, competitors, brand_name
+        )
+        try:
+            async for name, _ in _stream_llm_competitor_names(
+                refinement_prompt, model, competitors
+            ):
+                if name:
+                    competitors.append(name)
+                    yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
+        except Exception as e:
+            verbose_proxy_logger.error("LLM competitor refinement failed: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            return
+    elif data.competitors and not data.instruction:
+        # Free-form mode (no instruction): just emit existing
+        for comp in competitors:
+            yield f"data: {json.dumps({'type': 'competitor', 'name': comp})}\n\n"
+    else:
+        # Initial discovery mode
+        prompt = llm_enrichment["prompt"].replace(
+            "{{" + llm_enrichment["parameter"] + "}}", brand_name
+        )
+        try:
+            async for name, _ in _stream_llm_competitor_names(
+                prompt, model, []
+            ):
+                if name:
+                    competitors.append(name)
+                    yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
+        except Exception as e:
+            verbose_proxy_logger.error("LLM competitor streaming failed: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            return
+
+    yield f"data: {json.dumps({'type': 'status', 'message': f'Generating alternate spellings for {len(competitors)} competitors...'})}\n\n"
+    variations_map = await _generate_competitor_variations(competitors, model=model)
+
+    total_variations = sum(len(v) for v in variations_map.values())
+    yield f"data: {json.dumps({'type': 'status', 'message': f'Building guardrail definitions with {total_variations} variations...'})}\n\n"
+    enriched_definitions = _build_competitor_guardrail_definitions(
+        template.get("guardrailDefinitions", []),
+        competitors,
+        brand_name,
+        variations_map,
+    )
+
+    yield f"data: {json.dumps({'type': 'done', 'competitors': competitors, 'competitor_variations': variations_map, 'guardrailDefinitions': enriched_definitions})}\n\n"
+
+
+@router.post(
+    "/policy/templates/enrich/stream",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def enrich_policy_template_stream(
+    data: EnrichTemplateRequest,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Stream competitor names as SSE events as the LLM generates them.
+
+    Events:
+    - data: {"type": "competitor", "name": "..."}  — each competitor as discovered
+    - data: {"type": "done", "competitors": [...], "competitor_variations": {...}, "guardrailDefinitions": [...]}
+    """
+    template, llm_enrichment, brand_name = _validate_enrichment_request(data)
+    model = data.model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+
+    return StreamingResponse(
+        _stream_competitor_events(data, template, llm_enrichment, brand_name, model),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _clean_competitor_line(line: str) -> Optional[str]:
+    """Strip numbering, bullets, and whitespace from a competitor name line."""
+    name = line.strip().strip(".-) ").strip()
+    return name if name and len(name) > 1 else None
+
+
+async def _generate_competitor_variations(
+    competitors: list, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL
+) -> dict:
+    """Generate common misspellings, abbreviations, and alternate names for each competitor."""
+    if not competitors:
+        return {}
+
+    # Cap the list to prevent oversized prompts
+    capped = competitors[:MAX_COMPETITOR_NAMES]
+    names_list = "\n".join(capped)
+    prompt = (
+        "For each company/brand name below, list 3-5 common misspellings, abbreviations, "
+        "and alternate names that people might type. Include typos, missing spaces, "
+        "wrong suffixes (e.g. 'Airlines' vs 'Airways' vs 'Airline'), and common shortcuts.\n\n"
+        f"Names:\n{names_list}\n\n"
+        "Return the result as one line per variation in the format:\n"
+        "OriginalName: variation1, variation2, variation3\n"
+        "Use the EXACT original name before the colon. No numbering, no extra text."
+    )
 
     try:
-        response = await litellm.acompletion(
-            model="gpt-4o-mini",
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            raise ValueError("LLM router not initialized")
+        response = await llm_router.acompletion(
+            model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=COMPETITOR_LLM_TEMPERATURE,
+        )
+        raw = response.choices[0].message.content or ""  # type: ignore
+        return _parse_variations_response(raw, capped)
+    except Exception as e:
+        verbose_proxy_logger.error("LLM competitor variation generation failed: %s", e)
+        return {}
+
+
+def _parse_variations_response(raw: str, competitors: list) -> dict[str, list[str]]:
+    """Parse the LLM response for competitor variations into a name -> variations map."""
+    # Build a lowercase lookup for case-insensitive matching
+    lower_to_canonical = {comp.lower(): comp for comp in competitors}
+    variations_map: dict[str, list[str]] = {}
+
+    for line in raw.strip().split("\n"):
+        if ":" not in line:
+            continue
+        name, _, variations_str = line.partition(":")
+        canonical = lower_to_canonical.get(name.strip().lower())
+        if canonical is None:
+            continue
+        variations = [
+            v.strip()
+            for v in variations_str.split(",")
+            if v.strip() and v.strip().lower() != canonical.lower()
+        ]
+        variations_map[canonical] = variations
+
+    return variations_map
+
+
+async def _discover_competitors_via_llm(
+    prompt: str, model: str = DEFAULT_COMPETITOR_DISCOVERY_MODEL
+) -> list:
+    """Call an onboarded LLM to discover competitor names."""
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is None:
+            raise ValueError("LLM router not initialized")
+        response = await llm_router.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=COMPETITOR_LLM_TEMPERATURE,
         )
         raw = response.choices[0].message.content or ""  # type: ignore
         competitors = [
-            line.strip().strip(".-) ").strip()
+            name
             for line in raw.strip().split("\n")
-            if line.strip() and len(line.strip()) > 1
+            if (name := _clean_competitor_line(line)) is not None
         ]
-        return competitors[:15]
+        return competitors[:MAX_COMPETITOR_NAMES]
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor discovery failed: %s", e)
         return []
+
+
+def _build_all_names_per_competitor(
+    competitors: list[str], variations_map: dict[str, list[str]]
+) -> dict[str, list[str]]:
+    """Build canonical + variation name lists for each competitor."""
+    return {
+        comp: [comp] + variations_map.get(comp, [])
+        for comp in competitors
+    }
 
 
 def _build_competitor_guardrail_definitions(
     definitions: list,
     competitors: list,
     brand_name: str,
+    variations_map: Optional[dict] = None,
 ) -> list:
-    """Build enriched guardrailDefinitions with competitor names populated."""
-    import copy
-
+    """Build enriched guardrailDefinitions with competitor names and variations populated."""
+    variations_map = variations_map or {}
     enriched = copy.deepcopy(definitions)
+    all_names = _build_all_names_per_competitor(competitors, variations_map)
 
-    output_blocked = [
-        {"keyword": comp, "action": "BLOCK", "description": f"Competitor: {comp}"}
-        for comp in competitors
-    ]
-
-    recommendation_blocked = []
-    for comp in competitors:
-        recommendation_blocked.append(
-            {"keyword": f"try {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
-        recommendation_blocked.append(
-            {"keyword": f"use {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
-        recommendation_blocked.append(
-            {"keyword": f"switch to {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
-        recommendation_blocked.append(
-            {"keyword": f"consider {comp}", "action": "BLOCK", "description": "Recommendation to competitor"}
-        )
-
-    comparison_blocked = []
-    for comp in competitors:
-        comparison_blocked.append(
-            {"keyword": f"{comp} is better", "action": "BLOCK", "description": "Unfavorable comparison"}
-        )
-        comparison_blocked.append(
-            {"keyword": f"better than {brand_name}", "action": "BLOCK", "description": "Unfavorable comparison"}
-        )
-        comparison_blocked.append(
-            {"keyword": f"{brand_name} is worse", "action": "BLOCK", "description": "Unfavorable comparison"}
-        )
+    output_blocked = _build_name_blocked_words(competitors, all_names)
+    recommendation_blocked = _build_recommendation_blocked_words(competitors, all_names)
+    comparison_blocked = _build_comparison_blocked_words(competitors, all_names, brand_name)
 
     blocked_words_map = {
         "competitor-output-blocker": output_blocked,
+        "competitor-input-blocker": output_blocked,
+        "competitor-name-blocker": output_blocked,
+        "competitor-name-input-blocker": output_blocked,
+        "competitor-name-output-blocker": output_blocked,
         "competitor-recommendation-filter": recommendation_blocked,
+        "competitor-recommendation-input-filter": recommendation_blocked,
+        "competitor-recommendation-output-filter": recommendation_blocked,
         "competitor-comparison-filter": comparison_blocked,
+        "competitor-comparison-input-filter": comparison_blocked,
+        "competitor-comparison-output-filter": comparison_blocked,
     }
 
     for defn in enriched:
@@ -641,6 +901,62 @@ def _build_competitor_guardrail_definitions(
             defn["litellm_params"]["blocked_words"] = blocked_words_map[guardrail_name]
 
     return enriched
+
+
+def _build_name_blocked_words(
+    competitors: list[str], all_names: dict[str, list[str]]
+) -> list[dict]:
+    """Build blocked word entries for direct competitor name mentions."""
+    result = []
+    for comp in competitors:
+        for name in all_names[comp]:
+            desc = f"Competitor: {comp}" if name == comp else f"Competitor variation ({comp}): {name}"
+            result.append({"keyword": name, "action": "BLOCK", "description": desc})
+    return result
+
+
+def _build_recommendation_blocked_words(
+    competitors: list[str], all_names: dict[str, list[str]]
+) -> list[dict]:
+    """Build blocked word entries for competitor recommendations."""
+    result = []
+    for comp in competitors:
+        for name in all_names[comp]:
+            for prefix in ["try", "use", "switch to", "consider"]:
+                result.append({
+                    "keyword": f"{prefix} {name}",
+                    "action": "BLOCK",
+                    "description": f"Recommendation to competitor ({comp})",
+                })
+    return result
+
+
+def _build_comparison_blocked_words(
+    competitors: list[str], all_names: dict[str, list[str]], brand_name: str
+) -> list[dict]:
+    """Build blocked word entries for unfavorable competitor comparisons."""
+    result = []
+    for comp in competitors:
+        for name in all_names[comp]:
+            result.append({
+                "keyword": f"{name} is better",
+                "action": "BLOCK",
+                "description": f"Unfavorable comparison ({comp})",
+            })
+
+    # Brand-level comparisons (only need one entry each, not per-competitor)
+    result.append({
+        "keyword": f"better than {brand_name}",
+        "action": "BLOCK",
+        "description": "Unfavorable comparison",
+    })
+    result.append({
+        "keyword": f"{brand_name} is worse",
+        "action": "BLOCK",
+        "description": "Unfavorable comparison",
+    })
+
+    return result
 
 
 class SuggestTemplatesRequest(BaseModel):

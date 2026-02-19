@@ -231,7 +231,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     return JSON.parse(templateStr);
   };
 
-  const handleParameterConfirm = async (parameters: Record<string, string>) => {
+  const handleParameterConfirm = async (
+    parameters: Record<string, string>,
+    enrichmentOptions?: { model?: string; competitors?: string[] }
+  ) => {
     if (!accessToken || !pendingTemplate) return;
 
     setIsEnrichingTemplate(true);
@@ -240,14 +243,20 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       let enrichedTemplate = pendingTemplate;
 
       if (pendingTemplate.llm_enrichment) {
-        // Call backend to enrich template with LLM-discovered data
+        // Call backend to enrich template with LLM-discovered data (or user-provided competitors)
         const enrichResult = await enrichPolicyTemplate(
           accessToken,
           pendingTemplate.id,
-          parameters
+          parameters,
+          enrichmentOptions?.model,
+          enrichmentOptions?.competitors
         );
-        // The backend returns the enriched guardrailDefinitions
-        enrichedTemplate = { ...pendingTemplate, guardrailDefinitions: enrichResult.guardrailDefinitions };
+        // The backend returns the enriched guardrailDefinitions + discovered competitors
+        enrichedTemplate = {
+          ...pendingTemplate,
+          guardrailDefinitions: enrichResult.guardrailDefinitions,
+          discoveredCompetitors: enrichResult.competitors || [],
+        };
       }
 
       // Substitute parameters in template
@@ -499,6 +508,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               onConfirm={handleParameterConfirm}
               onCancel={handleParameterCancel}
               isLoading={isEnrichingTemplate}
+              accessToken={accessToken || ""}
             />
           </TabPanel>
 
