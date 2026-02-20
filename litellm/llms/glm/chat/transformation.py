@@ -25,7 +25,6 @@ import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
 
 
 GLM_API_BASE = "https://open.bigmodel.cn/api/paas/v4"
