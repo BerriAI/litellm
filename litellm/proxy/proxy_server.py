@@ -10658,6 +10658,11 @@ def get_logo_url():
 @app.get("/get_image", include_in_schema=False)
 async def get_image():
     """Get logo to show on admin UI"""
+    logo_path = os.getenv("UI_LOGO_PATH", "")
+
+    # NEW: Immediately redirect for HTTP/HTTPS to avoid mixed-content and stale cache bugs
+    if logo_path.startswith(("http://", "https://")):
+        return RedirectResponse(url=logo_path)
 
     # get current_dir
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -10670,7 +10675,7 @@ async def get_image():
     default_assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
     assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
 
-    # Try to create assets_dir if it doesn't exist (simple try/except approach)
+    # Try to create assets_dir if it doesn't exist
     if not os.path.exists(assets_dir):
         try:
             os.makedirs(assets_dir, exist_ok=True)
@@ -10678,7 +10683,7 @@ async def get_image():
         except (PermissionError, OSError) as e:
             verbose_proxy_logger.warning(
                 f"Cannot create assets directory at {assets_dir}: {e}. "
-                f"Logo caching may not work. Using current directory for assets."
+                f"Using current directory for assets."
             )
             assets_dir = current_dir
 
@@ -10688,48 +10693,15 @@ async def get_image():
         if assets_dir != current_dir
         else default_site_logo
     )
+    
     if assets_dir != current_dir and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
-    cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
-    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
+    if not logo_path:
+        logo_path = default_logo
 
-    # [OPTIMIZATION] Check if the cached image exists first
-    if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
-
-    logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
-
-    # Check if the logo path is an HTTP/HTTPS URL
-    if logo_path.startswith(("http://", "https://")):
-        try:
-            # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
-
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.UI,
-                params={"timeout": 5.0},
-            )
-            response = await async_client.get(logo_path)
-            if response.status_code == 200:
-                # Save the image to a local file
-                with open(cache_path, "wb") as f:
-                    f.write(response.content)
-
-                # Return the cached image as a FileResponse
-                return FileResponse(cache_path, media_type="image/jpeg")
-            else:
-                # Handle the case when the image cannot be downloaded
-                return FileResponse(default_logo, media_type="image/jpeg")
-        except Exception as e:
-            # Handle any exceptions during the download (e.g., timeout, connection error)
-            verbose_proxy_logger.debug(f"Error downloading logo from {logo_path}: {e}")
-            return FileResponse(default_logo, media_type="image/jpeg")
-    else:
-        # Return the local image file if the logo path is not an HTTP/HTTPS URL
-        return FileResponse(logo_path, media_type="image/jpeg")
+    return FileResponse(logo_path, media_type="image/jpeg")
 
 
 #### INVITATION MANAGEMENT ####
