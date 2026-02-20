@@ -1972,7 +1972,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
         model=model,
         drop_params=False,
     )
-    assert result["thinkingConfig"]["thinkingLevel"] == "medium"
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
     # Test high -> high + includeThoughts=True
@@ -2061,7 +2061,7 @@ def test_reasoning_effort_dict_format_gemini_3():
         model=model,
         drop_params=False,
     )
-    assert result["thinkingConfig"]["thinkingLevel"] == "medium"
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
     # Test dict format without effort key - should fall back to Gemini 3 default (low)
