@@ -942,22 +942,20 @@ class BaseAWSLLM:
 
         # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
         # This allows the web identity token to work automatically
+        sts_client_kwargs: dict = {"verify": self._get_ssl_verify(ssl_verify)}
+        if aws_region_name is not None:
+            sts_client_kwargs["region_name"] = aws_region_name
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
-                sts_client = boto3.client(
-                    "sts",
-                    region_name=aws_region_name,
-                    verify=self._get_ssl_verify(ssl_verify)
-                )
+                sts_client = boto3.client("sts", **sts_client_kwargs)
         else:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client(
                     "sts",
-                    region_name=aws_region_name,
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
                     aws_session_token=aws_session_token,
-                    verify=self._get_ssl_verify(ssl_verify),
+                    **sts_client_kwargs,
                 )
 
         assume_role_params = {
