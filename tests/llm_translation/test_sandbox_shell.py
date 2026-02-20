@@ -763,6 +763,68 @@ class TestShellToolHandlerUtilities:
         assert follow_up[2]["call_id"] == "fc_1"
         assert follow_up[2]["output"] == "file.txt\n"
 
+    def test_build_follow_up_input_excludes_non_shell_function_calls(self):
+        """Non-shell function calls must be excluded to avoid missing output errors."""
+        from litellm.responses.shell_tool_handler import _build_follow_up_input
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            **{
+                "id": "resp-mixed",
+                "created_at": 1000,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "Let me check both."}],
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_shell",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": ["date"]}',
+                        "id": "out-1",
+                        "status": "completed",
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_weather",
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                        "id": "out-2",
+                        "status": "completed",
+                    },
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        follow_up = _build_follow_up_input(
+            response=response,
+            shell_calls=[{"call_id": "fc_shell", "command": ["date"]}],
+            shell_results=[{"call_id": "fc_shell", "output": "Thu Feb 20\n"}],
+        )
+
+        types = [item["type"] for item in follow_up]
+        assert types == ["message", "function_call", "function_call_output"]
+
+        assert follow_up[1]["call_id"] == "fc_shell"
+        assert follow_up[1]["name"] == "_litellm_shell"
+
+        assert follow_up[2]["call_id"] == "fc_shell"
+        assert follow_up[2]["output"] == "Thu Feb 20\n"
+
+        call_ids_in_output = [
+            item.get("call_id")
+            for item in follow_up
+            if item["type"] == "function_call"
+        ]
+        assert "fc_weather" not in call_ids_in_output
+
 
 # ---------------------------------------------------------------------------
 # Native Responses API shell execution loop (async)

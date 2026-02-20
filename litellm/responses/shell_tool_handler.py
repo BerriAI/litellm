@@ -137,18 +137,22 @@ def _build_follow_up_input(
     Build Responses API follow-up input items from the model's output and
     sandbox execution results.
 
-    This follows the same pattern as the MCP handler: include assistant
-    messages, function call items, and function_call_output items.
+    Only shell function calls (``_litellm_shell``) and their outputs are
+    included.  Non-shell function calls are excluded because we cannot
+    provide outputs for them — including them without a corresponding
+    ``function_call_output`` would cause an API error from the provider.
     """
     follow_up_input: List[Dict[str, Any]] = []
 
     assistant_message_content: List[Any] = []
-    function_calls: List[Dict[str, Any]] = []
+    shell_call_ids = {sc["call_id"] for sc in shell_calls}
 
     for item in response.output or []:
         item_dict = item if isinstance(item, dict) else item.model_dump()
         if item_dict.get("type") == "function_call":
-            function_calls.append(item_dict)
+            call_id = item_dict.get("call_id") or item_dict.get("id")
+            if call_id in shell_call_ids:
+                follow_up_input.append(item_dict)
         elif item_dict.get("type") == "message":
             content = item_dict.get("content", [])
             if isinstance(content, list):
@@ -157,16 +161,14 @@ def _build_follow_up_input(
                 assistant_message_content.append(content)
 
     if assistant_message_content:
-        follow_up_input.append(
+        follow_up_input.insert(
+            0,
             {
                 "type": "message",
                 "role": "assistant",
                 "content": assistant_message_content,
-            }
+            },
         )
-
-    for fc in function_calls:
-        follow_up_input.append(fc)
 
     for sr in shell_results:
         follow_up_input.append(
