@@ -854,6 +854,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
+    verbose_proxy_logger.info(f"DEBUG: About to check prisma_client, value={prisma_client is not None}")
     if prisma_client is not None:
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings=general_settings,
@@ -863,6 +864,63 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+        # Initialize Mavvrik scheduler after scheduler is created
+        if "mavvrik" in litellm.success_callback:
+            verbose_proxy_logger.debug("Mavvrik in success_callback, attempting to initialize scheduler")
+            try:
+                from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
+                from litellm.proxy.spend_tracking.mavvrik_endpoints import is_mavvrik_setup
+                from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+                mavvrik_setup = await is_mavvrik_setup()
+                verbose_proxy_logger.debug(f"is_mavvrik_setup={mavvrik_setup}, scheduler={scheduler is not None}")
+
+                if mavvrik_setup and scheduler is not None:
+                    # Force instantiation of MavvrikLogger by creating instance directly
+                    verbose_proxy_logger.info("Instantiating MavvrikLogger...")
+
+                    # Load Mavvrik settings from database
+                    from litellm.proxy.spend_tracking.mavvrik_endpoints import _get_mavvrik_settings
+                    try:
+                        mavvrik_settings = await _get_mavvrik_settings()
+                        verbose_proxy_logger.info(f"Loaded Mavvrik settings: tenant={mavvrik_settings.get('tenant')}, endpoint={mavvrik_settings.get('api_endpoint')}")
+                    except Exception as e:
+                        verbose_proxy_logger.warning(f"Failed to load Mavvrik settings from database: {e}")
+                        mavvrik_settings = {}
+
+                    # Create MavvrikLogger instance with settings and add to callbacks
+                    mavvrik_logger = MavvrikLogger(
+                        api_key=mavvrik_settings.get("api_key"),
+                        api_endpoint=mavvrik_settings.get("api_endpoint"),
+                        tenant=mavvrik_settings.get("tenant"),
+                        instance_id=mavvrik_settings.get("instance_id"),
+                        timezone=mavvrik_settings.get("timezone", "UTC"),
+                    )
+                    litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
+
+                    # Remove the string from the callback list
+                    if "mavvrik" in litellm.success_callback:
+                        litellm.success_callback.remove("mavvrik")
+                    if "mavvrik" in litellm._async_success_callback:
+                        litellm._async_success_callback.remove("mavvrik")
+
+                    # Verify logger was created
+                    loggers_after = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=MavvrikLogger)
+                    verbose_proxy_logger.info(f"After instantiation: found {len(loggers_after)} MavvrikLogger instance(s)")
+
+                    verbose_proxy_logger.info("Initializing Mavvrik background job...")
+                    await MavvrikLogger.init_mavvrik_background_job(scheduler=scheduler)
+                    verbose_proxy_logger.info("✓ Mavvrik scheduler initialized after callbacks")
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Skipping Mavvrik scheduler init: setup={mavvrik_setup}, scheduler={scheduler is not None}"
+                    )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Failed to initialize Mavvrik scheduler: {e}", exc_info=True
+                )
 
         await ProxyStartupEvent._update_default_team_member_budget()
 
@@ -5358,6 +5416,7 @@ class ProxyStartupEvent:
     ):
         """Initializes scheduled background jobs"""
         global store_model_in_db, scheduler
+        verbose_proxy_logger.info("DEBUG: initialize_scheduled_background_jobs called")
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
