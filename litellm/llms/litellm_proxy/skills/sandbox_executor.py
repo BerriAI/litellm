@@ -270,6 +270,37 @@ print(json.dumps(files))
         
         return generated_files
 
+    def execute_shell_command(
+        self,
+        command: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Execute a shell command in the sandbox.
+
+        Wraps the command in a Python ``subprocess.run`` call so it can
+        reuse the same ``SandboxSession`` infrastructure.
+
+        Args:
+            command: Command and arguments as a list of strings,
+                     e.g. ``["ls", "-la"]``.
+
+        Returns:
+            Same shape as ``execute()``:
+            ``{"success": bool, "output": str, "error": str, "files": []}``
+        """
+        import shlex
+
+        escaped = ", ".join(shlex.quote(c) for c in command)
+        code = (
+            "import subprocess, sys\n"
+            f"r = subprocess.run([{escaped}], capture_output=True, text=True)\n"
+            "print(r.stdout, end='')\n"
+            "if r.stderr:\n"
+            "    print(r.stderr, end='', file=sys.stderr)\n"
+            "sys.exit(r.returncode)\n"
+        )
+        return self.execute(code=code, skill_files={})
+
     def _get_mime_type(self, filename: str) -> str:
         """Get MIME type for a file based on extension."""
         ext = filename.lower().split(".")[-1]

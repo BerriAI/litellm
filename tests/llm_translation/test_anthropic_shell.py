@@ -180,17 +180,21 @@ def test_gemini_shell_tool_maps_to_code_execution():
     assert "code_execution" in result_tools[0]
 
 
-def test_unsupported_provider_raises_error():
+def test_unsupported_provider_maps_to_litellm_shell_function():
     """
     Verify that passing a shell tool for an unsupported provider
-    raises a clear ValueError.
+    produces a synthetic ``_litellm_shell`` function tool (sandbox fallback).
     """
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
     )
 
-    with pytest.raises(ValueError, match="shell.*tool.*not supported"):
-        LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            tools=[SHELL_TOOL],
-            custom_llm_provider="cohere",
-        )
+    result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+        tools=[SHELL_TOOL],
+        custom_llm_provider="cohere",
+    )
+
+    assert len(result_tools) == 1
+    assert result_tools[0]["type"] == "function"
+    assert result_tools[0]["function"]["name"] == "_litellm_shell"
+    assert "command" in result_tools[0]["function"]["parameters"]["properties"]

@@ -1396,36 +1396,43 @@ class TestShellToolTransformation:
         assert "code_execution" in result_tools[1]
 
     # -------------------------------------------------------------------
-    # Unsupported providers: clear error
+    # Fallback providers: shell → synthetic _litellm_shell function tool
     # -------------------------------------------------------------------
 
-    def test_shell_tool_raises_error_for_unsupported_provider(self):
-        """Shell tools should raise a clear error for unsupported providers"""
+    def test_shell_tool_maps_to_function_for_unsupported_provider(self):
+        """Shell tool should map to _litellm_shell function tool for unsupported providers"""
         shell_tool = {
             "type": "shell",
             "environment": {"type": "container_auto"},
         }
 
-        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=[shell_tool],
-                custom_llm_provider="huggingface",
-            )
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="huggingface",
+        )
 
-    def test_shell_tool_raises_error_when_no_provider(self):
-        """Shell tools should raise a clear error when no provider is specified"""
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "_litellm_shell"
+        assert "command" in result_tools[0]["function"]["parameters"]["properties"]
+
+    def test_shell_tool_maps_to_function_when_no_provider(self):
+        """Shell tool should map to _litellm_shell function tool when no provider is specified"""
         shell_tool = {
             "type": "shell",
             "environment": {"type": "container_auto"},
         }
 
-        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=[shell_tool],
-            )
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+        )
 
-    def test_shell_tool_with_mixed_tools_raises_error_unsupported(self):
-        """If a shell tool is in a list with other tools for an unsupported provider, error fires"""
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "_litellm_shell"
+
+    def test_shell_tool_mixed_with_function_tools_unsupported(self):
+        """Shell tool should coexist with function tools for unsupported providers"""
         tools = [
             {
                 "type": "function",
@@ -1439,11 +1446,34 @@ class TestShellToolTransformation:
             },
         ]
 
-        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools,
-                custom_llm_provider="huggingface",
-            )
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools,
+            custom_llm_provider="huggingface",
+        )
+
+        assert len(result_tools) == 2
+        assert result_tools[0]["function"]["name"] == "get_weather"
+        assert result_tools[1]["type"] == "function"
+        assert result_tools[1]["function"]["name"] == "_litellm_shell"
+
+    def test_request_has_litellm_shell_tool_true(self):
+        """request_has_litellm_shell_tool should detect the synthetic tool"""
+        tools = [LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()]
+        assert LiteLLMCompletionResponsesConfig.request_has_litellm_shell_tool(tools) is True
+
+    def test_request_has_litellm_shell_tool_false_for_regular_tools(self):
+        """request_has_litellm_shell_tool should return False for normal function tools"""
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {}},
+            }
+        ]
+        assert LiteLLMCompletionResponsesConfig.request_has_litellm_shell_tool(tools) is False
+
+    def test_request_has_litellm_shell_tool_false_for_none(self):
+        """request_has_litellm_shell_tool should return False for None"""
+        assert LiteLLMCompletionResponsesConfig.request_has_litellm_shell_tool(None) is False
 
     # -------------------------------------------------------------------
     # Non-shell tools are unaffected
@@ -1619,6 +1649,189 @@ class TestShellToolTransformation:
         assert result[0]["environment"]["type"] == "container_reference"
         assert result[0]["environment"]["container_id"] == "ctr_abc123"
         assert result[0]["environment"]["network_policy"] == "allow_all"
+
+
+class TestShellExecutionLoop:
+    """Test the sandbox shell execution loop in the handler."""
+
+    @pytest.mark.asyncio
+    async def test_handler_runs_shell_loop_on_litellm_shell_tool_call(self):
+        """
+        When the model calls _litellm_shell, the handler should execute the
+        command via the sandbox and re-invoke the model with the result.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        # First response: model calls _litellm_shell
+        first_response = ModelResponse(
+            id="resp-1",
+            created=1000,
+            model="mistral/mistral-large-latest",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="_litellm_shell",
+                                    arguments='{"command": ["echo", "hello"]}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        # Second response: model produces final text (no more tool calls)
+        final_response = ModelResponse(
+            id="resp-2",
+            created=1001,
+            model="mistral/mistral-large-latest",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content="The command printed: hello",
+                    ),
+                )
+            ],
+        )
+
+        sandbox_result = {
+            "success": True,
+            "output": "hello\n",
+            "error": "",
+            "files": [],
+        }
+
+        handler = LiteLLMCompletionTransformationHandler()
+
+        with (
+            patch(
+                "litellm.responses.litellm_completion_transformation.handler.litellm.acompletion",
+                new_callable=AsyncMock,
+                return_value=final_response,
+            ) as mock_acompletion,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value=sandbox_result,
+            ) as mock_exec,
+        ):
+            result = await handler._run_shell_execution_loop(
+                initial_response=first_response,
+                completion_args={
+                    "model": "mistral/mistral-large-latest",
+                    "messages": [{"role": "user", "content": "run echo hello"}],
+                    "tools": [shell_fn_tool],
+                },
+            )
+
+        mock_exec.assert_called_once_with(["echo", "hello"])
+        mock_acompletion.assert_called_once()
+        call_kwargs = mock_acompletion.call_args.kwargs
+        messages = call_kwargs["messages"]
+        # Should have: user, assistant (tool call), tool result
+        assert len(messages) == 3
+        assert messages[2]["role"] == "tool"
+        assert "hello" in messages[2]["content"]
+
+        assert result.id == "resp-2"
+
+    @pytest.mark.asyncio
+    async def test_handler_no_loop_when_no_shell_call(self):
+        """If the model does NOT call _litellm_shell, no loop should run."""
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        response = ModelResponse(
+            id="resp-1",
+            created=1000,
+            model="mistral/mistral-large-latest",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(role="assistant", content="No shell needed."),
+                )
+            ],
+        )
+
+        handler = LiteLLMCompletionTransformationHandler()
+        result = await handler._run_shell_execution_loop(
+            initial_response=response,
+            completion_args={
+                "model": "mistral/mistral-large-latest",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [],
+            },
+        )
+
+        assert result is response
+
+    def test_extract_shell_tool_calls_parses_correctly(self):
+        """_extract_shell_tool_calls should parse _litellm_shell calls."""
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        response = ModelResponse(
+            id="resp-1",
+            created=1000,
+            model="test",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_abc",
+                                type="function",
+                                function=Function(
+                                    name="_litellm_shell",
+                                    arguments='{"command": ["ls", "-la"]}',
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_def",
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments='{"city": "NYC"}',
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        calls = LiteLLMCompletionTransformationHandler._extract_shell_tool_calls(response)
+        assert len(calls) == 1
+        assert calls[0]["id"] == "call_abc"
+        assert calls[0]["command"] == ["ls", "-la"]
 
 
 class TestUsageTransformation:
