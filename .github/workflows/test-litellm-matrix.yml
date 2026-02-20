@@ -84,13 +84,23 @@ jobs:
             workers: 2
             reruns: 1
           - name: "proxy-unit-b2"
-            # heavy server tests: proxy_server (2745) + proxy_utils (2339) + proxy_token_counter (1276)
-            path: "tests/proxy_unit_tests/test_proxy_[s-z]*.py"
+            # test_proxy_s*.py: proxy_server (2750) + proxy_server_* (618) + proxy_setting_guardrails (71)
+            path: "tests/proxy_unit_tests/test_proxy_s*.py"
             workers: 2
             reruns: 1
           - name: "proxy-unit-b3"
-            # test_[r-z]*.py: response_polling (1399) + user_api_key_auth (1136) + zero_cost (590) + rest
-            path: "tests/proxy_unit_tests/test_[r-z]*.py"
+            # test_proxy_[t-z]*.py: proxy_utils (2339) + proxy_token_counter (1279)
+            path: "tests/proxy_unit_tests/test_proxy_[t-z]*.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b4"
+            # test_[r-t]*.py: response_polling (1399) + search_api_logging (202) + server_root (64) + skills_db (261) + realtime_cache (62)
+            path: "tests/proxy_unit_tests/test_[r-t]*.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b5"
+            # test_[u-z]*.py: user_api_key_auth (1136) + zero_cost (590) + update_spend (305) + unit_test_* (206) + ui_path (157)
+            path: "tests/proxy_unit_tests/test_[u-z]*.py"
             workers: 2
             reruns: 1
 
