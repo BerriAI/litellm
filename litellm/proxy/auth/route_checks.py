@@ -12,6 +12,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
+_LITELLM_ROUTES_MEMBER_NAMES: frozenset = frozenset(LiteLLMRoutes._member_names_)
+
 from .auth_checks_organization import _user_is_org_admin
 
 
@@ -61,11 +63,11 @@ class RouteChecks:
 
         ## check if 'allowed_route' is a field name in LiteLLMRoutes
         if any(
-            allowed_route in LiteLLMRoutes._member_names_
+            allowed_route in _LITELLM_ROUTES_MEMBER_NAMES
             for allowed_route in valid_token.allowed_routes
         ):
             for allowed_route in valid_token.allowed_routes:
-                if allowed_route in LiteLLMRoutes._member_names_:
+                if allowed_route in _LITELLM_ROUTES_MEMBER_NAMES:
                     if RouteChecks.check_route_access(
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,

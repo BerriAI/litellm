@@ -3430,7 +3430,12 @@ class DynamicPromptManagementParamLiteral(str, Enum):
 
     @classmethod
     def list_all_params(cls):
-        return [param.value for param in cls]
+        return _DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+
+
+_DYNAMIC_PROMPT_MANAGEMENT_PARAMS: frozenset = frozenset(
+    param.value for param in DynamicPromptManagementParamLiteral
+)
 
 
 class CallbacksByType(TypedDict):
