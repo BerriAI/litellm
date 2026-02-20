@@ -136,7 +136,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         shell_tool: ShellToolParam,
         model: str,
     ) -> list:
-        """XAI does not support shell tools — delegate to base class error."""
+        """XAI has no native shell support — return sandbox fallback tool."""
         from litellm.llms.base_llm.responses.transformation import (
             BaseResponsesAPIConfig,
         )

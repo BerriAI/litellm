@@ -230,19 +230,21 @@ class BaseResponsesAPIConfig(ABC):
         """
         Transform a unified Responses API shell tool into provider-specific tool format.
 
-        Returns a list of tool dicts to include in the request. Providers that
-        support shell-like tools should override this method and return the
-        provider-specific representation.
+        Returns a list of tool dicts to include in the request.  Providers that
+        support shell-like tools natively (OpenAI, Azure) override this method
+        and pass the tool through as-is.
 
-        By default, raises an error indicating the provider does not support
-        shell tools.  OpenAI / Azure override this to pass through as-is.
+        The default implementation returns a synthetic ``_litellm_shell``
+        function tool so the model can invoke shell commands.  When the model
+        calls this function, the LiteLLM handler executes the command in a
+        sandboxed Docker container via ``SkillsSandboxExecutor`` and feeds the
+        output back automatically.
         """
-        raise ValueError(
-            f"'{self.custom_llm_provider.value}' does not support the Responses API "
-            f"'shell' tool. Only OpenAI and Azure are currently supported. "
-            f"If {self.custom_llm_provider.value} adds shell support in the future, "
-            f"update `transform_shell_tool_params` in the provider's ResponsesAPIConfig."
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
         )
+
+        return [LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()]
 
     #########################################################
     ########## END SHELL TOOL TRANSFORMATION ################

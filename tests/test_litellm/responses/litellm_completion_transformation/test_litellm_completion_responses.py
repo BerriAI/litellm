@@ -1513,8 +1513,8 @@ class TestShellToolTransformation:
         assert result[0]["type"] == "shell"
         assert result[0]["environment"]["type"] == "container_auto"
 
-    def test_base_config_raises_error_for_shell_tool(self):
-        """Base config should raise ValueError for shell tools (unsupported provider)"""
+    def test_base_config_returns_sandbox_fallback_for_shell_tool(self):
+        """Base config should return the _litellm_shell function tool as sandbox fallback"""
         from litellm.llms.base_llm.responses.transformation import (
             BaseResponsesAPIConfig,
         )
@@ -1581,11 +1581,13 @@ class TestShellToolTransformation:
             "environment": {"type": "container_auto"},
         }
 
-        with pytest.raises(ValueError, match="does not support.*shell"):
-            config.transform_shell_tool_params(shell_tool, "some-model")
+        result = config.transform_shell_tool_params(shell_tool, "some-model")
+        assert len(result) == 1
+        assert result[0]["type"] == "function"
+        assert result[0]["function"]["name"] == "_litellm_shell"
 
-    def test_xai_raises_error_for_shell_tool(self):
-        """XAI config should raise ValueError for shell tools"""
+    def test_xai_returns_sandbox_fallback_for_shell_tool(self):
+        """XAI config should return the sandbox fallback for shell tools"""
         from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 
         config = XAIResponsesAPIConfig()
@@ -1594,11 +1596,12 @@ class TestShellToolTransformation:
             "environment": {"type": "container_auto"},
         }
 
-        with pytest.raises(ValueError, match="does not support.*shell"):
-            config.transform_shell_tool_params(shell_tool, "grok-3")
+        result = config.transform_shell_tool_params(shell_tool, "grok-3")
+        assert len(result) == 1
+        assert result[0]["function"]["name"] == "_litellm_shell"
 
-    def test_perplexity_raises_error_for_shell_tool(self):
-        """Perplexity config should raise ValueError for shell tools"""
+    def test_perplexity_returns_sandbox_fallback_for_shell_tool(self):
+        """Perplexity config should return the sandbox fallback for shell tools"""
         from litellm.llms.perplexity.responses.transformation import (
             PerplexityResponsesConfig,
         )
@@ -1609,11 +1612,12 @@ class TestShellToolTransformation:
             "environment": {"type": "container_auto"},
         }
 
-        with pytest.raises(ValueError, match="does not support.*shell"):
-            config.transform_shell_tool_params(shell_tool, "sonar-pro")
+        result = config.transform_shell_tool_params(shell_tool, "sonar-pro")
+        assert len(result) == 1
+        assert result[0]["function"]["name"] == "_litellm_shell"
 
-    def test_volcengine_raises_error_for_shell_tool(self):
-        """VolcEngine config should raise ValueError for shell tools"""
+    def test_volcengine_returns_sandbox_fallback_for_shell_tool(self):
+        """VolcEngine config should return the sandbox fallback for shell tools"""
         from litellm.llms.volcengine.responses.transformation import (
             VolcEngineResponsesAPIConfig,
         )
@@ -1624,8 +1628,9 @@ class TestShellToolTransformation:
             "environment": {"type": "container_auto"},
         }
 
-        with pytest.raises(ValueError, match="does not support.*shell"):
-            config.transform_shell_tool_params(shell_tool, "doubao-pro")
+        result = config.transform_shell_tool_params(shell_tool, "doubao-pro")
+        assert len(result) == 1
+        assert result[0]["function"]["name"] == "_litellm_shell"
 
     def test_openai_shell_tool_preserves_all_environment_fields(self):
         """OpenAI passthrough should preserve all environment config fields"""

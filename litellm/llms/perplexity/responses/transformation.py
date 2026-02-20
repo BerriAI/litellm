@@ -150,7 +150,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         shell_tool: ShellToolParam,
         model: str,
     ) -> list:
-        """Perplexity does not support shell tools — delegate to base class error."""
+        """Perplexity has no native shell support — return sandbox fallback tool."""
         from litellm.llms.base_llm.responses.transformation import (
             BaseResponsesAPIConfig,
         )
@@ -174,7 +174,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
                 tool_type = tool.get("type")
 
                 if tool_type == "shell":
-                    self.transform_shell_tool_params(tool, "")
+                    perplexity_tools.extend(self.transform_shell_tool_params(tool, ""))
                 
                 # Direct Perplexity tool format
                 elif tool_type in ["web_search", "fetch_url"]:

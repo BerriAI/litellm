@@ -154,7 +154,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         shell_tool: "ShellToolParam",
         model: str,
     ) -> list:
-        """VolcEngine does not support shell tools — delegate to base class error."""
+        """VolcEngine has no native shell support — return sandbox fallback tool."""
         from litellm.llms.base_llm.responses.transformation import (
             BaseResponsesAPIConfig,
         )
@@ -189,12 +189,16 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             params.pop("parallel_tool_calls", None)
 
-        # Reject shell tools — not supported by VolcEngine
+        # Replace shell tools with sandbox fallback function tool
         tools = params.get("tools")
         if tools and isinstance(tools, list):
+            transformed: list = []
             for tool in tools:
                 if isinstance(tool, dict) and tool.get("type") == "shell":
-                    self.transform_shell_tool_params(tool, model)
+                    transformed.extend(self.transform_shell_tool_params(tool, model))
+                else:
+                    transformed.append(tool)
+            params["tools"] = transformed
 
         return params
 
