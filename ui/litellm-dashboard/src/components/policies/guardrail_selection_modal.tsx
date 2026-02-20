@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Checkbox, Button, Divider, Tag } from "antd";
+import { Modal, Checkbox, Button, Divider, Tag, Select, Switch, Tooltip } from "antd";
 import { CheckCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { credentialListCall } from "../networking";
 
 interface GuardrailInfo {
   guardrail_name: string;
@@ -9,15 +10,209 @@ interface GuardrailInfo {
   definition: any;
 }
 
+interface PartnerGuardrailConfig {
+  provider: string;
+  label: string;
+  description: string;
+  credential_provider: string;
+  provision_config: Record<string, any>;
+}
+
+export interface PartnerGuardrailSelection {
+  provider: string;
+  credential_name: string;
+  provision_config: Record<string, any>;
+  aws_region_name?: string;
+}
+
 interface GuardrailSelectionModalProps {
   visible: boolean;
   template: any;
   existingGuardrails: Set<string>;
-  onConfirm: (selectedGuardrails: any[]) => void;
+  onConfirm: (
+    selectedGuardrails: any[],
+    partnerGuardrails?: PartnerGuardrailSelection[]
+  ) => void;
   onCancel: () => void;
   isLoading?: boolean;
   progressInfo?: { current: number; total: number } | null;
+  accessToken?: string;
 }
+
+const AWS_REGIONS = [
+  "us-east-1",
+  "us-east-2",
+  "us-west-2",
+  "eu-west-1",
+  "eu-west-2",
+  "eu-central-1",
+  "ap-southeast-1",
+  "ap-southeast-2",
+  "ap-northeast-1",
+];
+
+const partnerProviderLogoMap: Record<string, string> = {
+  bedrock: "../ui/assets/logos/bedrock.svg",
+};
+
+const ProviderLogo: React.FC<{ provider: string }> = ({ provider }) => {
+  const logoSrc = partnerProviderLogoMap[provider];
+  if (logoSrc) {
+    return (
+      <img
+        src={logoSrc}
+        alt={provider}
+        style={{ height: "20px", width: "20px", objectFit: "contain" }}
+        onError={(e) => { e.currentTarget.style.display = "none"; }}
+      />
+    );
+  }
+  return (
+    <div className="w-5 h-5 rounded bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-500">
+      ?
+    </div>
+  );
+};
+
+const ProvisionConfigTags: React.FC<{ config: Record<string, any> }> = ({ config }) => (
+  <div className="flex flex-wrap gap-1.5">
+    {config.topicPolicyConfig && (
+      <Tag color="orange" className="text-xs">
+        {config.topicPolicyConfig.topicsConfig?.length || 0} topic policy(s)
+      </Tag>
+    )}
+    {config.contentPolicyConfig && (
+      <Tag color="red" className="text-xs">
+        {config.contentPolicyConfig.filtersConfig?.length || 0} content filter(s)
+      </Tag>
+    )}
+    {config.wordPolicyConfig && (
+      <Tag color="purple" className="text-xs">
+        word policy
+      </Tag>
+    )}
+    {config.sensitiveInformationPolicyConfig && (
+      <Tag color="blue" className="text-xs">
+        PII detection
+      </Tag>
+    )}
+  </div>
+);
+
+const CredentialOption: React.FC<{
+  credential: any;
+  provider?: string;
+  showProviderLogo?: boolean;
+}> = ({ credential, provider, showProviderLogo }) => (
+  <div className="flex items-center gap-2">
+    {showProviderLogo && provider && <ProviderLogo provider={provider} />}
+    <span>{credential.credential_name}</span>
+    {!showProviderLogo && credential.credential_info?.custom_llm_provider && (
+      <Tag className="text-xs">{credential.credential_info.custom_llm_provider}</Tag>
+    )}
+  </div>
+);
+
+const PartnerGuardrailCard: React.FC<{
+  pg: PartnerGuardrailConfig;
+  isEnabled: boolean;
+  onToggle: (checked: boolean) => void;
+  selectedCredential?: string;
+  onCredentialChange: (value: string) => void;
+  selectedRegion?: string;
+  onRegionChange: (value: string) => void;
+  providerCredentials: any[];
+  allCredentials: any[];
+  credentialsLoading: boolean;
+}> = ({
+  pg,
+  isEnabled,
+  onToggle,
+  selectedCredential,
+  onCredentialChange,
+  selectedRegion,
+  onRegionChange,
+  providerCredentials,
+  allCredentials,
+  credentialsLoading,
+}) => {
+  const credentialOptions = (providerCredentials.length > 0 ? providerCredentials : allCredentials).map(
+    (c: any) => ({
+      value: c.credential_name,
+      label: (
+        <CredentialOption
+          credential={c}
+          provider={pg.provider}
+          showProviderLogo={providerCredentials.length > 0}
+        />
+      ),
+    })
+  );
+
+  return (
+    <div
+      className={`border rounded-lg p-4 transition-colors ${
+        isEnabled ? "bg-orange-50 border-orange-200" : "bg-gray-50 border-gray-200"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex-shrink-0 pt-0.5">
+          <Switch size="small" checked={isEnabled} onChange={onToggle} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <ProviderLogo provider={pg.provider} />
+            <span className="text-sm font-medium text-gray-900">{pg.label}</span>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">{pg.description}</p>
+
+          {isEnabled && (
+            <div className="space-y-3 pt-2 border-t border-gray-200">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Credential
+                </label>
+                <Select
+                  className="w-full"
+                  size="small"
+                  placeholder={credentialsLoading ? "Loading credentials..." : "Select a credential"}
+                  loading={credentialsLoading}
+                  value={selectedCredential}
+                  onChange={onCredentialChange}
+                  options={credentialOptions}
+                  notFoundContent={
+                    <div className="text-center py-2 text-gray-500 text-xs">
+                      No credentials found. Add one in Settings &rarr; Credentials.
+                    </div>
+                  }
+                />
+              </div>
+
+              {pg.provider === "bedrock" && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    AWS Region
+                  </label>
+                  <Select
+                    className="w-full"
+                    size="small"
+                    placeholder="Select region (default: us-east-1)"
+                    value={selectedRegion}
+                    onChange={onRegionChange}
+                    options={AWS_REGIONS.map((r) => ({ value: r, label: r }))}
+                    allowClear
+                  />
+                </div>
+              )}
+
+              <ProvisionConfigTags config={pg.provision_config} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   visible,
@@ -27,10 +222,27 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   onCancel,
   isLoading = false,
   progressInfo,
+  accessToken,
 }) => {
   const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(
     new Set()
   );
+
+  // Partner guardrail state
+  const [partnerEnabled, setPartnerEnabled] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [partnerCredentials, setPartnerCredentials] = useState<
+    Record<string, string>
+  >({});
+  const [partnerRegions, setPartnerRegions] = useState<Record<string, string>>(
+    {}
+  );
+  const [credentials, setCredentials] = useState<any[]>([]);
+  const [credentialsLoading, setCredentialsLoading] = useState(false);
+
+  const partnerGuardrails: PartnerGuardrailConfig[] =
+    template?.partnerGuardrails || [];
 
   // Prepare guardrail info with existence status
   const guardrailsInfo: GuardrailInfo[] = (
@@ -49,8 +261,31 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
         .filter((g) => !g.alreadyExists)
         .map((g) => g.guardrail_name);
       setSelectedGuardrails(new Set(newGuardrails));
+
+      // Reset partner state
+      setPartnerEnabled({});
+      setPartnerCredentials({});
+      setPartnerRegions({});
     }
   }, [visible, template]);
+
+  // Fetch credentials when a partner guardrail is enabled
+  useEffect(() => {
+    const anyEnabled = Object.values(partnerEnabled).some(Boolean);
+    if (anyEnabled && accessToken && credentials.length === 0) {
+      setCredentialsLoading(true);
+      credentialListCall(accessToken)
+        .then((data) => {
+          setCredentials(data?.credentials || []);
+        })
+        .catch((err) => {
+          console.error("Failed to fetch credentials:", err);
+        })
+        .finally(() => {
+          setCredentialsLoading(false);
+        });
+    }
+  }, [partnerEnabled, accessToken]);
 
   const handleToggle = (guardrailName: string) => {
     setSelectedGuardrails((prev) => {
@@ -79,7 +314,33 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
     const selectedDefinitions = guardrailsInfo
       .filter((g) => selectedGuardrails.has(g.guardrail_name))
       .map((g) => g.definition);
-    onConfirm(selectedDefinitions);
+
+    // Build partner guardrail selections
+    const partnerSelections: PartnerGuardrailSelection[] = [];
+    for (const pg of partnerGuardrails) {
+      if (partnerEnabled[pg.provider] && partnerCredentials[pg.provider]) {
+        partnerSelections.push({
+          provider: pg.provider,
+          credential_name: partnerCredentials[pg.provider],
+          provision_config: pg.provision_config,
+          aws_region_name: partnerRegions[pg.provider] || undefined,
+        });
+      }
+    }
+
+    onConfirm(
+      selectedDefinitions,
+      partnerSelections.length > 0 ? partnerSelections : undefined
+    );
+  };
+
+  // Filter credentials by provider type
+  const getCredentialsForProvider = (credentialProvider: string) => {
+    return credentials.filter((c: any) => {
+      const provider =
+        c.credential_info?.custom_llm_provider?.toLowerCase() || "";
+      return provider.includes(credentialProvider.toLowerCase());
+    });
   };
 
   const newGuardrailsCount = guardrailsInfo.filter(
@@ -196,7 +457,7 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                   <p className="text-sm text-gray-600">
                     {guardrail.description}
                   </p>
-                  
+
                   {/* Show guardrail type and mode */}
                   <div className="flex gap-2 mt-2">
                     <Tag className="text-xs">
@@ -256,6 +517,48 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
           </>
         )}
 
+        {/* Partner Guardrails Section */}
+        {partnerGuardrails.length > 0 && (
+          <>
+            <Divider />
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Enhance with Partner Guardrail
+                </span>
+                <Tooltip title="Optional. Provisions a cloud-based guardrail for stronger ML-powered detection alongside the keyword-based rules above.">
+                  <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
+                </Tooltip>
+                <Tag color="default" className="text-xs ml-1">
+                  Optional
+                </Tag>
+              </div>
+
+              {partnerGuardrails.map((pg) => (
+                <PartnerGuardrailCard
+                  key={pg.provider}
+                  pg={pg}
+                  isEnabled={partnerEnabled[pg.provider] || false}
+                  onToggle={(checked) =>
+                    setPartnerEnabled((prev) => ({ ...prev, [pg.provider]: checked }))
+                  }
+                  selectedCredential={partnerCredentials[pg.provider] || undefined}
+                  onCredentialChange={(value) =>
+                    setPartnerCredentials((prev) => ({ ...prev, [pg.provider]: value }))
+                  }
+                  selectedRegion={partnerRegions[pg.provider] || undefined}
+                  onRegionChange={(value) =>
+                    setPartnerRegions((prev) => ({ ...prev, [pg.provider]: value }))
+                  }
+                  providerCredentials={getCredentialsForProvider(pg.credential_provider)}
+                  allCredentials={credentials}
+                  credentialsLoading={credentialsLoading}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
         <Divider />
 
         {/* Selected Summary */}
@@ -264,6 +567,12 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
             <p>
               <span className="font-medium text-gray-900">{selectedCount}</span>{" "}
               guardrail{selectedCount > 1 ? "s" : ""} will be created
+              {Object.values(partnerEnabled).some(Boolean) && (
+                <span className="text-orange-600">
+                  {" "}
+                  + partner guardrail will be provisioned
+                </span>
+              )}
             </p>
           ) : existingCount > 0 ? (
             <p className="text-green-600">
