@@ -177,7 +177,10 @@ async def test_get_key_object_should_reconnect_once_on_db_connection_error():
 
     assert key_obj.token == "hashed-token-1"
     assert mock_prisma_client.get_data.await_count == 2
-    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once_with(
+        reason="auth_get_key_object_lookup_failure",
+        timeout_seconds=2.0,
+    )
 
 
 @pytest.mark.asyncio
@@ -199,7 +202,10 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
             user_api_key_cache=mock_cache,
         )
 
-    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once_with(
+        reason="auth_get_key_object_lookup_failure",
+        timeout_seconds=2.0,
+    )
     assert mock_prisma_client.get_data.await_count == 1
 
 
