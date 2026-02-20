@@ -345,6 +345,9 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     admin_can_invite_user,
 )
+from litellm.proxy.management_endpoints.compliance_endpoints import (
+    router as compliance_router,
+)
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
 )
@@ -385,6 +388,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.project_endpoints import (
+    router as project_router,
+)
 from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
@@ -411,6 +417,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
+from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -2804,6 +2811,7 @@ class ProxyConfig:
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
                 store_model_in_db = False
+            general_settings["store_model_in_db"] = store_model_in_db
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
@@ -3841,7 +3849,7 @@ class ProxyConfig:
         """
         Pull from DB, read general settings value
         """
-        global general_settings
+        global general_settings, store_model_in_db
         if db_general_settings is None:
             return
         _general_settings = dict(db_general_settings)
@@ -3892,6 +3900,19 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        ## STORE MODEL IN DB ##
+        if "store_model_in_db" in _general_settings:
+            value = _general_settings["store_model_in_db"]
+            if value is None:
+                pass  # Don't change store_model_in_db to None; keep current value
+            elif isinstance(value, bool):
+                store_model_in_db = value
+            elif isinstance(value, str):
+                store_model_in_db = value.lower() == "true"
+            else:
+                store_model_in_db = bool(value)
+            general_settings["store_model_in_db"] = store_model_in_db
 
         ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
         if "maximum_spend_logs_retention_period" in _general_settings:
@@ -5070,10 +5091,6 @@ async def async_data_generator(
             response=response,
             request_data=request_data,
         ):
-            verbose_proxy_logger.debug(
-                "async_data_generator: received streaming chunk - {}".format(chunk)
-            )
-
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -5428,6 +5445,31 @@ class ProxyStartupEvent:
         store_model_in_db = (
             get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
         )
+
+        # If store_model_in_db is still False, check DB for override.
+        # This breaks the chicken-and-egg where DB has store_model_in_db=True
+        # but YAML config has False.
+        if store_model_in_db is not True and prisma_client is not None:
+            try:
+                _db_gs_record = await prisma_client.db.litellm_config.find_first(
+                    where={"param_name": "general_settings"}
+                )
+                if _db_gs_record is not None and isinstance(
+                    _db_gs_record.param_value, dict
+                ):
+                    _db_val = _db_gs_record.param_value.get("store_model_in_db")
+                    if _db_val is True or (
+                        isinstance(_db_val, str)
+                        and _db_val.lower() == "true"
+                    ):
+                        store_model_in_db = True
+                        verbose_proxy_logger.info(
+                            "store_model_in_db=True loaded from DB, overriding config/env"
+                        )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "Failed to check DB for store_model_in_db: %s", str(e)
+                )
 
         if store_model_in_db is True:
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
@@ -11317,10 +11359,12 @@ async def get_config_list(
         "max_request_size_mb": {"type": "Integer"},
         "max_response_size_mb": {"type": "Integer"},
         "pass_through_endpoints": {"type": "PydanticModel"},
+        "store_model_in_db": {"type": "Boolean"},
         "store_prompts_in_spend_logs": {"type": "Boolean"},
         "maximum_spend_logs_retention_period": {"type": "String"},
         "mcp_internal_ip_ranges": {"type": "List"},
         "mcp_trusted_proxy_ranges": {"type": "List"},
+        "always_include_stream_usage": {"type": "Boolean"},
     }
 
     return_val = []
@@ -12426,6 +12470,7 @@ app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
 app.include_router(anthropic_skills_router)
+app.include_router(evals_router)
 app.include_router(claude_code_marketplace_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
@@ -12437,6 +12482,7 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(scim_router)
 app.include_router(organization_router)
+app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
@@ -12465,6 +12511,7 @@ app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_endpoints_router)
+app.include_router(compliance_router)
 app.include_router(a2a_router)
 app.include_router(access_group_router)
 ########################################################

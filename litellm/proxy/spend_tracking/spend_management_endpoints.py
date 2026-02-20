@@ -3278,7 +3278,11 @@ async def _build_ui_spend_logs_response(
     count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids = list(
-            {row.session_id for row in data if getattr(row, "session_id", None)}
+            {
+                (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+                for row in data
+                if (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+            }
         )
         if session_ids:
             # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause

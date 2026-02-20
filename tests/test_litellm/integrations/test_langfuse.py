@@ -268,28 +268,29 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         Test that _log_langfuse_v2 correctly handles None values in the usage object
         by converting them to 0, preventing validation errors.
         """
-        # Create fresh mocks for this test to avoid state pollution from setUp's side_effect
-        # The setUp configures trace.side_effect which can interfere with return_value
-        mock_trace = MagicMock()
-        mock_generation = MagicMock()
-        mock_generation.trace_id = "test-trace-id"
+        # Reset the mock to ensure clean state; clear side_effect so return_value takes effect
+        self.mock_langfuse_client.reset_mock(side_effect=True)
+        self.mock_langfuse_trace.reset_mock(side_effect=True)
+        self.mock_langfuse_generation.reset_mock(side_effect=True)
+
+        # Re-setup the trace and generation chain with clean state
+        self.mock_langfuse_generation.trace_id = "test-trace-id"
         mock_span = MagicMock()
         mock_span.end = MagicMock()
-        
-        mock_trace.generation.return_value = mock_generation
-        mock_trace.span.return_value = mock_span
-        
-        mock_client = MagicMock()
-        mock_client.trace.return_value = mock_trace
-        
-        # Use our fresh mock client
-        self.logger.Langfuse = mock_client
-        
+        self.mock_langfuse_trace.span.return_value = mock_span
+        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+
+        # Ensure trace returns our mock
+        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.logger.Langfuse = self.mock_langfuse_client
+
         with patch(
             "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
             side_effect=lambda generation_params, **kwargs: generation_params,
             create=True,
-        ) as mock_add_prompt_params:
+        ) as mock_add_prompt_params, patch.object(
+            self.logger, "_supports_prompt", return_value=True
+        ):
             # Create a mock response object with usage information containing None values
             response_obj = MagicMock()
             response_obj.usage = MagicMock()
@@ -337,13 +338,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 )
             except Exception as e:
                 self.fail(f"_log_langfuse_v2 raised an exception: {e}")
-            
+
             # Verify that trace was called first
-            mock_client.trace.assert_called()
-            
+            self.mock_langfuse_client.trace.assert_called()
+
             #  Check the arguments passed to the mocked langfuse generation call
-            mock_trace.generation.assert_called_once()
-            call_args, call_kwargs = mock_trace.generation.call_args
+            self.mock_langfuse_trace.generation.assert_called_once()
+            call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
 
             #  Inspect the usage and usage_details dictionaries
             usage_arg = call_kwargs.get("usage")
@@ -471,8 +472,16 @@ def test_max_langfuse_clients_limit():
     """
     Test that the max langfuse clients limit is respected when initializing multiple clients
     """
+    # Mock langfuse package to avoid triggering real import.
+    # The real langfuse import fails on Python 3.14 due to pydantic v1 incompatibility,
+    # and sys.modules["langfuse"] may be absent after other tests in the suite clean up.
+    mock_langfuse = MagicMock()
+    mock_langfuse.version.__version__ = "3.0.0"
     # Set max clients to 2 for testing
-    with patch.object(langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2):
+    original_initialized_langfuse_clients = litellm.initialized_langfuse_clients
+    with patch.dict("sys.modules", {"langfuse": mock_langfuse}), patch.object(
+        langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2
+    ):
         # Reset the counter
         litellm.initialized_langfuse_clients = 0
 
@@ -505,3 +514,5 @@ def test_max_langfuse_clients_limit():
 
         # Counter should still be 2 (third client failed to initialize)
         assert litellm.initialized_langfuse_clients == 2
+
+    litellm.initialized_langfuse_clients = original_initialized_langfuse_clients

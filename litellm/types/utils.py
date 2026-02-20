@@ -2408,6 +2408,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
+    user_api_key_project_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2532,6 +2533,8 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    team_alias: Optional[str]
+    team_id: Optional[str]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2619,6 +2622,52 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
         "PHONE": 1
     }
     """
+
+    guardrail_id: Optional[str]
+    """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'"""
+
+    policy_template: Optional[str]
+    """Name of the policy template this guardrail belongs to, e.g. 'EU AI Act Article 5'"""
+
+    detection_method: Optional[str]
+    """How detection was performed: 'regex', 'keyword', 'llm-judge', 'presidio', etc."""
+
+    confidence_score: Optional[float]
+    """For LLM-judge guardrails: confidence score 0.0-1.0"""
+
+    classification: Optional[dict]
+    """For LLM-judge guardrails: structured classification output"""
+
+    match_details: Optional[List[dict]]
+    """Detailed match information for each detected pattern"""
+
+    patterns_checked: Optional[int]
+    """Total number of patterns evaluated by this guardrail"""
+
+    alert_recipients: Optional[List[str]]
+    """Email addresses that were notified"""
+
+    risk_score: Optional[float]
+    """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
+
+
+class GuardrailTracingDetail(TypedDict, total=False):
+    """
+    Typed fields for guardrail tracing metadata.
+
+    Passed to add_standard_logging_guardrail_information_to_request_data()
+    to enrich the StandardLoggingGuardrailInformation with provider-specific details.
+    """
+
+    guardrail_id: Optional[str]
+    policy_template: Optional[str]
+    detection_method: Optional[str]
+    confidence_score: Optional[float]
+    classification: Optional[dict]
+    match_details: Optional[List[dict]]
+    patterns_checked: Optional[int]
+    alert_recipients: Optional[List[str]]
+    risk_score: Optional[float]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3151,7 +3200,7 @@ class SearchProviders(str, Enum):
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
     LINKUP = "linkup"
-
+    DUCKDUCKGO = "duckduckgo"
 
 # Create a set of all search provider values for quick lookup
 SearchProvidersSet = {provider.value for provider in SearchProviders}

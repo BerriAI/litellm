@@ -731,50 +731,56 @@ class TestVideoLogging:
     
     @pytest.mark.asyncio
     async def test_video_generation_logging(self):
-        """Test that video generation creates proper logging payload with cost tracking."""
+        """Test that video generation creates proper logging payload with cost tracking.
+
+        Note: Uses AsyncMock with side_effect pattern for reliable parallel execution.
+        """
         custom_logger = self.TestVideoLogger()
         litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [custom_logger]
-        
+
         # Mock video generation response
         mock_response = VideoObject(
             id="video_test_123",
-            object="video", 
+            object="video",
             status="queued",
             created_at=1712697600,
             model="sora-2",
             size="720x1280",
             seconds="8"
         )
-        
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_generation_handler.return_value = mock_response
-            
+
+        # Create async mock function to return the mock_response
+        async def mock_async_handler(*args, **kwargs):
+            return mock_response
+
+        # Patch the async_video_generation_handler method on base_llm_http_handler
+        with patch.object(videos_main.base_llm_http_handler, 'async_video_generation_handler', side_effect=mock_async_handler):
             response = await litellm.avideo_generation(
                 prompt="A cat running in a garden",
                 model="sora-2",
                 seconds="8",
                 size="720x1280"
             )
-            
+
             await asyncio.sleep(1)  # Allow logging to complete
-            
+
             # Verify logging payload was created
             assert custom_logger.standard_logging_payload is not None
-            
+
             payload = custom_logger.standard_logging_payload
-            
+
             # Verify basic logging fields
             assert payload["call_type"] == "avideo_generation"
             assert payload["status"] == "success"
             assert payload["model"] == "sora-2"
             assert payload["custom_llm_provider"] == "openai"
-            
+
             # Verify response object is recognized for logging
             assert payload["response"] is not None
             assert payload["response"]["id"] == "video_test_123"
             assert payload["response"]["object"] == "video"
-            
+
             # Verify cost tracking is present (may be 0 in test environment)
             assert payload["response_cost"] is not None
             # Note: Cost calculation may not work in test environment due to mocking
@@ -799,6 +805,11 @@ def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.router import GenericLiteLLMParams
+
+    # Clear the HTTP client cache to prevent test isolation issues
+    # In CI, a cached real HTTPHandler from a previous test might bypass the mock
+    if hasattr(litellm, 'in_memory_llm_clients_cache'):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
     handler = BaseLLMHTTPHandler()
     config = OpenAIVideoConfig()

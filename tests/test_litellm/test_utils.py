@@ -56,6 +56,55 @@ def test_check_provider_match_azure_ai_allows_openai_and_azure():
     ) is False
 
 
+def test_check_provider_match_github_allows_upstream_provider_metadata():
+    """
+    Test that github provider can match upstream provider metadata.
+    GitHub Models can provide models from multiple providers.
+    """
+    assert _check_provider_match(
+        model_info={"litellm_provider": "openai"},
+        custom_llm_provider="github",
+    ) is True
+
+    assert _check_provider_match(
+        model_info={"litellm_provider": "github"},
+        custom_llm_provider="github",
+    ) is True
+
+    assert _check_provider_match(
+        model_info={"litellm_provider": "anthropic"},
+        custom_llm_provider="github",
+    ) is True
+
+
+def test_supports_function_calling_github_openai_alias():
+    assert litellm.utils.supports_function_calling(model="github/gpt-4o-mini") is True
+    assert (
+        litellm.utils.supports_function_calling(
+            model="gpt-4o-mini", custom_llm_provider="github"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_github_anthropic_alias():
+    assert (
+        litellm.utils.supports_function_calling(
+            model="github/claude-3-5-sonnet-latest"
+        )
+        is True
+    )
+
+
+def test_supports_function_calling_unknown_github_alias_returns_false():
+    assert (
+        litellm.utils.supports_function_calling(
+            model="github/non-existent-model-for-capability-check"
+        )
+        is False
+    )
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
@@ -580,6 +629,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
+                "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
                 "max_audio_length_hours": {"type": "number"},
                 "max_audio_per_prompt": {"type": "number"},
@@ -2605,6 +2655,59 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["supports_tool_choice"] is True
 
     print("openrouter kimi-k2.5 model info", model_info)
+
+
+def test_model_info_for_fireworks_short_form_models():
+    """
+    Test that fireworks_ai short-form model entries (fireworks_ai/<model>)
+    are correctly configured in model_prices_and_context_window.json.
+
+    These entries enable cost attribution for models called via short-form
+    names (e.g., fireworks_ai/glm-4p7 instead of
+    fireworks_ai/accounts/fireworks/models/glm-4p7).
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # glm-4p7: short-form and long-form
+    for key in [
+        "fireworks_ai/glm-4p7",
+        "fireworks_ai/accounts/fireworks/models/glm-4p7",
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} not found in model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "fireworks_ai"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == 6e-07
+        assert info["output_cost_per_token"] == 2.2e-06
+        assert info["max_input_tokens"] == 202800
+        assert info["supports_reasoning"] is True
+
+    # minimax-m2p1: short-form and long-form
+    for key in [
+        "fireworks_ai/minimax-m2p1",
+        "fireworks_ai/accounts/fireworks/models/minimax-m2p1",
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} not found in model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "fireworks_ai"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == 3e-07
+        assert info["output_cost_per_token"] == 1.2e-06
+        assert info["max_input_tokens"] == 204800
+
+    # kimi-k2p5: short-form only (long-form already existed)
+    info = model_cost.get("fireworks_ai/kimi-k2p5")
+    assert info is not None, "fireworks_ai/kimi-k2p5 not found in model_prices_and_context_window.json"
+    assert info["litellm_provider"] == "fireworks_ai"
+    assert info["mode"] == "chat"
+    assert info["input_cost_per_token"] == 6e-07
+    assert info["output_cost_per_token"] == 3e-06
+    assert info["max_input_tokens"] == 262144
 
 
 class TestGetValidModelsWithCLI:

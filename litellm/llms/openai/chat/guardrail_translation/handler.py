@@ -107,6 +107,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                data["tools"] = guardrailed_tools
 
             # Step 3: Map guardrail responses back to original message structure
             if guardrailed_texts and texts_to_check:

@@ -67,6 +67,7 @@ def _get_spend_logs_metadata(
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
+            user_api_key_project_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -352,6 +353,8 @@ def get_logging_payload(  # noqa: PLR0915
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
+            else metadata.get("standard_logging_guardrail_information", None)
+            if metadata is not None
             else None
         ),
         cold_storage_object_key=(

@@ -239,6 +239,8 @@ def clean_headers(
     """
     Removes litellm api key from headers
     """
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
     clean_headers = {}
     litellm_key_lower = (
         litellm_key_header_name.lower() if litellm_key_header_name is not None else None
@@ -246,8 +248,13 @@ def clean_headers(
 
     for header, value in headers.items():
         header_lower = header.lower()
+        # Preserve Authorization header if it contains Anthropic OAuth token (sk-ant-oat*)
+        # This allows OAuth tokens to be forwarded to Anthropic-compatible providers
+        # via add_provider_specific_headers_to_request()
+        if header_lower == "authorization" and is_anthropic_oauth_key(value):
+            clean_headers[header] = value
         # Check if header should be excluded: either in special headers cache or matches custom litellm key
-        if header_lower not in _SPECIAL_HEADERS_CACHE and (
+        elif header_lower not in _SPECIAL_HEADERS_CACHE and (
             litellm_key_lower is None or header_lower != litellm_key_lower
         ):
             clean_headers[header] = value
@@ -584,6 +591,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
             user_api_key_team_id=user_api_key_dict.team_id,
+            user_api_key_project_id=user_api_key_dict.project_id,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
@@ -872,7 +880,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         general_settings, user_api_key_dict, _headers
     )
 
-    # Parse user info from headers
+    # Parse user info from headers (fallback to general_settings.user_header_name)
     user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
     if user is not None:
         if user_api_key_dict.end_user_id is None:
@@ -1533,9 +1541,7 @@ def _match_and_track_policies(
         add_policy_sources_to_metadata,
         add_policy_to_applied_policies_header,
     )
-    from litellm.proxy.policy_engine.attachment_registry import (
-        get_attachment_registry,
-    )
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
     # Get matching policies via attachments (with match reasons for attribution)
@@ -1670,9 +1676,7 @@ def add_guardrails_from_policy_engine(
         user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        get_tags_from_request_body,
-    )
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
@@ -1717,6 +1721,8 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: dict,
 ):
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
     anthropic_headers = {}
     # boolean to indicate if a header was added
     added_header = False
@@ -1726,6 +1732,14 @@ def add_provider_specific_headers_to_request(
             anthropic_headers[header] = header_value
             added_header = True
 
+    # Check for Authorization header with Anthropic OAuth token (sk-ant-oat*)
+    # This needs to be handled via provider-specific headers to ensure it only
+    # goes to Anthropic-compatible providers, not all providers in the router
+    for header, value in headers.items():
+        if header.lower() == "authorization" and is_anthropic_oauth_key(value):
+            anthropic_headers[header] = value
+            added_header = True
+            break
     if added_header is True:
         # Anthropic headers work across multiple providers
         # Store as comma-separated list so retrieval can match any of them

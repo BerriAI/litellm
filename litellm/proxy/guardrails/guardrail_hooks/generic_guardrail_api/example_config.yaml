@@ -14,6 +14,7 @@ litellm_settings:
         mode: pre_call  # Options: pre_call, post_call, during_call, [pre_call, post_call]
         api_key: os.environ/GENERIC_GUARDRAIL_API_KEY  # Optional if using Bearer auth
         api_base: http://localhost:8080  # Required. Endpoint /beta/litellm_basic_guardrail_api is automatically appended
+        unreachable_fallback: fail_closed  # Options: fail_closed (default, raise), fail_open (proceed if endpoint unreachable or upstream returns 502/503/504)
         default_on: false  # Set to true to apply to all requests by default
         additional_provider_specific_params:
           # Any additional parameters your guardrail API needs

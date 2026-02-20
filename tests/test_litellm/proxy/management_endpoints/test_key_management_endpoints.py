@@ -5606,3 +5606,554 @@ async def test_validate_key_list_check_key_hash_not_found():
 
     assert exc_info.value.code == "403" or exc_info.value.code == 403
     assert "Key Hash not found" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
+)
+async def test_rotate_master_key_model_data_valid_for_prisma(
+    mock_rotate_mcp,
+):
+    """
+    Test that _rotate_master_key produces valid data for Prisma create_many().
+
+    Regression test for: master key rotation fails with Prisma validation error
+    because created_at/updated_at are None (non-nullable DateTime) and
+    litellm_params/model_info are JSON strings (create_many expects dicts).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    # Setup mock prisma client
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+
+    # Mock model table — return one model
+    mock_model = MagicMock()
+    mock_model.model_id = "model-1"
+    mock_model.model_name = "test-model"
+    mock_model.litellm_params = '{"model": "openai/gpt-4", "api_key": "sk-encrypted-old"}'
+    mock_model.model_info = '{"id": "model-1"}'
+    mock_model.created_by = "admin"
+    mock_model.updated_by = "admin"
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[mock_model]
+    )
+
+    # Mock transaction context manager
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable = MagicMock()
+    mock_tx.litellm_proxymodeltable.delete_many = AsyncMock()
+    mock_tx.litellm_proxymodeltable.create_many = AsyncMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=AsyncMock(
+        __aenter__=AsyncMock(return_value=mock_tx),
+        __aexit__=AsyncMock(return_value=False),
+    ))
+
+    # Mock config table — no env vars
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+
+    # Mock credentials table — no credentials
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[]
+    )
+
+    # Mock MCP rotation
+    mock_rotate_mcp.return_value = None
+
+    # Mock proxy_config
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.decrypt_model_list_from_db.return_value = [
+        {
+            "model_name": "test-model",
+            "litellm_params": {
+                "model": "openai/gpt-4",
+                "api_key": "sk-decrypted-key",
+            },
+            "model_info": {"id": "model-1"},
+        }
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_config",
+        mock_proxy_config,
+    ):
+        await _rotate_master_key(
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    # Verify create_many was called
+    mock_tx.litellm_proxymodeltable.create_many.assert_called_once()
+
+    # Get the data passed to create_many
+    call_args = mock_tx.litellm_proxymodeltable.create_many.call_args
+    created_models = call_args.kwargs.get("data") or call_args[1].get("data")
+
+    assert len(created_models) == 1
+    model_data = created_models[0]
+
+    # Verify timestamps are NOT present (Prisma @default(now()) should apply)
+    assert "created_at" not in model_data, (
+        "created_at should be excluded so Prisma @default(now()) applies"
+    )
+    assert "updated_at" not in model_data, (
+        "updated_at should be excluded so Prisma @default(now()) applies"
+    )
+
+    # Verify litellm_params and model_info are prisma.Json wrappers, NOT JSON strings
+    import prisma
+
+    assert isinstance(model_data["litellm_params"], prisma.Json), (
+        f"litellm_params should be prisma.Json for create_many(), got {type(model_data['litellm_params'])}"
+    )
+    assert isinstance(model_data["model_info"], prisma.Json), (
+        f"model_info should be prisma.Json for create_many(), got {type(model_data['model_info'])}"
+    )
+
+    # Verify delete_many was called inside the transaction (before create_many)
+    mock_tx.litellm_proxymodeltable.delete_many.assert_called_once()
+async def test_default_key_generate_params_duration(monkeypatch):
+    """
+    Test that default_key_generate_params with 'duration' is applied
+    when no duration is provided in the key generation request.
+
+    Regression test for bug where 'duration' was missing from the list
+    of fields populated from default_key_generate_params.
+    """
+    import litellm
+
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Set default_key_generate_params with duration
+    original_value = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {"duration": "180d"}
+
+    try:
+        request = GenerateKeyRequest()  # No duration specified
+        response = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+        # Verify duration was applied from defaults
+        assert request.duration == "180d"
+    finally:
+        litellm.default_key_generate_params = original_value
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_member_team_service_accounts():
+    """
+    Test that regular team members can see service accounts (user_id=NULL)
+    for their teams, but NOT other members' personal keys.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "regular-member-123"
+    member_team_ids = ["team-A", "team-B"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=False,
+    )
+
+    # Should have AND with OR conditions
+    assert "AND" in where
+    or_conditions = where["AND"][1]["OR"]
+
+    # Should have 2 conditions: user's own keys + member team service accounts
+    assert len(or_conditions) == 2
+
+    # First: user's own keys
+    user_cond = or_conditions[0]
+    assert user_cond["user_id"] == user_id
+
+    # Second: service accounts for member teams (user_id=None AND team_id in member teams)
+    service_account_cond = or_conditions[1]
+    assert "AND" in service_account_cond
+    and_parts = service_account_cond["AND"]
+    assert {"team_id": {"in": member_team_ids}} in and_parts
+    assert {"user_id": None} in and_parts
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_admin_sees_all_team_keys():
+    """
+    Test that team admins see ALL keys for their teams (not just service accounts),
+    and that member_team_ids doesn't duplicate admin teams.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "admin-user-123"
+    admin_team_ids = ["team-A"]
+    member_team_ids = ["team-A", "team-B"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=admin_team_ids,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=False,
+    )
+
+    assert "AND" in where
+    or_conditions = where["AND"][1]["OR"]
+
+    # Should have 3 conditions:
+    # 1. user's own keys
+    # 2. admin team keys (all keys for team-A)
+    # 3. member-only service accounts (only service accounts for team-B, since team-A is already covered by admin)
+    assert len(or_conditions) == 3
+
+    # Find admin condition
+    admin_cond = None
+    service_account_cond = None
+    for cond in or_conditions:
+        if isinstance(cond.get("team_id"), dict) and "in" in cond.get("team_id", {}):
+            admin_cond = cond
+        elif "AND" in cond:
+            service_account_cond = cond
+
+    assert admin_cond is not None, "Admin team condition should be present"
+    assert admin_cond["team_id"]["in"] == admin_team_ids
+
+    # member-only condition should only include team-B (team-A is covered by admin)
+    assert service_account_cond is not None, "Service account condition should be present"
+    and_parts = service_account_cond["AND"]
+    assert {"team_id": {"in": ["team-B"]}} in and_parts
+    assert {"user_id": None} in and_parts
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_created_by_scoped_to_current_teams():
+    """
+    Test that created_by filter is scoped to teams user currently belongs to.
+    A former team member should NOT see service accounts they created for
+    a team they've left.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-456"
+    # User is currently only a member of team-A (left team-B)
+    member_team_ids = ["team-A"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=True,
+    )
+
+    assert "AND" in where
+    or_conditions = where["AND"][1]["OR"]
+
+    # Find the created_by condition
+    created_by_cond = None
+    for cond in or_conditions:
+        if "AND" in cond:
+            and_parts = cond["AND"]
+            for part in and_parts:
+                if isinstance(part, dict) and "created_by" in part:
+                    created_by_cond = cond
+                    break
+
+    assert created_by_cond is not None, "Created by condition should be present"
+
+    # created_by should be scoped: created_by=user AND (team_id in [team-A] OR team_id=None)
+    and_parts = created_by_cond["AND"]
+    assert {"created_by": user_id} in and_parts
+
+    # Find the OR part that scopes to current teams
+    team_scope = None
+    for part in and_parts:
+        if isinstance(part, dict) and "OR" in part:
+            team_scope = part["OR"]
+
+    assert team_scope is not None, "Team scope OR condition should be present"
+    assert {"team_id": {"in": member_team_ids}} in team_scope
+    assert {"team_id": None} in team_scope
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_created_by_no_teams():
+    """
+    Test that when user has no team memberships (empty list), created_by
+    only returns non-team keys (personal keys).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-no-teams"
+    member_team_ids = []  # User has no team memberships
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=True,
+    )
+
+    assert "AND" in where
+    or_conditions = where["AND"][1]["OR"]
+
+    # Find the created_by condition
+    created_by_cond = None
+    for cond in or_conditions:
+        if "AND" in cond:
+            and_parts = cond["AND"]
+            for part in and_parts:
+                if isinstance(part, dict) and "created_by" in part:
+                    created_by_cond = cond
+                    break
+
+    assert created_by_cond is not None
+    and_parts = created_by_cond["AND"]
+    assert {"created_by": user_id} in and_parts
+    assert {"team_id": None} in and_parts
+    # Should NOT have an OR with team_id in [] - just a simple team_id=None
+    for part in and_parts:
+        if isinstance(part, dict) and "OR" in part:
+            pytest.fail("Should not have OR condition when member_team_ids is empty")
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_backward_compat_no_member_team_ids():
+    """
+    Test backward compatibility: when member_team_ids is None (not provided),
+    created_by filter should use the old unrestricted behavior.
+    This ensures direct callers of _list_key_helper (like Prometheus) still work.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-789"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,  # Not provided
+        include_created_by_keys=True,
+    )
+
+    assert "AND" in where
+    or_conditions = where["AND"][1]["OR"]
+
+    # Find the created_by condition - should be simple {"created_by": user_id}
+    created_by_cond = None
+    for cond in or_conditions:
+        if "created_by" in cond:
+            created_by_cond = cond
+
+    assert created_by_cond is not None
+    assert created_by_cond == {"created_by": user_id}
+    assert len(created_by_cond) == 1, "Should be simple created_by without team scoping"
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_admin_all_member_overlap():
+    """
+    Test that when user is admin of ALL teams they belong to,
+    no member-only service account condition is added (would be redundant).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "admin-all"
+    admin_team_ids = ["team-A", "team-B"]
+    member_team_ids = ["team-A", "team-B"]
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=admin_team_ids,
+        member_team_ids=member_team_ids,
+        include_created_by_keys=False,
+    )
+
+    assert "AND" in where
+    or_conditions = where["AND"][1]["OR"]
+
+    # Should only have 2 conditions: user's own keys + admin team keys
+    # No member-only service account condition since all teams are admin
+    assert len(or_conditions) == 2
+
+    # Verify no AND condition with user_id=None exists (that's the member-only pattern)
+    for cond in or_conditions:
+        if "AND" in cond:
+            and_parts = cond["AND"]
+            if {"user_id": None} in and_parts:
+                pytest.fail(
+                    "Should not have member-only service account condition "
+                    "when user is admin of all teams"
+                )
+
+
+@pytest.mark.asyncio
+async def test_get_member_team_ids():
+    """
+    Test that get_member_team_ids returns all teams where user is a member
+    (any role), not just admin teams.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_member_team_ids,
+    )
+
+    user_id = "member-user-123"
+
+    # Create mock user info with teams
+    user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        teams=["team-A", "team-B", "team-C"],
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-test",
+        user_id=user_id,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+
+    # Create mock team objects - user is admin of team-A, member of team-B, not in team-C's members list
+    mock_team_a = MagicMock()
+    mock_team_a.model_dump.return_value = {
+        "team_id": "team-A",
+        "team_alias": "Team A",
+        "members_with_roles": [
+            {"user_id": user_id, "role": "admin", "user_email": None}
+        ],
+        "max_budget": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "models": [],
+        "blocked": False,
+    }
+
+    mock_team_b = MagicMock()
+    mock_team_b.model_dump.return_value = {
+        "team_id": "team-B",
+        "team_alias": "Team B",
+        "members_with_roles": [
+            {"user_id": user_id, "role": "user", "user_email": None}
+        ],
+        "max_budget": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "models": [],
+        "blocked": False,
+    }
+
+    mock_team_c = MagicMock()
+    mock_team_c.model_dump.return_value = {
+        "team_id": "team-C",
+        "team_alias": "Team C",
+        "members_with_roles": [
+            {"user_id": "other-user", "role": "admin", "user_email": None}
+        ],
+        "max_budget": None,
+        "budget_duration": None,
+        "budget_reset_at": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "models": [],
+        "blocked": False,
+    }
+
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[mock_team_a, mock_team_b, mock_team_c]
+    )
+
+    result = await get_member_team_ids(
+        complete_user_info=user_info,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    # Should return team-A and team-B (user is a member of both)
+    # Should NOT return team-C (user is not in members list)
+    assert sorted(result) == ["team-A", "team-B"]

@@ -21,9 +21,7 @@ commands:
       - run:
           name: "Install local version of litellm-enterprise"
           command: |
-            cd enterprise
-            python -m pip install -e .
-            cd ..
+            pip install --force-reinstall --no-deps -e enterprise/
   setup_litellm_test_deps:
     steps:
       - checkout

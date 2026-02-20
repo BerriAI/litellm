@@ -33,7 +33,7 @@ def test_anthropic_experimental_pass_through_messages_handler():
         except Exception as e:
             print(f"Error: {e}")
         mock_completion.assert_called_once()
-        mock_completion.call_args.kwargs["api_key"] == "test-api-key"
+        assert mock_completion.call_args.kwargs["api_key"] == "test-api-key"
 
 
 def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_and_api_base_and_custom_values():
@@ -57,9 +57,9 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
         except Exception as e:
             print(f"Error: {e}")
         mock_completion.assert_called_once()
-        mock_completion.call_args.kwargs["api_key"] == "test-api-key"
-        mock_completion.call_args.kwargs["api_base"] == "test-api-base"
-        mock_completion.call_args.kwargs["custom_key"] == "custom_value"
+        assert mock_completion.call_args.kwargs["api_key"] == "test-api-key"
+        assert mock_completion.call_args.kwargs["api_base"] == "test-api-base"
+        assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():

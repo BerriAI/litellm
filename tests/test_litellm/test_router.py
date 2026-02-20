@@ -1877,19 +1877,20 @@ async def test_anthropic_messages_call_type_is_cached():
     in PromptCachingDeploymentCheck.async_log_success_event.
     """
     import asyncio
+
+    from litellm.caching.dual_cache import DualCache
     from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
         PromptCachingDeploymentCheck,
     )
     from litellm.router_utils.prompt_caching_cache import PromptCachingCache
-    from litellm.caching.dual_cache import DualCache
-    from litellm.types.utils import CallTypes
     from litellm.types.utils import (
-        StandardLoggingPayload,
-        StandardLoggingModelInformation,
-        StandardLoggingMetadata,
+        CallTypes,
         StandardLoggingHiddenParams,
+        StandardLoggingMetadata,
+        StandardLoggingModelInformation,
+        StandardLoggingPayload,
     )
-    
+
     # Create mock standard logging payload inline
     def create_standard_logging_payload() -> StandardLoggingPayload:
         return StandardLoggingPayload(
@@ -2081,3 +2082,107 @@ def test_update_kwargs_with_deployment_no_tags():
 
     # No tags key should be added if deployment has no tags
     assert "tags" not in kwargs["metadata"]
+
+
+def test_update_kwargs_with_deployment_merges_tools():
+    """
+    Test that when both deployment litellm_params and request have tools,
+    they are merged (deployment tools first, then request tools).
+
+    Supports proxy-configured tools (e.g. for o3 deep research) merged with
+    client-provided tools.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    "tool_choice": "auto",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {
+        "metadata": {},
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "description": "Get weather"},
+            },
+        ],
+    }
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="o3-deep-research"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Tools should be merged: deployment first, then request
+    assert "tools" in kwargs
+    assert len(kwargs["tools"]) == 2
+    assert kwargs["tools"][0] == {"type": "web_search"}
+    assert kwargs["tools"][1]["function"]["name"] == "get_weather"
+    # tool_choice from request (none) - deployment's should be used
+    assert kwargs["tool_choice"] == "auto"
+
+
+def test_update_kwargs_with_deployment_merge_tools_deployment_only():
+    """
+    Test that when only deployment has tools, they are applied to kwargs.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    "tool_choice": "required",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="o3-deep-research"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["tools"] == [{"type": "web_search"}]
+    assert kwargs["tool_choice"] == "required"
+
+
+def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice():
+    """
+    Test that when request has tool_choice, it overrides deployment's.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    "tool_choice": "auto",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {
+        "metadata": {},
+        "tool_choice": "none",
+    }
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="o3-deep-research"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Request tool_choice should be preserved (merged tools still applied)
+    assert kwargs["tool_choice"] == "none"

@@ -70,22 +70,86 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "us_ssn", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "us_ssn_no_dash", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_us", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_uk", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_germany", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_france", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_netherlands", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "nl_bsn_contextual", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_china", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_india", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_japan", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "passport_canada", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "br_cpf", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "br_cpf_unformatted", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "br_rg", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "br_cnpj", "action": "MASK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "us_ssn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "us_ssn_no_dash",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_us",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_uk",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_germany",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_france",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_netherlands",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "nl_bsn_contextual",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_china",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_india",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_japan",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_canada",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "br_cpf",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "br_cpf_unformatted",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "br_rg",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "br_cnpj",
+              "action": "MASK"
+            }
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },
@@ -99,12 +163,36 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "email", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "us_phone", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "br_phone_landline", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "br_phone_mobile", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "street_address", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "br_cep", "action": "MASK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "email",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "us_phone",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "br_phone_landline",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "br_phone_mobile",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "street_address",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "br_cep",
+              "action": "MASK"
+            }
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },
@@ -118,12 +206,36 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "amex", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "discover", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "visa",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "mastercard",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "amex",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "discover",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "credit_card",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "iban",
+              "action": "MASK"
+            }
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },
@@ -137,11 +249,31 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "aws_access_key",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "aws_secret_key",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "github_token",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "slack_token",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "generic_api_key",
+              "action": "BLOCK"
+            }
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },
@@ -155,8 +287,16 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "ipv4", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "ipv6", "action": "MASK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ipv4",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "ipv6",
+              "action": "MASK"
+            }
           ],
           "pattern_redaction_format": "[INTERNAL_IP_REDACTED]"
         },
@@ -170,14 +310,46 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "gender_sexual_orientation", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "race_ethnicity_national_origin", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "religion", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "age_discrimination", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "disability", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "marital_family_status", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "military_status", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "public_assistance", "action": "MASK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "gender_sexual_orientation",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "race_ethnicity_national_origin",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "religion",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "age_discrimination",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "disability",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "marital_family_status",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "military_status",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "public_assistance",
+              "action": "MASK"
+            }
           ],
           "pattern_redaction_format": "[PROTECTED_CLASS_INFO_REDACTED]"
         },
@@ -200,7 +372,12 @@
         "protected-class-information"
       ],
       "guardrails_remove": []
-    }
+    },
+    "tags": [
+      "PII Protection",
+      "Australia"
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "baseline-pii-protection",
@@ -222,13 +399,27 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "au_tfn", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "au_abn", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "au_medicare", "action": "MASK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_tfn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_abn",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "au_medicare",
+              "action": "MASK"
+            }
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },
-        "guardrail_info": {"description": "Masks Australian Tax File Numbers, Business Numbers, and Medicare Numbers"}
+        "guardrail_info": {
+          "description": "Masks Australian Tax File Numbers, Business Numbers, and Medicare Numbers"
+        }
       },
       {
         "guardrail_name": "credentials-api-keys",
@@ -236,15 +427,37 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "aws_access_key", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "aws_secret_key", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "github_token", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "slack_token", "action": "BLOCK"},
-            {"pattern_type": "prebuilt", "pattern_name": "generic_api_key", "action": "BLOCK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "aws_access_key",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "aws_secret_key",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "github_token",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "slack_token",
+              "action": "BLOCK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "generic_api_key",
+              "action": "BLOCK"
+            }
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },
-        "guardrail_info": {"description": "Blocks requests containing API keys and credentials (AWS, GitHub, Slack)"}
+        "guardrail_info": {
+          "description": "Blocks requests containing API keys and credentials (AWS, GitHub, Slack)"
+        }
       },
       {
         "guardrail_name": "financial-pii",
@@ -252,16 +465,42 @@
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
           "patterns": [
-            {"pattern_type": "prebuilt", "pattern_name": "visa", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "mastercard", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "amex", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "discover", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "credit_card", "action": "MASK"},
-            {"pattern_type": "prebuilt", "pattern_name": "iban", "action": "MASK"}
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "visa",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "mastercard",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "amex",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "discover",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "credit_card",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "iban",
+              "action": "MASK"
+            }
           ],
           "pattern_redaction_format": "[{pattern_name}_REDACTED]"
         },
-        "guardrail_info": {"description": "Masks financial information including credit cards and bank account numbers"}
+        "guardrail_info": {
+          "description": "Masks financial information including credit cards and bank account numbers"
+        }
       }
     ],
     "templateData": {
@@ -273,7 +512,11 @@
         "financial-pii"
       ],
       "guardrails_remove": []
-    }
+    },
+    "tags": [
+      "PII Protection"
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "nsfw-content-filter-australia",
@@ -393,7 +636,12 @@
         "nsfw-racial-bias-filter"
       ],
       "guardrails_remove": []
-    }
+    },
+    "tags": [
+      "Content Safety",
+      "Australia"
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "nsfw-content-filter-basic",
@@ -493,7 +741,11 @@
         "nsfw-racial-bias-filter-basic"
       ],
       "guardrails_remove": []
-    }
+    },
+    "tags": [
+      "Content Safety"
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "nsfw-content-filter-all-regions",
@@ -673,6 +925,1093 @@
         "nsfw-racial-bias-filter-global"
       ],
       "guardrails_remove": []
-    }
+    },
+    "tags": [
+      "Content Safety"
+    ],
+    "estimated_latency_ms": 1
+  },
+  {
+    "id": "gdpr-eu-pii-protection",
+    "title": "GDPR Art. 32 \u2014 EU PII Protection",
+    "description": "GDPR Article 32 compliance for EU personal data protection. Masks French national IDs (NIR/INSEE), EU IBANs, French phone numbers, EU VAT numbers, EU passport numbers, and email addresses. Suitable for applications processing EU citizen data requiring GDPR compliance.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-indigo-500",
+    "iconBg": "bg-indigo-50",
+    "guardrails": [
+      "gdpr-eu-national-identifiers",
+      "gdpr-eu-financial-data",
+      "gdpr-eu-contact-information",
+      "gdpr-eu-business-identifiers"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "gdpr-eu-national-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "fr_nir",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "eu_passport_generic",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU national identification numbers including French NIR/INSEE and EU passport numbers for GDPR compliance"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-financial-data",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "eu_iban_enhanced",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "iban",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[IBAN_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU bank account numbers (IBANs) to protect financial data under GDPR Article 32"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-contact-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "email",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "fr_phone",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "fr_postal_code",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks contact information including emails, French phone numbers, and postal codes for EU data subjects"
+        }
+      },
+      {
+        "guardrail_name": "gdpr-eu-business-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "eu_vat",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[VAT_NUMBER_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks EU VAT identification numbers to protect business entity information under GDPR"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "gdpr-eu-pii-protection",
+      "description": "GDPR Article 32 compliance policy for EU personal data protection. Masks French national IDs, EU IBANs, phone numbers, VAT numbers, passports, and contact information.",
+      "guardrails_add": [
+        "gdpr-eu-national-identifiers",
+        "gdpr-eu-financial-data",
+        "gdpr-eu-contact-information",
+        "gdpr-eu-business-identifiers"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "PII Protection",
+      "Regulatory",
+      "EU"
+    ],
+    "estimated_latency_ms": 1
+  },
+  {
+    "id": "eu-ai-act-article5",
+    "title": "EU AI Act Article 5 \u2014 Prohibited Practices",
+    "description": "Comprehensive EU AI Act Article 5 compliance covering all prohibited AI practices. Includes 5 dedicated sub-guardrails per language (English + French) for: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition in workplace/education (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Uses conditional matching (identifier word + context word).",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "eu-ai-act-art5-manipulation",
+      "eu-ai-act-art5-vulnerability",
+      "eu-ai-act-art5-social-scoring",
+      "eu-ai-act-art5-emotion-recognition",
+      "eu-ai-act-art5-biometric-profiling",
+      "eu-ai-act-art5-manipulation-fr",
+      "eu-ai-act-art5-vulnerability-fr",
+      "eu-ai-act-art5-social-scoring-fr",
+      "eu-ai-act-art5-emotion-recognition-fr",
+      "eu-ai-act-art5-biometric-profiling-fr"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "eu-ai-act-art5-manipulation",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_manipulation",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(a) \u2014 Blocks subliminal manipulation, deceptive AI techniques, dark patterns, and covert behavioral influence"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-vulnerability",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_vulnerability",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(b) \u2014 Blocks AI systems that exploit vulnerabilities of children, elderly, disabled persons, or economically disadvantaged groups"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-social-scoring",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_social_scoring",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(c) \u2014 Blocks social credit systems, citizen scoring, trustworthiness classification, and behavioral reputation scoring"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-emotion-recognition",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_emotion_recognition",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(f) \u2014 Blocks emotion recognition, mood tracking, and sentiment analysis in workplace and educational settings"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-biometric-profiling",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_biometric_profiling",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(d)(g)(h) \u2014 Blocks biometric categorization by race/ethnicity/religion/politics, facial recognition database scraping, and predictive policing"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-manipulation-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_manipulation_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(a) FR \u2014 Bloque la manipulation subliminale, les techniques d'IA trompeuses et les dark patterns (fran\u00e7ais)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-vulnerability-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_vulnerability_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(b) FR \u2014 Bloque l'exploitation des vuln\u00e9rabilit\u00e9s des enfants, personnes \u00e2g\u00e9es et handicap\u00e9es (fran\u00e7ais)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-social-scoring-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_social_scoring_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(c) FR \u2014 Bloque les syst\u00e8mes de cr\u00e9dit social, notation des citoyens et classification de fiabilit\u00e9 (fran\u00e7ais)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-emotion-recognition-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_emotion_recognition_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(f) FR \u2014 Bloque la reconnaissance des \u00e9motions et l'analyse des sentiments au travail et dans l'\u00e9ducation (fran\u00e7ais)"
+        }
+      },
+      {
+        "guardrail_name": "eu-ai-act-art5-biometric-profiling-fr",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "eu_ai_act_art5_biometric_profiling_fr",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling_fr.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Art. 5.1(d)(g)(h) FR \u2014 Bloque la cat\u00e9gorisation biom\u00e9trique, les bases de reconnaissance faciale et le profilage pr\u00e9dictif (fran\u00e7ais)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "eu-ai-act-article5",
+      "description": "Comprehensive EU AI Act Article 5 compliance policy. Covers all prohibited AI practices across 5 sub-guardrails per language: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Includes English and French detection.",
+      "guardrails_add": [
+        "eu-ai-act-art5-manipulation",
+        "eu-ai-act-art5-vulnerability",
+        "eu-ai-act-art5-social-scoring",
+        "eu-ai-act-art5-emotion-recognition",
+        "eu-ai-act-art5-biometric-profiling",
+        "eu-ai-act-art5-manipulation-fr",
+        "eu-ai-act-art5-vulnerability-fr",
+        "eu-ai-act-art5-social-scoring-fr",
+        "eu-ai-act-art5-emotion-recognition-fr",
+        "eu-ai-act-art5-biometric-profiling-fr"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Regulatory",
+      "EU"
+    ],
+    "estimated_latency_ms": 1
+  },
+  {
+    "id": "mcp-security-unregistered-server-block",
+    "title": "MCP Security: Block Unregistered Servers",
+    "description": "Blocks requests that reference MCP servers not registered on this LiteLLM gateway. Prevents unauthorized tool access via unregistered MCP endpoints.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "mcp-security-block"
+    ],
+    "complexity": "Low",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "mcp-security-block",
+        "litellm_params": {
+          "guardrail": "mcp_security",
+          "mode": "pre_call",
+          "default_on": true,
+          "on_violation": "block"
+        },
+        "guardrail_info": {
+          "description": "Blocks requests referencing MCP servers not in the gateway registry"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "mcp-security-unregistered-server-block",
+      "description": "Blocks requests referencing MCP servers not registered on this gateway.",
+      "guardrails_add": [
+        "mcp-security-block"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Security"
+    ],
+    "estimated_latency_ms": 200
+  },
+  {
+    "id": "airline-passenger-data-protection-uae",
+    "title": "Airline Passenger Data Protection (UAE)",
+    "description": "Protects airline passenger PII including PNR/booking references, multi-national passport numbers, frequent flyer (Skywards) numbers, payment cards, IBANs, Emirates ID, UAE phone numbers, and email addresses. Designed for UAE-based airlines operating global routes.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-emerald-500",
+    "iconBg": "bg-emerald-50",
+    "guardrails": [
+      "airline-pnr-skywards-pii",
+      "airline-passport-multinational",
+      "airline-payment-financial",
+      "airline-contact-info-uae"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "airline-pnr-skywards-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "airline_pnr",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "skywards_number",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks airline PNR/booking references and Emirates Skywards frequent flyer numbers"
+        }
+      },
+      {
+        "guardrail_name": "airline-passport-multinational",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_us",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_uk",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_germany",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_france",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_india",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_china",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_australia",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_japan",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_canada",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_netherlands",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uae_emirates_id",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks passport numbers from 10+ nationalities and UAE Emirates ID -- covers global route network"
+        }
+      },
+      {
+        "guardrail_name": "airline-payment-financial",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "credit_card",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "visa",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "mastercard",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "amex",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "iban",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks credit card numbers (Visa, Mastercard, Amex) and IBANs"
+        }
+      },
+      {
+        "guardrail_name": "airline-contact-info-uae",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "email",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uae_phone",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "us_phone",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks email addresses and phone numbers (UAE and international formats)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "airline-passenger-data-protection-uae",
+      "description": "Airline passenger data protection for UAE-based carriers. Masks PNR/booking references, Skywards numbers, multi-national passports, Emirates ID, payment cards, IBANs, and contact information.",
+      "guardrails_add": [
+        "airline-pnr-skywards-pii",
+        "airline-passport-multinational",
+        "airline-payment-financial",
+        "airline-contact-info-uae"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "PII Protection",
+      "Aviation",
+      "UAE"
+    ],
+    "estimated_latency_ms": 1
+  },
+  {
+    "id": "aviation-operations-security",
+    "title": "Aviation Operations Security",
+    "description": "Prevents AI from leaking flight operations data (flight numbers, crew schedules, gate assignments, aircraft tail numbers), generating content about aviation security vulnerabilities or bypass procedures, and producing unauthorized airline statements or fake incident reports.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "aviation-ops-data-protection",
+      "aviation-safety-topic-filter",
+      "airline-brand-protection-filter",
+      "competitor-name-input-blocker",
+      "competitor-name-output-blocker",
+      "competitor-recommendation-input-filter",
+      "competitor-recommendation-output-filter",
+      "competitor-comparison-input-filter",
+      "competitor-comparison-output-filter"
+    ],
+    "complexity": "High",
+    "parameters": [
+      {
+        "name": "brand_name",
+        "label": "Your Airline / Brand Name",
+        "type": "text",
+        "required": true,
+        "placeholder": "e.g. Acme Airlines"
+      }
+    ],
+    "llm_enrichment": {
+      "parameter": "brand_name",
+      "prompt": "List the top 30 direct competitors of {{brand_name}} in the airline industry. Include major international carriers, regional competitors, and low-cost carriers that operate on overlapping routes. Return ONLY airline/brand names, one per line, no numbering, no explanations.",
+      "result_key": "competitors"
+    },
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "aviation-ops-data-protection",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "flight_number",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "regex",
+              "name": "aircraft_tail_number",
+              "pattern": "\\bA6-[A-Z]{3}\\b|\\b[A-Z]-[A-Z]{4}\\b|\\bN[0-9]{1,5}[A-Z]{0,2}\\b",
+              "action": "MASK"
+            }
+          ],
+          "blocked_words": [
+            {
+              "keyword": "crew roster",
+              "action": "BLOCK",
+              "description": "Crew scheduling data"
+            },
+            {
+              "keyword": "crew schedule",
+              "action": "BLOCK",
+              "description": "Crew scheduling data"
+            },
+            {
+              "keyword": "duty roster",
+              "action": "BLOCK",
+              "description": "Staff duty data"
+            },
+            {
+              "keyword": "pilot roster",
+              "action": "BLOCK",
+              "description": "Pilot scheduling data"
+            },
+            {
+              "keyword": "cabin crew list",
+              "action": "BLOCK",
+              "description": "Crew manifest data"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks flight numbers and aircraft registrations. Blocks crew scheduling and gate assignment data leakage."
+        }
+      },
+      {
+        "guardrail_name": "aviation-safety-topic-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "aviation_safety_topics",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/aviation_safety_topics.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content about aircraft vulnerabilities, security bypass procedures, cockpit access, and aviation system exploitation"
+        }
+      },
+      {
+        "guardrail_name": "airline-brand-protection-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "categories": [
+            {
+              "category": "airline_brand_protection",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/airline_brand_protection.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ],
+          "blocked_words": [
+            {
+              "keyword": "{{brand_name}} plane crash",
+              "action": "BLOCK",
+              "description": "Fake crash report"
+            },
+            {
+              "keyword": "{{brand_name}} flight crashed",
+              "action": "BLOCK",
+              "description": "Fake crash report"
+            },
+            {
+              "keyword": "{{brand_name}} crash landing",
+              "action": "BLOCK",
+              "description": "Fake incident"
+            },
+            {
+              "keyword": "{{brand_name}} emergency",
+              "action": "BLOCK",
+              "description": "Fake emergency"
+            },
+            {
+              "keyword": "{{brand_name}} passengers dead",
+              "action": "BLOCK",
+              "description": "Fake fatality report"
+            },
+            {
+              "keyword": "{{brand_name}} confirms fatalities",
+              "action": "BLOCK",
+              "description": "Fake fatality confirmation"
+            },
+            {
+              "keyword": "{{brand_name}} safety scandal",
+              "action": "BLOCK",
+              "description": "Fake scandal"
+            },
+            {
+              "keyword": "{{brand_name}} cover up",
+              "action": "BLOCK",
+              "description": "Fake coverup claim"
+            },
+            {
+              "keyword": "{{brand_name}} fleet grounded",
+              "action": "BLOCK",
+              "description": "Fake grounding claim"
+            },
+            {
+              "keyword": "{{brand_name}} discrimination lawsuit",
+              "action": "BLOCK",
+              "description": "Fake lawsuit"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks AI-generated fake incident reports, unauthorized statements, and reputation-damaging content about your brand (runs on output)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-name-input-blocker",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitors_blocked_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs that mention competitor names (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-name-output-blocker",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitors_blocked_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI outputs that mention competitor names (post_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-recommendation-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_recommendation_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user requests asking to recommend competitors (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-recommendation-output-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitor_recommendation_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI from recommending or suggesting competitor services (post_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-comparison-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_comparison_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs requesting unfavorable brand comparisons (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-comparison-output-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitor_comparison_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI outputs with unfavorable brand comparisons (post_call)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "aviation-operations-security",
+      "description": "Aviation operations security policy. Protects flight ops data, blocks aviation security vulnerability content, and prevents fake airline incident reports and unauthorized statements.",
+      "guardrails_add": [
+        "aviation-ops-data-protection",
+        "aviation-safety-topic-filter",
+        "airline-brand-protection-filter",
+        "competitor-name-input-blocker",
+        "competitor-name-output-blocker",
+        "competitor-recommendation-input-filter",
+        "competitor-recommendation-output-filter",
+        "competitor-comparison-input-filter",
+        "competitor-comparison-output-filter"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Aviation",
+      "Security"
+    ],
+    "estimated_latency_ms": 1
+  },
+  {
+    "id": "uae-regulatory-compliance",
+    "title": "UAE Regulatory Compliance",
+    "description": "Compliance with UAE Federal Decree-Law No. 45/2021 (Data Protection) and Federal Decree-Law No. 2/2015 (Anti-Discrimination). Protects Emirates ID numbers, UAE phone numbers, and ensures cultural sensitivity including royal family references and religious content policies.",
+    "icon": "CheckCircleIcon",
+    "iconColor": "text-blue-500",
+    "iconBg": "bg-blue-50",
+    "guardrails": [
+      "uae-data-protection-pii",
+      "uae-cultural-sensitivity-filter",
+      "uae-anti-discrimination-filter"
+    ],
+    "complexity": "Medium",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "uae-data-protection-pii",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uae_emirates_id",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "uae_phone",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "email",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "iban",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "credit_card",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "regex",
+              "name": "uae_po_box",
+              "pattern": "\\b[Pp]\\.?[Oo]\\.?\\s*[Bb]ox\\s*\\d{1,6}\\b",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "UAE Federal Decree-Law No. 45/2021 compliance -- masks Emirates ID, UAE phone numbers, email, IBAN, payment cards, and PO Box addresses"
+        }
+      },
+      {
+        "guardrail_name": "uae-cultural-sensitivity-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "uae_cultural_sensitivity",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/uae_cultural_sensitivity.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Blocks content disrespecting UAE royal family, cultural norms, and religious sensitivities"
+        }
+      },
+      {
+        "guardrail_name": "uae-anti-discrimination-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "uae_anti_discrimination",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/uae_anti_discrimination.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "UAE Federal Decree-Law No. 2/2015 compliance -- blocks discriminatory content based on race, religion, caste, ethnicity, or nationality"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "uae-regulatory-compliance",
+      "description": "UAE regulatory compliance policy. Covers Federal Decree-Law No. 45/2021 (Data Protection) and Federal Decree-Law No. 2/2015 (Anti-Discrimination). Protects Emirates ID, UAE contact info, and ensures cultural and religious sensitivity.",
+      "guardrails_add": [
+        "uae-data-protection-pii",
+        "uae-cultural-sensitivity-filter",
+        "uae-anti-discrimination-filter"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Regulatory",
+      "UAE"
+    ],
+    "estimated_latency_ms": 1
+  },
+  {
+    "id": "competitor-mention-detection",
+    "title": "Competitor Mention Detection",
+    "description": "Automatically detects and blocks AI from recommending or promoting competitor brands. Uses LLM-powered discovery to identify your top competitors, then monitors both inputs and outputs for competitor mentions, referrals, and comparisons that could divert business.",
+    "icon": "ShieldExclamationIcon",
+    "iconColor": "text-orange-500",
+    "iconBg": "bg-orange-50",
+    "guardrails": [
+      "competitor-input-blocker",
+      "competitor-output-blocker",
+      "competitor-recommendation-input-filter",
+      "competitor-recommendation-output-filter",
+      "competitor-comparison-input-filter",
+      "competitor-comparison-output-filter"
+    ],
+    "complexity": "Medium",
+    "parameters": [
+      {
+        "name": "brand_name",
+        "label": "Your Brand Name",
+        "type": "text",
+        "required": true,
+        "placeholder": "e.g. Acme Airlines"
+      }
+    ],
+    "llm_enrichment": {
+      "parameter": "brand_name",
+      "prompt": "List the top 30 direct competitors of {{brand_name}} in the same industry. Return ONLY company/brand names, one per line, no numbering, no explanations.",
+      "result_key": "competitors"
+    },
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "competitor-input-blocker",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitors_blocked_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs that mention competitor brands (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-output-blocker",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitors_blocked_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI outputs that mention competitor brands (post_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-recommendation-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_recommendation_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user requests asking to recommend competitors (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-recommendation-output-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitor_recommendation_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI from recommending or suggesting competitor services (post_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-comparison-input-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "blocked_words": "{{competitor_comparison_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks user inputs requesting unfavorable brand comparisons (pre_call)"
+        }
+      },
+      {
+        "guardrail_name": "competitor-comparison-output-filter",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "post_call",
+          "blocked_words": "{{competitor_comparison_words}}"
+        },
+        "guardrail_info": {
+          "description": "Blocks AI outputs with unfavorable brand comparisons (post_call)"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "competitor-mention-detection",
+      "description": "Detects and blocks competitor mentions in both inputs and outputs. Uses LLM-powered competitor discovery based on your brand name.",
+      "guardrails_add": [
+        "competitor-input-blocker",
+        "competitor-output-blocker",
+        "competitor-recommendation-input-filter",
+        "competitor-recommendation-output-filter",
+        "competitor-comparison-input-filter",
+        "competitor-comparison-output-filter"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Brand Protection"
+    ],
+    "estimated_latency_ms": 1
   }
 ]
