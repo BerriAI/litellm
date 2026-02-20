@@ -549,7 +549,7 @@ function CreateKeyPageContent() {
                   ) : page == "vector-stores" ? (
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "guardrails-monitor" ? (
-                    <GuardrailsMonitorView />
+                    <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (
                     <NewUsagePage
                       teams={(teams as Team[]) ?? []}

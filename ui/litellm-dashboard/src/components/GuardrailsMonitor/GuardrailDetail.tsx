@@ -3,19 +3,23 @@ import {
   BellOutlined,
   CheckOutlined,
   CloseOutlined,
+  PlayCircleOutlined,
   SafetyOutlined,
+  SettingOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
 import { Card, Col, Grid, Title } from "@tremor/react";
 import { Button, Input, Tabs } from "antd";
 import React, { useState } from "react";
 import { getGuardrailDetailOrDefault } from "./mockData";
+import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { LogViewer } from "./LogViewer";
 import { MetricCard } from "./MetricCard";
 
 interface GuardrailDetailProps {
   guardrailId: string;
   onBack: () => void;
+  accessToken?: string | null;
 }
 
 const statusColors: Record<
@@ -27,10 +31,15 @@ const statusColors: Record<
   critical: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
 };
 
-export function GuardrailDetail({ guardrailId, onBack }: GuardrailDetailProps) {
+export function GuardrailDetail({
+  guardrailId,
+  onBack,
+  accessToken = null,
+}: GuardrailDetailProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [showNotifyPanel, setShowNotifyPanel] = useState(false);
   const [notifySaved, setNotifySaved] = useState(false);
+  const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
   const [notifyConfig, setNotifyConfig] = useState({
     failRateThreshold: "",
     apiErrorThreshold: "",
@@ -77,6 +86,15 @@ export function GuardrailDetail({ guardrailId, onBack }: GuardrailDetailProps) {
             <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
               {data.provider}
             </span>
+            <Button type="default" icon={<PlayCircleOutlined />}>
+              Re-run AI
+            </Button>
+            <Button
+              type="default"
+              icon={<SettingOutlined />}
+              onClick={() => setEvaluationModalOpen(true)}
+              title="Evaluation settings"
+            />
             <div className="relative">
               <Button
                 type={showNotifyPanel ? "primary" : "default"}
@@ -194,7 +212,7 @@ export function GuardrailDetail({ guardrailId, onBack }: GuardrailDetailProps) {
 
       {activeTab === "overview" && (
         <div className="space-y-6 mt-4">
-          <Grid numItems={2} numItemsMd={6} className="gap-4">
+          <Grid numItems={2} numItemsMd={5} className="gap-4">
             <Col>
               <MetricCard label="Requests Evaluated" value={data.requestsEvaluated.toLocaleString()} />
             </Col>
@@ -205,6 +223,7 @@ export function GuardrailDetail({ guardrailId, onBack }: GuardrailDetailProps) {
                 valueColor={
                   data.failRate > 15 ? "text-red-600" : data.failRate > 5 ? "text-amber-600" : "text-green-600"
                 }
+                subtitle={`${Math.round((data.requestsEvaluated * data.failRate) / 100).toLocaleString()} blocked`}
                 icon={data.failRate > 15 ? <WarningOutlined className="text-red-400" /> : undefined}
               />
             </Col>
@@ -258,14 +277,6 @@ export function GuardrailDetail({ guardrailId, onBack }: GuardrailDetailProps) {
                       : "text-green-600"
                 }
                 subtitle={`p95: ${data.p95Latency}ms`}
-              />
-            </Col>
-            <Col>
-              <MetricCard
-                label="Blocked Today"
-                value="47"
-                valueColor="text-red-600"
-                subtitle="↑ 12% from yesterday"
               />
             </Col>
           </Grid>
@@ -325,6 +336,13 @@ export function GuardrailDetail({ guardrailId, onBack }: GuardrailDetailProps) {
           <LogViewer guardrailName={data.name} />
         </div>
       )}
+
+      <EvaluationSettingsModal
+        open={evaluationModalOpen}
+        onClose={() => setEvaluationModalOpen(false)}
+        guardrailName={data.name}
+        accessToken={accessToken}
+      />
     </div>
   );
 }
