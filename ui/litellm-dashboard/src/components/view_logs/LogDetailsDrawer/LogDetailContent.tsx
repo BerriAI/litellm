@@ -296,6 +296,14 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
             </Descriptions.Item>
           )}
 
+          <Descriptions.Item label="Retries">
+            {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null
+              ? metadata.attempted_retries > 0
+                ? <>{metadata.attempted_retries}{metadata.max_retries !== undefined && metadata.max_retries !== null ? ` / ${metadata.max_retries}` : ''}</>
+                : <Tag color="green">None</Tag>
+              : "-"}
+          </Descriptions.Item>
+
           <Descriptions.Item label="Start Time">
             {moment(logEntry.startTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
           </Descriptions.Item>
