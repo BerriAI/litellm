@@ -6,6 +6,7 @@ Supports Docker, Podman, and Kubernetes backends.
 """
 
 import base64
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -288,12 +289,18 @@ print(json.dumps(files))
             Same shape as ``execute()``:
             ``{"success": bool, "output": str, "error": str, "files": []}``
         """
-        import shlex
+        if not command:
+            return {
+                "success": False,
+                "output": "",
+                "error": "No command provided",
+                "files": [],
+            }
 
-        escaped = ", ".join(shlex.quote(c) for c in command)
+        serialized_command = json.dumps(command)
         code = (
             "import subprocess, sys\n"
-            f"r = subprocess.run([{escaped}], capture_output=True, text=True)\n"
+            f"r = subprocess.run({serialized_command}, capture_output=True, text=True)\n"
             "print(r.stdout, end='')\n"
             "if r.stderr:\n"
             "    print(r.stderr, end='', file=sys.stderr)\n"
