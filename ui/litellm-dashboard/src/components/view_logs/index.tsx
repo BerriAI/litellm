@@ -254,25 +254,6 @@ export default function SpendLogsTable({
     currentPage,
   });
 
-  const fetchKeyHashForAlias = useCallback(
-    async (keyAlias: string) => {
-      if (!accessToken) return;
-
-      try {
-        const response = await keyListCall(accessToken, null, null, keyAlias, null, null, 1, pageSize);
-
-        const selectedKey = response.keys.find((key: any) => key.key_alias === keyAlias);
-
-        if (selectedKey) {
-          setSelectedKeyHash(selectedKey.token);
-        }
-      } catch (error) {
-        console.error("Error fetching key hash for alias:", error);
-      }
-    },
-    [accessToken, pageSize],
-  );
-
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
     // Reset custom time range to default (last 24 hours)
@@ -283,7 +264,7 @@ export default function SpendLogsTable({
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
-  // Add this effect to update selected filters when filter changes
+  // Sync filter state into the individual selectedX state variables used by the main query
   useEffect(() => {
     if (!accessToken) return;
 
@@ -296,14 +277,11 @@ export default function SpendLogsTable({
     setSelectedModelId(filters["Model"] || "");
     setSelectedEndUser(filters["End User"] || "");
 
-    if (filters["Key Hash"]) {
-      setSelectedKeyHash(filters["Key Hash"]);
-    } else if (filters["Key Alias"]) {
-      fetchKeyHashForAlias(filters["Key Alias"]);
-    } else {
-      setSelectedKeyHash("");
-    }
-  }, [filters, accessToken, fetchKeyHashForAlias]);
+    // Key Alias filtering is handled server-side by performSearch via the key_alias param.
+    // We intentionally do not translate the alias to a hash here to avoid firing a
+    // redundant main-query request (api_key=hash) alongside performSearch's key_alias request.
+    setSelectedKeyHash(filters["Key Hash"] || "");
+  }, [filters, accessToken]);
 
   if (!accessToken || !token || !userRole || !userID) {
     return null;
@@ -592,6 +570,7 @@ export default function SpendLogsTable({
                                       className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
                                         }`}
                                       onClick={() => {
+                                        setCurrentPage(1);
                                         setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
                                         setStartTime(
                                           moment()

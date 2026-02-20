@@ -165,7 +165,12 @@ export function useLogFilterLogic({
       debouncedSearch.cancel();
       performSearch(filters, currentPage);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentionally omitted from deps:
+    // - `filters` / `debouncedSearch` / `performSearch`: filter changes are handled by
+    //   handleFilterChange → debouncedSearch; adding them here would double-fetch on filter apply.
+    // - `hasBackendFilters` / `accessToken`: stable across sort/page/time changes; including them
+    //   would cause spurious re-runs when the filter state first becomes active.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortBy, sortOrder, currentPage, startTime, endTime, isCustomDate]);
 
   // Compute client-side filtered logs directly from incoming logs and filters
