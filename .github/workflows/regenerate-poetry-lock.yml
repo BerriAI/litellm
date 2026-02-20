@@ -13,7 +13,7 @@ on:
 
 permissions:
   contents: write       # needed to push the auto/regenerate-poetry-lock-* branch
-  pull-requests: write  # needed to open the PR
+  pull-requests: write  # needed to open and approve the PR
 
 jobs:
   regenerate-lock:
@@ -30,8 +30,6 @@ jobs:
         run: pip install poetry
 
       - name: Regenerate poetry.lock
-        # --no-update: re-solve only what pyproject.toml requires without
-        # upgrading packages that are already in the lock file.
         run: poetry lock
 
       - name: Check whether poetry.lock actually changed
@@ -45,6 +43,7 @@ jobs:
 
       - name: Open PR with the refreshed lock file
         if: steps.diff.outputs.changed == 'true'
+        id: open-pr
         run: |
           BRANCH="auto/regenerate-poetry-lock-$(date +'%Y%m%d%H%M%S')"
           git config user.name "github-actions[bot]"
@@ -54,7 +53,6 @@ jobs:
           git commit -m "chore: regenerate poetry.lock to match pyproject.toml"
           git push -f origin "$BRANCH"
 
-          # Write body to a temp file to avoid heredoc/quoting issues in YAML
           cat > /tmp/pr-body.md << 'BODY'
           Automated regeneration of `poetry.lock` after `pyproject.toml` was updated on `main`.
 
@@ -63,17 +61,23 @@ jobs:
           pyproject.toml changed significantly since poetry.lock was last generated.
           Run `poetry lock` to fix the lock file.
           ```
-
-          Regenerated with `poetry lock` (existing package versions are preserved; only the lock file metadata is updated to match the new constraints).
           BODY
 
-          gh pr create \
+          PR_URL=$(gh pr create \
             --title "chore: regenerate poetry.lock to match pyproject.toml" \
             --body-file /tmp/pr-body.md \
             --head "$BRANCH" \
-            --base main
+            --base main)
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
         env:
-          # github.token cannot create PRs when "Allow GitHub Actions to create
-          # and approve pull requests" is disabled in repo settings.
-          # PAT_TOKEN_2 bypasses that restriction.
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Approve and enable auto-merge
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          # Approve with PAT_TOKEN_2 (a different identity from the creator,
+          # since GitHub does not allow a token to approve its own PR).
+          gh pr review "${{ steps.open-pr.outputs.pr_url }}" --approve
+          gh pr merge  "${{ steps.open-pr.outputs.pr_url }}" --auto --squash
+        env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN_2 }}
