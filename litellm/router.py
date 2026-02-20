@@ -5130,7 +5130,7 @@ class Router:
         )
         ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
         _metadata["attempted_retries"] = 0
-        _metadata["max_retries"] = num_retries
+        _metadata["max_retries"] = num_retries  # Updated after overrides in exception handler
         try:
             self._handle_mock_testing_rate_limit_error(
                 model_group=model_group, kwargs=kwargs
@@ -5196,6 +5196,9 @@ class Router:
                     regular_fallbacks=fallbacks,
                     content_policy_fallbacks=content_policy_fallbacks,
                 )
+            # Update max_retries after overrides (deployment_num_retries / retry_policy)
+            _metadata["max_retries"] = num_retries
+
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)

@@ -145,7 +145,7 @@ describe("Request Viewer", () => {
     expect(screen.getByText("2 / 3")).toBeInTheDocument();
   });
 
-  it("should display 'Not Retried' when attempted_retries is 0", () => {
+  it("should display green 'None' tag when attempted_retries is 0", () => {
     render(
       <RequestViewer
         row={createRow({
@@ -163,13 +163,14 @@ describe("Request Viewer", () => {
     );
 
     expect(screen.getByText("Retries:")).toBeInTheDocument();
-    expect(screen.getByText("Not Retried")).toBeInTheDocument();
+    expect(screen.getByText("None")).toBeInTheDocument();
   });
 
-  it("should not display Retries when attempted_retries is not present in metadata", () => {
+  it("should display '-' for Retries when attempted_retries is not present in metadata", () => {
     render(<RequestViewer row={createRow()} />);
 
-    expect(screen.queryByText("Retries:")).not.toBeInTheDocument();
+    expect(screen.getByText("Retries:")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
   });
 });
 
