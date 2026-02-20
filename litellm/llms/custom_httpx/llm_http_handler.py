@@ -3015,7 +3015,8 @@ class BaseLLMHTTPHandler:
 
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
-        litellm_params_with_url["upload_url"] = api_base
+        if "upload_url" not in litellm_params:
+            litellm_params_with_url["upload_url"] = api_base
 
         return provider_config.transform_create_file_response(
             model=None,
