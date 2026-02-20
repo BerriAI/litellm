@@ -1,7 +1,7 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
-import { ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
-import { Badge, Spin, Checkbox } from "antd";
+import { ToolOutlined, CheckCircleOutlined, SearchOutlined } from "@ant-design/icons";
+import { Badge, Spin, Checkbox, Input } from "antd";
 import { useTestMCPConnection } from "../../hooks/useTestMCPConnection";
 
 interface MCPToolConfigurationProps {
@@ -22,12 +22,22 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   onAllowedToolsChange,
 }) => {
   const previousToolsLengthRef = useRef(0);
+  const [toolSearchTerm, setToolSearchTerm] = useState("");
 
   const { tools, isLoadingTools, toolsError, canFetchTools } = useTestMCPConnection({
     accessToken,
     oauthAccessToken,
     formValues,
     enabled: true,
+  });
+
+  // Filter tools based on search term
+  const filteredTools = tools.filter((tool) => {
+    const searchLower = toolSearchTerm.toLowerCase();
+    return (
+      tool.name.toLowerCase().includes(searchLower) ||
+      (tool.description && tool.description.toLowerCase().includes(searchLower))
+    );
   });
 
   // Auto-select tools when tools are first loaded
@@ -168,9 +178,26 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               </div>
             </div>
 
+            {/* Search bar */}
+            <Input
+              placeholder="Search tools by name or description..."
+              prefix={<SearchOutlined className="text-gray-400" />}
+              value={toolSearchTerm}
+              onChange={(e) => setToolSearchTerm(e.target.value)}
+              allowClear
+              className="rounded-lg"
+              size="large"
+            />
+
             {/* Tool list with checkboxes */}
             <div className="space-y-2">
-              {tools.map((tool, index) => (
+              {filteredTools.length === 0 ? (
+                <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
+                  <SearchOutlined className="text-2xl mb-2" />
+                  <Text>No tools found matching "{toolSearchTerm}"</Text>
+                </div>
+              ) : (
+                filteredTools.map((tool, index) => (
                 <div
                   key={index}
                   className={`p-4 rounded-lg border transition-colors cursor-pointer ${
@@ -202,7 +229,8 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                     </div>
                   </div>
                 </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         )}
