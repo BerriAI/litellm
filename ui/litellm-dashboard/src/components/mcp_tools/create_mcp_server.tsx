@@ -3,7 +3,7 @@ import { Modal, Tooltip, Form, Select, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -316,6 +316,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
       }
 
+      // Map "openapi" transport to "http" for the backend
+      if (restValues.transport === TRANSPORT.OPENAPI) {
+        restValues.transport = "http";
+      }
+
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -377,9 +382,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setTransportType(value);
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
-      form.setFieldsValue({ url: undefined, auth_type: undefined, credentials: undefined });
+      form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
+    } else if (value === TRANSPORT.OPENAPI) {
+      form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined });
     } else {
-      form.setFieldsValue({ command: undefined, args: undefined, env: undefined });
+      form.setFieldsValue({ spec_path: undefined, command: undefined, args: undefined, env: undefined });
     }
   };
 
@@ -555,11 +562,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
+                <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
               </Select>
             </Form.Item>
 
             {/* URL field - only show for HTTP and SSE */}
-            {transportType !== "stdio" && (
+            {(transportType === "http" || transportType === "sse") && (
               <Form.Item
                 label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
                 name="url"
@@ -575,8 +583,29 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {/* Authentication - only show for HTTP and SSE */}
-            {transportType !== "stdio" && (
+            {/* OpenAPI Spec URL - only show for OpenAPI transport */}
+            {transportType === TRANSPORT.OPENAPI && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    OpenAPI Spec URL
+                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="spec_path"
+                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
+              >
+                <Input
+                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {/* Authentication - show for HTTP, SSE, and OpenAPI */}
+            {transportType !== "stdio" && transportType !== "" && (
               <Form.Item
                 label={<span className="text-sm font-medium text-gray-700">Authentication</span>}
                 name="auth_type"
@@ -592,7 +621,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {transportType !== "stdio" && shouldShowAuthValueField && (
+            {transportType !== "stdio" && transportType !== "" && shouldShowAuthValueField && (
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
@@ -613,7 +642,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {transportType !== "stdio" && isOAuthAuthType && (
+            {transportType !== "stdio" && transportType !== "" && isOAuthAuthType && (
               <OAuthFormFields
                 isM2M={isM2MFlow}
                 initialFlowType={OAUTH_FLOW.INTERACTIVE}

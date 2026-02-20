@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
@@ -42,6 +42,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const authType = Form.useWatch("auth_type", form) as string | undefined;
   const transportType = Form.useWatch("transport", form) as string | undefined;
   const isStdioTransport = transportType === "stdio";
+  const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
+  const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
@@ -142,13 +144,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   }, [mcpServer.env]);
 
 
+  // If server has spec_path and no url, show it as "openapi" transport in the UI
+  const effectiveTransport = React.useMemo(() => {
+    if (mcpServer.spec_path && !mcpServer.url && mcpServer.transport !== "stdio") {
+      return TRANSPORT.OPENAPI;
+    }
+    return mcpServer.transport;
+  }, [mcpServer]);
+
   const initialValues = React.useMemo(
     () => ({
       ...mcpServer,
+      transport: effectiveTransport,
       static_headers: initialStaticHeaders,
       oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
     }),
-    [mcpServer, initialStaticHeaders, initialEnvJson],
+    [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvJson],
   );
 
   // Initialize cost config from existing server data
@@ -231,8 +242,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const fetchTools = async () => {
     if (!accessToken) return;
 
-    // HTTP/SSE requires a URL; stdio does not.
-    if (mcpServer.transport !== "stdio" && !mcpServer.url) return;
+    // HTTP/SSE requires a URL (unless spec_path is set); stdio does not.
+    if (mcpServer.transport !== "stdio" && !mcpServer.url && !mcpServer.spec_path) return;
 
     const isM2M = mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !!mcpServer.token_url;
     if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !isM2M && !oauthAccessToken) {
@@ -311,14 +322,24 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (value === "stdio") {
       form.setFieldsValue({
         url: undefined,
+        spec_path: undefined,
         auth_type: undefined,
         credentials: undefined,
         authorization_url: undefined,
         token_url: undefined,
         registration_url: undefined,
       });
+    } else if (value === TRANSPORT.OPENAPI) {
+      form.setFieldsValue({
+        url: undefined,
+        command: undefined,
+        args: undefined,
+        env_json: undefined,
+        stdio_config: undefined,
+      });
     } else {
       form.setFieldsValue({
+        spec_path: undefined,
         command: undefined,
         args: undefined,
         env_json: undefined,
@@ -457,6 +478,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         }
       }
 
+      // Map "openapi" transport to "http" for the backend
+      if (restValues.transport === TRANSPORT.OPENAPI) {
+        restValues.transport = "http";
+      }
+
       // Prepare the payload with cost configuration and permission fields
       const mcpInfoServerName =
         restValues.server_name ||
@@ -543,14 +569,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             </Form.Item>
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
               <Select onChange={handleTransportChange}>
-                <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
+                <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
+                <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
               </Select>
             </Form.Item>
 
-            {/* URL/Auth fields are only applicable for HTTP/SSE */}
-            {!isStdioTransport && (
+            {/* URL field - only for HTTP/SSE */}
+            {isMCPTransport && (
               <Form.Item
                 label="MCP Server URL"
                 name="url"
@@ -566,6 +593,28 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               </Form.Item>
             )}
 
+            {/* OpenAPI Spec URL - only for OpenAPI transport */}
+            {isOpenAPITransport && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    OpenAPI Spec URL
+                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="spec_path"
+                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
+              >
+                <Input
+                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {/* Authentication - for HTTP, SSE, and OpenAPI */}
             {!isStdioTransport && (
               <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
                 <Select>

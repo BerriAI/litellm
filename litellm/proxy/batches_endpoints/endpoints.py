@@ -151,7 +151,9 @@ async def create_batch(  # noqa: PLR0915
             if response and hasattr(response, "id") and response.id:
                 original_batch_id = response.id
                 encoded_batch_id = encode_file_id_with_model(
-                    file_id=original_batch_id, model=model_from_file_id
+                    file_id=original_batch_id,
+                    model=model_from_file_id,
+                    id_type="batch",
                 )
                 response.id = encoded_batch_id
                 

@@ -301,6 +301,7 @@ def team_token_tuple():
     return team_id, token, public_jwk
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
 async def test_team_token_output(prisma_client, audience, monkeypatch):
@@ -418,6 +419,7 @@ async def test_team_token_output(prisma_client, audience, monkeypatch):
 
     ## 1. INITIAL TEAM CALL - should fail
     # use generated key to auth in
+    setattr(litellm.proxy.proxy_server, "premium_user", True)
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
@@ -840,6 +842,7 @@ async def test_allowed_routes_admin(
 
         ## 1. INITIAL TEAM CALL - should fail
         # use generated key to auth in
+        setattr(litellm.proxy.proxy_server, "premium_user", True)
         setattr(
             litellm.proxy.proxy_server,
             "general_settings",
@@ -1014,6 +1017,7 @@ async def test_allow_access_by_email(
 
     ## 1. INITIAL TEAM CALL - should fail
     # use generated key to auth in
+    setattr(litellm.proxy.proxy_server, "premium_user", True)
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",
@@ -1175,6 +1179,7 @@ async def test_end_user_jwt_auth(monkeypatch):
         ),
     )
     
+    setattr(litellm.proxy.proxy_server, "premium_user", True)
     setattr(
         litellm.proxy.proxy_server,
         "general_settings",

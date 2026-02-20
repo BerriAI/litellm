@@ -376,7 +376,8 @@
     "tags": [
       "PII Protection",
       "Australia"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "baseline-pii-protection",
@@ -514,7 +515,8 @@
     },
     "tags": [
       "PII Protection"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "nsfw-content-filter-australia",
@@ -638,7 +640,8 @@
     "tags": [
       "Content Safety",
       "Australia"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "nsfw-content-filter-basic",
@@ -741,7 +744,8 @@
     },
     "tags": [
       "Content Safety"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "nsfw-content-filter-all-regions",
@@ -924,7 +928,8 @@
     },
     "tags": [
       "Content Safety"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "gdpr-eu-pii-protection",
@@ -1049,7 +1054,8 @@
       "PII Protection",
       "Regulatory",
       "EU"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "eu-ai-act-article5",
@@ -1283,7 +1289,8 @@
     "tags": [
       "Regulatory",
       "EU"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "mcp-security-unregistered-server-block",
@@ -1320,7 +1327,8 @@
     },
     "tags": [
       "Security"
-    ]
+    ],
+    "estimated_latency_ms": 200
   },
   {
     "id": "airline-passenger-data-protection-uae",
@@ -1510,7 +1518,8 @@
       "PII Protection",
       "Aviation",
       "UAE"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "aviation-operations-security",
@@ -1773,7 +1782,8 @@
     "tags": [
       "Aviation",
       "Security"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "uae-regulatory-compliance",
@@ -1885,7 +1895,8 @@
     "tags": [
       "Regulatory",
       "UAE"
-    ]
+    ],
+    "estimated_latency_ms": 1
   },
   {
     "id": "competitor-mention-detection",
@@ -2000,6 +2011,7 @@
     },
     "tags": [
       "Brand Protection"
-    ]
+    ],
+    "estimated_latency_ms": 1
   }
 ]
