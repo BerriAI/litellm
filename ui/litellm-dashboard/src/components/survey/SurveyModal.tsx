@@ -101,8 +101,8 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         return reasonLabels[r] || r;
       });
 
-      // Submit to Google Form
-      const googleFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLScbv3G-UGQQhPKc-XoIxoTMIiiVQrE88xS0_rmVLU6n-MkeNA/formResponse";
+      // Submit to feedback endpoint (redirects to Google Form)
+      const feedbackUrl = "https://feedback.litellm.ai/survey";
       
       const formData = new URLSearchParams({
         "entry.2015264290": data.usingAtCompany ? "Yes" : "No",
@@ -112,13 +112,14 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         "entry.928142208": data.email || "",
       });
 
-      await fetch(googleFormUrl, {
+      await fetch(feedbackUrl, {
         method: "POST",
         mode: "no-cors",
         body: formData,
       });
     } catch (error) {
       // Silently fail - don't block the user experience
+      console.error("Failed to submit survey:", error);
     }
     setIsSubmitting(false);
     onComplete();
