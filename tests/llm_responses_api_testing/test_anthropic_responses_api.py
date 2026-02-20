@@ -79,7 +79,7 @@ def test_multiturn_tool_calls():
             ], 
             'type': 'message'
         }],
-        model='anthropic/claude-sonnet-4-5',
+        model='anthropic/claude-4-sonnet-20250514',
         instructions='You are a helpful coding assistant.',
         tools=[shell_tool]
     )
@@ -105,7 +105,7 @@ def test_multiturn_tool_calls():
 
     # Use await with asyncio.run for the async function
     follow_up_response = litellm.responses(
-        model='anthropic/claude-sonnet-4-5',
+        model='anthropic/claude-4-sonnet-20250514',
         previous_response_id=response_id,
         input=[{
             'type': 'function_call_output',
