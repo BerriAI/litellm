@@ -2278,6 +2278,9 @@ class PrismaClient:
         self._db_health_watchdog_enabled: bool = (
             str_to_bool(os.getenv("PRISMA_HEALTH_WATCHDOG_ENABLED", "true")) is True
         )
+        self._db_auth_reconnect_timeout_seconds: float = max(
+            0.5, float(os.getenv("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", "2.0"))
+        )
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -3545,7 +3548,42 @@ class PrismaClient:
             )
             raise e
 
-    async def attempt_db_reconnect(self, reason: str, force: bool = False) -> bool:
+    async def _run_reconnect_cycle(
+        self, timeout_seconds: Optional[float] = None
+    ) -> None:
+        """
+        Run a reconnect cycle. When timeout_seconds is set, use direct db operations
+        with per-step timeouts to avoid long retries on hot paths (e.g. auth).
+        """
+        if timeout_seconds is None:
+            try:
+                await self.disconnect()
+            except Exception as disconnect_err:
+                verbose_proxy_logger.debug(
+                    "Prisma DB disconnect before reconnect failed (ignored): %s",
+                    disconnect_err,
+                )
+            await self.connect()
+            await self.health_check()
+            return
+
+        try:
+            await self.db.disconnect()
+        except Exception as disconnect_err:
+            verbose_proxy_logger.debug(
+                "Prisma DB disconnect before reconnect failed (ignored): %s",
+                disconnect_err,
+            )
+
+        await asyncio.wait_for(self.db.connect(), timeout=timeout_seconds)
+        await asyncio.wait_for(self.db.query_raw("SELECT 1"), timeout=timeout_seconds)
+
+    async def attempt_db_reconnect(
+        self,
+        reason: str,
+        force: bool = False,
+        timeout_seconds: Optional[float] = None,
+    ) -> bool:
         """
         Attempt to reconnect the Prisma client in a singleflight manner.
 
@@ -3577,33 +3615,28 @@ class PrismaClient:
                 )
                 return False
 
-            self._db_last_reconnect_attempt_ts = now
             verbose_proxy_logger.warning(
                 "Attempting Prisma DB reconnect. reason=%s", reason
             )
 
+            reconnect_succeeded = False
             try:
-                await self.disconnect()
-            except Exception as disconnect_err:
-                verbose_proxy_logger.debug(
-                    "Prisma DB disconnect before reconnect failed (ignored): %s",
-                    disconnect_err,
-                )
-
-            try:
-                await self.connect()
-                await self.health_check()
+                await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
+                reconnect_succeeded = True
                 verbose_proxy_logger.info(
                     "Prisma DB reconnect succeeded. reason=%s", reason
                 )
-                return True
             except Exception as reconnect_err:
                 verbose_proxy_logger.error(
                     "Prisma DB reconnect failed. reason=%s error=%s",
                     reason,
                     reconnect_err,
                 )
-                return False
+            finally:
+                # Start cooldown after reconnect attempt has completed.
+                self._db_last_reconnect_attempt_ts = time.time()
+
+            return reconnect_succeeded
 
     async def start_db_health_watchdog_task(self) -> None:
         """
