@@ -101,7 +101,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         return reasonLabels[r] || r;
       });
 
-      await fetch("https://hooks.zapier.com/hooks/catch/16331268/ugms6w0/", {
+      await fetch("https://feedback.litellm.ai/", {
         method: "POST",
         mode: "no-cors",
         headers: {
