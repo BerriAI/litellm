@@ -682,6 +682,10 @@ async def test_factory_registration():
     assert not counter.should_use_token_counting_api(custom_llm_provider=None)
 
 
+@pytest.mark.skipif(
+    not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"),
+    reason="Requires Google API credentials.",
+)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_name", ["gemini-2.5-pro", "vertex-ai-gemini-2.5-pro"])
 async def test_vertex_ai_gemini_token_counting_with_contents(model_name):
