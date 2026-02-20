@@ -25951,10 +25951,13 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "source": "https://openrouter.ai/minimax/minimax-m2.5",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_prompt_caching": true
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_computer_use": false
     },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
         "input_cost_per_token": 6.7e-07,
