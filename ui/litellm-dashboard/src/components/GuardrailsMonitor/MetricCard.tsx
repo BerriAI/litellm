@@ -16,7 +16,7 @@ export function MetricCard({
   subtitle,
 }: MetricCardProps) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-5">
+    <div className="h-full bg-white border border-gray-200 rounded-lg p-5 flex flex-col">
       <div className="flex items-center justify-between mb-1">
         <span className="text-sm font-medium text-gray-600">{label}</span>
         {icon && <span className="text-gray-400">{icon}</span>}

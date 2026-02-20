@@ -299,11 +299,11 @@ export function GuardrailsOverview({ onSelectGuardrail }: GuardrailsOverviewProp
         </button>
       </div>
 
-      <Grid numItems={2} numItemsLg={5} className="gap-4 mb-6">
-        <Col>
+      <Grid numItems={2} numItemsLg={5} className="gap-4 mb-6 items-stretch">
+        <Col className="flex flex-col">
           <MetricCard label="Total Requests Evaluated" value={metrics.totalRequests.toLocaleString()} />
         </Col>
-        <Col>
+        <Col className="flex flex-col">
           <MetricCard
             label="Blocked Requests"
             value={metrics.totalBlocked.toLocaleString()}
@@ -311,7 +311,7 @@ export function GuardrailsOverview({ onSelectGuardrail }: GuardrailsOverviewProp
             icon={<WarningOutlined className="text-red-400" />}
           />
         </Col>
-        <Col>
+        <Col className="flex flex-col">
           <MetricCard
             label="Pass Rate"
             value={`${metrics.passRate}%`}
@@ -319,7 +319,7 @@ export function GuardrailsOverview({ onSelectGuardrail }: GuardrailsOverviewProp
             icon={<RiseOutlined className="text-green-400" />}
           />
         </Col>
-        <Col>
+        <Col className="flex flex-col">
           <MetricCard
             label="Avg. latency added"
             value={`${metrics.avgLatency}ms`}
@@ -333,7 +333,7 @@ export function GuardrailsOverview({ onSelectGuardrail }: GuardrailsOverviewProp
             subtitle={`p95: ${metrics.p95Latency}ms`}
           />
         </Col>
-        <Col>
+        <Col className="flex flex-col">
           <MetricCard
             label={isGuardrails ? "Active Guardrails" : "Active Policies"}
             value={metrics.count}
