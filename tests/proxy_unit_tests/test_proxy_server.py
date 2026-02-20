@@ -1035,6 +1035,7 @@ from test_key_generate_prisma import prisma_client
     [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.PROXY_ADMIN.value],
 )
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_create_user_default_budget(prisma_client, user_role):
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -1075,6 +1076,7 @@ async def test_create_user_default_budget(prisma_client, user_role):
 
 @pytest.mark.parametrize("new_member_method", ["user_id", "user_email"])
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_create_team_member_add(prisma_client, new_member_method):
     import time
 
@@ -1363,6 +1365,7 @@ async def test_create_team_member_add_team_admin(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_user_info_team_list(prisma_client):
     """Assert user_info for admin calls team_list function"""
     from litellm.proxy._types import LiteLLM_UserTable
@@ -1966,6 +1969,7 @@ async def test_gemini_pass_through_endpoint():
 
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_proxy_model_group_alias_checks(prisma_client, hidden):
     """
     Check if model group alias is returned on
@@ -2046,6 +2050,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_proxy_model_group_info_rerank(prisma_client):
     """
     Check if rerank model is returned on the following endpoints
