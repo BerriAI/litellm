@@ -3429,7 +3429,7 @@ class DynamicPromptManagementParamLiteral(str, Enum):
     VECTOR_STORE_IDS = "vector_store_ids"
 
     @classmethod
-    def list_all_params(cls):
+    def list_all_params(cls) -> frozenset:
         return _DYNAMIC_PROMPT_MANAGEMENT_PARAMS
 
 

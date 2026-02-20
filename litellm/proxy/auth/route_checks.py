@@ -12,9 +12,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-_LITELLM_ROUTES_MEMBER_NAMES: frozenset = frozenset(LiteLLMRoutes._member_names_)
-
 from .auth_checks_organization import _user_is_org_admin
+
+_LITELLM_ROUTES_MEMBER_NAMES: frozenset = frozenset(LiteLLMRoutes._member_names_)
 
 
 class RouteChecks:
