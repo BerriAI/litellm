@@ -27,13 +27,75 @@ Key concepts:
 - `policies`: Define WHAT guardrails to apply (with inheritance via `inherit` and `guardrails.add`/`remove`)
 - `policy_attachments`: Define WHERE policies apply (teams, keys, models)
 - `condition`: Optional model condition for when guardrails apply
+- `versioning`: Policies support draft/published/production workflow for safe iteration
 """
 
+from datetime import datetime
+from enum import Enum
 from typing import Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy Versioning
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class PolicyVersionStatus(str, Enum):
+    """
+    Status of a policy version in the version workflow.
+
+    - DRAFT: Policy is being edited, not yet published
+    - PUBLISHED: Policy is ready for testing/mirroring
+    - PRODUCTION: Policy is active and applied to matching requests
+    """
+
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    PRODUCTION = "production"
+
+
+class SilentMirroringConfig(BaseModel):
+    """
+    Configuration for silent/shadow testing of policy versions.
+
+    Silent mirroring executes a policy version on a percentage of traffic
+    without blocking requests, allowing safe testing before promotion.
+
+    Example usage:
+    - Test new policy on 10% of traffic
+    - Limit to 1000 test executions
+    - Log all results for analysis
+    - Automatically expire after testing period
+    """
+
+    traffic_percentage: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Percentage of traffic to mirror (0.0-100.0)",
+    )
+    max_requests: Optional[int] = Field(
+        default=None,
+        description="Maximum number of requests to mirror (optional limit)",
+    )
+    fail_silently: bool = Field(
+        default=True,
+        description="Continue request processing if mirroring fails",
+    )
+    log_results: bool = Field(
+        default=True,
+        description="Store execution results in mirror logs",
+    )
+    expires_at: Optional[datetime] = Field(
+        default=None,
+        description="Optional expiration time for mirroring",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Policy Condition
@@ -182,6 +244,12 @@ class Policy(BaseModel):
 
     Policies can have a `condition` for model-based guardrail application.
 
+    Versioning Support:
+    - Policies support version workflow: draft → published → production
+    - Multiple versions of the same policy can coexist
+    - Only production versions are applied to requests by default
+    - Published versions can be tested via silent mirroring
+
     Example configuration:
     ```yaml
     policies:
@@ -236,6 +304,36 @@ class Policy(BaseModel):
     pipeline: Optional[GuardrailPipeline] = Field(
         default=None,
         description="Optional pipeline for ordered, conditional guardrail execution.",
+    )
+
+    # Versioning fields (populated from database)
+    version_number: int = Field(
+        default=1,
+        description="Version number of this policy (1-indexed)",
+    )
+    version_status: PolicyVersionStatus = Field(
+        default=PolicyVersionStatus.PRODUCTION,
+        description="Status of this policy version (draft/published/production)",
+    )
+    parent_version_id: Optional[str] = Field(
+        default=None,
+        description="Policy ID of the version this was created from",
+    )
+    is_latest: bool = Field(
+        default=True,
+        description="Whether this is the latest version of the policy",
+    )
+    published_at: Optional[datetime] = Field(
+        default=None,
+        description="When this version was published",
+    )
+    production_at: Optional[datetime] = Field(
+        default=None,
+        description="When this version was promoted to production",
+    )
+    silent_mirroring: Optional[SilentMirroringConfig] = Field(
+        default=None,
+        description="Silent mirroring configuration (for testing)",
     )
 
     model_config = ConfigDict(extra="forbid")

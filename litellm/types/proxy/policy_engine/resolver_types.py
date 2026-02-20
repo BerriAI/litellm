@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from litellm.types.proxy.policy_engine.policy_types import PolicyVersionStatus
+
 
 class PolicyMatchContext(BaseModel):
     """
@@ -158,6 +160,10 @@ class PolicyCreateRequest(BaseModel):
         default=None,
         description="Optional guardrail pipeline for ordered execution. Contains 'mode' and 'steps'.",
     )
+    version_status: PolicyVersionStatus = Field(
+        default=PolicyVersionStatus.DRAFT,
+        description="Initial status for the policy version (default: draft).",
+    )
 
 
 class PolicyUpdateRequest(BaseModel):
@@ -212,6 +218,25 @@ class PolicyDBResponse(BaseModel):
     pipeline: Optional[Dict[str, Any]] = Field(
         default=None, description="Optional guardrail pipeline."
     )
+
+    # Versioning fields
+    version_number: int = Field(default=1, description="Version number (1-indexed).")
+    version_status: str = Field(
+        default="production", description="Status: draft, published, or production."
+    )
+    parent_version_id: Optional[str] = Field(
+        default=None, description="Policy ID this version was created from."
+    )
+    is_latest: bool = Field(
+        default=True, description="Whether this is the latest version."
+    )
+    published_at: Optional[datetime] = Field(
+        default=None, description="When this version was published."
+    )
+    production_at: Optional[datetime] = Field(
+        default=None, description="When this version was promoted to production."
+    )
+
     created_at: Optional[datetime] = Field(
         default=None, description="When the policy was created."
     )
@@ -310,6 +335,10 @@ class PipelineTestRequest(BaseModel):
     )
     test_messages: List[Dict[str, str]] = Field(
         description="Test messages to run through the pipeline, e.g. [{'role': 'user', 'content': '...'}].",
+    )
+    guardrail_filter: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of guardrail names to test. If provided, only these guardrails will be executed.",
     )
 
 

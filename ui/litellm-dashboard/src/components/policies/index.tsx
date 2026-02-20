@@ -68,6 +68,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [loadedTemplates, setLoadedTemplates] = useState<any[]>([]);
   const [templateQueue, setTemplateQueue] = useState<any[]>([]);
   const [templateQueueProgress, setTemplateQueueProgress] = useState<{ current: number; total: number } | null>(null);
+  const [preselectedPolicyName, setPreselectedPolicyName] = useState<string | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -440,9 +441,20 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
             />
 
             <div className="flex justify-between items-center mb-4">
-              <Button onClick={handleAddPolicy} disabled={!accessToken}>
-                + Add New Policy
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={handleAddPolicy} disabled={!accessToken}>
+                  + Add New Policy
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setEditingPolicy(null);
+                    setShowFlowBuilder(true);
+                  }}
+                >
+                  Try flow builder (demo)
+                </Button>
+              </div>
             </div>
 
             {selectedPolicyId ? (
@@ -453,6 +465,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                   setEditingPolicy(policy);
                   setSelectedPolicyId(null);
                   if (policy.pipeline) {
+                    fetchGuardrails();
                     setShowFlowBuilder(true);
                   } else {
                     setIsAddPolicyModalVisible(true);
@@ -470,6 +483,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onEditClick={(policy) => {
                   setEditingPolicy(policy);
                   if (policy.pipeline) {
+                    fetchGuardrails();
                     setShowFlowBuilder(true);
                   } else {
                     setIsAddPolicyModalVisible(true);
@@ -494,6 +508,13 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               availableGuardrails={guardrailsList}
               createPolicy={createPolicyCall}
               updatePolicy={updatePolicyCall}
+              onVersionSelect={(version) => setEditingPolicy(version)}
+              onVersionCreated={() => fetchPolicies()}
+              onOpenSimulator={(policy) => {
+                handleCloseModal();
+                setActiveTab(3);
+                setPreselectedPolicyName(policy?.policy_name ?? null);
+              }}
             />
 
             <DeleteResourceModal
@@ -602,7 +623,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           </TabPanel>
 
           <TabPanel>
-            <PolicyTestPanel accessToken={accessToken} />
+            <PolicyTestPanel
+              accessToken={accessToken}
+              preselectedPolicyName={preselectedPolicyName}
+              onClearPreselectedPolicy={() => setPreselectedPolicyName(null)}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
@@ -643,6 +668,19 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           availableGuardrails={guardrailsList}
           createPolicy={createPolicyCall}
           updatePolicy={updatePolicyCall}
+          isAdmin={isAdmin}
+          onGuardrailUpdated={fetchGuardrails}
+          onVersionSelect={async (version) => {
+            if (!accessToken) return;
+            try {
+              const full = await getPolicyInfo(accessToken, version.policy_id);
+              setEditingPolicy(full);
+            } catch (err) {
+              console.error("Failed to load version:", err);
+              message.error("Failed to load version");
+            }
+          }}
+          onVersionCreated={() => fetchPolicies()}
         />
       )}
     </div>

@@ -101,3 +101,5 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+
+ui/litellm-dashboard/out/__next.*

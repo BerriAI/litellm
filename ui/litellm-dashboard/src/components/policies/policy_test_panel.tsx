@@ -8,6 +8,8 @@ const { Text } = Typography;
 
 interface PolicyTestPanelProps {
   accessToken: string | null;
+  preselectedPolicyName?: string | null;
+  onClearPreselectedPolicy?: () => void;
 }
 
 interface PolicyMatchDetail {
@@ -21,7 +23,11 @@ interface ResolveResult {
   matched_policies: PolicyMatchDetail[];
 }
 
-const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
+const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({
+  accessToken,
+  preselectedPolicyName,
+  onClearPreselectedPolicy,
+}) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<ResolveResult | null>(null);
@@ -103,6 +109,16 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
 
   return (
     <div>
+      {preselectedPolicyName && (
+        <Alert
+          message={`Viewing results for policy: ${preselectedPolicyName}`}
+          type="info"
+          showIcon
+          closable={!!onClearPreselectedPolicy}
+          onClose={onClearPreselectedPolicy}
+          className="mb-4"
+        />
+      )}
       <div className="bg-white border rounded-lg p-6 mb-6">
         <div className="mb-5">
           <h3 className="text-base font-semibold mb-1">Policy Simulator</h3>
