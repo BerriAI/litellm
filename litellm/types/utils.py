@@ -22,8 +22,9 @@ from openai.types.moderation_create_response import Moderation as Moderation
 from openai.types.moderation_create_response import (
     ModerationCreateResponse as ModerationCreateResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
-from typing_extensions import Required, TypedDict
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SerializationInfo, model_validator
+from pydantic.functional_serializers import WrapSerializer
+from typing_extensions import Annotated, Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -1640,6 +1641,34 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
+def _serialize_choices_list(
+    choices: list, handler, info: SerializationInfo
+) -> list:
+    """Serialize each choice individually to avoid Union serializer warnings.
+
+    Pydantic's Union serializer for ``List[Union[Choices, StreamingChoices]]``
+    may try the wrong branch first, emitting spurious
+    ``PydanticSerializationUnexpectedValue`` warnings.  By serializing each
+    item via its own ``model_dump()`` we bypass the Union dispatch entirely.
+    """
+    kwargs: Dict[str, Any] = {}
+    if info.exclude_none:
+        kwargs["exclude_none"] = True
+    if info.exclude_unset:
+        kwargs["exclude_unset"] = True
+    if info.exclude_defaults:
+        kwargs["exclude_defaults"] = True
+    result = []
+    for choice in choices:
+        if hasattr(choice, "model_dump"):
+            result.append(choice.model_dump(**kwargs))
+        elif isinstance(choice, dict):
+            result.append(choice)
+        else:
+            result.append(choice)
+    return result
+
+
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -1748,7 +1777,10 @@ class ModelResponseStream(ModelResponseBase):
 
 
 class ModelResponse(ModelResponseBase):
-    choices: List[Union[Choices, StreamingChoices]]
+    choices: Annotated[
+        List[Union[Choices, StreamingChoices]],
+        WrapSerializer(_serialize_choices_list, return_type=list),
+    ]
     """The list of completion choices the model generated for the input prompt."""
 
     def __init__(  # noqa: PLR0915
