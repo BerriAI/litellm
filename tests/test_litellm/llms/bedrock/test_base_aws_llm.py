@@ -541,22 +541,29 @@ def test_different_roles_without_session_names_should_not_share_cache():
     assert cache_key1 != cache_key2
 
 
-def test_eks_irsa_ambient_credentials_used():
+@pytest.mark.parametrize(
+    "role_kwargs,expected_client_kwargs",
+    [
+        ({}, {"verify": True}),
+        ({"aws_region_name": "us-east-1"}, {"region_name": "us-east-1", "verify": True}),
+        (
+            {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
+            {"endpoint_url": "https://sts.eu-west-1.amazonaws.com", "verify": True},
+        ),
+    ],
+    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+)
+def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
-    Test that in EKS/IRSA environments, ambient credentials are used when no explicit keys provided.
-    This allows web identity tokens to work automatically.
+    When only aws_role_name and aws_session_name are passed (no explicit creds),
+    boto3.client("sts", **expected) is called with no credential kwargs.
     """
     base_aws_llm = BaseAWSLLM()
-    
-    # Mock the STS response with proper expiration handling
     mock_expiry = MagicMock()
     mock_expiry.tzinfo = timezone.utc
-    current_time = datetime.now(timezone.utc)
-    # Create a timedelta object that returns 3600 when total_seconds() is called
     time_diff = MagicMock()
     time_diff.total_seconds.return_value = 3600
     mock_expiry.__sub__ = MagicMock(return_value=time_diff)
-
     mock_sts_response = {
         "Credentials": {
             "AccessKeyId": "assumed-access-key",
@@ -565,50 +572,20 @@ def test_eks_irsa_ambient_credentials_used():
             "Expiration": mock_expiry,
         }
     }
-    
-    # Case 1: only aws_role_name and aws_session_name (no aws_region_name)
     mock_sts_client = MagicMock()
     mock_sts_client.assume_role.return_value = mock_sts_response
-    
-    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-        
-        # Call with no explicit credentials (EKS/IRSA scenario)
-        credentials, ttl = base_aws_llm._auth_with_aws_role(
-            aws_access_key_id=None,
-            aws_secret_access_key=None,
-            aws_session_token=None,
-            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            aws_session_name="test-session"
-        )
-        
-        # Should create STS client without explicit credentials (using ambient credentials)
-        # Note: verify parameter is passed for SSL verification
-        mock_boto3_client.assert_called_once_with("sts", verify=True)
-        
-        # Should call assume_role
-        mock_sts_client.assume_role.assert_called_once_with(
-            RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            RoleSessionName="test-session",
-        )
-        
-        # Verify credentials are returned correctly
-        assert credentials.access_key == "assumed-access-key"
-        assert ttl is not None
 
-    # Case 2: aws_role_name, aws_session_name, and aws_region_name (regional STS)
-    mock_sts_client2 = MagicMock()
-    mock_sts_client2.assume_role.return_value = mock_sts_response
-    with patch("boto3.client", return_value=mock_sts_client2) as mock_boto3_client:
+    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
             aws_session_token=None,
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="test-session",
-            aws_region_name="us-east-1",
+            **role_kwargs,
         )
-        mock_boto3_client.assert_called_once_with("sts", region_name="us-east-1", verify=True)
-        mock_sts_client2.assume_role.assert_called_once_with(
+        mock_boto3_client.assert_called_once_with("sts", **expected_client_kwargs)
+        mock_sts_client.assume_role.assert_called_once_with(
             RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             RoleSessionName="test-session",
         )
