@@ -18,13 +18,13 @@ from typing import (
     List,
     Literal,
     Optional,
-    TypedDict,
     cast,
 )
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -993,3 +993,150 @@ async def suggest_policy_templates(
         description=data.description,
         model=data.model,
     )
+
+
+class GuardrailTestResultEntry(TypedDict):
+    guardrail_name: str
+    action: str  # "passed" | "blocked" | "masked" | "unsupported"
+    output_text: str
+    details: str
+
+
+class TestPolicyTemplateRequest(BaseModel):
+    guardrail_definitions: List[dict] = Field(
+        description="All guardrailDefinitions from the policy template"
+    )
+    text: str = Field(description="Test input text to run guardrails against")
+
+
+class TestPolicyTemplateResponse(TypedDict):
+    overall_action: str  # worst-case across all guardrails
+    results: List[GuardrailTestResultEntry]
+
+
+@router.post(
+    "/policy/templates/test",
+    tags=["policy management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def test_policy_template(
+    data: TestPolicyTemplateRequest,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> TestPolicyTemplateResponse:
+    """
+    Test a policy template's guardrails against a text input without creating them.
+
+    Instantiates temporary guardrails from the template definitions, runs them
+    against the provided text, and returns per-guardrail results so users can
+    verify the template solves their problem before creating it.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    try:
+        results = await _test_guardrail_definitions(
+            guardrail_definitions=data.guardrail_definitions,
+            text=data.text,
+        )
+        overall = _compute_overall_action(results)
+        return TestPolicyTemplateResponse(
+            overall_action=overall,
+            results=results,
+        )
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+async def _test_guardrail_definitions(
+    guardrail_definitions: List[dict],
+    text: str,
+) -> List[GuardrailTestResultEntry]:
+    """Instantiate and run each guardrail definition against the text."""
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
+    results: List[GuardrailTestResultEntry] = []
+
+    for guardrail_def in guardrail_definitions:
+        guardrail_name = guardrail_def.get("guardrail_name", "unknown")
+        litellm_params = guardrail_def.get("litellm_params", {})
+        guardrail_type = litellm_params.get("guardrail", "")
+
+        if guardrail_type != "litellm_content_filter":
+            results.append(
+                GuardrailTestResultEntry(
+                    guardrail_name=guardrail_name,
+                    action="unsupported",
+                    output_text=text,
+                    details=f"Preview not available for guardrail type: {guardrail_type}",
+                )
+            )
+            continue
+
+        try:
+            guardrail = ContentFilterGuardrail(
+                guardrail_name=guardrail_name,
+                patterns=litellm_params.get("patterns"),
+                blocked_words=litellm_params.get("blocked_words"),
+                categories=litellm_params.get("categories"),
+                pattern_redaction_format=litellm_params.get("pattern_redaction_format"),
+                default_on=litellm_params.get("default_on", False),
+            )
+
+            output = await guardrail.apply_guardrail(
+                inputs={"texts": [text]},
+                request_data={},
+                input_type="request",
+            )
+            output_text = output.get("texts", [text])[0] if output.get("texts") else text
+
+            if output_text != text:
+                action = "masked"
+                details = "Content was modified (masked)"
+            else:
+                action = "passed"
+                details = "No issues detected"
+
+            results.append(
+                GuardrailTestResultEntry(
+                    guardrail_name=guardrail_name,
+                    action=action,
+                    output_text=output_text,
+                    details=details,
+                )
+            )
+        except HTTPException as e:
+            detail = e.detail if hasattr(e, "detail") else str(e)
+            if isinstance(detail, dict):
+                detail = detail.get("error", str(detail))
+            results.append(
+                GuardrailTestResultEntry(
+                    guardrail_name=guardrail_name,
+                    action="blocked",
+                    output_text="",
+                    details=str(detail),
+                )
+            )
+        except Exception as e:
+            results.append(
+                GuardrailTestResultEntry(
+                    guardrail_name=guardrail_name,
+                    action="error",
+                    output_text=text,
+                    details=str(e),
+                )
+            )
+
+    return results
+
+
+def _compute_overall_action(results: List[GuardrailTestResultEntry]) -> str:
+    """Return the worst-case action: blocked > masked > error > unsupported > passed."""
+    priority = {"blocked": 4, "masked": 3, "error": 2, "unsupported": 1, "passed": 0}
+    worst = "passed"
+    for r in results:
+        if priority.get(r["action"], 0) > priority.get(worst, 0):
+            worst = r["action"]
+    return worst

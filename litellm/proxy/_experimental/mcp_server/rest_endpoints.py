@@ -625,6 +625,46 @@ if MCP_AVAILABLE:
                 "message": "Failed to connect to MCP server. Check proxy logs for details.",
             }
 
+    async def _preview_openapi_tools(spec_path: str) -> dict:
+        """Generate tool previews from an OpenAPI spec without creating a server."""
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            build_input_schema,
+            load_openapi_spec_async,
+        )
+
+        try:
+            spec = await load_openapi_spec_async(spec_path)
+            paths = spec.get("paths", {})
+            tools: List[dict] = []
+            for path, path_item in paths.items():
+                for method in ("get", "post", "put", "patch", "delete"):
+                    operation = path_item.get(method)
+                    if operation is None:
+                        continue
+                    op_id = operation.get("operationId", f"{method}_{path}")
+                    summary = operation.get("summary", "")
+                    description = operation.get("description", summary)
+                    input_schema = build_input_schema(operation)
+                    tools.append(
+                        {
+                            "name": op_id,
+                            "description": description or summary or f"{method.upper()} {path}",
+                            "inputSchema": input_schema,
+                        }
+                    )
+            return {
+                "tools": tools,
+                "error": None,
+                "message": f"Found {len(tools)} tools from OpenAPI spec",
+            }
+        except Exception as e:
+            verbose_logger.error("Error previewing OpenAPI tools: %s", e, exc_info=True)
+            return {
+                "tools": [],
+                "error": True,
+                "message": f"Failed to load OpenAPI spec: {e}",
+            }
+
     @router.post("/test/connection", dependencies=[Depends(user_api_key_auth)])
     async def test_connection(
         request: Request,
@@ -657,6 +697,10 @@ if MCP_AVAILABLE:
         """
         Preview tools available from MCP server before adding it
         """
+        # For OpenAPI spec servers, generate tools from the spec directly
+        if new_mcp_server_request.spec_path:
+            return await _preview_openapi_tools(new_mcp_server_request.spec_path)
+
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )

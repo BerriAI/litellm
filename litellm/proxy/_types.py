@@ -1077,6 +1077,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
     url: Optional[str] = None
+    spec_path: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
@@ -1103,8 +1104,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url"):
-                    raise ValueError("url is required for HTTP/SSE transport")
+                if not values.get("url") and not values.get("spec_path"):
+                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
         return values
 
     @model_validator(mode="before")
@@ -1139,6 +1140,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
     url: Optional[str] = None
+    spec_path: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
@@ -1165,8 +1167,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url"):
-                    raise ValueError("url is required for HTTP/SSE transport")
+                if not values.get("url") and not values.get("spec_path"):
+                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
         return values
 
 
@@ -1178,6 +1180,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     url: Optional[str] = None
+    spec_path: Optional[str] = None
     transport: MCPTransportType
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
@@ -3041,6 +3044,8 @@ class SpendLogsMetadata(TypedDict):
         str
     ]  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: Optional[float]  # LiteLLM overhead time in milliseconds
+    attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
+    max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)

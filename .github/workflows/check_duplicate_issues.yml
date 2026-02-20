@@ -2,28 +2,51 @@ name: Check Duplicate Issues
 
 on:
   issues:
-    types: [opened, edited]
+    types: [opened]
 
 jobs:
-  check-duplicate:
+  check-duplicates:
+    if: github.event.action == 'opened'
     runs-on: ubuntu-latest
     permissions:
-      issues: write
       contents: read
+      issues: write
     steps:
-      - name: Check for potential duplicates
-        uses: wow-actions/potential-duplicates@v1
-        with:
+      - name: Install opencode
+        run: curl -fsSL https://opencode.ai/install | bash
+
+      - name: Check duplicates
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          label: potential-duplicate
-          threshold: 0.6
-          reaction: eyes
-          comment: |
-            **⚠️ Potential duplicate detected**
-            
-            This issue appears similar to existing issue(s):
-            {{#issues}}
-            - [#{{number}}]({{html_url}}) - {{title}} ({{accuracy}}% similar)
-            {{/issues}}
-            
-            Please review the linked issue(s) to see if they address your concern. If this is not a duplicate, please provide additional context to help us understand the difference.
+          OPENCODE_PERMISSION: |
+            {
+              "bash": {
+                "*": "deny",
+                "gh issue*": "allow"
+              },
+              "webfetch": "deny"
+            }
+        run: |
+          opencode run -m anthropic/claude-sonnet-4-6 "A new issue has been created:
+
+          Issue number: ${{ github.event.issue.number }}
+
+          Lookup this issue with gh issue view ${{ github.event.issue.number }}.
+
+          Search through existing issues (excluding #${{ github.event.issue.number }}) to find potential duplicates.
+
+          Use gh issue list with relevant search terms from the new issue's title and description. Try multiple keyword combinations to search broadly. Check both open and recently closed issues.
+
+          Consider:
+          1. Similar titles or descriptions
+          2. Same error messages or symptoms
+          3. Related functionality or components
+          4. Similar feature requests
+
+          If you find potential duplicates, post a SINGLE comment on issue #${{ github.event.issue.number }} using this format:
+
+          This issue might be a duplicate of existing issues. Please check:
+          - #[issue_number]: [brief description of similarity]
+
+          If you find NO duplicates, do NOT post any comment. Stay silent."
