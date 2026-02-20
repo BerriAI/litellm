@@ -235,6 +235,7 @@ class BaseAWSLLM:
                     aws_role_name=aws_role_name,
                     aws_session_name=aws_session_name,
                     aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
                     aws_external_id=aws_external_id,
                     ssl_verify=ssl_verify,
                 )
@@ -869,6 +870,7 @@ class BaseAWSLLM:
         aws_role_name: str,
         aws_session_name: str,
         aws_region_name: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
         aws_external_id: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> Tuple[Credentials, Optional[int]]:
@@ -945,6 +947,8 @@ class BaseAWSLLM:
         sts_client_kwargs: dict = {"verify": self._get_ssl_verify(ssl_verify)}
         if aws_region_name is not None:
             sts_client_kwargs["region_name"] = aws_region_name
+        if aws_sts_endpoint is not None:
+            sts_client_kwargs["endpoint_url"] = aws_sts_endpoint
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client("sts", **sts_client_kwargs)
