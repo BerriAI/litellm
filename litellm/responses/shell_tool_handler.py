@@ -182,16 +182,16 @@ def _build_follow_up_input(
 
 def _execute_shell_calls(
     shell_calls: List[Dict[str, Any]],
+    executor: Any,
 ) -> List[Dict[str, Any]]:
     """Execute shell commands via sandbox and return Responses API results.
 
     Each returned dict is ``{"call_id": ..., "output": ...}``.
-    """
-    from litellm.llms.litellm_proxy.skills.sandbox_executor import (
-        SkillsSandboxExecutor,
-    )
 
-    executor = SkillsSandboxExecutor()
+    Args:
+        shell_calls: List of shell call dicts with ``call_id`` and ``command``.
+        executor: A ``SkillsSandboxExecutor`` instance (reused across iterations).
+    """
     results: List[Dict[str, Any]] = []
     for sc in shell_calls:
         result = executor.execute_shell_command(sc["command"])
@@ -206,16 +206,16 @@ def _execute_shell_calls(
 
 async def _execute_shell_calls_async(
     shell_calls: List[Dict[str, Any]],
+    executor: Any,
 ) -> List[Dict[str, Any]]:
     """Execute shell commands via sandbox in a thread pool (async-safe).
 
     Each returned dict is ``{"call_id": ..., "output": ...}``.
-    """
-    from litellm.llms.litellm_proxy.skills.sandbox_executor import (
-        SkillsSandboxExecutor,
-    )
 
-    executor = SkillsSandboxExecutor()
+    Args:
+        shell_calls: List of shell call dicts with ``call_id`` and ``command``.
+        executor: A ``SkillsSandboxExecutor`` instance (reused across iterations).
+    """
     loop = asyncio.get_running_loop()
     results: List[Dict[str, Any]] = []
     for sc in shell_calls:
@@ -277,6 +277,9 @@ async def run_shell_execution_loop_responses_api(
     loop), and re-invokes ``litellm.aresponses()`` with the results until
     the model produces a final response without shell calls.
     """
+    from litellm.llms.litellm_proxy.skills.sandbox_executor import (
+        SkillsSandboxExecutor,
+    )
     from litellm.responses.main import aresponses
 
     current_response = response
@@ -284,11 +287,13 @@ async def run_shell_execution_loop_responses_api(
     if not shell_calls:
         return current_response
 
+    executor = SkillsSandboxExecutor()
+
     for _iteration in range(MAX_SHELL_ITERATIONS):
         if not shell_calls:
             break
 
-        shell_results = await _execute_shell_calls_async(shell_calls)
+        shell_results = await _execute_shell_calls_async(shell_calls, executor)
         follow_up_input = _prepare_responses_follow_up(
             current_response, shell_calls, shell_results, _iteration, "",
         )
@@ -327,6 +332,9 @@ def run_shell_execution_loop_responses_api_sync(
     Same as :func:`run_shell_execution_loop_responses_api` but uses
     ``litellm.responses()`` (sync) for follow-up calls.
     """
+    from litellm.llms.litellm_proxy.skills.sandbox_executor import (
+        SkillsSandboxExecutor,
+    )
     from litellm.responses.main import responses
 
     current_response = response
@@ -334,11 +342,13 @@ def run_shell_execution_loop_responses_api_sync(
     if not shell_calls:
         return current_response
 
+    executor = SkillsSandboxExecutor()
+
     for _iteration in range(MAX_SHELL_ITERATIONS):
         if not shell_calls:
             break
 
-        shell_results = _execute_shell_calls(shell_calls)
+        shell_results = _execute_shell_calls(shell_calls, executor)
         follow_up_input = _prepare_responses_follow_up(
             current_response, shell_calls, shell_results, _iteration, "sync ",
         )
