@@ -1,17 +1,12 @@
 """
-Tests for the unified Shell tool in the Responses API.
+Tests for the unified Shell tool in the OpenAI Responses API.
 
 Covers:
-  OpenAI (native passthrough):
-    1. Mock: request body sent to OpenAI includes shell tool unchanged
-    2. Mock: container_reference environment passes through
-    3. Mock: shell + function tools coexist in same request
-    4. Live: OpenAI non-streaming call with shell tool
-    5. Live: OpenAI streaming call with shell tool
-
-  Anthropic (shell → bash_20250124 mapping):
-    6. Mock: shell tool mapped to bash_20250124 in request body
-    7. Mock: shell + function tools coexist for Anthropic
+  1. Mock: request body sent to OpenAI includes shell tool unchanged
+  2. Mock: container_reference environment passes through
+  3. Mock: shell + function tools coexist in same request
+  4. Live: OpenAI non-streaming call with shell tool
+  5. Live: OpenAI streaming call with shell tool
 """
 
 import json
@@ -265,108 +260,3 @@ async def test_openai_shell_tool_live_streaming():
 
     assert event_count > 0, "Should receive at least one streaming event"
     print(f"Streaming: received {event_count} events, types: {set(event_types_seen)}")
-
-
-# ---------------------------------------------------------------------------
-# Anthropic mock tests — shell → bash_20250124 mapping (no API key needed)
-# ---------------------------------------------------------------------------
-
-MOCK_ANTHROPIC_RESPONSE = {
-    "id": "msg_mock_001",
-    "type": "message",
-    "role": "assistant",
-    "content": [
-        {"type": "text", "text": "Here are the files."},
-    ],
-    "model": "claude-sonnet-4-5-20250929",
-    "stop_reason": "end_turn",
-    "stop_sequence": None,
-    "usage": {"input_tokens": 25, "output_tokens": 15},
-}
-
-
-@pytest.mark.asyncio
-async def test_anthropic_shell_tool_maps_to_bash():
-    """
-    Verify that when calling litellm.aresponses() with an Anthropic model
-    and a shell tool, the request body sent to Anthropic contains
-    bash_20250124 instead of 'shell'.
-    """
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = _MockHTTPResponse(MOCK_ANTHROPIC_RESPONSE)
-
-        await litellm.aresponses(
-            model="anthropic/claude-sonnet-4-5-20250929",
-            input="List files in the current directory",
-            tools=[SHELL_TOOL],
-            max_output_tokens=128,
-        )
-
-        mock_post.assert_called_once()
-        request_body = mock_post.call_args.kwargs.get(
-            "json", mock_post.call_args.kwargs.get("data", {})
-        )
-        if isinstance(request_body, str):
-            request_body = json.loads(request_body)
-
-        assert "tools" in request_body, "Request body must contain 'tools'"
-        tools_sent = request_body["tools"]
-
-        bash_tools = [t for t in tools_sent if "bash" in t.get("type", "")]
-        assert len(bash_tools) >= 1, (
-            f"Expected at least one bash_20250124 tool, got tools: {tools_sent}"
-        )
-        assert bash_tools[0]["type"] == "bash_20250124"
-        assert bash_tools[0]["name"] == "bash"
-
-
-@pytest.mark.asyncio
-async def test_anthropic_shell_tool_mixed_with_function_tools():
-    """
-    Verify that shell tools coexist with function tools when targeting Anthropic.
-    The shell tool should become bash_20250124, function tools should be preserved.
-    """
-    function_tool = {
-        "type": "function",
-        "name": "get_weather",
-        "description": "Get weather for a location",
-        "parameters": {
-            "type": "object",
-            "properties": {"location": {"type": "string"}},
-        },
-    }
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = _MockHTTPResponse(MOCK_ANTHROPIC_RESPONSE)
-
-        await litellm.aresponses(
-            model="anthropic/claude-sonnet-4-5-20250929",
-            input="What's the weather? Also list files.",
-            tools=[function_tool, SHELL_TOOL],
-            max_output_tokens=128,
-        )
-
-        mock_post.assert_called_once()
-        request_body = mock_post.call_args.kwargs.get(
-            "json", mock_post.call_args.kwargs.get("data", {})
-        )
-        if isinstance(request_body, str):
-            request_body = json.loads(request_body)
-
-        tools_sent = request_body["tools"]
-        tool_types = {t.get("type", "") for t in tools_sent}
-
-        assert any(
-            "bash" in t for t in tool_types
-        ), f"Expected bash_20250124 tool in types: {tool_types}"
-
-        function_tools = [t for t in tools_sent if t.get("input_schema")]
-        assert len(function_tools) >= 1, (
-            f"Expected at least one function tool (with input_schema), got: {tools_sent}"
-        )

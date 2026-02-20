@@ -1337,6 +1337,65 @@ class TestShellToolTransformation:
         assert result_tools[1]["name"] == "bash"
 
     # -------------------------------------------------------------------
+    # Gemini / Vertex AI: shell → code_execution mapping
+    # -------------------------------------------------------------------
+
+    def test_shell_tool_maps_to_code_execution_for_vertex_ai(self):
+        """Shell tool should map to code_execution for Vertex AI"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert len(result_tools) == 1
+        assert "code_execution" in result_tools[0]
+        assert result_tools[0]["code_execution"] == {}
+
+    def test_shell_tool_maps_to_code_execution_for_gemini(self):
+        """Shell tool should map to code_execution for Gemini"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="gemini",
+        )
+
+        assert len(result_tools) == 1
+        assert "code_execution" in result_tools[0]
+
+    def test_shell_tool_mixed_with_function_tools_vertex(self):
+        """Shell tool should coexist with function tools for Vertex AI"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "shell",
+                "environment": {"type": "container_auto"},
+            },
+        ]
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools,
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert len(result_tools) == 2
+        assert result_tools[0]["function"]["name"] == "get_weather"
+        assert "code_execution" in result_tools[1]
+
+    # -------------------------------------------------------------------
     # Unsupported providers: clear error
     # -------------------------------------------------------------------
 
@@ -1350,7 +1409,7 @@ class TestShellToolTransformation:
         with pytest.raises(ValueError, match="shell.*tool.*not supported"):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools=[shell_tool],
-                custom_llm_provider="vertex_ai",
+                custom_llm_provider="huggingface",
             )
 
     def test_shell_tool_raises_error_when_no_provider(self):
@@ -1383,7 +1442,7 @@ class TestShellToolTransformation:
         with pytest.raises(ValueError, match="shell.*tool.*not supported"):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools=tools,
-                custom_llm_provider="vertex_ai",
+                custom_llm_provider="huggingface",
             )
 
     # -------------------------------------------------------------------

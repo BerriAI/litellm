@@ -1268,7 +1268,9 @@ class LiteLLMCompletionResponsesConfig:
         """
         return ChatCompletionSystemMessage(role="system", content=instructions or "")
 
-    SHELL_TOOL_SUPPORTED_PROVIDERS = {"anthropic", "bedrock"}
+    SHELL_TOOL_BASH_PROVIDERS = {"anthropic", "bedrock"}
+    SHELL_TOOL_CODE_EXEC_PROVIDERS = {"vertex_ai", "vertex_ai_beta", "gemini"}
+    SHELL_TOOL_SUPPORTED_PROVIDERS = SHELL_TOOL_BASH_PROVIDERS | SHELL_TOOL_CODE_EXEC_PROVIDERS
 
     @staticmethod
     def _transform_shell_tool_for_provider(
@@ -1281,13 +1283,17 @@ class LiteLLMCompletionResponsesConfig:
 
         Currently supported:
         - **Anthropic / Bedrock** → ``bash_20250124`` hosted tool
+        - **Vertex AI / Gemini** → ``code_execution`` tool
         """
-        if custom_llm_provider in LiteLLMCompletionResponsesConfig.SHELL_TOOL_SUPPORTED_PROVIDERS:
+        if custom_llm_provider in LiteLLMCompletionResponsesConfig.SHELL_TOOL_BASH_PROVIDERS:
             return {"type": "bash_20250124", "name": "bash"}
+
+        if custom_llm_provider in LiteLLMCompletionResponsesConfig.SHELL_TOOL_CODE_EXEC_PROVIDERS:
+            return {"code_execution": {}}
 
         raise ValueError(
             f"The Responses API 'shell' tool is not supported for provider "
-            f"'{custom_llm_provider}'. Supported providers for shell→bash mapping: "
+            f"'{custom_llm_provider}'. Supported providers: "
             f"{sorted(LiteLLMCompletionResponsesConfig.SHELL_TOOL_SUPPORTED_PROVIDERS)}. "
             f"For providers with a native Responses API endpoint (OpenAI, Azure), "
             f"shell tools are passed through directly."
