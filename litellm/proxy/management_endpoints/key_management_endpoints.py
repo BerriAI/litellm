@@ -3898,6 +3898,47 @@ async def get_admin_team_ids(
     return admin_team_ids
 
 
+async def get_member_team_ids(
+    complete_user_info: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> List[str]:
+    """
+    Get all team IDs where the user is a member (any role, including admin).
+
+    Used to determine which teams' service accounts (keys with user_id=NULL)
+    a regular team member can see.
+    """
+    if complete_user_info is None:
+        return []
+
+    if not complete_user_info.teams:
+        return []
+
+    # Get all teams that user belongs to
+    teams: Optional[
+        List[BaseModel]
+    ] = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": complete_user_info.teams}}
+    )
+    if teams is None:
+        return []
+
+    teams_pydantic_obj = [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+
+    # Return team IDs where the user is a member (any role)
+    member_team_ids = [
+        team.team_id
+        for team in teams_pydantic_obj
+        if any(
+            member.user_id is not None
+            and member.user_id == user_api_key_dict.user_id
+            for member in team.members_with_roles
+        )
+    ]
+    return member_team_ids
+
+
 @router.get(
     "/key/list",
     tags=["key management"],
@@ -3990,6 +4031,18 @@ async def list_keys(
         else:
             admin_team_ids = None
 
+        # Compute member_team_ids when either include_team_keys or
+        # include_created_by_keys is True. This ensures created_by visibility
+        # is scoped to teams the user currently belongs to.
+        if include_team_keys or include_created_by_keys:
+            member_team_ids = await get_member_team_ids(
+                complete_user_info=complete_user_info,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+            )
+        else:
+            member_team_ids = None
+
         if not user_id and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
@@ -4007,6 +4060,7 @@ async def list_keys(
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
+            member_team_ids=member_team_ids,
             include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
@@ -4157,9 +4211,19 @@ def _build_key_filter_conditions(
     key_hash: Optional[str],
     exclude_team_id: Optional[str],
     admin_team_ids: Optional[List[str]],
-    include_created_by_keys: bool,
+    member_team_ids: Optional[List[str]] = None,
+    include_created_by_keys: bool = False,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
-    """Build filter conditions for key listing."""
+    """Build filter conditions for key listing.
+
+    Visibility rules:
+    - Users always see their own keys (user_id match)
+    - Team admins see ALL keys for their admin teams (via admin_team_ids)
+    - Regular team members see only service accounts (user_id=NULL) for their
+      teams (via member_team_ids). This prevents leaking other members' spend data.
+    - created_by visibility is scoped to teams the user currently belongs to,
+      so former members cannot see service accounts they created after leaving.
+    """
     # Prepare filter conditions
     where: Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
@@ -4185,13 +4249,54 @@ def _build_key_filter_conditions(
     if user_condition:
         or_conditions.append(user_condition)
 
-    # Add condition for created by keys if provided
+    # Add condition for created_by keys, scoped to user's current teams
     if include_created_by_keys and user_id:
-        or_conditions.append({"created_by": user_id})
+        if member_team_ids is not None:
+            if member_team_ids:
+                # Scope created_by keys to teams user is still a member of,
+                # or keys that have no team (personal keys)
+                or_conditions.append(
+                    {
+                        "AND": [
+                            {"created_by": user_id},
+                            {
+                                "OR": [
+                                    {"team_id": {"in": member_team_ids}},
+                                    {"team_id": None},
+                                ]
+                            },
+                        ]
+                    }
+                )
+            else:
+                # User is not a member of any team, only show non-team created_by keys
+                or_conditions.append(
+                    {"AND": [{"created_by": user_id}, {"team_id": None}]}
+                )
+        else:
+            # No team membership info provided (backward compatibility for
+            # direct _list_key_helper callers like Prometheus)
+            or_conditions.append({"created_by": user_id})
 
-    # Add condition for admin team keys if provided
+    # Add condition for admin team keys (admins see ALL team keys)
     if admin_team_ids:
         or_conditions.append({"team_id": {"in": admin_team_ids}})
+
+    # Add condition for member team service accounts (members only see keys with user_id=NULL)
+    if member_team_ids:
+        # Exclude teams where user is already admin (those are covered above with full visibility)
+        member_only_team_ids = [
+            tid for tid in member_team_ids if tid not in (admin_team_ids or [])
+        ]
+        if member_only_team_ids:
+            or_conditions.append(
+                {
+                    "AND": [
+                        {"team_id": {"in": member_only_team_ids}},
+                        {"user_id": None},
+                    ]
+                }
+            )
 
     # Combine conditions with OR if we have multiple conditions
     if len(or_conditions) > 1:
@@ -4217,6 +4322,9 @@ async def _list_key_helper(
     admin_team_ids: Optional[
         List[str]
     ] = None,  # New parameter for teams where user is admin
+    member_team_ids: Optional[
+        List[str]
+    ] = None,  # Team IDs where user is a member (any role) - for service account visibility
     include_created_by_keys: bool = False,
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
@@ -4234,6 +4342,7 @@ async def _list_key_helper(
         exclude_team_id: Optional[str] # exclude a specific team_id
         return_full_object: bool # when true, will return UserAPIKeyAuth objects instead of just the token
         admin_team_ids: Optional[List[str]] # list of team IDs where the user is an admin
+        member_team_ids: Optional[List[str]] # list of team IDs where user is a member (for service account visibility)
 
     Returns:
         KeyListResponseObject
@@ -4252,6 +4361,7 @@ async def _list_key_helper(
         key_hash=key_hash,
         exclude_team_id=exclude_team_id,
         admin_team_ids=admin_team_ids,
+        member_team_ids=member_team_ids,
         include_created_by_keys=include_created_by_keys,
     )
 
