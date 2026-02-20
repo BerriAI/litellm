@@ -1,17 +1,22 @@
 """
-Shell tool execution loop for the native Responses API path.
+Shell tool execution helpers and execution loops.
 
-When a provider has a native ``ResponsesAPIConfig`` but no native shell /
-code-execution support (e.g. VolcEngine, Perplexity, XAI), the transformation
-layer injects a synthetic ``_litellm_shell`` function tool.  The provider's
-model may call this tool, and the ``ResponsesAPIResponse`` will contain
-``function_call`` output items with ``name="_litellm_shell"``.
+Shared utilities for formatting sandbox results and executing shell commands
+are used by both:
 
-This module intercepts those calls, executes them in a sandboxed Docker
-container via ``SkillsSandboxExecutor``, and re-invokes the Responses API with
-the results until the model produces a final non-tool-call response.
+1. The **Chat Completion bridge** (``handler.py``) — providers without a native
+   Responses API that go through ``litellm.completion()``.
+2. The **native Responses API path** (this module's ``run_shell_execution_loop_*``
+   functions) — providers with a native ``ResponsesAPIConfig`` but no native
+   shell / code-execution support (e.g. VolcEngine, Perplexity, XAI).
+
+In both cases a synthetic ``_litellm_shell`` function tool is injected, the
+model's calls are intercepted, executed in a sandboxed Docker container via
+``SkillsSandboxExecutor``, and the output is fed back until the model produces
+a final non-tool-call response.
 """
 
+import asyncio
 import json
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -22,7 +27,55 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 _SHELL_TOOL_NAME = LiteLLMCompletionResponsesConfig.LITELLM_SHELL_TOOL_NAME
-_MAX_SHELL_ITERATIONS = 10
+MAX_SHELL_ITERATIONS = 10
+
+
+# ------------------------------------------------------------------
+# Shared helpers (used by both handler.py and this module)
+# ------------------------------------------------------------------
+
+
+def format_shell_result(result: Dict[str, Any]) -> str:
+    """
+    Format a ``SkillsSandboxExecutor.execute_shell_command`` result dict
+    into a human-readable string suitable for feeding back to the model.
+    """
+    output_parts: List[str] = []
+    if result.get("output"):
+        output_parts.append(result["output"])
+    if result.get("error"):
+        output_parts.append(f"STDERR:\n{result['error']}")
+    if not result.get("success"):
+        output_parts.append("[command exited with non-zero status]")
+    return "\n".join(output_parts) or "(no output)"
+
+
+def execute_shell_calls_for_completion(
+    executor: Any,
+    shell_calls: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Execute shell calls and return Chat Completion tool-result messages.
+
+    Each returned dict is ``{"role": "tool", "tool_call_id": ..., "content": ...}``.
+    Designed for the Chat Completion bridge in ``handler.py``.
+    """
+    tool_messages: List[Dict[str, Any]] = []
+    for sc in shell_calls:
+        result = executor.execute_shell_command(sc["command"])
+        tool_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": sc["id"],
+                "content": format_shell_result(result),
+            }
+        )
+    return tool_messages
+
+
+# ------------------------------------------------------------------
+# Responses API extraction / detection helpers
+# ------------------------------------------------------------------
 
 
 def _extract_shell_calls_from_responses_api(
@@ -68,6 +121,11 @@ def responses_api_has_shell_tool(
             if fn.get("name") == _SHELL_TOOL_NAME:
                 return True
     return False
+
+
+# ------------------------------------------------------------------
+# Responses API follow-up helpers
+# ------------------------------------------------------------------
 
 
 def _build_follow_up_input(
@@ -125,7 +183,10 @@ def _build_follow_up_input(
 def _execute_shell_calls(
     shell_calls: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Execute shell commands via sandbox and return results."""
+    """Execute shell commands via sandbox and return Responses API results.
+
+    Each returned dict is ``{"call_id": ..., "output": ...}``.
+    """
     from litellm.llms.litellm_proxy.skills.sandbox_executor import (
         SkillsSandboxExecutor,
     )
@@ -134,20 +195,72 @@ def _execute_shell_calls(
     results: List[Dict[str, Any]] = []
     for sc in shell_calls:
         result = executor.execute_shell_command(sc["command"])
-        output_parts: List[str] = []
-        if result.get("output"):
-            output_parts.append(result["output"])
-        if result.get("error"):
-            output_parts.append(f"STDERR:\n{result['error']}")
-        if not result.get("success"):
-            output_parts.append("[command exited with non-zero status]")
         results.append(
             {
                 "call_id": sc["call_id"],
-                "output": "\n".join(output_parts) or "(no output)",
+                "output": format_shell_result(result),
             }
         )
     return results
+
+
+async def _execute_shell_calls_async(
+    shell_calls: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Execute shell commands via sandbox in a thread pool (async-safe).
+
+    Each returned dict is ``{"call_id": ..., "output": ...}``.
+    """
+    from litellm.llms.litellm_proxy.skills.sandbox_executor import (
+        SkillsSandboxExecutor,
+    )
+
+    executor = SkillsSandboxExecutor()
+    loop = asyncio.get_running_loop()
+    results: List[Dict[str, Any]] = []
+    for sc in shell_calls:
+        result = await loop.run_in_executor(
+            None, executor.execute_shell_command, sc["command"]
+        )
+        results.append(
+            {
+                "call_id": sc["call_id"],
+                "output": format_shell_result(result),
+            }
+        )
+    return results
+
+
+def _prepare_responses_follow_up(
+    current_response: ResponsesAPIResponse,
+    shell_calls: List[Dict[str, Any]],
+    shell_results: List[Dict[str, Any]],
+    iteration: int,
+    log_prefix: str,
+) -> List[Dict[str, Any]]:
+    """
+    Build the follow-up input for the next Responses API call from
+    pre-computed shell results.
+    """
+    follow_up_input = _build_follow_up_input(
+        response=current_response,
+        shell_calls=shell_calls,
+        shell_results=shell_results,
+    )
+
+    verbose_logger.debug(
+        "shell_tool_handler: %siteration %d, executed %d command(s)",
+        log_prefix,
+        iteration + 1,
+        len(shell_calls),
+    )
+
+    return follow_up_input
+
+
+# ------------------------------------------------------------------
+# Responses API execution loops (async + sync)
+# ------------------------------------------------------------------
 
 
 async def run_shell_execution_loop_responses_api(
@@ -160,8 +273,9 @@ async def run_shell_execution_loop_responses_api(
     Async shell execution loop for the native Responses API path.
 
     Detects ``_litellm_shell`` function calls in the response, executes them
-    in the sandbox, and re-invokes ``litellm.aresponses()`` with the results
-    until the model produces a final response without shell calls.
+    in the sandbox (offloaded to a thread pool to avoid blocking the event
+    loop), and re-invokes ``litellm.aresponses()`` with the results until
+    the model produces a final response without shell calls.
     """
     from litellm.responses.main import aresponses
 
@@ -170,22 +284,13 @@ async def run_shell_execution_loop_responses_api(
     if not shell_calls:
         return current_response
 
-    for _iteration in range(_MAX_SHELL_ITERATIONS):
+    for _iteration in range(MAX_SHELL_ITERATIONS):
         if not shell_calls:
             break
 
-        shell_results = _execute_shell_calls(shell_calls)
-
-        follow_up_input = _build_follow_up_input(
-            response=current_response,
-            shell_calls=shell_calls,
-            shell_results=shell_results,
-        )
-
-        verbose_logger.debug(
-            "shell_tool_handler: iteration %d, executed %d command(s)",
-            _iteration + 1,
-            len(shell_calls),
+        shell_results = await _execute_shell_calls_async(shell_calls)
+        follow_up_input = _prepare_responses_follow_up(
+            current_response, shell_calls, shell_results, _iteration, "",
         )
 
         current_response = await aresponses(
@@ -204,7 +309,7 @@ async def run_shell_execution_loop_responses_api(
     if shell_calls:
         verbose_logger.warning(
             "shell_tool_handler: max shell iterations (%d) reached",
-            _MAX_SHELL_ITERATIONS,
+            MAX_SHELL_ITERATIONS,
         )
 
     return current_response
@@ -229,22 +334,13 @@ def run_shell_execution_loop_responses_api_sync(
     if not shell_calls:
         return current_response
 
-    for _iteration in range(_MAX_SHELL_ITERATIONS):
+    for _iteration in range(MAX_SHELL_ITERATIONS):
         if not shell_calls:
             break
 
         shell_results = _execute_shell_calls(shell_calls)
-
-        follow_up_input = _build_follow_up_input(
-            response=current_response,
-            shell_calls=shell_calls,
-            shell_results=shell_results,
-        )
-
-        verbose_logger.debug(
-            "shell_tool_handler: sync iteration %d, executed %d command(s)",
-            _iteration + 1,
-            len(shell_calls),
+        follow_up_input = _prepare_responses_follow_up(
+            current_response, shell_calls, shell_results, _iteration, "sync ",
         )
 
         current_response = responses(
@@ -263,7 +359,7 @@ def run_shell_execution_loop_responses_api_sync(
     if shell_calls:
         verbose_logger.warning(
             "shell_tool_handler: max sync shell iterations (%d) reached",
-            _MAX_SHELL_ITERATIONS,
+            MAX_SHELL_ITERATIONS,
         )
 
     return current_response

@@ -13,6 +13,7 @@ shell / code-execution support, this handler transparently:
 5. Repeats until the model produces a final (non-tool-call) response.
 """
 
+import asyncio
 import json
 from typing import Any, Coroutine, Dict, List, Optional, Union
 
@@ -24,6 +25,11 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.responses.shell_tool_handler import (
+    MAX_SHELL_ITERATIONS,
+    execute_shell_calls_for_completion,
+    format_shell_result,
+)
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -33,7 +39,6 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse
 
 _SHELL_TOOL_NAME = LiteLLMCompletionResponsesConfig.LITELLM_SHELL_TOOL_NAME
-_MAX_SHELL_ITERATIONS = 10
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -237,6 +242,84 @@ class LiteLLMCompletionTransformationHandler:
             ]
         return assistant_dict
 
+    def _prepare_next_completion(
+        self,
+        current_response: ModelResponse,
+        shell_calls: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        completion_args: Dict[str, Any],
+        executor: Any,
+        iteration: int,
+        log_prefix: str,
+    ) -> Dict[str, Any]:
+        """
+        Execute pending shell calls (sync), append results to *messages*,
+        and return the kwargs for the next completion call.
+
+        Shared by both the sync and async shell execution loops.
+        The async variant (:meth:`_async_prepare_next_completion`) offloads
+        sandbox calls to a thread pool.
+        """
+        messages.append(self._build_assistant_message(current_response))
+        messages.extend(
+            execute_shell_calls_for_completion(executor, shell_calls)
+        )
+
+        verbose_logger.debug(
+            "LiteLLMCompletionTransformationHandler: %sshell loop iteration %d, "
+            "executed %d command(s)",
+            log_prefix,
+            iteration + 1,
+            len(shell_calls),
+        )
+
+        next_args = dict(completion_args)
+        next_args["messages"] = messages
+        next_args.pop("stream", None)
+        return next_args
+
+    async def _async_prepare_next_completion(
+        self,
+        current_response: ModelResponse,
+        shell_calls: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        completion_args: Dict[str, Any],
+        executor: Any,
+        iteration: int,
+    ) -> Dict[str, Any]:
+        """
+        Async variant of :meth:`_prepare_next_completion`.
+
+        Runs each ``execute_shell_command`` call in a thread pool via
+        ``run_in_executor`` to avoid blocking the event loop.
+        """
+        messages.append(self._build_assistant_message(current_response))
+
+        loop = asyncio.get_running_loop()
+        for sc in shell_calls:
+            result = await loop.run_in_executor(
+                None, executor.execute_shell_command, sc["command"]
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": sc["id"],
+                    "content": format_shell_result(result),
+                }
+            )
+
+        verbose_logger.debug(
+            "LiteLLMCompletionTransformationHandler: shell loop iteration %d, "
+            "executed %d command(s)",
+            iteration + 1,
+            len(shell_calls),
+        )
+
+        next_args = dict(completion_args)
+        next_args["messages"] = messages
+        next_args.pop("stream", None)
+        return next_args
+
     def _run_shell_execution_loop_sync(
         self,
         initial_response: ModelResponse,
@@ -257,50 +340,21 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.get("messages") or []
         )
 
-        for _iteration in range(_MAX_SHELL_ITERATIONS):
+        for _iteration in range(MAX_SHELL_ITERATIONS):
             if not shell_calls:
                 break
-
-            messages.append(self._build_assistant_message(current_response))
-
-            for sc in shell_calls:
-                result = executor.execute_shell_command(sc["command"])
-                output_parts: List[str] = []
-                if result.get("output"):
-                    output_parts.append(result["output"])
-                if result.get("error"):
-                    output_parts.append(f"STDERR:\n{result['error']}")
-                if not result.get("success"):
-                    output_parts.append("[command exited with non-zero status]")
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": sc["id"],
-                        "content": "\n".join(output_parts) or "(no output)",
-                    }
-                )
-
-            verbose_logger.debug(
-                "LiteLLMCompletionTransformationHandler: sync shell loop iteration %d, "
-                "executed %d command(s)",
-                _iteration + 1,
-                len(shell_calls),
+            next_args = self._prepare_next_completion(
+                current_response, shell_calls, messages,
+                completion_args, executor, _iteration, "sync ",
             )
-
-            next_args = dict(completion_args)
-            next_args["messages"] = messages
-            next_args.pop("stream", None)
-
             current_response = litellm.completion(**next_args)  # type: ignore[assignment]
-
             shell_calls = self._extract_shell_tool_calls(current_response)
 
         if shell_calls:
             verbose_logger.warning(
                 "LiteLLMCompletionTransformationHandler: max shell iterations "
                 "(%d) reached, returning last response",
-                _MAX_SHELL_ITERATIONS,
+                MAX_SHELL_ITERATIONS,
             )
 
         return current_response
@@ -314,6 +368,9 @@ class LiteLLMCompletionTransformationHandler:
         If the model called ``_litellm_shell``, execute the command in a
         sandboxed container, feed the result back, and repeat until the
         model produces a final non-tool-call response.
+
+        Sandbox calls are offloaded to a thread pool via ``run_in_executor``
+        to avoid blocking the event loop.
 
         Returns the final ``ModelResponse``.
         """
@@ -331,50 +388,21 @@ class LiteLLMCompletionTransformationHandler:
             completion_args.get("messages") or []
         )
 
-        for _iteration in range(_MAX_SHELL_ITERATIONS):
+        for _iteration in range(MAX_SHELL_ITERATIONS):
             if not shell_calls:
                 break
-
-            messages.append(self._build_assistant_message(current_response))
-
-            for sc in shell_calls:
-                result = executor.execute_shell_command(sc["command"])
-                output_parts: List[str] = []
-                if result.get("output"):
-                    output_parts.append(result["output"])
-                if result.get("error"):
-                    output_parts.append(f"STDERR:\n{result['error']}")
-                if not result.get("success"):
-                    output_parts.append("[command exited with non-zero status]")
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": sc["id"],
-                        "content": "\n".join(output_parts) or "(no output)",
-                    }
-                )
-
-            verbose_logger.debug(
-                "LiteLLMCompletionTransformationHandler: shell loop iteration %d, "
-                "executed %d command(s)",
-                _iteration + 1,
-                len(shell_calls),
+            next_args = await self._async_prepare_next_completion(
+                current_response, shell_calls, messages,
+                completion_args, executor, _iteration,
             )
-
-            next_args = dict(completion_args)
-            next_args["messages"] = messages
-            next_args.pop("stream", None)
-
             current_response = await litellm.acompletion(**next_args)  # type: ignore[assignment]
-
             shell_calls = self._extract_shell_tool_calls(current_response)
 
         if shell_calls:
             verbose_logger.warning(
                 "LiteLLMCompletionTransformationHandler: max shell iterations "
                 "(%d) reached, returning last response",
-                _MAX_SHELL_ITERATIONS,
+                MAX_SHELL_ITERATIONS,
             )
 
         return current_response
