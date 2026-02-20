@@ -672,14 +672,9 @@ class CustomGuardrail(CustomLogger):
 
         if isinstance(e, ModifyResponseException):
             return True
-        try:
-            from fastapi.exceptions import HTTPException
-        except ImportError:
-            HTTPException = None  # type: ignore
         if (
-            HTTPException is not None
-            and isinstance(e, HTTPException)
-            and e.status_code == 400
+            type(e).__name__ == "HTTPException"
+            and getattr(e, "status_code", None) == 400
         ):
             return True
         return False
