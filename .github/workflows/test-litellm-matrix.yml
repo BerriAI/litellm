@@ -92,6 +92,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          poetry lock --no-update
           poetry config virtualenvs.in-project true
           poetry install --with dev,proxy-dev --extras "proxy semantic-router"
           # pytest-rerunfailures and pytest-xdist are in pyproject.toml dev dependencies
