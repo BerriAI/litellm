@@ -2313,20 +2313,33 @@ def _get_pass_through_endpoints_from_config() -> List[PassThroughGenericEndpoint
 async def _get_pass_through_endpoints_from_db(
     endpoint_id: Optional[str] = None,
     user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    config_map: Optional[Dict] = None,
 ) -> List[PassThroughGenericEndpoint]:
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.proxy_server import get_config_general_settings
 
-    try:
-        if user_api_key_dict is None:
-            user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-        response: ConfigFieldInfo = await get_config_general_settings(
-            field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
-        )
-    except Exception:
-        return []
+    pass_through_endpoint_data: Optional[List] = None
 
-    pass_through_endpoint_data: Optional[List] = response.field_value
+    if config_map is not None:
+        # Use batch-loaded general_settings to avoid duplicate DB query during polling
+        gs_record = config_map.get("general_settings")
+        if gs_record is not None and gs_record.param_value is not None:
+            gs = dict(gs_record.param_value)
+            pass_through_endpoint_data = gs.get("pass_through_endpoints")
+    else:
+        from litellm.proxy.proxy_server import get_config_general_settings
+
+        try:
+            if user_api_key_dict is None:
+                user_api_key_dict = UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                )
+            response: ConfigFieldInfo = await get_config_general_settings(
+                field_name="pass_through_endpoints",
+                user_api_key_dict=user_api_key_dict,
+            )
+            pass_through_endpoint_data = response.field_value
+        except Exception:
+            return []
     if pass_through_endpoint_data is None:
         return []
 
@@ -2810,11 +2823,15 @@ def _find_endpoint_by_id(
     return None
 
 
-async def initialize_pass_through_endpoints_in_db():
+async def initialize_pass_through_endpoints_in_db(
+    config_map: Optional[Dict] = None,
+):
     """
     Gets all pass-through endpoints from db and initializes them in the proxy server.
     """
-    pass_through_endpoints = await _get_pass_through_endpoints_from_db()
+    pass_through_endpoints = await _get_pass_through_endpoints_from_db(
+        config_map=config_map,
+    )
     await initialize_pass_through_endpoints(
         pass_through_endpoints=pass_through_endpoints
     )
