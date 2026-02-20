@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -39,7 +39,7 @@ const renderFilters = (overrides: Partial<Parameters<typeof TeamsFilters>[0]> = 
 };
 
 describe("TeamsFilters", () => {
-  it("renders the team name search input, Filters button, and Reset Filters button", () => {
+  it("should render the team name search input, Filters button, and Reset Filters button", () => {
     renderFilters();
 
     expect(screen.getByPlaceholderText("Search by Team Name...")).toBeInTheDocument();
@@ -47,13 +47,13 @@ describe("TeamsFilters", () => {
     expect(screen.getByRole("button", { name: /reset filters/i })).toBeInTheDocument();
   });
 
-  it("reflects the current team_alias filter value in the search input", () => {
+  it("should reflect the current team_alias filter value in the search input", () => {
     renderFilters({ filters: { ...emptyFilters, team_alias: "Platform" } });
 
     expect(screen.getByPlaceholderText("Search by Team Name...")).toHaveValue("Platform");
   });
 
-  it("calls onChange with 'team_alias' key when the search input changes", async () => {
+  it("should call onChange with 'team_alias' key when the search input changes", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderFilters({ onChange });
@@ -63,7 +63,7 @@ describe("TeamsFilters", () => {
     expect(onChange).toHaveBeenCalledWith("team_alias", expect.stringContaining("D"));
   });
 
-  it("calls onToggleFilters with the inverted boolean when the Filters button is clicked", async () => {
+  it("should call onToggleFilters with the inverted boolean when the Filters button is clicked", async () => {
     const user = userEvent.setup();
     const onToggleFilters = vi.fn();
     renderFilters({ showFilters: false, onToggleFilters });
@@ -73,7 +73,7 @@ describe("TeamsFilters", () => {
     expect(onToggleFilters).toHaveBeenCalledWith(true);
   });
 
-  it("calls onToggleFilters(false) when filters are currently expanded", async () => {
+  it("should call onToggleFilters(false) when filters are currently expanded", async () => {
     const user = userEvent.setup();
     const onToggleFilters = vi.fn();
     renderFilters({ showFilters: true, onToggleFilters });
@@ -83,7 +83,7 @@ describe("TeamsFilters", () => {
     expect(onToggleFilters).toHaveBeenCalledWith(false);
   });
 
-  it("calls onReset when the Reset Filters button is clicked", async () => {
+  it("should call onReset when the Reset Filters button is clicked", async () => {
     const user = userEvent.setup();
     const onReset = vi.fn();
     renderFilters({ onReset });
@@ -93,19 +93,19 @@ describe("TeamsFilters", () => {
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 
-  it("does not show the Team ID input when showFilters is false", () => {
+  it("should not show the Team ID input when showFilters is false", () => {
     renderFilters({ showFilters: false });
 
     expect(screen.queryByPlaceholderText("Enter Team ID")).not.toBeInTheDocument();
   });
 
-  it("shows the Team ID input when showFilters is true", () => {
+  it("should show the Team ID input when showFilters is true", () => {
     renderFilters({ showFilters: true });
 
     expect(screen.getByPlaceholderText("Enter Team ID")).toBeInTheDocument();
   });
 
-  it("calls onChange with 'team_id' key when the Team ID input changes", async () => {
+  it("should call onChange with 'team_id' key when the Team ID input changes", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderFilters({ showFilters: true, onChange });
@@ -115,37 +115,37 @@ describe("TeamsFilters", () => {
     expect(onChange).toHaveBeenCalledWith("team_id", expect.stringContaining("a"));
   });
 
-  it("reflects the current team_id filter value in the Team ID input", () => {
+  it("should reflect the current team_id filter value in the Team ID input", () => {
     renderFilters({ showFilters: true, filters: { ...emptyFilters, team_id: "team-xyz" } });
 
     expect(screen.getByPlaceholderText("Enter Team ID")).toHaveValue("team-xyz");
   });
 
-  it("shows a blue dot indicator on the Filters button when team_alias filter is active", () => {
+  it("should show the active filter indicator on the Filters button when team_alias is set", () => {
     renderFilters({ filters: { ...emptyFilters, team_alias: "Platform" } });
 
     const filtersButton = screen.getByRole("button", { name: /^filters$/i });
-    expect(filtersButton.querySelector(".bg-blue-500")).toBeInTheDocument();
+    expect(within(filtersButton).getByTestId("active-filter-indicator")).toBeInTheDocument();
   });
 
-  it("shows a blue dot indicator on the Filters button when team_id filter is active", () => {
+  it("should show the active filter indicator on the Filters button when team_id is set", () => {
     renderFilters({ filters: { ...emptyFilters, team_id: "team-123" } });
 
     const filtersButton = screen.getByRole("button", { name: /^filters$/i });
-    expect(filtersButton.querySelector(".bg-blue-500")).toBeInTheDocument();
+    expect(within(filtersButton).getByTestId("active-filter-indicator")).toBeInTheDocument();
   });
 
-  it("shows a blue dot indicator on the Filters button when organization_id filter is active", () => {
+  it("should show the active filter indicator on the Filters button when organization_id is set", () => {
     renderFilters({ filters: { ...emptyFilters, organization_id: "org-1" } });
 
     const filtersButton = screen.getByRole("button", { name: /^filters$/i });
-    expect(filtersButton.querySelector(".bg-blue-500")).toBeInTheDocument();
+    expect(within(filtersButton).getByTestId("active-filter-indicator")).toBeInTheDocument();
   });
 
-  it("does not show the blue dot indicator when all filters are empty", () => {
+  it("should not show the active filter indicator when all filters are empty", () => {
     renderFilters({ filters: emptyFilters });
 
     const filtersButton = screen.getByRole("button", { name: /^filters$/i });
-    expect(filtersButton.querySelector(".bg-blue-500")).not.toBeInTheDocument();
+    expect(within(filtersButton).queryByTestId("active-filter-indicator")).not.toBeInTheDocument();
   });
 });

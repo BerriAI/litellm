@@ -34,19 +34,19 @@ const buildProps = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("ModelRetrySettingsTab", () => {
-  it("renders the 'Global Retry Policy' heading when selectedModelGroup is 'global'", () => {
+  it("should render the 'Global Retry Policy' heading when selectedModelGroup is 'global'", () => {
     render(<ModelRetrySettingsTab {...buildProps()} />);
 
     expect(screen.getByText("Global Retry Policy")).toBeInTheDocument();
   });
 
-  it("renders a model-specific heading when a model group is selected", () => {
+  it("should render a model-specific heading when a model group is selected", () => {
     render(<ModelRetrySettingsTab {...buildProps({ selectedModelGroup: "gpt-4" })} />);
 
     expect(screen.getByText("Retry Policy for gpt-4")).toBeInTheDocument();
   });
 
-  it("renders a row for every error type in the retry policy map", () => {
+  it("should render a row for every error type in the retry policy map", () => {
     render(<ModelRetrySettingsTab {...buildProps()} />);
 
     expect(screen.getByText(/BadRequestError \(400\)/)).toBeInTheDocument();
@@ -57,7 +57,7 @@ describe("ModelRetrySettingsTab", () => {
     expect(screen.getByText(/InternalServerError \(500\)/)).toBeInTheDocument();
   });
 
-  it("uses defaultRetry when globalRetryPolicy is null (global scope)", () => {
+  it("should use defaultRetry when globalRetryPolicy is null (global scope)", () => {
     render(<ModelRetrySettingsTab {...buildProps({ defaultRetry: 3 })} />);
 
     // All 6 spinbutton inputs should show the defaultRetry value
@@ -67,7 +67,7 @@ describe("ModelRetrySettingsTab", () => {
     });
   });
 
-  it("shows globalRetryPolicy values when they are set (global scope)", () => {
+  it("should show globalRetryPolicy values when they are set (global scope)", () => {
     const globalRetryPolicy: GlobalRetryPolicy = {
       RateLimitErrorRetries: 5,
     };
@@ -82,7 +82,7 @@ describe("ModelRetrySettingsTab", () => {
     expect(inputs[0]).toHaveValue("0");
   });
 
-  it("falls back to globalRetryPolicy when no model-specific value is set (model scope)", () => {
+  it("should fall back to globalRetryPolicy when no model-specific value is set (model scope)", () => {
     const globalRetryPolicy: GlobalRetryPolicy = {
       TimeoutErrorRetries: 7,
     };
@@ -105,7 +105,7 @@ describe("ModelRetrySettingsTab", () => {
     expect(inputs[0]).toHaveValue("1");
   });
 
-  it("prefers model-specific retry count over the global value (model scope)", () => {
+  it("should prefer model-specific retry count over the global value (model scope)", () => {
     const globalRetryPolicy: GlobalRetryPolicy = {
       RateLimitErrorRetries: 3,
     };
@@ -128,7 +128,7 @@ describe("ModelRetrySettingsTab", () => {
     expect(inputs[3]).toHaveValue("9");
   });
 
-  it("shows the global reference value text for each row in model-specific scope", () => {
+  it("should show the global reference value text for each row in model-specific scope", () => {
     const globalRetryPolicy: GlobalRetryPolicy = { BadRequestErrorRetries: 2 };
     render(
       <ModelRetrySettingsTab
@@ -144,13 +144,13 @@ describe("ModelRetrySettingsTab", () => {
     expect(screen.getByText("(Global: 2)")).toBeInTheDocument();
   });
 
-  it("does not show global reference annotations in global scope", () => {
+  it("should not show global reference annotations in global scope", () => {
     render(<ModelRetrySettingsTab {...buildProps({ selectedModelGroup: "global" })} />);
 
     expect(screen.queryByText(/Global:/)).not.toBeInTheDocument();
   });
 
-  it("calls handleSaveRetrySettings when the Save button is clicked", async () => {
+  it("should call handleSaveRetrySettings when the Save button is clicked", async () => {
     const user = userEvent.setup();
     const handleSaveRetrySettings = vi.fn();
     render(<ModelRetrySettingsTab {...buildProps({ handleSaveRetrySettings })} />);
@@ -160,7 +160,7 @@ describe("ModelRetrySettingsTab", () => {
     expect(handleSaveRetrySettings).toHaveBeenCalledTimes(1);
   });
 
-  it("calls setGlobalRetryPolicy with an updater function when an input changes (global scope)", async () => {
+  it("should call setGlobalRetryPolicy with an updater function when an input changes (global scope)", async () => {
     const user = userEvent.setup();
     const setGlobalRetryPolicy = vi.fn();
     render(
@@ -188,7 +188,7 @@ describe("ModelRetrySettingsTab", () => {
     expect(result).toMatchObject({ BadRequestErrorRetries: 4 });
   });
 
-  it("calls setModelGroupRetryPolicy with an updater function when an input changes (model scope)", async () => {
+  it("should call setModelGroupRetryPolicy with an updater function when an input changes (model scope)", async () => {
     const user = userEvent.setup();
     const setModelGroupRetryPolicy = vi.fn();
     render(
