@@ -310,7 +310,7 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
-                    elif endpoint == "https://api.komilion.com/v1":
+                    elif endpoint == "https://www.komilion.com/api/v1":
                         custom_llm_provider = "komilion"
                         dynamic_api_key = get_secret_str("KOMILION_API_KEY")
 

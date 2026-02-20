@@ -27,7 +27,7 @@ class KomilionChatConfig(OpenAIGPTConfig):
         api_base = (
             api_base
             or get_secret_str("KOMILION_API_BASE")
-            or "https://api.komilion.com/v1"
+            or "https://www.komilion.com/api/v1"
         )
         dynamic_api_key = api_key or get_secret_str("KOMILION_API_KEY")
         return api_base, dynamic_api_key
@@ -46,7 +46,7 @@ class KomilionChatConfig(OpenAIGPTConfig):
         stream: Optional[bool] = None,
     ) -> str:
         if not api_base:
-            api_base = "https://api.komilion.com/v1"
+            api_base = "https://www.komilion.com/api/v1"
 
         if not api_base.endswith("/chat/completions"):
             api_base = f"{api_base}/chat/completions"
