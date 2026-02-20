@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -16,6 +18,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     Choices,
     CompletionTokensDetailsWrapper,
+    LlmProviders,
     Message,
     ModelResponse,
     Function,
@@ -1267,6 +1270,213 @@ class TestToolTransformation:
         assert result_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in result_tool["function"]["parameters"]
         assert result_tool["function"]["parameters"]["properties"]["arg"]["type"] == "string"
+
+
+class TestShellToolTransformation:
+    """Test cases for shell tool handling across the Responses API pipeline"""
+
+    def test_shell_tool_raises_error_in_chat_completion_bridge(self):
+        """Shell tools should raise a clear error in the Chat Completion translation path"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[shell_tool]
+            )
+
+    def test_shell_tool_error_does_not_affect_other_tools(self):
+        """Other tools in the same request should not be impacted by the shell error path"""
+        function_tool = {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {}},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["function"]["name"] == "get_weather"
+
+    def test_shell_tool_with_mixed_tools_raises_error(self):
+        """If a shell tool is in a list with other tools, the error should still fire"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "shell",
+                "environment": {"type": "container_auto"},
+            },
+        ]
+
+        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+
+    def test_openai_passthrough_shell_tool(self):
+        """OpenAI config should passthrough shell tools unchanged"""
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
+        )
+
+        config = OpenAIResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "gpt-4.1")
+
+        assert len(result) == 1
+        assert result[0]["type"] == "shell"
+        assert result[0]["environment"]["type"] == "container_auto"
+
+    def test_base_config_raises_error_for_shell_tool(self):
+        """Base config should raise ValueError for shell tools (unsupported provider)"""
+        from litellm.llms.base_llm.responses.transformation import (
+            BaseResponsesAPIConfig,
+        )
+
+        class _DummyConfig(BaseResponsesAPIConfig):
+            @property
+            def custom_llm_provider(self):
+                return LlmProviders.HUGGINGFACE
+
+            def get_supported_openai_params(self, model):
+                return []
+
+            def map_openai_params(self, response_api_optional_params, model, drop_params):
+                return {}
+
+            def validate_environment(self, headers, model, litellm_params):
+                return headers
+
+            def get_complete_url(self, api_base, litellm_params):
+                return ""
+
+            def transform_responses_api_request(self, model, input, response_api_optional_request_params, litellm_params, headers):
+                return {}
+
+            def transform_response_api_response(self, model, raw_response, logging_obj):
+                pass
+
+            def transform_streaming_response(self, model, parsed_chunk, logging_obj):
+                pass
+
+            def transform_delete_response_api_request(self, response_id, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_delete_response_api_response(self, raw_response, logging_obj):
+                pass
+
+            def transform_get_response_api_request(self, response_id, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_get_response_api_response(self, raw_response, logging_obj):
+                pass
+
+            def transform_list_input_items_request(self, response_id, api_base, litellm_params, headers, **kwargs):
+                return ("", {})
+
+            def transform_list_input_items_response(self, raw_response, logging_obj):
+                return {}
+
+            def transform_cancel_response_api_request(self, response_id, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_cancel_response_api_response(self, raw_response, logging_obj):
+                pass
+
+            def transform_compact_response_api_request(self, model, input, response_api_optional_request_params, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_compact_response_api_response(self, raw_response, logging_obj):
+                pass
+
+        config = _DummyConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        with pytest.raises(ValueError, match="does not support.*shell"):
+            config.transform_shell_tool_params(shell_tool, "some-model")
+
+    def test_xai_raises_error_for_shell_tool(self):
+        """XAI config should raise ValueError for shell tools"""
+        from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
+
+        config = XAIResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        with pytest.raises(ValueError, match="does not support.*shell"):
+            config.transform_shell_tool_params(shell_tool, "grok-3")
+
+    def test_perplexity_raises_error_for_shell_tool(self):
+        """Perplexity config should raise ValueError for shell tools"""
+        from litellm.llms.perplexity.responses.transformation import (
+            PerplexityResponsesConfig,
+        )
+
+        config = PerplexityResponsesConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        with pytest.raises(ValueError, match="does not support.*shell"):
+            config.transform_shell_tool_params(shell_tool, "sonar-pro")
+
+    def test_volcengine_raises_error_for_shell_tool(self):
+        """VolcEngine config should raise ValueError for shell tools"""
+        from litellm.llms.volcengine.responses.transformation import (
+            VolcEngineResponsesAPIConfig,
+        )
+
+        config = VolcEngineResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        with pytest.raises(ValueError, match="does not support.*shell"):
+            config.transform_shell_tool_params(shell_tool, "doubao-pro")
+
+    def test_openai_shell_tool_preserves_all_environment_fields(self):
+        """OpenAI passthrough should preserve all environment config fields"""
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
+        )
+
+        config = OpenAIResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {
+                "type": "container_reference",
+                "container_id": "ctr_abc123",
+                "network_policy": "allow_all",
+            },
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "gpt-4.1")
+
+        assert len(result) == 1
+        assert result[0]["environment"]["type"] == "container_reference"
+        assert result[0]["environment"]["container_id"] == "ctr_abc123"
+        assert result[0]["environment"]["network_policy"] == "allow_all"
 
 
 class TestUsageTransformation:

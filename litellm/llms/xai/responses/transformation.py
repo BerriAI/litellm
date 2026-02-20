@@ -5,7 +5,10 @@ from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    ResponsesAPIOptionalRequestParams,
+    ShellToolParam,
+)
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -128,6 +131,20 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         
         return xai_tool
 
+    def transform_shell_tool_params(
+        self,
+        shell_tool: ShellToolParam,
+        model: str,
+    ) -> list:
+        """XAI does not support shell tools — delegate to base class error."""
+        from litellm.llms.base_llm.responses.transformation import (
+            BaseResponsesAPIConfig,
+        )
+
+        return BaseResponsesAPIConfig.transform_shell_tool_params(
+            self, shell_tool, model
+        )
+
     def map_openai_params(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
@@ -191,6 +208,11 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                             "XAI: Transforming x_search tool to XAI format"
                         )
                         transformed_tools.append(self._transform_x_search_tool(tool))
+                    
+                    elif tool_type == "shell":
+                        transformed_tools.extend(
+                            self.transform_shell_tool_params(tool, model)
+                        )
                     
                     else:
                         # Keep other tools as-is

@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -9,6 +9,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
+    ShellToolParam,
 )
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -217,6 +218,35 @@ class BaseResponsesAPIConfig(ABC):
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
         return False
+
+    #########################################################
+    ########## SHELL TOOL TRANSFORMATION ####################
+    #########################################################
+    def transform_shell_tool_params(
+        self,
+        shell_tool: ShellToolParam,
+        model: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Transform a unified Responses API shell tool into provider-specific tool format.
+
+        Returns a list of tool dicts to include in the request. Providers that
+        support shell-like tools should override this method and return the
+        provider-specific representation.
+
+        By default, raises an error indicating the provider does not support
+        shell tools.  OpenAI / Azure override this to pass through as-is.
+        """
+        raise ValueError(
+            f"'{self.custom_llm_provider.value}' does not support the Responses API "
+            f"'shell' tool. Only OpenAI and Azure are currently supported. "
+            f"If {self.custom_llm_provider.value} adds shell support in the future, "
+            f"update `transform_shell_tool_params` in the provider's ResponsesAPIConfig."
+        )
+
+    #########################################################
+    ########## END SHELL TOOL TRANSFORMATION ################
+    #########################################################
 
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########

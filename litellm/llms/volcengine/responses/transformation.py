@@ -26,6 +26,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
+    ShellToolParam,
 )
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
@@ -148,6 +149,20 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return f"{base_url}/responses"
         return f"{base_url}/api/v3/responses"
 
+    def transform_shell_tool_params(
+        self,
+        shell_tool: "ShellToolParam",
+        model: str,
+    ) -> list:
+        """VolcEngine does not support shell tools — delegate to base class error."""
+        from litellm.llms.base_llm.responses.transformation import (
+            BaseResponsesAPIConfig,
+        )
+
+        return BaseResponsesAPIConfig.transform_shell_tool_params(
+            self, shell_tool, model
+        )
+
     def map_openai_params(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
@@ -173,6 +188,13 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "Volcengine Responses API: dropping unsupported 'parallel_tool_calls' param."
             )
             params.pop("parallel_tool_calls", None)
+
+        # Reject shell tools — not supported by VolcEngine
+        tools = params.get("tools")
+        if tools and isinstance(tools, list):
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "shell":
+                    self.transform_shell_tool_params(tool, model)
 
         return params
 

@@ -25,6 +25,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
+    ShellToolParam,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -144,6 +145,20 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         
         return mapped_params
 
+    def transform_shell_tool_params(
+        self,
+        shell_tool: ShellToolParam,
+        model: str,
+    ) -> list:
+        """Perplexity does not support shell tools — delegate to base class error."""
+        from litellm.llms.base_llm.responses.transformation import (
+            BaseResponsesAPIConfig,
+        )
+
+        return BaseResponsesAPIConfig.transform_shell_tool_params(
+            self, shell_tool, model
+        )
+
     def _transform_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Transform tools to Perplexity format
@@ -157,9 +172,12 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         for tool in tools:
             if isinstance(tool, dict):
                 tool_type = tool.get("type")
+
+                if tool_type == "shell":
+                    self.transform_shell_tool_params(tool, "")
                 
                 # Direct Perplexity tool format
-                if tool_type in ["web_search", "fetch_url"]:
+                elif tool_type in ["web_search", "fetch_url"]:
                     perplexity_tools.append(tool)
                 
                 # OpenAI function format - try to map to Perplexity tools

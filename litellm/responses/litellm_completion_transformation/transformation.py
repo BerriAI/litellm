@@ -1301,6 +1301,14 @@ class LiteLLMCompletionResponsesConfig:
                     search_context_size=_search_context_size,
                     user_location=_user_location,
                 )
+            elif tool.get("type") == "shell":
+                raise ValueError(
+                    "The Responses API 'shell' tool is not supported when using the "
+                    "Chat Completion translation layer. Shell tools are only supported "
+                    "by providers with native Responses API endpoints (OpenAI, Azure). "
+                    "If your provider adds shell support, its ResponsesAPIConfig should "
+                    "override `transform_shell_tool_params`."
+                )
             elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
