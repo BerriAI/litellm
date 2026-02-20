@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -45,19 +45,19 @@ const renderModelsCell = (team: Team) =>
   );
 
 describe("ModelsCell", () => {
-  it("shows 'All Proxy Models' badge when the models array is empty", () => {
+  it("should show 'All Proxy Models' badge when the models array is empty", () => {
     renderModelsCell(makeTeam([]));
 
     expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
   });
 
-  it("shows an 'All Proxy Models' badge when the model value is 'all-proxy-models'", () => {
+  it("should show an 'All Proxy Models' badge when the model value is 'all-proxy-models'", () => {
     renderModelsCell(makeTeam(["all-proxy-models"]));
 
     expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
   });
 
-  it("displays individual model badges for up to 3 models without an accordion", () => {
+  it("should display individual model badges for up to 3 models without an accordion", () => {
     renderModelsCell(makeTeam(["gpt-4", "gpt-3.5-turbo", "claude-3"]));
 
     expect(screen.getByText("gpt-4")).toBeInTheDocument();
@@ -66,7 +66,7 @@ describe("ModelsCell", () => {
     expect(screen.queryByRole("button", { name: /accordion/i })).not.toBeInTheDocument();
   });
 
-  it("truncates model names longer than 30 characters with an ellipsis", () => {
+  it("should truncate model names longer than 30 characters with an ellipsis", () => {
     const longName = "a-very-long-model-name-exceeding-thirty-chars";
     renderModelsCell(makeTeam([longName]));
 
@@ -75,7 +75,7 @@ describe("ModelsCell", () => {
     expect(badge.textContent!.length).toBeLessThanOrEqual(33); // 30 chars + "..."
   });
 
-  it("shows the first 3 models and a '+N more models' badge when there are more than 3 models", () => {
+  it("should show the first 3 models and a '+N more models' badge when there are more than 3 models", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4", "m5"]));
 
     expect(screen.getByText("m1")).toBeInTheDocument();
@@ -86,43 +86,51 @@ describe("ModelsCell", () => {
     expect(screen.queryByText("m5")).not.toBeInTheDocument();
   });
 
-  it("uses singular 'more model' when there is exactly 1 overflow model", () => {
+  it("should use singular 'more model' when there is exactly 1 overflow model", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4"]));
 
     expect(screen.getByText("+1 more model")).toBeInTheDocument();
   });
 
-  it("shows the accordion toggle button when there are more than 3 models", () => {
+  it("should show the accordion toggle button when there are more than 3 models", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4"]));
 
     expect(screen.getByRole("button", { name: /accordion/i })).toBeInTheDocument();
   });
 
-  it("expands to show all models when the accordion toggle is clicked", () => {
+  it("should expand to show all models when the accordion toggle is clicked", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4", "m5"]));
 
-    fireEvent.click(screen.getByRole("button", { name: /accordion/i }));
+    act(() => {
+      screen.getByRole("button", { name: /accordion/i }).click();
+    });
 
     expect(screen.getByText("m4")).toBeInTheDocument();
     expect(screen.getByText("m5")).toBeInTheDocument();
     expect(screen.queryByText("+2 more models")).not.toBeInTheDocument();
   });
 
-  it("collapses back to show the overflow badge after a second click on the toggle", () => {
+  it("should collapse back to show the overflow badge after a second click on the toggle", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "m4", "m5"]));
 
     const toggle = screen.getByRole("button", { name: /accordion/i });
-    fireEvent.click(toggle);
-    fireEvent.click(toggle);
+    act(() => {
+      toggle.click();
+    });
+    act(() => {
+      toggle.click();
+    });
 
     expect(screen.queryByText("m4")).not.toBeInTheDocument();
     expect(screen.getByText("+2 more models")).toBeInTheDocument();
   });
 
-  it("renders 'all-proxy-models' entries in the overflow section as 'All Proxy Models' badges", () => {
+  it("should render 'all-proxy-models' entries in the overflow section as 'All Proxy Models' badges", () => {
     renderModelsCell(makeTeam(["m1", "m2", "m3", "all-proxy-models"]));
 
-    fireEvent.click(screen.getByRole("button", { name: /accordion/i }));
+    act(() => {
+      screen.getByRole("button", { name: /accordion/i }).click();
+    });
 
     // There should now be an "All Proxy Models" badge in the expanded section
     expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
