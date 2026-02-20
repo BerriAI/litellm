@@ -378,6 +378,7 @@ class ProxyLogging:
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
         alert_to_webhook_url: Optional[dict] = None,
+        alert_type_config: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
         if alerting is not None:
@@ -392,6 +393,8 @@ class ProxyLogging:
         if alert_to_webhook_url is not None:
             self.alert_to_webhook_url = alert_to_webhook_url
             updated_slack_alerting = True
+        if alert_type_config is not None:
+            updated_slack_alerting = True
 
         if updated_slack_alerting is True:
             self.slack_alerting_instance.update_values(
@@ -400,6 +403,7 @@ class ProxyLogging:
                 alert_types=self.alert_types,
                 alerting_args=alerting_args,
                 alert_to_webhook_url=self.alert_to_webhook_url,
+                alert_type_config=alert_type_config,
             )
 
             if self.alerting is not None and "slack" in self.alerting:
