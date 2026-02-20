@@ -8,6 +8,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     Member,
+    TeamListResponseObject,
 )
 
 
@@ -45,8 +46,9 @@ class UpdateTeamMemberPermissionsRequest(BaseModel):
 
 class TeamListResponse(BaseModel):
     """Response to get the list of teams"""
-
-    teams: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]
+    ## /v2/team/list can return active teams with keys (TeamListResponseObject) or deleted-team records
+    # include all variants here so response_model doesn't strip keys or reject results.
+    teams: List[Union[TeamListResponseObject, LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]
     total: int
     page: int
     page_size: int

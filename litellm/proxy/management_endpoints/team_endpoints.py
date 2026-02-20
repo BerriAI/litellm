@@ -3346,8 +3346,49 @@ async def list_team_v2(
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
 
-    # Convert Prisma models to Pydantic models, preserving deleted fields when applicable
-    team_list = _convert_teams_to_response(teams, use_deleted_table)
+    # Build team list with keys and team_memberships for active teams
+    if use_deleted_table:
+        team_list = _convert_teams_to_response(teams, use_deleted_table)
+    else:
+        _team_ids = [team.team_id for team in teams]
+        returned_tm = await get_all_team_memberships(
+            prisma_client, _team_ids, user_id=user_id
+        )
+
+        team_list: List[Union[TeamListResponseObject, LiteLLM_TeamTable]] = []
+        for team in teams:
+            _team_memberships: List[LiteLLM_TeamMembership] = []
+            for tm in returned_tm:
+                if tm.team_id == team.team_id:
+                    _team_memberships.append(tm)
+
+            # Fetch keys for this team 
+            keys = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"team_id": team.team_id}
+            )
+
+            # Sanitize keys
+            sanitized_keys = []
+            for key in keys:
+                try:
+                    key_dict = key.model_dump()
+                except Exception:
+                    key_dict = key.dict()
+                key_dict.pop("token", None)
+                sanitized_keys.append(key_dict)
+
+            try:
+                team_dict = team.model_dump()
+            except Exception:
+                team_dict = team.dict()
+
+            team_list.append(
+                TeamListResponseObject(
+                    **team_dict,
+                    team_memberships=_team_memberships,
+                    keys=sanitized_keys,
+                )
+            )
 
     return {
         "teams": team_list,
