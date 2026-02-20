@@ -390,8 +390,7 @@ class MCPServerManager:
 
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
-                base_url = get_openapi_base_url(spec)
-
+                base_url = get_openapi_base_url(spec, spec_path)
             verbose_logger.info(
                 f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
             )
