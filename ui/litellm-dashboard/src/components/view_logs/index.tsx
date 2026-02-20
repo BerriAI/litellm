@@ -259,7 +259,7 @@ export default function SpendLogsTable({
       if (!accessToken) return;
 
       try {
-        const response = await keyListCall(accessToken, null, null, keyAlias, null, null, currentPage, pageSize);
+        const response = await keyListCall(accessToken, null, null, keyAlias, null, null, 1, pageSize);
 
         const selectedKey = response.keys.find((key: any) => key.key_alias === keyAlias);
 
@@ -270,7 +270,7 @@ export default function SpendLogsTable({
         console.error("Error fetching key hash for alias:", error);
       }
     },
-    [accessToken, currentPage, pageSize],
+    [accessToken, pageSize],
   );
 
   const handleFilterReset = useCallback(() => {
