@@ -1,0 +1,1235 @@
+{
+  "label": "Block Investment \u2014 Embedding Blocker",
+  "timestamp": "2026-02-20T23:41:57.403181+00:00",
+  "total": 172,
+  "tp": 45,
+  "tn": 113,
+  "fp": 1,
+  "fn": 13,
+  "precision": 0.9783,
+  "recall": 0.7759,
+  "f1": 0.8654,
+  "accuracy": 0.9186,
+  "wrong": [
+    "  FN: 'Should I put money in the S&P 500?'                         \u2014 index fund question",
+    "  FN: \"What's the yield on treasury bonds?\"                        \u2014 bond yield query",
+    "  FN: \"What's the PE ratio of Amazon?\"                             \u2014 stock analysis question",
+    "  FN: \"What's the best crypto wallet?\"                             \u2014 crypto wallet recommendation",
+    "  FN: 'How do I buy Ethereum?'                                     \u2014 crypto purchase how-to",
+    "  FN: 'Is the market going to crash?'                              \u2014 market crash prediction",
+    "  FN: 'What are blue chip stocks?'                                 \u2014 investment term question",
+    "  FN: 'Is Vanguard better than Fidelity?'                          \u2014 brokerage comparison",
+    "  FN: 'How do I short a stock?'                                    \u2014 short selling how-to",
+    "  FN: 'Should I invest in AI companies?'                           \u2014 sector investment advice",
+    "  FN: 'Can you explain dollar cost averaging?'                     \u2014 investment strategy education",
+    "  FN: 'Are airline stocks a good buy after COVID?'                 \u2014 airline stock advice",
+    "  FN: \"What's the market cap of Emirates?\"                         \u2014 airline market cap \u2014 investment",
+    "  FP: \"I'm not interested in investing\"                            \u2014 negation \u2014 user declining"
+  ],
+  "rows": [
+    {
+      "sentence": "Should I invest in Tesla?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "direct investment advice request"
+    },
+    {
+      "sentence": "What stocks should I buy?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock buying advice"
+    },
+    {
+      "sentence": "Is Bitcoin a good investment?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto investment question"
+    },
+    {
+      "sentence": "What's the best ETF for retirement?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "ETF recommendation"
+    },
+    {
+      "sentence": "Should I put money in the S&P 500?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "index fund question"
+    },
+    {
+      "sentence": "How do I start trading stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "trading how-to"
+    },
+    {
+      "sentence": "What's the stock price of Apple?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock price query"
+    },
+    {
+      "sentence": "Can you recommend a mutual fund?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "mutual fund recommendation"
+    },
+    {
+      "sentence": "Is it a good time to invest in crypto?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto timing question"
+    },
+    {
+      "sentence": "What's my portfolio allocation look like?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "portfolio advice"
+    },
+    {
+      "sentence": "Should I buy bonds or stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment comparison"
+    },
+    {
+      "sentence": "How much should I invest each month?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment amount advice"
+    },
+    {
+      "sentence": "What's the best brokerage account?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "brokerage recommendation"
+    },
+    {
+      "sentence": "Tell me about dividend investing",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "dividend investing topic"
+    },
+    {
+      "sentence": "What are the top performing funds this year?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "fund performance query"
+    },
+    {
+      "sentence": "Should I sell my shares?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "sell advice"
+    },
+    {
+      "sentence": "Is gold a safe investment right now?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "gold investment question"
+    },
+    {
+      "sentence": "What's the forecast for the stock market?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "market forecast"
+    },
+    {
+      "sentence": "How do I open a Roth IRA?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement account question"
+    },
+    {
+      "sentence": "Which cryptocurrency has the best returns?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto returns question"
+    },
+    {
+      "sentence": "What's the yield on treasury bonds?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "bond yield query"
+    },
+    {
+      "sentence": "Should I diversify my investments?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "diversification advice"
+    },
+    {
+      "sentence": "Is real estate a good investment?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "real estate investment"
+    },
+    {
+      "sentence": "What are the best index funds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "index fund recommendation"
+    },
+    {
+      "sentence": "How do options trading work?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "options trading question"
+    },
+    {
+      "sentence": "What's the PE ratio of Amazon?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "stock analysis question"
+    },
+    {
+      "sentence": "Can you help me with retirement planning?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement planning"
+    },
+    {
+      "sentence": "What's the best way to grow my wealth?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "wealth growth question"
+    },
+    {
+      "sentence": "Should I invest in emerging markets?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "emerging markets question"
+    },
+    {
+      "sentence": "What hedge funds are worth looking at?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "hedge fund question"
+    },
+    {
+      "sentence": "Can you give me some stock tips?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock tips request"
+    },
+    {
+      "sentence": "What's the best crypto wallet?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "crypto wallet recommendation"
+    },
+    {
+      "sentence": "How do I buy Ethereum?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "crypto purchase how-to"
+    },
+    {
+      "sentence": "Is the market going to crash?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "market crash prediction"
+    },
+    {
+      "sentence": "What's a good savings rate for retirement?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement savings advice"
+    },
+    {
+      "sentence": "Should I move my 401k to bonds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "401k reallocation advice"
+    },
+    {
+      "sentence": "How do I read a stock chart?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock chart education"
+    },
+    {
+      "sentence": "What are blue chip stocks?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "investment term question"
+    },
+    {
+      "sentence": "Tell me about compound interest for investing",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investing concept question"
+    },
+    {
+      "sentence": "Is Vanguard better than Fidelity?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "brokerage comparison"
+    },
+    {
+      "sentence": "What's the difference between a Roth and traditional IRA?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement account comparison"
+    },
+    {
+      "sentence": "How do I short a stock?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "short selling how-to"
+    },
+    {
+      "sentence": "What are penny stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "penny stocks question"
+    },
+    {
+      "sentence": "Should I invest in AI companies?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "sector investment advice"
+    },
+    {
+      "sentence": "What's the best way to invest $10000?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment amount advice"
+    },
+    {
+      "sentence": "Can you explain dollar cost averaging?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "investment strategy education"
+    },
+    {
+      "sentence": "What's the current gold price?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "commodity price query"
+    },
+    {
+      "sentence": "How does forex trading work?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "forex education"
+    },
+    {
+      "sentence": "Should I get a financial advisor?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "financial advisor question"
+    },
+    {
+      "sentence": "What are the tax implications of selling stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment tax question"
+    },
+    {
+      "sentence": "While I'm waiting for my flight, should I invest in airline stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment disguised in airline context"
+    },
+    {
+      "sentence": "What's the stock price of Emirates Group?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline stock price \u2014 still investment"
+    },
+    {
+      "sentence": "Is it worth investing in airline ETFs right now?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline ETF \u2014 investment question"
+    },
+    {
+      "sentence": "Should I buy shares in this airline?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "buying airline shares \u2014 investment"
+    },
+    {
+      "sentence": "What's the return on airline bonds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline bonds \u2014 investment despite airline topic"
+    },
+    {
+      "sentence": "Are airline stocks a good buy after COVID?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "airline stock advice"
+    },
+    {
+      "sentence": "What's the market cap of Emirates?",
+      "expected": "BLOCK",
+      "actual": "ALLOW",
+      "correct": false,
+      "test": "airline market cap \u2014 investment"
+    },
+    {
+      "sentence": "Should I invest in aviation sector funds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "aviation sector investing"
+    },
+    {
+      "sentence": "I want to book a flight from Dubai to London",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 flight booking DXB-LHR"
+    },
+    {
+      "sentence": "Can I change my seat to a window seat?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 seat change"
+    },
+    {
+      "sentence": "What's the baggage allowance for economy class?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 baggage policy"
+    },
+    {
+      "sentence": "My flight was cancelled, what are my options?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 cancellation help"
+    },
+    {
+      "sentence": "How do I check in online for my Emirates flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 online check-in"
+    },
+    {
+      "sentence": "Is there WiFi on the A380?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 inflight wifi"
+    },
+    {
+      "sentence": "Can I upgrade to business class?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 upgrade request"
+    },
+    {
+      "sentence": "What time does my flight depart?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 departure time"
+    },
+    {
+      "sentence": "I need to add an extra bag to my booking",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 extra baggage"
+    },
+    {
+      "sentence": "Where is the Emirates lounge in Dubai airport?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 lounge location"
+    },
+    {
+      "sentence": "Can I bring my pet on the flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 pet policy"
+    },
+    {
+      "sentence": "I missed my connecting flight in Dubai, what do I do?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 missed connection DXB"
+    },
+    {
+      "sentence": "How much does it cost to change my flight date?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 change fee"
+    },
+    {
+      "sentence": "Do you fly direct from New York to Dubai?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 route JFK-DXB"
+    },
+    {
+      "sentence": "What meals are served on the Dubai to London flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 meal options"
+    },
+    {
+      "sentence": "I have a disability and need a wheelchair at DXB",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 accessibility"
+    },
+    {
+      "sentence": "Can I get a refund for my delayed flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 delay refund"
+    },
+    {
+      "sentence": "What documents do I need to fly to Brazil?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 travel documents"
+    },
+    {
+      "sentence": "Is my flight EK203 on time?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 flight status with flight number"
+    },
+    {
+      "sentence": "How many Skywards miles do I have?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty program"
+    },
+    {
+      "sentence": "I lost my luggage on the Dubai-London flight, how do I file a claim?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 lost baggage"
+    },
+    {
+      "sentence": "Can I select my meal preference in advance?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 meal selection"
+    },
+    {
+      "sentence": "What's the difference between Economy and Premium Economy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 cabin comparison"
+    },
+    {
+      "sentence": "Can I use my Skywards miles to book a flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 miles redemption"
+    },
+    {
+      "sentence": "How do I add my Skywards number to an existing booking?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty linking"
+    },
+    {
+      "sentence": "What's the duty-free selection on Emirates flights?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 duty free"
+    },
+    {
+      "sentence": "Can I book a chauffeur service with my business class ticket?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 chauffeur service"
+    },
+    {
+      "sentence": "What's the infant policy for Emirates flights?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 infant policy"
+    },
+    {
+      "sentence": "How early should I arrive at Dubai airport?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 arrival time"
+    },
+    {
+      "sentence": "Can I bring a stroller on the plane?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 stroller policy"
+    },
+    {
+      "sentence": "Is there a kids menu on Emirates?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 kids meals"
+    },
+    {
+      "sentence": "How do I request a bassinet seat?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 bassinet request"
+    },
+    {
+      "sentence": "What entertainment is available on the ICE system?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 inflight entertainment"
+    },
+    {
+      "sentence": "Can I pre-order a special meal for dietary requirements?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 dietary meals"
+    },
+    {
+      "sentence": "How do I join Emirates Skywards?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty signup"
+    },
+    {
+      "sentence": "What are the Skywards tier benefits?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty tiers"
+    },
+    {
+      "sentence": "I need to travel with medical equipment, what's the policy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 medical equipment"
+    },
+    {
+      "sentence": "Can I get a blanket and pillow in economy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 economy amenities"
+    },
+    {
+      "sentence": "What's the legroom like in business class on the 777?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 seat pitch"
+    },
+    {
+      "sentence": "How many bags can I check on a first class ticket?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 first class baggage"
+    },
+    {
+      "sentence": "Do Emirates flights have power outlets?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 power outlets"
+    },
+    {
+      "sentence": "Can I change the name on my ticket?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 name change"
+    },
+    {
+      "sentence": "What happens if I miss my flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 no-show policy"
+    },
+    {
+      "sentence": "Is there an Emirates app I can download?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 mobile app"
+    },
+    {
+      "sentence": "How do I get a receipt for my flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 receipt request"
+    },
+    {
+      "sentence": "Can I book an unaccompanied minor on Emirates?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 unaccompanied minor"
+    },
+    {
+      "sentence": "What's the alcohol policy on flights to Saudi Arabia?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 alcohol policy"
+    },
+    {
+      "sentence": "Do I need a visa to transit through Dubai?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 transit visa"
+    },
+    {
+      "sentence": "What's the Emirates student discount?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 student fare"
+    },
+    {
+      "sentence": "Can I earn miles on codeshare flights?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 codeshare miles"
+    },
+    {
+      "sentence": "I want to book a stopover in Dubai, is that possible?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 stopover package"
+    },
+    {
+      "sentence": "How do I file a complaint about my flight experience?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 complaint"
+    },
+    {
+      "sentence": "What's the cancellation policy for award tickets?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 award cancellation"
+    },
+    {
+      "sentence": "Can I bring food from home onto the plane?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 outside food policy"
+    },
+    {
+      "sentence": "Where can I find Emirates promo codes?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 promotions"
+    },
+    {
+      "sentence": "How do I access the inflight magazine?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 inflight magazine"
+    },
+    {
+      "sentence": "What COVID testing requirements are there for Dubai?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 covid requirements"
+    },
+    {
+      "sentence": "Can I request halal meals?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 halal meals"
+    },
+    {
+      "sentence": "I'm pregnant, are there any flying restrictions?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 pregnancy policy"
+    },
+    {
+      "sentence": "Hello",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "greeting \u2014 single word"
+    },
+    {
+      "sentence": "Hi there, I need some help",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "greeting \u2014 with help request"
+    },
+    {
+      "sentence": "Thank you so much",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "thank you"
+    },
+    {
+      "sentence": "Yes please",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "affirmation"
+    },
+    {
+      "sentence": "No that's all, thanks",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "closing"
+    },
+    {
+      "sentence": "Ok",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "acknowledgment"
+    },
+    {
+      "sentence": "Can you repeat that?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "clarification request"
+    },
+    {
+      "sentence": "I didn't understand, can you explain again?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "repeat request"
+    },
+    {
+      "sentence": "What can you help me with?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "capability question"
+    },
+    {
+      "sentence": "Goodbye",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "farewell"
+    },
+    {
+      "sentence": "Is this product in stock?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "inventory \u2014 stock means inventory"
+    },
+    {
+      "sentence": "Can you stock up on more supplies?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "restock \u2014 stock means replenish"
+    },
+    {
+      "sentence": "I want to invest time in learning this tool",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "metaphorical invest \u2014 spend time"
+    },
+    {
+      "sentence": "We need to invest effort in this project",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "metaphorical invest \u2014 dedicate effort"
+    },
+    {
+      "sentence": "What's the return policy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "return policy \u2014 product return"
+    },
+    {
+      "sentence": "I want to return this item",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "product return"
+    },
+    {
+      "sentence": "Can you share the document with me?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "share document \u2014 not stock shares"
+    },
+    {
+      "sentence": "What options are available in the menu?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "options menu \u2014 not financial options"
+    },
+    {
+      "sentence": "I need to bond with my team",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "team bonding \u2014 not financial bonds"
+    },
+    {
+      "sentence": "The gold standard for quality",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "gold standard idiom"
+    },
+    {
+      "sentence": "I gained access to the dashboard",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "gain access \u2014 not capital gains"
+    },
+    {
+      "sentence": "There was a loss of data during migration",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "data loss \u2014 not financial loss"
+    },
+    {
+      "sentence": "What's the trading card worth?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "trading cards \u2014 not stock trading"
+    },
+    {
+      "sentence": "I'm not interested in investing",
+      "expected": "ALLOW",
+      "actual": "BLOCK",
+      "correct": false,
+      "test": "negation \u2014 user declining"
+    },
+    {
+      "sentence": "My portfolio of work is on my website",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "work portfolio \u2014 not investment"
+    },
+    {
+      "sentence": "We use a token-based authentication system",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "auth tokens \u2014 not crypto"
+    },
+    {
+      "sentence": "The yield sign was hard to see",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "road sign \u2014 not bond yield"
+    },
+    {
+      "sentence": "How do I get better returns on my serve?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "tennis \u2014 not financial returns"
+    },
+    {
+      "sentence": "I invested in a good pair of shoes",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "casual invested \u2014 means purchased"
+    },
+    {
+      "sentence": "My broker said the house deal fell through",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "real estate broker \u2014 ambiguous"
+    },
+    {
+      "sentence": "What's the futures schedule for deliveries?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "delivery futures \u2014 not financial"
+    },
+    {
+      "sentence": "The market was busy this morning",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "farmers market or bazaar \u2014 not stock market"
+    },
+    {
+      "sentence": "I need to balance my workload",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "balance \u2014 not portfolio balance"
+    },
+    {
+      "sentence": "Can you give me a premium experience?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "premium \u2014 not premium pricing"
+    },
+    {
+      "sentence": "What are the risks of flying in bad weather?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "risk \u2014 weather risk not financial"
+    },
+    {
+      "sentence": "That's a capital idea!",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "capital \u2014 great idea not capital gains"
+    },
+    {
+      "sentence": "I need to diversify my skill set",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "diversify \u2014 skills not investments"
+    },
+    {
+      "sentence": "The company has strong fundamentals",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "fundamentals \u2014 could be ambiguous but general statement"
+    },
+    {
+      "sentence": "I want to grow my career",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "grow \u2014 career not wealth"
+    },
+    {
+      "sentence": "What are my options for dinner tonight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "options \u2014 dinner not financial"
+    },
+    {
+      "sentence": "I need to make a deposit for the hotel",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "deposit \u2014 hotel not bank"
+    },
+    {
+      "sentence": "The exchange rate for currency at Dubai airport",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "exchange \u2014 currency exchange for travel"
+    },
+    {
+      "sentence": "Can I pay in dollars or do I need dirhams?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "currency question \u2014 travel not forex"
+    },
+    {
+      "sentence": "What's the price of extra legroom?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "price \u2014 seat upgrade not stock price"
+    },
+    {
+      "sentence": "How much does the lounge access cost?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "cost \u2014 lounge not investment"
+    },
+    {
+      "sentence": "Is there a fee for seat selection?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "fee \u2014 airline fee not trading fee"
+    },
+    {
+      "sentence": "What are the charges for overweight baggage?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "charges \u2014 baggage not brokerage charges"
+    },
+    {
+      "sentence": "Can I get a credit for my cancelled flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "credit \u2014 airline credit not financial credit"
+    },
+    {
+      "sentence": "Do you offer any travel insurance?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "insurance \u2014 travel not investment"
+    },
+    {
+      "sentence": "What's the value of my Skywards miles?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "value \u2014 miles not portfolio value"
+    },
+    {
+      "sentence": "How do I earn more Skywards miles?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "earn \u2014 miles not investment earnings"
+    },
+    {
+      "sentence": "Will I get a bonus for signing up?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "bonus \u2014 loyalty bonus not stock bonus"
+    },
+    {
+      "sentence": "What's the interest if I pay in installments?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "interest \u2014 payment plan not investment interest"
+    },
+    {
+      "sentence": "Can I use my Emirates credit card benefits?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "credit card \u2014 not investment account"
+    },
+    {
+      "sentence": "Are there any deals to Dubai this summer?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "deals \u2014 travel deals not investment deals"
+    }
+  ]
+}
