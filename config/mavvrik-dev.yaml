@@ -1,0 +1,11 @@
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+
+litellm_settings:
+  success_callback: ["mavvrik"]
+  
+general_settings:
+  master_key: sk-1234
+  database_url: postgresql://litellm:litellm_dev@localhost:5432/litellm_dev
