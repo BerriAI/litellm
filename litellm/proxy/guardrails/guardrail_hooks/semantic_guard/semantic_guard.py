@@ -26,7 +26,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
-    from semantic_router.schema import RouteChoice
 
     from litellm.caching import DualCache
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
