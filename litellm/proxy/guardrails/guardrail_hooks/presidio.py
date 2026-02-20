@@ -806,9 +806,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
-        if isinstance(response, ModelResponse) and not isinstance(
-            response, ModelResponseStream
-        ):  # /chat/completions requests
+        if isinstance(response, ModelResponse):  # /chat/completions requests
             if isinstance(response.choices[0].message.content, str):
                 verbose_proxy_logger.debug(
                     f"self.pii_tokens: {self.pii_tokens}; initial response: {response.choices[0].message.content}"
