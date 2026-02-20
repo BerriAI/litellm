@@ -12705,6 +12705,7 @@
         "supports_web_search": true
     },
     "fireworks_ai/accounts/fireworks/models/kimi-k2p5": {
+        "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 262144,
