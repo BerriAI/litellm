@@ -816,7 +816,11 @@ def test_anthropic_chat_transform_request_includes_context_management():
     assert result["context_management"] == _sample_context_management_payload()
 
 
-def test_anthropic_structured_output_beta_header():
+def test_anthropic_structured_output_no_beta_header_for_ga():
+    """
+    Test that GA models using output_config.format do NOT include the
+    structured-outputs beta header (it's only needed for legacy output_format).
+    """
     from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
 
@@ -846,12 +850,15 @@ def test_anthropic_structured_output_beta_header():
     )
 
     assert response is not None
-    print(f"response: {response}")
-    print(f"raw_request_headers: {response['raw_request_headers']}")
-    assert (
-        "structured-outputs-2025-11-13"
-        in response["raw_request_headers"]["anthropic-beta"]
+    # GA models should use output_config.format, no beta header needed
+    beta_header = response["raw_request_headers"].get("anthropic-beta", "")
+    assert "structured-outputs-2025-11-13" not in beta_header, (
+        f"GA models should not include structured-outputs beta header, got: {beta_header}"
     )
+    # Verify the request body uses output_config.format
+    assert "output_config" in response["raw_request_body"]
+    assert "format" in response["raw_request_body"]["output_config"]
+    assert "output_format" not in response["raw_request_body"]
 
 
 @pytest.mark.parametrize(
@@ -866,7 +873,7 @@ def test_anthropic_structured_output_beta_header():
 def test_opus_uses_native_structured_output(model_name):
     """
     Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
-    (output_format) rather than the tool-based workaround.
+    (output_config.format GA API) rather than the tool-based workaround.
     """
     config = AnthropicConfig()
 
@@ -893,9 +900,13 @@ def test_opus_uses_native_structured_output(model_name):
         drop_params=False,
     )
 
-    # Should use output_format (native structured outputs)
-    assert "output_format" in optional_params
-    assert optional_params["output_format"]["type"] == "json_schema"
+    # Should use output_config.format (GA structured outputs API)
+    assert "output_config" in optional_params
+    assert "format" in optional_params["output_config"]
+    assert optional_params["output_config"]["format"]["type"] == "json_schema"
+
+    # Should NOT use legacy output_format
+    assert "output_format" not in optional_params
 
     # Should NOT create a tool-based workaround
     assert "tools" not in optional_params
@@ -932,12 +943,98 @@ def test_non_structured_output_model_uses_tool_workaround():
         drop_params=False,
     )
 
-    # Should NOT use output_format
+    # Should NOT use output_config.format or legacy output_format
     assert "output_format" not in optional_params
+    assert "output_config" not in optional_params
 
     # Should use tool-based workaround
     assert "tools" in optional_params
     assert "tool_choice" in optional_params
+
+
+def test_ga_structured_output_in_transform_request():
+    """
+    Test that transform_request produces output_config.format (GA API)
+    instead of output_format (beta API) for supported models.
+    """
+    config = AnthropicConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+                "required": ["name", "age"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={"max_tokens": 1024},
+        model="claude-sonnet-4-5-20250514",
+        drop_params=False,
+    )
+
+    headers = {}
+    result = config.transform_request(
+        model="claude-sonnet-4-5-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    # GA API: should use output_config.format
+    assert "output_config" in result
+    assert "format" in result["output_config"]
+    assert result["output_config"]["format"]["type"] == "json_schema"
+
+    # Should NOT use legacy output_format
+    assert "output_format" not in result
+
+    # No structured-outputs beta header needed for GA
+    beta_header = headers.get("anthropic-beta", "")
+    assert "structured-outputs-2025-11-13" not in beta_header
+
+
+def test_ga_structured_output_with_existing_output_config_effort():
+    """
+    Test that output_config.format and output_config.effort can coexist
+    when both response_format and output_config effort are provided.
+    """
+    config = AnthropicConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"result": {"type": "string"}},
+                "required": ["result"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={"max_tokens": 1024, "output_config": {"effort": "high"}},
+        model="claude-sonnet-4-5-20250514",
+        drop_params=False,
+    )
+
+    # Both format and effort should be in output_config
+    assert "output_config" in optional_params
+    assert optional_params["output_config"]["format"]["type"] == "json_schema"
+    assert optional_params["output_config"]["effort"] == "high"
 
 
 # ============ Tool Search Tests ============

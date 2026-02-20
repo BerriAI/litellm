@@ -964,7 +964,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_response_format_to_anthropic_output_format(value)
                     )
                     if _output_format is not None:
-                        optional_params["output_format"] = _output_format
+                        optional_params.setdefault("output_config", {})[
+                            "format"
+                        ] = _output_format
                 else:
                     _tool = self.map_response_format_to_anthropic_tool(
                         value, optional_params, is_thinking_enabled
@@ -1233,6 +1235,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_context_management_beta_header(
                 headers, optional_params["context_management"]
             )
+        # Legacy output_format passthrough still needs the beta header
         if optional_params.get("output_format") is not None:
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
