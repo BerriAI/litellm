@@ -862,3 +862,42 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
     wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
     assert abs(completion_cost - wrong_cost) > 1e-6, \
         "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
+
+
+def test_image_count_prevents_text_tokens_fallback():
+    """
+    Test that the text_tokens fallback in generic_cost_per_token does not
+    override text_tokens=0 when image_count > 0.
+
+    Regression test for: Bedrock image embedding double-charging bug.
+    When image_count > 0, text_tokens=0 is intentional (image-only request),
+    not "text_tokens not set by provider."
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Simulate Nova image-only embedding: prompt_tokens estimated from
+    # embedding dimensions (768 for 3072-dim), image_count=1
+    usage = Usage(
+        prompt_tokens=768,
+        completion_tokens=0,
+        total_tokens=768,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_count=1,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="amazon.nova-2-multimodal-embeddings-v1:0",
+        usage=usage,
+        custom_llm_provider="bedrock",
+    )
+
+    # Cost should be 1 * input_cost_per_image ($6e-05) = $0.00006
+    # NOT 768 * input_cost_per_token ($1.35e-07) + $0.00006 = $0.000164
+    expected_image_cost = 1 * 6e-05
+    assert prompt_cost == expected_image_cost, (
+        f"Expected prompt_cost={expected_image_cost} (image-only), "
+        f"got {prompt_cost}. text_tokens fallback may be double-charging."
+    )
+    assert completion_cost == 0.0

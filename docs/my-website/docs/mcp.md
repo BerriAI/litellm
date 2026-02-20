@@ -808,6 +808,68 @@ If your stdio MCP server needs per-request credentials, you can map HTTP headers
 
 In this example, when a client makes a request with the `X-GITHUB_PERSONAL_ACCESS_TOKEN` header, the proxy forwards that value into the stdio process as the `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable.
 
+## Control MCP Access for End Users
+
+Control which MCP servers end users of your AI application can access (e.g. users of an internal chat UI). Pass the customer ID in the `x-litellm-end-user-id` header to:
+- Enforce object permissions (limit which MCP servers they can access)
+- Apply customer-specific budgets
+- Track spend per customer
+
+**FastMCP Client Example:**
+
+```python title="Track customer spend with x-litellm-end-user-id" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# MCP client configuration with customer tracking
+config = {
+    "mcpServers": {
+        "github": {
+            "url": "http://localhost:4000/github_mcp/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234",
+                "x-litellm-end-user-id": "customer_123",  # 👈 CUSTOMER ID
+                "Authorization": "Bearer gho_token"
+            }
+        }
+    }
+}
+
+client = Client(config)
+
+async def main():
+    async with client:
+        # All MCP calls will be tracked under customer_123
+        tools = await client.list_tools()
+        result = await client.call_tool(tools[0].name, {})
+        print(f"Tool result: {result}")
+
+asyncio.run(main())
+```
+
+**Cursor IDE Example:**
+
+```json title="Cursor config with customer tracking" showLineNumbers
+{
+  "mcpServers": {
+    "GitHub": {
+      "url": "http://localhost:4000/github_mcp/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-litellm-end-user-id": "customer_123"
+      }
+    }
+  }
+}
+```
+
+**What happens:**
+- Customer-specific object permissions are enforced (only allowed MCP servers are accessible)
+- Customer budgets are applied
+- All tool calls are tracked under `customer_123`
+
+[Learn more about customer management →](./proxy/customers)
+
 ## Using your MCP with client side credentials
 
 Use this if you want to pass a client side authentication token to LiteLLM to then pass to your MCP to auth to your MCP.

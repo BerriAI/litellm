@@ -60,6 +60,7 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_project_id=user_api_key_dict.project_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
@@ -68,11 +69,11 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata["error_information"] = (
-            StandardLoggingPayloadSetup.get_error_information(
-                original_exception=original_exception,
-                traceback_str=traceback_str,
-            )
+        _metadata[
+            "error_information"
+        ] = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+            traceback_str=traceback_str,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -80,25 +81,31 @@ class _ProxyDBLogger(CustomLogger):
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
-        
+
         existing_litellm_params = request_data.get("litellm_params", {})
         existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
-        
+
         # Preserve tags from existing metadata
         if existing_litellm_metadata.get("tags"):
             existing_metadata["tags"] = existing_litellm_metadata.get("tags")
-        
+
         request_data["litellm_params"]["proxy_server_request"] = (
-            request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
+            request_data.get("proxy_server_request")
+            or existing_litellm_params.get("proxy_server_request")
+            or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
-        
+
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
-            request_data["model"] = existing_litellm_params.get("model") or request_data.get("model", "")
+            request_data["model"] = existing_litellm_params.get(
+                "model"
+            ) or request_data.get("model", "")
         if "custom_llm_provider" not in request_data:
-            request_data["custom_llm_provider"] = existing_litellm_params.get("custom_llm_provider") or request_data.get("custom_llm_provider", "")
-        
+            request_data["custom_llm_provider"] = existing_litellm_params.get(
+                "custom_llm_provider"
+            ) or request_data.get("custom_llm_provider", "")
+
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
@@ -202,8 +209,17 @@ class _ProxyDBLogger(CustomLogger):
                         max_budget=end_user_max_budget,
                     )
             else:
+                # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
+                # Use .get() for "stream" to avoid KeyError on health checks.
+                if sl_object is None and not kwargs.get("model"):
+                    verbose_proxy_logger.warning(
+                        "Cost tracking - skipping, no standard_logging_object and no model for call_type=%s",
+                        kwargs.get("call_type", "unknown"),
+                    )
+                    return
                 if kwargs.get("stream") is not True or (
-                    kwargs.get("stream") is True and "complete_streaming_response" in kwargs
+                    kwargs.get("stream") is True
+                    and "complete_streaming_response" in kwargs
                 ):
                     if sl_object is not None:
                         cost_tracking_failure_debug_info: Union[dict, str] = (
