@@ -975,7 +975,13 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
       </div>
 
       {/* Cost Breakdown - Show if cost breakdown data is available */}
-      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
+      <CostBreakdownViewer
+        costBreakdown={row.original.metadata?.cost_breakdown}
+        totalSpend={row.original.spend ?? 0}
+        promptTokens={row.original.prompt_tokens}
+        completionTokens={row.original.completion_tokens}
+        cacheHit={row.original.cache_hit}
+      />
 
       {/* Configuration Info Message - Show when data is missing */}
       <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
