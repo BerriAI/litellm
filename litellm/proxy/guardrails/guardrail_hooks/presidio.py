@@ -61,7 +61,6 @@ from litellm.utils import (
     ImageResponse,
     ModelResponse,
     ModelResponseStream,
-    StreamingChoices,
 )
 
 
