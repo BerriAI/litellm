@@ -41,11 +41,11 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
-    LiteLLM_ProjectTableCachedObj,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
@@ -2020,12 +2020,33 @@ async def get_key_object(
         )
 
     # else, check db
-    _valid_token: Optional[BaseModel] = await prisma_client.get_data(
-        token=hashed_token,
-        table_name="combined_view",
-        parent_otel_span=parent_otel_span,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    try:
+        _valid_token: Optional[BaseModel] = await prisma_client.get_data(
+            token=hashed_token,
+            table_name="combined_view",
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+        if PrismaDBExceptionHandler.is_database_connection_error(e):
+            did_reconnect = False
+            if hasattr(prisma_client, "attempt_db_reconnect"):
+                did_reconnect = await prisma_client.attempt_db_reconnect(
+                    reason="auth_get_key_object_lookup_failure"
+                )
+            if did_reconnect:
+                _valid_token = await prisma_client.get_data(
+                    token=hashed_token,
+                    table_name="combined_view",
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            else:
+                raise
+        else:
+            raise
 
     if _valid_token is None:
         raise ProxyException(
