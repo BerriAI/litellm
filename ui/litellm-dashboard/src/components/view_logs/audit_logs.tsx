@@ -45,16 +45,40 @@ export default function AuditLogs({
   const [actionFilterOpen, setActionFilterOpen] = useState(false);
   const [tableFilterOpen, setTableFilterOpen] = useState(false);
 
-  // Fetch only the current page from the backend (server-side pagination)
+  // Map UI table filter values to backend table_name values
+  const getBackendTableName = (uiFilter: string): string | undefined => {
+    switch (uiFilter) {
+      case "keys":
+        return "litellm_verificationtoken";
+      case "teams":
+        return "litellm_teamtable";
+      case "users":
+        return "litellm_usertable";
+      default:
+        return undefined;
+    }
+  };
+
+  // Fetch only the current page from the backend (server-side pagination + filtering)
   const auditLogsQuery = useQuery({
-    queryKey: ["audit_logs", accessToken, token, userRole, userID, startTime, currentPage, pageSize],
+    queryKey: [
+      "audit_logs",
+      accessToken, token, userRole, userID, startTime,
+      currentPage, pageSize,
+      selectedActionFilter, selectedTableFilter, objectIdSearch,
+    ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
-        return { audit_logs: [] as AuditLogEntry[], total_pages: 1, total_count: 0 };
+        return { audit_logs: [] as AuditLogEntry[], total_pages: 1, total: 0 };
       }
 
       const formattedStartTimeStr = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTimeStr = moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+      // Build server-side filter parameters
+      const actionParam = selectedActionFilter !== "all" ? selectedActionFilter : undefined;
+      const tableNameParam = selectedTableFilter !== "all" ? getBackendTableName(selectedTableFilter) : undefined;
+      const objectIdParam = objectIdSearch || undefined;
 
       const response = await uiAuditLogsCall(
         accessToken,
@@ -62,6 +86,9 @@ export default function AuditLogs({
         formattedEndTimeStr,
         currentPage,
         pageSize,
+        actionParam,
+        tableNameParam,
+        objectIdParam,
       );
       return response;
     },
@@ -165,16 +192,14 @@ export default function AuditLogs({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Client-side filtering of the current page's data
+  // Client-side filtering for team/key (these require inspecting nested JSON fields
+  // that the backend doesn't support filtering on directly)
   const filteredLogs = useMemo(() => {
     const logs = auditLogsQuery.data?.audit_logs;
     if (!logs) return [];
     return logs.filter((log) => {
       let matchesTeam = true;
       let matchesKey = true;
-      let matchesObjectId = true;
-      let matchesAction = true;
-      let matchesTable = true;
 
       if (selectedTeamId) {
         const beforeTeamId =
@@ -203,36 +228,11 @@ export default function AuditLogs({
         }
       }
 
-      if (objectIdSearch) {
-        matchesObjectId = log.object_id?.toLowerCase().includes(objectIdSearch.toLowerCase());
-      }
-
-      if (selectedActionFilter !== "all") {
-        matchesAction = log.action?.toLowerCase() === selectedActionFilter.toLowerCase();
-      }
-
-      if (selectedTableFilter !== "all") {
-        let tableMatchName = "";
-        switch (selectedTableFilter) {
-          case "keys":
-            tableMatchName = "litellm_verificationtoken";
-            break;
-          case "teams":
-            tableMatchName = "litellm_teamtable";
-            break;
-          case "users":
-            tableMatchName = "litellm_usertable";
-            break;
-          default:
-            tableMatchName = selectedTableFilter;
-        }
-        matchesTable = log.table_name?.toLowerCase() === tableMatchName;
-      }
-
-      return matchesTeam && matchesKey && matchesObjectId && matchesAction && matchesTable;
+      return matchesTeam && matchesKey;
     });
-  }, [auditLogsQuery.data, selectedTeamId, selectedKeyHash, objectIdSearch, selectedActionFilter, selectedTableFilter]);
+  }, [auditLogsQuery.data, selectedTeamId, selectedKeyHash]);
 
+  const totalCount = auditLogsQuery.data?.total ?? 0;
   const totalPagesFromBackend = auditLogsQuery.data?.total_pages ?? 1;
 
   // Check if audit logs are empty (not loading and no data)
@@ -438,8 +438,8 @@ export default function AuditLogs({
     );
   }
 
-  const currentDisplayItemsStart = filteredLogs.length > 0 ? 1 : 0;
-  const currentDisplayItemsEnd = filteredLogs.length;
+  const currentDisplayItemsStart = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
+  const currentDisplayItemsEnd = Math.min(currentPage * pageSize, totalCount);
 
   return (
     <>
@@ -603,8 +603,8 @@ export default function AuditLogs({
 
               <span className="text-sm text-gray-700">
                 Showing {auditLogsQuery.isLoading ? "..." : currentDisplayItemsStart} -{" "}
-                {auditLogsQuery.isLoading ? "..." : currentDisplayItemsEnd} of page{" "}
-                {auditLogsQuery.isLoading ? "..." : currentPage}
+                {auditLogsQuery.isLoading ? "..." : currentDisplayItemsEnd} of{" "}
+                {auditLogsQuery.isLoading ? "..." : totalCount} results
               </span>
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-700">

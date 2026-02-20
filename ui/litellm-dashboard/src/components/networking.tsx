@@ -8213,6 +8213,9 @@ export const uiAuditLogsCall = async (
   end_date?: string,
   page?: number,
   page_size?: number,
+  action?: string,
+  table_name?: string,
+  object_id?: string,
 ) => {
   try {
     // Construct base URL
@@ -8224,6 +8227,9 @@ export const uiAuditLogsCall = async (
     // if (end_date) queryParams.append('end_date', end_date);
     if (page) queryParams.append("page", page.toString());
     if (page_size) queryParams.append("page_size", page_size.toString());
+    if (action) queryParams.append("action", action);
+    if (table_name) queryParams.append("table_name", table_name);
+    if (object_id) queryParams.append("object_id", object_id);
 
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
