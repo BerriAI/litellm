@@ -2219,6 +2219,48 @@ class MCPServerManager:
 
         return None
 
+    async def reload_servers_from_records(self, db_records: list):
+        """Re-synchronize the in-memory MCP server registry with pre-fetched records."""
+        from litellm.proxy._types import LiteLLM_MCPServerTable
+
+        verbose_logger.debug("Loading MCP servers from pre-fetched records...")
+
+        db_mcp_servers = [LiteLLM_MCPServerTable(**r.model_dump()) for r in db_records]
+        verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in records")
+
+        previous_registry = self.registry
+        new_registry: Dict[str, MCPServer] = {}
+
+        for server in db_mcp_servers:
+            existing_server = previous_registry.get(server.server_id)
+
+            if (
+                existing_server is not None
+                and existing_server.updated_at is not None
+                and server.updated_at is not None
+                and existing_server.updated_at == server.updated_at
+            ):
+                new_registry[server.server_id] = existing_server
+                continue
+
+            _warn_on_server_name_fields(
+                server_id=server.server_id,
+                alias=getattr(server, "alias", None),
+                server_name=getattr(server, "server_name", None),
+            )
+            verbose_logger.debug(
+                f"Building server from DB: {server.server_id} ({server.server_name})"
+            )
+            new_server = await self.build_mcp_server_from_table(server)
+            new_registry[server.server_id] = new_server
+            await self._maybe_register_openapi_tools(new_server)
+
+        self.registry = new_registry
+
+        verbose_logger.debug(
+            "MCP registry refreshed (%s servers in registry)", len(new_registry)
+        )
+
     async def reload_servers_from_database(self):
         """Re-synchronize the in-memory MCP server registry with the database."""
         from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
