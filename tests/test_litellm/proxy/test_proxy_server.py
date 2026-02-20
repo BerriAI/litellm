@@ -3154,6 +3154,76 @@ async def test_get_image_root_case_uses_current_dir(monkeypatch):
         assert mock_file_response.called, "FileResponse should be called"
 
 
+@pytest.mark.asyncio
+async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
+    """
+    Test that when UI_LOGO_PATH is set to a local file, get_image serves it
+    directly and does not return a stale cached_logo.jpg.
+
+    Regression test: previously the cache check ran before reading UI_LOGO_PATH,
+    so a pre-existing cached_logo.jpg (e.g. from the base Docker image) would
+    always be returned, ignoring the user's custom logo.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.setenv("UI_LOGO_PATH", "/app/custom_logo.jpg")
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+
+    calls_to_file_response = []
+
+    def fake_file_response(path, **kwargs):
+        calls_to_file_response.append(path)
+        return MagicMock()
+
+    with patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
+         patch("litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response):
+
+        await get_image()
+
+    assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
+    assert calls_to_file_response[0] == "/app/custom_logo.jpg", (
+        f"Expected custom logo path, got {calls_to_file_response[0]}. "
+        "A stale cached_logo.jpg may have been returned instead."
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_image_default_logo_still_uses_cache(monkeypatch):
+    """
+    Test that when UI_LOGO_PATH is NOT set (default logo), the cache
+    optimization still works — cached_logo.jpg is returned if it exists.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+
+    calls_to_file_response = []
+
+    def fake_file_response(path, **kwargs):
+        calls_to_file_response.append(path)
+        return MagicMock()
+
+    with patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
+         patch("litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response):
+
+        await get_image()
+
+    assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
+    served_path = calls_to_file_response[0]
+    assert served_path.endswith("cached_logo.jpg"), (
+        f"Expected cached_logo.jpg for default logo, got {served_path}"
+    )
+
+
 def test_get_config_normalizes_string_callbacks(monkeypatch):
     """
     Test that /get/config/callbacks normalizes string callbacks to lists.
