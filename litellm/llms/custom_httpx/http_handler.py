@@ -492,7 +492,7 @@ class AsyncHTTPHandler:
                     headers["response_headers-{}".format(key)] = value
 
             raise litellm.Timeout(
-                message=f"Connection timed out. Timeout passed={timeout}, time taken={time_delta} seconds",
+                message=f"Connection timed out after {timeout} seconds. Time taken={time_delta} seconds." if timeout is not None else f"Connection timed out. Time taken={time_delta} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
                 headers=headers,
@@ -975,7 +975,7 @@ class HTTPHandler:
     @staticmethod
     def extract_query_params(url: str) -> Dict[str, str]:
         """
-        Parse a URL’s query-string into a dict.
+        Parse a URL's query-string into a dict.
 
         :param url: full URL, e.g. "https://.../path?foo=1&bar=2"
         :return: {"foo": "1", "bar": "2"}
