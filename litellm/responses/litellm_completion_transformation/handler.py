@@ -233,7 +233,7 @@ class LiteLLMCompletionTransformationHandler:
                         "arguments": tc.function.arguments,
                     },
                 }
-                for tc in msg.tool_calls
+                for tc in (msg.tool_calls or [])
             ]
         return assistant_dict
 

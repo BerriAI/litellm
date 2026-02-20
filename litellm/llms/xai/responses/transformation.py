@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -211,7 +211,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     
                     elif tool_type == "shell":
                         transformed_tools.extend(
-                            self.transform_shell_tool_params(tool, model)
+                            self.transform_shell_tool_params(cast(ShellToolParam, tool), model)
                         )
                     
                     else:

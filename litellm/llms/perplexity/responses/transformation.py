@@ -10,7 +10,7 @@ and Perplexity's Responses API format, which supports:
 - Instructions parameter for system-level guidance
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import httpx
 
@@ -174,7 +174,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
                 tool_type = tool.get("type")
 
                 if tool_type == "shell":
-                    perplexity_tools.extend(self.transform_shell_tool_params(tool, ""))
+                    perplexity_tools.extend(self.transform_shell_tool_params(cast(ShellToolParam, tool), ""))
                 
                 # Direct Perplexity tool format
                 elif tool_type in ["web_search", "fetch_url"]:

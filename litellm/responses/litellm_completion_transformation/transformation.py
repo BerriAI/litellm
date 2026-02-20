@@ -1378,7 +1378,7 @@ class LiteLLMCompletionResponsesConfig:
                 )
             elif tool.get("type") == "shell":
                 mapped = LiteLLMCompletionResponsesConfig._transform_shell_tool_for_provider(
-                    shell_tool=tool,
+                    shell_tool=cast(Dict[str, Any], tool),
                     custom_llm_provider=custom_llm_provider,
                 )
                 chat_completion_tools.append(cast(ChatCompletionToolParam, mapped))

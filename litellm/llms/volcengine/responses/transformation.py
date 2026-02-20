@@ -7,6 +7,7 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    cast,
     get_args,
     get_origin,
 )
@@ -195,7 +196,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             transformed: list = []
             for tool in tools:
                 if isinstance(tool, dict) and tool.get("type") == "shell":
-                    transformed.extend(self.transform_shell_tool_params(tool, model))
+                    transformed.extend(self.transform_shell_tool_params(cast(ShellToolParam, tool), model))
                 else:
                     transformed.append(tool)
             params["tools"] = transformed
