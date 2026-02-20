@@ -72,12 +72,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Approve and enable auto-merge
+      - name: Enable auto-merge
         if: steps.diff.outputs.changed == 'true'
         run: |
-          # Approve with PAT_TOKEN_2 (a different identity from the creator,
-          # since GitHub does not allow a token to approve its own PR).
-          gh pr review "${{ steps.open-pr.outputs.pr_url }}" --approve
-          gh pr merge  "${{ steps.open-pr.outputs.pr_url }}" --auto --squash
+          gh pr merge "${{ steps.open-pr.outputs.pr_url }}" --auto --squash
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN_2 }}
+          GH_TOKEN: ${{ github.token }}
