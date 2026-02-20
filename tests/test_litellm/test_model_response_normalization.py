@@ -2,7 +2,14 @@ import warnings
 
 import pytest
 
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 def test_modelresponse_normalizes_openai_base_models() -> None:
@@ -62,10 +69,8 @@ def test_modelresponse_serialization_avoids_pydantic_warnings() -> None:
 
 
 def test_modelresponse_model_dump_json_no_pydantic_warnings() -> None:
-    """model_dump_json() bypasses the Python model_dump() override and uses
-    Pydantic's C-level serializer directly.  The Union[Choices, StreamingChoices]
-    field previously triggered PydanticSerializationUnexpectedValue warnings via
-    this path."""
+    """model_dump_json() and model_dump() should not trigger any Pydantic
+    serialization warnings now that choices is List[Choices] (no Union)."""
     response = ModelResponse(
         model="test-model",
         choices=[
@@ -94,11 +99,10 @@ def test_modelresponse_model_dump_json_no_pydantic_warnings() -> None:
     )
 
 
-def test_streaming_modelresponse_no_pydantic_warnings() -> None:
-    """Streaming responses use StreamingChoices in the Union field and should
-    also serialize without warnings."""
-    response = ModelResponse(
-        model="test-model",
+def test_streaming_modelresponsestream_no_pydantic_warnings() -> None:
+    """Streaming responses use ModelResponseStream with List[StreamingChoices]
+    and should serialize without warnings."""
+    response = ModelResponseStream(
         choices=[
             StreamingChoices(
                 finish_reason="stop",
@@ -106,7 +110,6 @@ def test_streaming_modelresponse_no_pydantic_warnings() -> None:
                 delta=Delta(content="hello", role="assistant"),
             )
         ],
-        stream=True,
     )
 
     with warnings.catch_warnings(record=True) as captured:

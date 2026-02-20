@@ -72,7 +72,7 @@ def test_stream_chunk_builder_preserves_images():
 
     chunks = []
     for chunk in init_chunks:
-        chunks.append(litellm.ModelResponse(**chunk, stream=True))
+        chunks.append(litellm.ModelResponseStream(**chunk))
 
     response = stream_chunk_builder(chunks=chunks)
 
@@ -163,7 +163,7 @@ def test_stream_chunk_builder_preserves_multiple_images():
 
     chunks = []
     for chunk in init_chunks:
-        chunks.append(litellm.ModelResponse(**chunk, stream=True))
+        chunks.append(litellm.ModelResponseStream(**chunk))
 
     response = stream_chunk_builder(chunks=chunks)
 
@@ -230,7 +230,7 @@ def test_stream_chunk_builder_no_images():
 
     chunks = []
     for chunk in init_chunks:
-        chunks.append(litellm.ModelResponse(**chunk, stream=True))
+        chunks.append(litellm.ModelResponseStream(**chunk))
 
     response = stream_chunk_builder(chunks=chunks)
 
