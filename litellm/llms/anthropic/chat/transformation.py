@@ -1064,7 +1064,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
         for idx, message in enumerate(messages):
             if message["role"] == "system":
-                valid_content: bool = False
+                system_prompt_indices.append(idx)
                 system_message_block = ChatCompletionSystemMessage(**message)
                 if isinstance(system_message_block["content"], str):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
@@ -1084,7 +1084,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
-                    valid_content = True
                 elif isinstance(message["content"], list):
                     for _content in message["content"]:
                         # Skip empty text blocks - Anthropic API raises errors for empty text
@@ -1108,10 +1107,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
                         )
-                    valid_content = True
 
-                if valid_content:
-                    system_prompt_indices.append(idx)
         if len(system_prompt_indices) > 0:
             for idx in reversed(system_prompt_indices):
                 messages.pop(idx)

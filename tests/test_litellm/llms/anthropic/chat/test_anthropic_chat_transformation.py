@@ -1739,6 +1739,8 @@ def test_translate_system_message_skips_empty_string_content():
 
     # Empty system message should produce no anthropic content blocks
     assert len(result) == 0
+    # System message must be removed from messages so it doesn't reach anthropic_messages_pt
+    assert all(m["role"] != "system" for m in messages)
 
 
 def test_translate_system_message_skips_empty_list_content():
