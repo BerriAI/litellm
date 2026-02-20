@@ -388,10 +388,10 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.project_endpoints import (
     router as project_router,
 )
-from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -4112,6 +4112,12 @@ class ProxyConfig:
         global llm_router, llm_model_list, master_key, general_settings
 
         try:
+            # Batch-load all LiteLLM_Config records in one query to reduce DB connection pressure.
+            # Previously each sub-method made its own query, causing ~5 queries per cycle per worker.
+            from litellm.proxy.db.litellm_config_cache import batch_load_config
+
+            config_map = await batch_load_config(prisma_client)
+
             # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
             if self._should_load_db_object(object_type="models"):
                 new_models = await self._get_models_from_db(prisma_client=prisma_client)
@@ -4121,9 +4127,7 @@ class ProxyConfig:
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
 
-            db_general_settings = await prisma_client.db.litellm_config.find_first(
-                where={"param_name": "general_settings"}
-            )
+            db_general_settings = config_map.get("general_settings")
 
             # update general settings
             if db_general_settings is not None:
@@ -4132,7 +4136,9 @@ class ProxyConfig:
                 )
 
             # initialize vector stores, guardrails, etc. table in db
-            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+            await self._init_non_llm_objects_in_db(
+                prisma_client=prisma_client, config_map=config_map
+            )
 
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -4141,12 +4147,18 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
+    async def _init_non_llm_objects_in_db(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+    ):
         """
         Use this to read non-llm objects from the db and initialize them
 
         ex. Vector Stores, Guardrails, MCP tools, etc.
         """
+        if config_map is None:
+            config_map = {}
         if self._should_load_db_object(object_type="guardrails"):
             await self._init_guardrails_in_db(prisma_client=prisma_client)
 
@@ -4166,7 +4178,7 @@ class ProxyConfig:
             await self._init_agents_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="pass_through_endpoints"):
-            await self._init_pass_through_endpoints_in_db()
+            await self._init_pass_through_endpoints_in_db(config_map=config_map)
 
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
@@ -4175,10 +4187,14 @@ class ProxyConfig:
             await self._init_search_tools_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="model_cost_map"):
-            await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
-        
+            await self._check_and_reload_model_cost_map(
+                prisma_client=prisma_client, config_map=config_map
+            )
+
         if self._should_load_db_object(object_type="anthropic_beta_headers"):
-            await self._check_and_reload_anthropic_beta_headers(prisma_client=prisma_client)
+            await self._check_and_reload_anthropic_beta_headers(
+                prisma_client=prisma_client, config_map=config_map
+            )
         
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
@@ -4193,10 +4209,14 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(
-                prisma_client=prisma_client
+                prisma_client=prisma_client, config_map=config_map
             )
 
-    async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
+    async def _init_semantic_filter_settings_in_db(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize MCP semantic filter settings from database.
         Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
@@ -4207,10 +4227,10 @@ class ProxyConfig:
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         try:
-            # Load litellm_settings from DB
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "litellm_settings"}
-            )
+            # Use batch-loaded litellm_settings from config_map (1 query for all config)
+            if config_map is None:
+                config_map = {}
+            config_record = config_map.get("litellm_settings")
 
             if config_record is None or config_record.param_value is None:
                 return
@@ -4305,16 +4325,20 @@ class ProxyConfig:
                 )
             )
 
-    async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
+    async def _check_and_reload_model_cost_map(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+    ):
         """
         Check if model cost map needs to be reloaded based on database configuration.
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
         try:
-            # Get model cost map reload configuration from database
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "model_cost_map_reload_config"}
-            )
+            # Use batch-loaded config_map (1 query for all config)
+            if config_map is None:
+                config_map = {}
+            config_record = config_map.get("model_cost_map_reload_config")
 
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
@@ -4408,16 +4432,20 @@ class ProxyConfig:
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
             )
 
-    async def _check_and_reload_anthropic_beta_headers(self, prisma_client: PrismaClient):
+    async def _check_and_reload_anthropic_beta_headers(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+    ):
         """
         Check if anthropic beta headers config needs to be reloaded based on database configuration.
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
         try:
-            # Get anthropic beta headers reload configuration from database
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "anthropic_beta_headers_reload_config"}
-            )
+            # Use batch-loaded config_map (1 query for all config)
+            if config_map is None:
+                config_map = {}
+            config_record = config_map.get("anthropic_beta_headers_reload_config")
 
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
@@ -4747,12 +4775,14 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_pass_through_endpoints_in_db(self):
+    async def _init_pass_through_endpoints_in_db(
+        self, config_map: Optional[Dict[str, Any]] = None
+    ):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             initialize_pass_through_endpoints_in_db,
         )
 
-        await initialize_pass_through_endpoints_in_db()
+        await initialize_pass_through_endpoints_in_db(config_map=config_map)
 
     def decrypt_credentials(self, credential: Union[dict, BaseModel]) -> CredentialItem:
         if isinstance(credential, dict):
