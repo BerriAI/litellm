@@ -3,9 +3,11 @@ import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "ant
 import { Button, TextInput, Textarea } from "@tremor/react";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
 import { Guardrail } from "../guardrails/types";
-import { getResolvedGuardrails, modelAvailableCall } from "../networking";
+import { getResolvedGuardrails, modelAvailableCall, createPolicyVersion } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import VersionStatusBadge from "./version_status_badge";
+import VersionSidebar from "./version_sidebar";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -21,6 +23,9 @@ interface AddPolicyFormProps {
   availableGuardrails: Guardrail[];
   createPolicy: (accessToken: string, policyData: any) => Promise<any>;
   updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
+  onVersionSelect?: (version: Policy) => void;
+  onVersionCreated?: () => void;
+  onOpenSimulator?: (policy: Policy) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -140,6 +145,9 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   availableGuardrails,
   createPolicy,
   updatePolicy,
+  onVersionSelect,
+  onVersionCreated,
+  onOpenSimulator,
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -173,14 +181,13 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         loadResolvedGuardrails(editingPolicy.policy_id);
       }
 
-      // If editing a pipeline policy, go directly to flow builder
-      if (editingPolicy.pipeline) {
-        onClose();
+      // When editing any policy, open in flow builder instead of the form.
+      // Only call onOpenFlowBuilder (not onClose) so the parent keeps editingPolicy
+      // and the flow builder can pre-populate from it.
+      if (editingPolicy.policy_id) {
         onOpenFlowBuilder();
         return;
       }
-      // If editing a simple policy, skip mode picker
-      setStep("simple_form");
     } else if (visible) {
       form.resetFields();
       setResolvedGuardrails([]);
@@ -288,6 +295,34 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
     }
   };
 
+  const handleCreateNewVersion = async () => {
+    if (!accessToken || !editingPolicy?.policy_id) return;
+
+    Modal.confirm({
+      title: "Create New Version",
+      content: "This will create a new draft version based on the current policy. You can then edit the new version.",
+      okText: "Create",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setIsSubmitting(true);
+        try {
+          await createPolicyVersion(accessToken, editingPolicy.policy_id);
+          NotificationsManager.success("New version created successfully");
+          resetForm();
+          onSuccess();
+          onClose();
+        } catch (error) {
+          console.error("Failed to create version:", error);
+          NotificationsManager.fromBackend(
+            "Failed to create version: " + (error instanceof Error ? error.message : String(error))
+          );
+        } finally {
+          setIsSubmitting(false);
+        }
+      },
+    });
+  };
+
   const handleSubmit = async () => {
     try {
       setIsSubmitting(true);
@@ -352,6 +387,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         footer={null}
         width={620}
       >
+        <Form form={form} style={{ display: "none" }} />
         <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
 
         {selectedMode === "flow_builder" && (
@@ -386,14 +422,61 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   }
 
   // ── Simple Form Step ──────────────────────────────────────────────────────
-  return (
-    <Modal
-      title={isEditing ? "Edit Policy" : "Create New Policy"}
-      open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={700}
-    >
+  const versionStatus = editingPolicy?.version_status || "draft";
+  const versionNumber = editingPolicy?.version_number || 1;
+  const isReadOnlyVersion = isEditing && versionStatus !== "draft";
+  const showVersionSidebar = isEditing && editingPolicy && onVersionSelect && onVersionCreated;
+
+  const formContent = (
+    <>
+      {/* Version Indicator (compact when sidebar is shown) */}
+      {isEditing && editingPolicy && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between p-3 rounded-lg bg-blue-50 border border-blue-200">
+            <div className="flex items-center gap-3">
+              <div>
+                <Text strong style={{ fontSize: 14, display: "block" }}>
+                  Version {versionNumber}
+                </Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {editingPolicy.policy_name}
+                </Text>
+              </div>
+              <VersionStatusBadge status={versionStatus as any} size="sm" />
+            </div>
+            <div className="flex items-center gap-2">
+              {onOpenSimulator && (
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => onOpenSimulator(editingPolicy)}
+                >
+                  Test in Simulator
+                </Button>
+              )}
+              {(versionStatus === "published" || versionStatus === "production") && (
+                <Button
+                  size="xs"
+                  onClick={handleCreateNewVersion}
+                  loading={isSubmitting}
+                >
+                  Create New Version
+                </Button>
+              )}
+            </div>
+          </div>
+          {isReadOnlyVersion && (
+            <Alert
+              message="Read-Only Mode"
+              description="This is a published or production version. Create a new version to make changes."
+              type="info"
+              showIcon
+              style={{ marginTop: 12 }}
+            />
+          )}
+        </div>
+      )}
+
       <Form
         form={form}
         layout="vertical"
@@ -425,6 +508,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
           <Textarea
             rows={2}
             placeholder="Describe what this policy does..."
+            disabled={isReadOnlyVersion}
           />
         </Form.Item>
 
@@ -442,6 +526,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             placeholder="Select a parent policy (optional)"
             options={policyOptions}
             style={{ width: "100%" }}
+            disabled={isReadOnlyVersion}
           />
         </Form.Item>
 
@@ -460,6 +545,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             placeholder="Select guardrails to add"
             options={guardrailOptions}
             style={{ width: "100%" }}
+            disabled={isReadOnlyVersion}
           />
         </Form.Item>
 
@@ -474,6 +560,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             placeholder="Select guardrails to remove (from inherited)"
             options={guardrailOptions}
             style={{ width: "100%" }}
+            disabled={isReadOnlyVersion}
           />
         </Form.Item>
 
@@ -519,6 +606,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
               setModelConditionType(e.target.value);
               form.setFieldValue("model_condition", undefined);
             }}
+            disabled={isReadOnlyVersion}
           >
             <Radio value="model">Select Model</Radio>
             <Radio value="regex">Custom Regex Pattern</Radio>
@@ -547,21 +635,58 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
                 (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
               }
               style={{ width: "100%" }}
+              disabled={isReadOnlyVersion}
             />
           ) : (
-            <TextInput placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)" />
+            <TextInput
+              placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)"
+              disabled={isReadOnlyVersion}
+            />
           )}
         </Form.Item>
 
         <div className="flex justify-end space-x-2 mt-4">
           <Button variant="secondary" onClick={handleClose}>
-            Cancel
+            {isReadOnlyVersion ? "Close" : "Cancel"}
           </Button>
-          <Button onClick={handleSubmit} loading={isSubmitting}>
-            {isEditing ? "Update Policy" : "Create Policy"}
-          </Button>
+          {!isReadOnlyVersion && (
+            <Button onClick={handleSubmit} loading={isSubmitting}>
+              {isEditing ? "Update Policy" : "Create Policy"}
+            </Button>
+          )}
         </div>
       </Form>
+    </>
+  );
+
+  return (
+    <Modal
+      title={isEditing ? "Edit Policy" : "Create New Policy"}
+      open={visible}
+      onCancel={handleClose}
+      footer={null}
+      width={showVersionSidebar ? 960 : 700}
+    >
+      {showVersionSidebar && editingPolicy ? (
+        <div className="flex gap-6" style={{ minHeight: 400 }}>
+          <div style={{ width: 260, flexShrink: 0 }}>
+            <VersionSidebar
+              policyName={editingPolicy.policy_name}
+              currentPolicyId={editingPolicy.policy_id}
+              accessToken={accessToken}
+              onVersionSelect={(version) => onVersionSelect?.(version)}
+              onVersionCreated={() => {
+                onVersionCreated?.();
+              }}
+            />
+          </div>
+          <div className="flex-1 overflow-y-auto" style={{ maxHeight: "70vh" }}>
+            {formContent}
+          </div>
+        </div>
+      ) : (
+        formContent
+      )}
     </Modal>
   );
 };

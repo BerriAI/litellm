@@ -1,12 +1,13 @@
 import React, { useState } from "react";
-import { Select, Typography, message } from "antd";
+import { Select, Typography, message, Modal } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
-import { DotsVerticalIcon } from "@heroicons/react/solid";
+import { DotsVerticalIcon, PencilIcon, BeakerIcon } from "@heroicons/react/solid";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
 import { testPipelineCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import GuardrailInfoView from "../guardrails/guardrail_info";
 
 const { Text } = Typography;
 
@@ -31,6 +32,18 @@ function createDefaultStep(): PipelineStep {
     on_fail: "block",
     pass_data: false,
     modify_response_message: null,
+  };
+}
+
+/** Build initial pipeline from a policy (uses pipeline if present, else guardrails_add as steps). */
+function getInitialPipelineFromPolicy(policy: Policy | null | undefined): GuardrailPipeline {
+  if (!policy) return { mode: "pre_call", steps: [createDefaultStep()] };
+  if (policy.pipeline?.steps?.length) return policy.pipeline;
+  const add = policy.guardrails_add || [];
+  if (add.length === 0) return { mode: "pre_call", steps: [createDefaultStep()] };
+  return {
+    mode: "pre_call",
+    steps: add.map((guardrail) => ({ ...createDefaultStep(), guardrail })),
   };
 }
 
@@ -162,6 +175,8 @@ interface StepCardProps {
   onChange: (updated: Partial<PipelineStep>) => void;
   onDelete: () => void;
   availableGuardrails: Guardrail[];
+  onEditGuardrail: (guardrailName: string) => void;
+  onTestGuardrail: (guardrailName: string) => void;
 }
 
 const StepCard: React.FC<StepCardProps> = ({
@@ -171,11 +186,15 @@ const StepCard: React.FC<StepCardProps> = ({
   onChange,
   onDelete,
   availableGuardrails,
+  onEditGuardrail,
+  onTestGuardrail,
 }) => {
   const guardrailOptions = availableGuardrails.map((g) => ({
     label: g.guardrail_name || g.guardrail_id,
     value: g.guardrail_name || g.guardrail_id,
   }));
+
+  const selectedGuardrail = step.guardrail;
 
   return (
     <div
@@ -230,22 +249,84 @@ const StepCard: React.FC<StepCardProps> = ({
         </div>
       </div>
 
-      {/* Guardrail selector */}
+      {/* Guardrail selector with action buttons */}
       <div style={{ padding: "12px 20px 16px 20px" }}>
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Guardrail
         </label>
-        <Select
-          showSearch
-          style={{ width: "100%" }}
-          placeholder="Select a guardrail"
-          value={step.guardrail || undefined}
-          onChange={(value) => onChange({ guardrail: value })}
-          options={guardrailOptions}
-          filterOption={(input, option) =>
-            (option?.label ?? "").toString().toLowerCase().includes(input.toLowerCase())
-          }
-        />
+        <div className="flex items-center gap-2">
+          <Select
+            showSearch
+            style={{ flex: 1 }}
+            placeholder="Select a guardrail"
+            value={step.guardrail || undefined}
+            onChange={(value) => onChange({ guardrail: value })}
+            options={guardrailOptions}
+            filterOption={(input, option) =>
+              (option?.label ?? "").toString().toLowerCase().includes(input.toLowerCase())
+            }
+          />
+          {selectedGuardrail && (
+            <>
+              <button
+                onClick={() => onEditGuardrail(selectedGuardrail)}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 13,
+                  color: "#374151",
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#6366f1";
+                  e.currentTarget.style.backgroundColor = "#eef2ff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#d1d5db";
+                  e.currentTarget.style.backgroundColor = "#fff";
+                }}
+                title="Edit guardrail settings"
+              >
+                <PencilIcon style={{ width: 14, height: 14 }} />
+                Edit
+              </button>
+              <button
+                onClick={() => onTestGuardrail(selectedGuardrail)}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  backgroundColor: "#fff",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 13,
+                  color: "#374151",
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#6366f1";
+                  e.currentTarget.style.backgroundColor = "#eef2ff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#d1d5db";
+                  e.currentTarget.style.backgroundColor = "#fff";
+                }}
+                title="Test this guardrail"
+              >
+                <BeakerIcon style={{ width: 14, height: 14 }} />
+                Test
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* ON PASS section */}
@@ -317,13 +398,22 @@ interface PipelineFlowBuilderProps {
   pipeline: GuardrailPipeline;
   onChange: (pipeline: GuardrailPipeline) => void;
   availableGuardrails: Guardrail[];
+  accessToken: string | null;
+  isAdmin: boolean;
+  onGuardrailUpdated?: () => void;
 }
 
 const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
   pipeline,
   onChange,
   availableGuardrails,
+  accessToken,
+  isAdmin,
+  onGuardrailUpdated,
 }) => {
+  const [editingGuardrailName, setEditingGuardrailName] = useState<string | null>(null);
+  const [testingGuardrailName, setTestingGuardrailName] = useState<string | null>(null);
+
   const handleInsertStep = (atIndex: number) => {
     onChange({ ...pipeline, steps: insertStep(pipeline.steps, atIndex) });
   };
@@ -337,6 +427,34 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
       ...pipeline,
       steps: updateStepAtIndex(pipeline.steps, index, updated),
     });
+  };
+
+  const handleEditGuardrail = (guardrailName: string) => {
+    setEditingGuardrailName(guardrailName);
+  };
+
+  const handleTestGuardrail = (guardrailName: string) => {
+    setTestingGuardrailName(guardrailName);
+  };
+
+  const handleCloseEditModal = () => {
+    setEditingGuardrailName(null);
+    if (onGuardrailUpdated) {
+      onGuardrailUpdated();
+    }
+  };
+
+  const handleCloseTestModal = () => {
+    setTestingGuardrailName(null);
+  };
+
+  // Find the guardrail ID for the selected guardrail name
+  const getGuardrailId = (guardrailName: string | null): string | null => {
+    if (!guardrailName) return null;
+    const guardrail = availableGuardrails.find(
+      (g) => g.guardrail_name === guardrailName || g.guardrail_id === guardrailName
+    );
+    return guardrail?.guardrail_id || null;
   };
 
   return (
@@ -389,6 +507,8 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
             onChange={(updated) => handleUpdateStep(index, updated)}
             onDelete={() => handleRemoveStep(index)}
             availableGuardrails={availableGuardrails}
+            onEditGuardrail={handleEditGuardrail}
+            onTestGuardrail={handleTestGuardrail}
           />
         </React.Fragment>
       ))}
@@ -448,6 +568,63 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Edit Guardrail Modal */}
+      <Modal
+        title="Edit Guardrail"
+        open={!!editingGuardrailName}
+        onCancel={handleCloseEditModal}
+        footer={null}
+        width={900}
+        destroyOnHidden
+        zIndex={1200}
+        styles={{ body: { padding: 0, maxHeight: "80vh", overflowY: "auto" } }}
+      >
+        {editingGuardrailName && getGuardrailId(editingGuardrailName) && (
+          <GuardrailInfoView
+            guardrailId={getGuardrailId(editingGuardrailName)!}
+            onClose={handleCloseEditModal}
+            accessToken={accessToken}
+            isAdmin={isAdmin}
+          />
+        )}
+      </Modal>
+
+      {/* Test Guardrail Modal */}
+      <Modal
+        title="Test Guardrail"
+        open={!!testingGuardrailName}
+        onCancel={handleCloseTestModal}
+        footer={null}
+        width={1200}
+        destroyOnHidden
+        zIndex={1200}
+        styles={{ body: { padding: "16px", maxHeight: "80vh", overflowY: "auto" } }}
+      >
+        {testingGuardrailName && (
+          <div>
+            <Text style={{ fontSize: 14, color: "#6b7280", marginBottom: 16, display: "block" }}>
+              Testing guardrail: <strong>{testingGuardrailName}</strong>
+            </Text>
+            <PipelineTestPanel
+              pipeline={{
+                mode: pipeline.mode,
+                steps: [
+                  {
+                    guardrail: testingGuardrailName,
+                    on_pass: "next",
+                    on_fail: "block",
+                    pass_data: false,
+                    modify_response_message: null,
+                  },
+                ],
+              }}
+              accessToken={accessToken}
+              onClose={handleCloseTestModal}
+            />
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };
@@ -795,6 +972,8 @@ interface FlowBuilderPageProps {
   availableGuardrails: Guardrail[];
   createPolicy: (accessToken: string, policyData: any) => Promise<any>;
   updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
+  isAdmin: boolean;
+  onGuardrailUpdated?: () => void;
 }
 
 export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
@@ -805,6 +984,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   availableGuardrails,
   createPolicy,
   updatePolicy,
+  isAdmin,
+  onGuardrailUpdated,
 }) => {
   const isEditing = !!editingPolicy?.policy_id;
 
@@ -812,8 +993,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   const [description, setDescription] = useState(editingPolicy?.description || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
-  const [pipeline, setPipeline] = useState<GuardrailPipeline>(
-    editingPolicy?.pipeline || { mode: "pre_call", steps: [createDefaultStep()] }
+  const [pipeline, setPipeline] = useState<GuardrailPipeline>(() =>
+    getInitialPipelineFromPolicy(editingPolicy)
   );
 
   const handleSave = async () => {
@@ -875,10 +1056,11 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         right: 0,
         bottom: 0,
         backgroundColor: "#f9fafb",
-        zIndex: 1000,
+        zIndex: 1100,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        pointerEvents: "auto",
       }}
     >
       {/* Header bar */}
@@ -964,10 +1146,11 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       </div>
 
       {/* Flow builder canvas + test panel */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
         <div
           style={{
             flex: 1,
+            minHeight: 0,
             overflowY: "auto",
             display: "flex",
             justifyContent: "center",
@@ -979,6 +1162,9 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
               pipeline={pipeline}
               onChange={setPipeline}
               availableGuardrails={availableGuardrails}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+              onGuardrailUpdated={onGuardrailUpdated}
             />
           </div>
         </div>

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-VALID_PIPELINE_ACTIONS = {"allow", "block", "next", "modify_response"}
+VALID_PIPELINE_ACTIONS = {"allow", "block", "next", "skip_to_end", "modify_response"}
 VALID_PIPELINE_MODES = {"pre_call", "post_call"}
 
 
@@ -24,11 +24,11 @@ class PipelineStep(BaseModel):
     guardrail: str = Field(description="Name of the guardrail to run.")
     on_fail: str = Field(
         default="block",
-        description="Action when guardrail rejects: next | block | allow | modify_response",
+        description="Action when guardrail rejects: next | block | allow | skip_to_end | modify_response",
     )
     on_pass: str = Field(
         default="allow",
-        description="Action when guardrail passes: next | block | allow | modify_response",
+        description="Action when guardrail passes: next | block | allow | skip_to_end | modify_response",
     )
     pass_data: bool = Field(
         default=False,

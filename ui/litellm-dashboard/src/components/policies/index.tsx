@@ -68,6 +68,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [loadedTemplates, setLoadedTemplates] = useState<any[]>([]);
   const [templateQueue, setTemplateQueue] = useState<any[]>([]);
   const [templateQueueProgress, setTemplateQueueProgress] = useState<{ current: number; total: number } | null>(null);
+  const [preselectedPolicyName, setPreselectedPolicyName] = useState<string | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
@@ -494,6 +495,13 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               availableGuardrails={guardrailsList}
               createPolicy={createPolicyCall}
               updatePolicy={updatePolicyCall}
+              onVersionSelect={(version) => setEditingPolicy(version)}
+              onVersionCreated={() => fetchPolicies()}
+              onOpenSimulator={(policy) => {
+                handleCloseModal();
+                setActiveTab(3);
+                setPreselectedPolicyName(policy?.policy_name ?? null);
+              }}
             />
 
             <DeleteResourceModal
@@ -602,7 +610,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           </TabPanel>
 
           <TabPanel>
-            <PolicyTestPanel accessToken={accessToken} />
+            <PolicyTestPanel
+              accessToken={accessToken}
+              preselectedPolicyName={preselectedPolicyName}
+              onClearPreselectedPolicy={() => setPreselectedPolicyName(null)}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
@@ -643,6 +655,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           availableGuardrails={guardrailsList}
           createPolicy={createPolicyCall}
           updatePolicy={updatePolicyCall}
+          isAdmin={isAdmin}
+          onGuardrailUpdated={fetchGuardrails}
         />
       )}
     </div>

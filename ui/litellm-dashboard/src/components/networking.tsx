@@ -5805,6 +5805,126 @@ export const getPolicyInfo = async (accessToken: string, policyId: string) => {
   }
 };
 
+// Policy Version Management API Calls
+
+export const createPolicyVersion = async (accessToken: string, policyId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}/versions` : `/policies/${policyId}/versions`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create policy version:", error);
+    throw error;
+  }
+};
+
+export const listPolicyVersions = async (accessToken: string, policyName: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/name/${encodeURIComponent(policyName)}/versions`
+      : `/policies/name/${encodeURIComponent(policyName)}/versions`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to list policy versions:", error);
+    throw error;
+  }
+};
+
+export const updatePolicyVersionStatus = async (
+  accessToken: string,
+  policyId: string,
+  status: "draft" | "published" | "production"
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/${policyId}/status?status=${status}`
+      : `/policies/${policyId}/status?status=${status}`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update policy version status:", error);
+    throw error;
+  }
+};
+
+export const comparePolicyVersions = async (
+  accessToken: string,
+  policyId: string,
+  compareWithId: string
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/${policyId}/compare/${compareWithId}`
+      : `/policies/${policyId}/compare/${compareWithId}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to compare policy versions:", error);
+    throw error;
+  }
+};
+
 // Policy Attachments API Calls
 
 export const getPolicyAttachmentsList = async (accessToken: string) => {

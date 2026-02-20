@@ -11,6 +11,13 @@ export interface Policy {
   updated_at?: string;
   created_by?: string;
   updated_by?: string;
+  // Versioning fields
+  version_number?: number;
+  version_status?: "draft" | "published" | "production";
+  parent_version_id?: string | null;
+  is_latest?: boolean;
+  published_at?: string | null;
+  production_at?: string | null;
 }
 
 export interface PolicyCondition {
@@ -98,4 +105,46 @@ export interface PipelineTestResult {
   modified_data: Record<string, any> | null;
   error_message: string | null;
   modify_response_message: string | null;
+}
+
+// Version Management Types
+
+export interface PolicyVersionListResponse {
+  policies: Policy[];
+  total_count: number;
+}
+
+export interface FieldDifference<T = any> {
+  changed: boolean;
+  old: T | null;
+  new: T | null;
+}
+
+export interface ArrayFieldDifference {
+  added: string[];
+  removed: string[];
+  unchanged: string[];
+}
+
+export interface PolicyVersionComparison {
+  policy_1: {
+    policy_id: string;
+    policy_name: string;
+    version_number: number;
+    version_status: string;
+  };
+  policy_2: {
+    policy_id: string;
+    policy_name: string;
+    version_number: number;
+    version_status: string;
+  };
+  differences: {
+    description?: FieldDifference<string>;
+    inherit?: FieldDifference<string>;
+    guardrails_add?: ArrayFieldDifference;
+    guardrails_remove?: ArrayFieldDifference;
+    condition?: FieldDifference<PolicyCondition>;
+    pipeline?: FieldDifference<GuardrailPipeline>;
+  };
 }

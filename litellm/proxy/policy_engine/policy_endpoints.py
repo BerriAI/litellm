@@ -353,6 +353,257 @@ async def get_resolved_guardrails(policy_id: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Policy Version Management Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/policies/{policy_id}/versions",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyDBResponse,
+)
+async def create_policy_version(
+    policy_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Create a new version from an existing policy.
+
+    The new version will be created as a draft with version_number incremented.
+    All policy configuration (guardrails, pipeline, condition) will be copied from the source version.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/policies/123e4567-e89b-12d3-a456-426614174000/versions" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "policy_id": "new-uuid-here",
+        "policy_name": "global-baseline",
+        "version_number": 2,
+        "version_status": "draft",
+        "parent_version_id": "123e4567-e89b-12d3-a456-426614174000",
+        "description": "Base guardrails for all requests",
+        "guardrails_add": ["pii_masking"],
+        "guardrails_remove": []
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        created_by = user_api_key_dict.user_id
+        result = await get_policy_registry().create_policy_version(
+            policy_id=policy_id,
+            prisma_client=prisma_client,
+            created_by=created_by,
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error creating policy version: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/policies/name/{policy_name}/versions",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyListDBResponse,
+)
+async def list_policy_versions(policy_name: str):
+    """
+    List all versions of a policy by policy name.
+
+    Returns all versions ordered by version_number descending (latest first).
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/policies/name/global-baseline/versions" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "policies": [
+            {
+                "policy_id": "uuid-v2",
+                "policy_name": "global-baseline",
+                "version_number": 2,
+                "version_status": "draft",
+                "is_latest": true
+            },
+            {
+                "policy_id": "uuid-v1",
+                "policy_name": "global-baseline",
+                "version_number": 1,
+                "version_status": "production",
+                "is_latest": false
+            }
+        ],
+        "total_count": 2
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        versions = await get_policy_registry().get_policy_versions(
+            policy_name=policy_name,
+            prisma_client=prisma_client,
+        )
+        return PolicyListDBResponse(policies=versions, total_count=len(versions))
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error listing policy versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put(
+    "/policies/{policy_id}/status",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyDBResponse,
+)
+async def update_policy_version_status(
+    policy_id: str,
+    status: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Change the status of a policy version.
+
+    Valid status transitions:
+    - draft → published
+    - published → production
+    - production → published (demote)
+
+    When promoting to production, the previous production version (if any) will be demoted to published.
+
+    Example Request:
+    ```bash
+    curl -X PUT "http://localhost:4000/policies/123e4567-e89b-12d3-a456-426614174000/status?status=published" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "policy_id": "123e4567-e89b-12d3-a456-426614174000",
+        "policy_name": "global-baseline",
+        "version_number": 2,
+        "version_status": "published",
+        "published_at": "2024-01-15T10:30:00Z"
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    # Validate status
+    valid_statuses = {"draft", "published", "production"}
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Must be one of: {valid_statuses}",
+        )
+
+    try:
+        updated_by = user_api_key_dict.user_id
+        result = await get_policy_registry().update_policy_status(
+            policy_id=policy_id,
+            new_status=status,
+            prisma_client=prisma_client,
+            updated_by=updated_by,
+        )
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating policy status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/policies/{policy_id}/compare/{compare_with_id}",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def compare_policy_versions(policy_id: str, compare_with_id: str):
+    """
+    Compare two policy versions and return their differences.
+
+    Returns a structured diff showing what changed between the two versions.
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/policies/uuid-v2/compare/uuid-v1" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "policy_1": {
+            "policy_id": "uuid-v2",
+            "version_number": 2,
+            "version_status": "draft"
+        },
+        "policy_2": {
+            "policy_id": "uuid-v1",
+            "version_number": 1,
+            "version_status": "production"
+        },
+        "differences": {
+            "guardrails_add": {
+                "added": ["toxicity_filter"],
+                "removed": [],
+                "unchanged": ["pii_masking"]
+            },
+            "description": {
+                "changed": true,
+                "old": "Base guardrails",
+                "new": "Enhanced base guardrails"
+            }
+        }
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        comparison = await get_policy_registry().compare_policy_versions(
+            policy_id_1=policy_id,
+            policy_id_2=compare_with_id,
+            prisma_client=prisma_client,
+        )
+        return comparison
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error comparing policy versions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Pipeline Test Endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -373,6 +624,8 @@ async def test_pipeline(
     step-by-step results showing which guardrails passed/failed, actions taken,
     and timing information.
 
+    Optionally filter to test only specific guardrails using the guardrail_filter parameter.
+
     Example Request:
     ```bash
     curl -X POST "http://localhost:4000/policies/test-pipeline" \\
@@ -388,11 +641,37 @@ async def test_pipeline(
             "test_messages": [{"role": "user", "content": "My SSN is 123-45-6789"}]
         }'
     ```
+
+    Example with guardrail filtering:
+    ```bash
+    curl -X POST "http://localhost:4000/policies/test-pipeline" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "pipeline": {...},
+            "test_messages": [...],
+            "guardrail_filter": ["pii-guard"]
+        }'
+    ```
     """
     try:
         validated_pipeline = GuardrailPipeline(**request.pipeline)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid pipeline: {e}")
+
+    # Filter steps if guardrail_filter is provided
+    steps_to_execute = validated_pipeline.steps
+    if request.guardrail_filter:
+        steps_to_execute = [
+            step
+            for step in validated_pipeline.steps
+            if step.guardrail in request.guardrail_filter
+        ]
+        if not steps_to_execute:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No steps match the guardrail filter: {request.guardrail_filter}",
+            )
 
     data = {
         "messages": request.test_messages,
@@ -402,7 +681,7 @@ async def test_pipeline(
 
     try:
         result = await PipelineExecutor.execute_steps(
-            steps=validated_pipeline.steps,
+            steps=steps_to_execute,
             mode=validated_pipeline.mode,
             data=data,
             user_api_key_dict=user_api_key_dict,

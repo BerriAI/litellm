@@ -48,7 +48,7 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
   return (
     <Card
       className="h-full hover:shadow-md transition-shadow"
-      bodyStyle={{ display: "flex", flexDirection: "column", height: "100%" }}
+      styles={{ body: { display: "flex", flexDirection: "column", height: "100%" } }}
     >
       <div className="flex items-start justify-between mb-4">
         <div className={`p-2 rounded-lg ${iconBg}`}>
@@ -196,7 +196,9 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpen
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-20">
-        <Spin size="large" tip="Loading policy templates..." />
+        <Spin size="large" tip="Loading policy templates...">
+          <div className="min-h-[200px]" />
+        </Spin>
       </div>
     );
   }
