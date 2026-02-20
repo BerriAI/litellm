@@ -14,21 +14,26 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
-from litellm.types.guardrails import (PII_ENTITY_CATEGORIES_MAP,
-                                      ApplyGuardrailRequest,
-                                      ApplyGuardrailResponse,
-                                      BaseLitellmParams,
-                                      BedrockGuardrailConfigModel, Guardrail,
-                                      GuardrailEventHooks,
-                                      GuardrailInfoResponse,
-                                      GuardrailUIAddGuardrailSettings,
-                                      LakeraV2GuardrailConfigModel,
-                                      ListGuardrailsResponse, LitellmParams,
-                                      PatchGuardrailRequest, PiiAction,
-                                      PiiEntityType,
-                                      PresidioPresidioConfigModelUserInterface,
-                                      SupportedGuardrailIntegrations,
-                                      ToolPermissionGuardrailConfigModel)
+from litellm.types.guardrails import (
+    PII_ENTITY_CATEGORIES_MAP,
+    ApplyGuardrailRequest,
+    ApplyGuardrailResponse,
+    BaseLitellmParams,
+    BedrockGuardrailConfigModel,
+    Guardrail,
+    GuardrailEventHooks,
+    GuardrailInfoResponse,
+    GuardrailUIAddGuardrailSettings,
+    LakeraV2GuardrailConfigModel,
+    ListGuardrailsResponse,
+    LitellmParams,
+    PatchGuardrailRequest,
+    PiiAction,
+    PiiEntityType,
+    PresidioPresidioConfigModelUserInterface,
+    SupportedGuardrailIntegrations,
+    ToolPermissionGuardrailConfigModel,
+)
 
 #### GUARDRAILS ENDPOINTS ####
 
@@ -147,8 +152,7 @@ async def list_guardrails_v2():
     ```
     """
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -288,8 +292,7 @@ async def create_guardrail(request: CreateGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -319,6 +322,150 @@ async def create_guardrail(request: CreateGuardrailRequest):
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class ProvisionPartnerGuardrailRequest(BaseModel):
+    """Request to provision a partner guardrail from a policy template."""
+
+    guardrail_name: str
+    """Name for the guardrail in LiteLLM (e.g. 'eu-ai-act-bedrock')."""
+
+    provider: str
+    """Partner provider: 'bedrock'."""
+
+    credential_name: str
+    """Name of a stored LiteLLM credential with the provider's API keys."""
+
+    provision_config: dict
+    """Provider-specific config (topicPolicyConfig, contentPolicyConfig, etc.)."""
+
+    aws_region_name: Optional[str] = None
+    """AWS region for Bedrock. Falls back to credential value or us-east-1."""
+
+    mode: str = "pre_call"
+    """Guardrail mode: pre_call, post_call, during_call."""
+
+    default_on: bool = True
+    """Whether the guardrail is enabled by default."""
+
+
+class ProvisionPartnerGuardrailResponse(BaseModel):
+    """Response from provisioning a partner guardrail."""
+
+    guardrail_name: str
+    provider: str
+    provider_guardrail_id: str
+    provider_guardrail_version: str
+    message: str
+
+
+@router.post(
+    "/guardrails/provision_partner",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ProvisionPartnerGuardrailResponse,
+)
+async def provision_partner_guardrail(
+    request: ProvisionPartnerGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Provision a partner guardrail (e.g. AWS Bedrock) and register it in LiteLLM.
+
+    1. Looks up the credential by name to get provider API keys.
+    2. Calls the provider's CreateGuardrail API.
+    3. Creates a LiteLLM guardrail entry pointing to the provisioned guardrail.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    try:
+        return await _provision_partner_guardrail(request, user_api_key_dict)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+def _get_partner_provisioner(provider: str):
+    """Lazy-load and return the provision_partner_guardrail callable for a provider."""
+    if provider == "bedrock":
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+            BedrockGuardrail,
+        )
+
+        return BedrockGuardrail.provision_partner_guardrail
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported partner provider: '{provider}'. Supported: bedrock.",
+    )
+
+
+async def _provision_partner_guardrail(
+    request: ProvisionPartnerGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> ProvisionPartnerGuardrailResponse:
+    """
+    Generic provisioning logic — fully provider-agnostic.
+
+    1. Looks up the credential.
+    2. Dispatches to the provider's ``provision_partner_guardrail`` method.
+    3. Registers the returned ``Guardrail`` in the DB and in-memory handler.
+    4. Returns a standard response.
+    """
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy.guardrails.guardrail_registry import (
+        IN_MEMORY_GUARDRAIL_HANDLER,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    # 1. Look up credential
+    credential_values = CredentialAccessor.get_credential_values(
+        credential_name=request.credential_name
+    )
+    if not credential_values:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Credential '{request.credential_name}' not found.",
+        )
+
+    # 2. Dispatch to the provider — all provider-specific logic lives there
+    provisioner = _get_partner_provisioner(request.provider)
+    result = await provisioner(
+        credential_values=credential_values,
+        guardrail_name=request.guardrail_name,
+        provision_config=request.provision_config,
+        mode=request.mode,
+        default_on=request.default_on,
+        aws_region_name=request.aws_region_name,
+    )
+
+    # 3. Register the guardrail in DB + memory (generic for all providers)
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not initialized")
+
+    db_result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(
+        guardrail=result.guardrail_data, prisma_client=prisma_client
+    )
+
+    try:
+        IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+            guardrail=cast(Guardrail, db_result)
+        )
+    except Exception as init_error:
+        verbose_proxy_logger.warning(
+            "Partner guardrail provisioned but failed to initialize in memory: %s",
+            init_error,
+        )
+
+    # 4. Return standard response
+    return ProvisionPartnerGuardrailResponse(
+        guardrail_name=request.guardrail_name,
+        provider=result.provider,
+        provider_guardrail_id=result.provider_guardrail_id,
+        provider_guardrail_version=result.provider_guardrail_version,
+        message=result.message,
+    )
 
 
 class UpdateGuardrailRequest(BaseModel):
@@ -378,8 +525,7 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -447,8 +593,7 @@ async def delete_guardrail(guardrail_id: str):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -541,8 +686,7 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     }
     ```
     """
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -664,8 +808,7 @@ async def get_guardrail_info(guardrail_id: str):
     """
 
     from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-    from litellm.proxy.guardrails.guardrail_registry import \
-        IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
 
@@ -740,8 +883,10 @@ async def get_guardrail_ui_settings():
     - Content filter settings (patterns and categories)
     """
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
-        PATTERN_CATEGORIES, get_available_content_categories,
-        get_pattern_metadata)
+        PATTERN_CATEGORIES,
+        get_available_content_categories,
+        get_pattern_metadata,
+    )
 
     # Convert the PII_ENTITY_CATEGORIES_MAP to the format expected by the UI
     category_maps = []
@@ -1277,8 +1422,7 @@ async def get_provider_specific_params():
     }
 
     ### get the config model for the guardrail - go through the registry and get the config model for the guardrail
-    from litellm.proxy.guardrails.guardrail_registry import \
-        guardrail_class_registry
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
     for guardrail_name, guardrail_class in guardrail_class_registry.items():
         guardrail_config_model = guardrail_class.get_config_model()
@@ -1406,8 +1550,9 @@ async def test_custom_code_guardrail(request: TestCustomCodeGuardrailRequest):
     import concurrent.futures
     import re
 
-    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import \
-        get_custom_code_primitives
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
+        get_custom_code_primitives,
+    )
 
     # Security validation patterns
     FORBIDDEN_PATTERNS = [

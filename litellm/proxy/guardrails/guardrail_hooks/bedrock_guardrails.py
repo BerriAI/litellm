@@ -33,6 +33,10 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.constants import (
+    BEDROCK_PARTNER_GUARDRAIL_BLOCKED_INPUT_MSG,
+    BEDROCK_PARTNER_GUARDRAIL_BLOCKED_OUTPUT_MSG,
+)
 from litellm.exceptions import GuardrailInterventionNormalStringError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -55,6 +59,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import PartnerProvisionResult
 
 from litellm.types.utils import (
     CallTypes,
@@ -68,6 +73,20 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME = "bedrock"
+
+
+class BedrockGuardrailProvisionResult:
+    """Result of provisioning a Bedrock guardrail via CreateGuardrail API."""
+
+    def __init__(
+        self,
+        guardrail_id: str,
+        guardrail_arn: str,
+        version: str,
+    ):
+        self.guardrail_id = guardrail_id
+        self.guardrail_arn = guardrail_arn
+        self.version = version
 
 
 class GuardrailMessageFilterResult(NamedTuple):
@@ -1460,3 +1479,185 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 "Bedrock Guardrail: Failed to apply guardrail: %s", str(e)
             )
             raise Exception(f"Bedrock guardrail failed: {str(e)}")
+
+    @staticmethod
+    def _provision_sync(
+        credential_values: dict,
+        provision_config: dict,
+        guardrail_name: str,
+        aws_region_name: Optional[str] = None,
+    ) -> BedrockGuardrailProvisionResult:
+        """
+        Synchronous Bedrock CreateGuardrail call. Runs on a thread via ``provision()``.
+        """
+        import boto3
+
+        region = (
+            aws_region_name
+            or credential_values.get("aws_region_name")
+            or "us-east-1"
+        )
+
+        session_kwargs: dict = {
+            "region_name": region,
+        }
+        if credential_values.get("aws_access_key_id"):
+            session_kwargs["aws_access_key_id"] = credential_values[
+                "aws_access_key_id"
+            ]
+        if credential_values.get("aws_secret_access_key"):
+            session_kwargs["aws_secret_access_key"] = credential_values[
+                "aws_secret_access_key"
+            ]
+        if credential_values.get("aws_session_token"):
+            session_kwargs["aws_session_token"] = credential_values[
+                "aws_session_token"
+            ]
+        if credential_values.get("aws_profile_name"):
+            session_kwargs["profile_name"] = credential_values["aws_profile_name"]
+
+        session = boto3.Session(**session_kwargs)
+        client = session.client("bedrock", region_name=region)
+
+        create_kwargs: dict = {
+            "name": guardrail_name,
+            "blockedInputMessaging": BEDROCK_PARTNER_GUARDRAIL_BLOCKED_INPUT_MSG,
+            "blockedOutputsMessaging": BEDROCK_PARTNER_GUARDRAIL_BLOCKED_OUTPUT_MSG,
+            "description": f"Provisioned by LiteLLM for policy template: {guardrail_name}",
+        }
+
+        if "topicPolicyConfig" in provision_config:
+            create_kwargs["topicPolicyConfig"] = provision_config[
+                "topicPolicyConfig"
+            ]
+
+        if "contentPolicyConfig" in provision_config:
+            create_kwargs["contentPolicyConfig"] = provision_config[
+                "contentPolicyConfig"
+            ]
+
+        if "wordPolicyConfig" in provision_config:
+            create_kwargs["wordPolicyConfig"] = provision_config["wordPolicyConfig"]
+
+        if "sensitiveInformationPolicyConfig" in provision_config:
+            create_kwargs["sensitiveInformationPolicyConfig"] = provision_config[
+                "sensitiveInformationPolicyConfig"
+            ]
+
+        if "contextualGroundingPolicyConfig" in provision_config:
+            create_kwargs["contextualGroundingPolicyConfig"] = provision_config[
+                "contextualGroundingPolicyConfig"
+            ]
+
+        verbose_proxy_logger.info(
+            "Provisioning Bedrock guardrail '%s' in region '%s'",
+            guardrail_name,
+            region,
+        )
+
+        response = client.create_guardrail(**create_kwargs)
+
+        verbose_proxy_logger.info(
+            "Bedrock guardrail provisioned: id=%s, arn=%s, version=%s",
+            response["guardrailId"],
+            response["guardrailArn"],
+            response["version"],
+        )
+
+        return BedrockGuardrailProvisionResult(
+            guardrail_id=response["guardrailId"],
+            guardrail_arn=response["guardrailArn"],
+            version=response["version"],
+        )
+
+    @staticmethod
+    async def provision(
+        credential_values: dict,
+        provision_config: dict,
+        guardrail_name: str,
+        aws_region_name: Optional[str] = None,
+    ) -> BedrockGuardrailProvisionResult:
+        """
+        Call Bedrock CreateGuardrail API and return the provisioned guardrail info.
+
+        Offloads the synchronous boto3 call to a worker thread via
+        ``asyncify`` so the event loop is not blocked.
+
+        Args:
+            credential_values: AWS credential dict (aws_access_key_id, aws_secret_access_key, etc.)
+            provision_config: Dict with topicPolicyConfig, contentPolicyConfig, etc.
+            guardrail_name: Human-readable name for the Bedrock guardrail.
+            aws_region_name: AWS region. Falls back to credential or us-east-1.
+
+        Returns:
+            BedrockGuardrailProvisionResult with guardrail_id, arn, version.
+        """
+        from litellm.litellm_core_utils.asyncify import asyncify
+
+        return await asyncify(BedrockGuardrail._provision_sync)(
+            credential_values=credential_values,
+            provision_config=provision_config,
+            guardrail_name=guardrail_name,
+            aws_region_name=aws_region_name,
+        )
+
+    @staticmethod
+    async def provision_partner_guardrail(
+        credential_values: dict,
+        guardrail_name: str,
+        provision_config: dict,
+        mode: str = "pre_call",
+        default_on: bool = True,
+        aws_region_name: Optional[str] = None,
+    ) -> "PartnerProvisionResult":
+        """
+        Provision a Bedrock guardrail and return everything needed to register it.
+
+        This is the single entry-point the generic endpoint calls.  All
+        Bedrock-specific knowledge (LitellmParams fields, region resolution,
+        response message) lives here so the endpoint stays provider-agnostic.
+        """
+        from litellm.types.guardrails import (
+            Guardrail,
+            LitellmParams,
+            PartnerProvisionResult,
+        )
+
+        result = await BedrockGuardrail.provision(
+            credential_values=credential_values,
+            provision_config=provision_config,
+            guardrail_name=guardrail_name,
+            aws_region_name=aws_region_name,
+        )
+
+        aws_region = (
+            aws_region_name
+            or credential_values.get("aws_region_name")
+            or "us-east-1"
+        )
+
+        guardrail_data: Guardrail = {
+            "guardrail_name": guardrail_name,
+            "litellm_params": LitellmParams(
+                guardrail="bedrock",
+                mode=mode,
+                default_on=default_on,
+                guardrailIdentifier=result.guardrail_id,
+                guardrailVersion=result.version,
+                aws_region_name=aws_region,
+            ),
+            "guardrail_info": {
+                "description": f"Bedrock partner guardrail (ID: {result.guardrail_id})",
+                "partner_provisioned": True,
+                "provider": "bedrock",
+                "provider_guardrail_arn": result.guardrail_arn,
+            },
+        }
+
+        return PartnerProvisionResult(
+            guardrail_data=guardrail_data,
+            provider="bedrock",
+            provider_guardrail_id=result.guardrail_id,
+            provider_guardrail_version=result.version,
+            message=f"Bedrock guardrail provisioned and registered in region {aws_region}.",
+        )
