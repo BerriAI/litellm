@@ -81,6 +81,36 @@ async def list_policies():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get(
+    "/policies/name/{policy_name}/versions",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyListDBResponse,
+)
+async def list_policy_versions(policy_name: str):
+    """
+    List all versions of a policy by policy name.
+
+    Returns all versions ordered by version_number descending (latest first).
+    Returns 200 with empty list when the policy has no versions (e.g. older
+    policies created before versioning), so the UI can show "No versions found".
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        versions = await get_policy_registry().get_policy_versions(
+            policy_name=policy_name,
+            prisma_client=prisma_client,
+        )
+        return PolicyListDBResponse(policies=versions, total_count=len(versions))
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error listing policy versions: {e}")
+        return PolicyListDBResponse(policies=[], total_count=0)
+
+
 @router.post(
     "/policies",
     tags=["Policies"],
@@ -410,63 +440,6 @@ async def create_policy_version(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating policy version: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get(
-    "/policies/name/{policy_name}/versions",
-    tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=PolicyListDBResponse,
-)
-async def list_policy_versions(policy_name: str):
-    """
-    List all versions of a policy by policy name.
-
-    Returns all versions ordered by version_number descending (latest first).
-
-    Example Request:
-    ```bash
-    curl -X GET "http://localhost:4000/policies/name/global-baseline/versions" \\
-        -H "Authorization: Bearer <your_api_key>"
-    ```
-
-    Example Response:
-    ```json
-    {
-        "policies": [
-            {
-                "policy_id": "uuid-v2",
-                "policy_name": "global-baseline",
-                "version_number": 2,
-                "version_status": "draft",
-                "is_latest": true
-            },
-            {
-                "policy_id": "uuid-v1",
-                "policy_name": "global-baseline",
-                "version_number": 1,
-                "version_status": "production",
-                "is_latest": false
-            }
-        ],
-        "total_count": 2
-    }
-    ```
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
-
-    try:
-        versions = await get_policy_registry().get_policy_versions(
-            policy_name=policy_name,
-            prisma_client=prisma_client,
-        )
-        return PolicyListDBResponse(policies=versions, total_count=len(versions))
-    except Exception as e:
-        verbose_proxy_logger.exception(f"Error listing policy versions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

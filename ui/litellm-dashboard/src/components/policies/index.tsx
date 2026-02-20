@@ -454,6 +454,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                   setEditingPolicy(policy);
                   setSelectedPolicyId(null);
                   if (policy.pipeline) {
+                    fetchGuardrails();
                     setShowFlowBuilder(true);
                   } else {
                     setIsAddPolicyModalVisible(true);
@@ -471,6 +472,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onEditClick={(policy) => {
                   setEditingPolicy(policy);
                   if (policy.pipeline) {
+                    fetchGuardrails();
                     setShowFlowBuilder(true);
                   } else {
                     setIsAddPolicyModalVisible(true);
@@ -657,6 +659,17 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           updatePolicy={updatePolicyCall}
           isAdmin={isAdmin}
           onGuardrailUpdated={fetchGuardrails}
+          onVersionSelect={async (version) => {
+            if (!accessToken) return;
+            try {
+              const full = await getPolicyInfo(accessToken, version.policy_id);
+              setEditingPolicy(full);
+            } catch (err) {
+              console.error("Failed to load version:", err);
+              message.error("Failed to load version");
+            }
+          }}
+          onVersionCreated={() => fetchPolicies()}
         />
       )}
     </div>

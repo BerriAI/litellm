@@ -55,7 +55,15 @@ const VersionSidebar: React.FC<VersionSidebarProps> = ({
       setVersions(response.policies || []);
     } catch (error) {
       console.error("Failed to load versions:", error);
-      NotificationsManager.fromBackend("Failed to load policy versions");
+      // Check if it's a database schema issue
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes("column") || errorMessage.includes("version_number")) {
+        console.warn("Database migration needed - version columns don't exist yet");
+        // Don't show error to user, just log it
+      } else {
+        // NotificationsManager.fromBackend("Failed to load policy versions: " + errorMessage);
+        return
+      }
     } finally {
       setIsLoading(false);
     }
@@ -83,10 +91,16 @@ const VersionSidebar: React.FC<VersionSidebarProps> = ({
           onVersionCreated();
         } catch (error) {
           console.error("Failed to create version:", error);
-          NotificationsManager.fromBackend(
-            "Failed to create version: " +
-              (error instanceof Error ? error.message : String(error))
-          );
+          const errorMessage = error instanceof Error ? error.message : String(error);
+
+          // Check if it's a database schema issue
+          if (errorMessage.includes("column") || errorMessage.includes("version_number") || errorMessage.includes("schema")) {
+            NotificationsManager.error(
+              "Database migration required. Run: poetry run prisma migrate dev --name add_policy_versioning"
+            );
+          } else {
+            NotificationsManager.fromBackend("Failed to create version: " + errorMessage);
+          }
         } finally {
           setActionLoading(null);
         }
@@ -248,12 +262,12 @@ const VersionSidebar: React.FC<VersionSidebarProps> = ({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pt-4 px-1">
       {/* Header with Create New Version button */}
-      <div className="flex justify-between items-center">
-        <Text strong style={{ fontSize: 16 }}>
+      <div className="flex justify-between items-center mb-3" style={{ minHeight: 32 }}>
+        <span className="text-sm font-semibold" style={{ lineHeight: '32px' }}>
           Versions
-        </Text>
+        </span>
         <Button
           size="xs"
           icon={PlusIcon}
@@ -265,7 +279,7 @@ const VersionSidebar: React.FC<VersionSidebarProps> = ({
         </Button>
       </div>
 
-      <Divider style={{ margin: "12px 0" }} />
+      <Divider style={{ margin: "0 0 16px 0" }} />
 
       {/* Version List */}
       <div className="space-y-3">
@@ -355,7 +369,7 @@ const VersionSidebar: React.FC<VersionSidebarProps> = ({
 
       {/* Silent Mirroring - Coming Soon */}
       <div
-        className="p-4 rounded-lg"
+        className="p-4 rounded-lg mt-4"
         style={{
           backgroundColor: "#f9fafb",
           border: "1px dashed #d1d5db",

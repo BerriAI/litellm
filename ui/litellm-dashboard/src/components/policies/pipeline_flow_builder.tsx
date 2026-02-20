@@ -1,13 +1,32 @@
-import React, { useState } from "react";
-import { Select, Typography, message, Modal } from "antd";
+import React, { useState, useEffect, useMemo } from "react";
+import { Select, Typography, message, Modal, Spin, Divider, Form } from "antd";
 import { Button, TextInput } from "@tremor/react";
-import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
+import {
+  ArrowLeftIcon,
+  PlusIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+  ClockIcon,
+  CheckCircleIcon,
+  SwitchHorizontalIcon,
+} from "@heroicons/react/outline";
 import { DotsVerticalIcon, PencilIcon, BeakerIcon } from "@heroicons/react/solid";
-import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
+import {
+  GuardrailPipeline,
+  PipelineStep,
+  PipelineTestResult,
+  PolicyCreateRequest,
+  PolicyUpdateRequest,
+  Policy,
+  PolicyVersionListResponse,
+} from "./types";
 import { Guardrail } from "../guardrails/types";
-import { testPipelineCall } from "../networking";
+import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import GuardrailInfoView from "../guardrails/guardrail_info";
+import VersionStatusBadge from "./version_status_badge";
+import VersionComparison from "./version_comparison";
+import { getFrameworks } from "@/data/compliancePrompts";
 
 const { Text } = Typography;
 
@@ -38,7 +57,13 @@ function createDefaultStep(): PipelineStep {
 /** Build initial pipeline from a policy (uses pipeline if present, else guardrails_add as steps). */
 function getInitialPipelineFromPolicy(policy: Policy | null | undefined): GuardrailPipeline {
   if (!policy) return { mode: "pre_call", steps: [createDefaultStep()] };
-  if (policy.pipeline?.steps?.length) return policy.pipeline;
+  if (
+    policy.pipeline?.steps &&
+    Array.isArray(policy.pipeline.steps) &&
+    policy.pipeline.steps.length > 0
+  ) {
+    return policy.pipeline;
+  }
   const add = policy.guardrails_add || [];
   if (add.length === 0) return { mode: "pre_call", steps: [createDefaultStep()] };
   return {
@@ -414,18 +439,25 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
   const [editingGuardrailName, setEditingGuardrailName] = useState<string | null>(null);
   const [testingGuardrailName, setTestingGuardrailName] = useState<string | null>(null);
 
+  const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [createDefaultStep()];
+  const guardrails = availableGuardrails ?? [];
+  const safePipeline: GuardrailPipeline = {
+    mode: pipeline?.mode ?? "pre_call",
+    steps,
+  };
+
   const handleInsertStep = (atIndex: number) => {
-    onChange({ ...pipeline, steps: insertStep(pipeline.steps, atIndex) });
+    onChange({ ...safePipeline, steps: insertStep(steps, atIndex) });
   };
 
   const handleRemoveStep = (index: number) => {
-    onChange({ ...pipeline, steps: removeStep(pipeline.steps, index) });
+    onChange({ ...safePipeline, steps: removeStep(steps, index) });
   };
 
   const handleUpdateStep = (index: number, updated: Partial<PipelineStep>) => {
     onChange({
-      ...pipeline,
-      steps: updateStepAtIndex(pipeline.steps, index, updated),
+      ...safePipeline,
+      steps: updateStepAtIndex(steps, index, updated),
     });
   };
 
@@ -451,7 +483,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
   // Find the guardrail ID for the selected guardrail name
   const getGuardrailId = (guardrailName: string | null): string | null => {
     if (!guardrailName) return null;
-    const guardrail = availableGuardrails.find(
+    const guardrail = guardrails.find(
       (g) => g.guardrail_name === guardrailName || g.guardrail_id === guardrailName
     );
     return guardrail?.guardrail_id || null;
@@ -497,16 +529,16 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
       </div>
 
       {/* Steps */}
-      {pipeline.steps.map((step, index) => (
+      {steps.map((step, index) => (
         <React.Fragment key={index}>
           <Connector onInsert={() => handleInsertStep(index)} />
           <StepCard
             step={step}
             stepIndex={index}
-            totalSteps={pipeline.steps.length}
+            totalSteps={steps.length}
             onChange={(updated) => handleUpdateStep(index, updated)}
             onDelete={() => handleRemoveStep(index)}
-            availableGuardrails={availableGuardrails}
+            availableGuardrails={guardrails}
             onEditGuardrail={handleEditGuardrail}
             onTestGuardrail={handleTestGuardrail}
           />
@@ -514,7 +546,7 @@ const PipelineFlowBuilder: React.FC<PipelineFlowBuilderProps> = ({
       ))}
 
       {/* Bottom connector */}
-      <Connector onInsert={() => handleInsertStep(pipeline.steps.length)} />
+      <Connector onInsert={() => handleInsertStep(steps.length)} />
 
       {/* End card */}
       <div
@@ -637,7 +669,9 @@ interface PipelineInfoDisplayProps {
   pipeline: GuardrailPipeline;
 }
 
-export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeline }) => (
+export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeline }) => {
+  const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [];
+  return (
   <div className="flex flex-col items-center" style={{ padding: "16px 0" }}>
     {/* Trigger */}
     <div
@@ -664,7 +698,7 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
     </div>
 
     {/* Steps */}
-    {pipeline.steps.map((step, index) => (
+    {steps.map((step, index) => (
       <React.Fragment key={index}>
         {/* Connector */}
         <div style={{ width: 1, height: 32, backgroundColor: "#d1d5db" }} />
@@ -712,7 +746,8 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
       </React.Fragment>
     ))}
   </div>
-);
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pipeline Test Panel (right drawer)
@@ -736,6 +771,16 @@ const TERMINAL_STYLES: Record<string, { bg: string; color: string }> = {
   modify_response: { bg: "#eff6ff", color: "#2563eb" },
 };
 
+type ComplianceTestResult = {
+  promptId: string;
+  prompt: string;
+  expectedResult: "fail" | "pass";
+  actualResult: "blocked" | "allowed";
+  isMatch: boolean;
+  status: "complete" | "pending" | "error";
+  error?: string;
+};
+
 const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   pipeline,
   accessToken,
@@ -746,10 +791,35 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   const [result, setResult] = useState<PipelineTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [];
+
+  const [testTab, setTestTab] = useState<"quick" | "compliance">("quick");
+  const complianceFrameworks = useMemo(() => getFrameworks(), []);
+  const allCompliancePrompts = useMemo(
+    () => complianceFrameworks.flatMap((fw) => fw.categories.flatMap((c) => c.prompts)),
+    [complianceFrameworks]
+  );
+  const [selectedPromptIds, setSelectedPromptIds] = useState<Set<string>>(new Set());
+  const [complianceResults, setComplianceResults] = useState<ComplianceTestResult[]>([]);
+  const [isRunningCompliance, setIsRunningCompliance] = useState(false);
+
+  const togglePromptSelection = (id: string) => {
+    setSelectedPromptIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllPrompts = () => {
+    setSelectedPromptIds(new Set(allCompliancePrompts.map((p) => p.id)));
+  };
+
   const handleRunTest = async () => {
     if (!accessToken) return;
 
-    const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
+    const emptySteps = steps.filter((s) => !s.guardrail);
     if (emptySteps.length > 0) {
       setError("All steps must have a guardrail selected");
       return;
@@ -773,10 +843,65 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
     }
   };
 
+  const handleRunComplianceTests = async () => {
+    if (!accessToken || selectedPromptIds.size === 0) return;
+
+    const emptySteps = steps.filter((s) => !s.guardrail);
+    if (emptySteps.length > 0) {
+      setError("All steps must have a guardrail selected");
+      return;
+    }
+
+    const selected = allCompliancePrompts.filter((p) => selectedPromptIds.has(p.id));
+    setComplianceResults(
+      selected.map((p) => ({
+        promptId: p.id,
+        prompt: p.prompt,
+        expectedResult: p.expectedResult,
+        actualResult: "allowed" as const,
+        isMatch: false,
+        status: "pending" as const,
+      }))
+    );
+    setIsRunningCompliance(true);
+    setError(null);
+
+    for (let i = 0; i < selected.length; i++) {
+      const p = selected[i];
+      try {
+        const data = await testPipelineCall(accessToken, pipeline, [
+          { role: "user", content: p.prompt },
+        ]);
+        const actualResult: "blocked" | "allowed" =
+          data.terminal_action === "block" ? "blocked" : "allowed";
+        const isMatch =
+          (p.expectedResult === "fail" && actualResult === "blocked") ||
+          (p.expectedResult === "pass" && actualResult === "allowed");
+        setComplianceResults((prev) =>
+          prev.map((r) =>
+            r.promptId === p.id
+              ? { ...r, actualResult, isMatch, status: "complete" as const }
+              : r
+          )
+        );
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        setComplianceResults((prev) =>
+          prev.map((r) =>
+            r.promptId === p.id
+              ? { ...r, status: "error" as const, error: errMsg, actualResult: "blocked" as const }
+              : r
+          )
+        );
+      }
+    }
+    setIsRunningCompliance(false);
+  };
+
   return (
     <div
       style={{
-        width: 400,
+        width: 440,
         borderLeft: "1px solid #e5e7eb",
         backgroundColor: "#fff",
         display: "flex",
@@ -811,7 +936,51 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
         </button>
       </div>
 
-      {/* Input section */}
+      {/* Tabs: Quick test | Compliance */}
+      <div
+        style={{
+          display: "flex",
+          borderBottom: "1px solid #e5e7eb",
+          padding: "0 16px",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setTestTab("quick")}
+          style={{
+            padding: "10px 12px",
+            fontSize: 13,
+            fontWeight: 500,
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            color: testTab === "quick" ? "#6366f1" : "#6b7280",
+            borderBottom: testTab === "quick" ? "2px solid #6366f1" : "2px solid transparent",
+            marginBottom: -1,
+          }}
+        >
+          Quick test
+        </button>
+        <button
+          type="button"
+          onClick={() => setTestTab("compliance")}
+          style={{
+            padding: "10px 12px",
+            fontSize: 13,
+            fontWeight: 500,
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            color: testTab === "compliance" ? "#6366f1" : "#6b7280",
+            borderBottom: testTab === "compliance" ? "2px solid #6366f1" : "2px solid transparent",
+            marginBottom: -1,
+          }}
+        >
+          Compliance datasets
+        </button>
+      </div>
+
+      {testTab === "quick" && (
       <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb" }}>
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
           Test Message
@@ -839,9 +1008,72 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
           Run Test
         </Button>
       </div>
+      )}
+
+      {testTab === "compliance" && (
+      <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb", overflowY: "auto", maxHeight: 280 }}>
+        <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          Same datasets as Compliance playground. Select prompts and run.
+        </p>
+        <Button
+          size="xs"
+          variant="secondary"
+          onClick={selectAllPrompts}
+          style={{ marginBottom: 12 }}
+        >
+          Select all
+        </Button>
+        <div style={{ maxHeight: 160, overflowY: "auto", marginBottom: 12 }}>
+          {complianceFrameworks.map((fw) => (
+            <div key={fw.name} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
+                {fw.name}
+              </div>
+              {fw.categories.map((cat) => (
+                <div key={cat.name} style={{ marginLeft: 8, marginBottom: 4 }}>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>{cat.name}</div>
+                  {cat.prompts.map((p) => (
+                    <label
+                      key={p.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 6,
+                        cursor: "pointer",
+                        fontSize: 12,
+                        marginBottom: 2,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedPromptIds.has(p.id)}
+                        onChange={() => togglePromptSelection(p.id)}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span className="line-clamp-2" style={{ color: "#111827" }}>
+                        {p.prompt.slice(0, 80)}
+                        {p.prompt.length > 80 ? "…" : ""}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <Button
+          onClick={handleRunComplianceTests}
+          loading={isRunningCompliance}
+          disabled={selectedPromptIds.size === 0}
+          style={{ width: "100%" }}
+        >
+          Run selected ({selectedPromptIds.size})
+        </Button>
+      </div>
+      )}
 
       {/* Results section */}
-      <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: 16, minHeight: 0 }}>
         {error && (
           <div
             style={{
@@ -858,7 +1090,49 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
           </div>
         )}
 
-        {result && (
+        {testTab === "compliance" && complianceResults.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 8 }}>
+              Results
+            </div>
+            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
+              {complianceResults.filter((r) => r.status === "complete").length} / {complianceResults.length} complete
+              {" · "}
+              {complianceResults.filter((r) => r.isMatch).length} match expected
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {complianceResults.map((r) => (
+                <div
+                  key={r.promptId}
+                  style={{
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 6,
+                    padding: "8px 10px",
+                    backgroundColor: r.status === "error" ? "#fef2f2" : r.isMatch ? "#f0fdf4" : "#fffbeb",
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>
+                    Expected: {r.expectedResult} → Actual: {r.actualResult}
+                    {r.status === "complete" && (
+                      <span style={{ marginLeft: 6, fontWeight: 600 }}>
+                        {r.isMatch ? "✓ Match" : "✗ Mismatch"}
+                      </span>
+                    )}
+                    {r.status === "error" && r.error && (
+                      <span style={{ color: "#dc2626", marginLeft: 4 }}>{r.error}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#111827" }} className="line-clamp-2">
+                    {r.prompt.slice(0, 120)}
+                    {r.prompt.length > 120 ? "…" : ""}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {testTab === "quick" && result && (
           <div>
             {/* Step results */}
             {result.step_results.map((step, i) => {
@@ -950,12 +1224,387 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
           </div>
         )}
 
-        {!result && !error && (
+        {testTab === "quick" && !result && !error && (
           <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
             Enter a test message and click "Run Test" to execute the pipeline
           </div>
         )}
+        {testTab === "compliance" && complianceResults.length === 0 && !error && (
+          <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
+            Select prompts above and click "Run selected" to test with compliance datasets
+          </div>
+        )}
       </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Version sidebar for Flow Builder (self-contained, used only in this page)
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface FlowBuilderVersionSidebarProps {
+  editingPolicy: Policy;
+  accessToken: string | null;
+  onVersionSelect: (version: Policy) => void;
+  onVersionCreated: () => void;
+}
+
+const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
+  editingPolicy,
+  accessToken,
+  onVersionSelect,
+  onVersionCreated,
+}) => {
+  const policyName = editingPolicy.policy_name;
+  const currentPolicyId = editingPolicy.policy_id;
+
+  const [versions, setVersions] = useState<Policy[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [compareModalOpen, setCompareModalOpen] = useState(false);
+  const [comparePolicyId1, setComparePolicyId1] = useState<string>("");
+  const [comparePolicyId2, setComparePolicyId2] = useState<string>("");
+
+  const loadVersions = async () => {
+    if (!accessToken || !policyName) return;
+    setIsLoading(true);
+    try {
+      const response: PolicyVersionListResponse = await listPolicyVersions(accessToken, policyName);
+      setVersions(response.policies || []);
+    } catch (error) {
+      console.error("Failed to load versions:", error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      if (!errMsg.includes("column") && !errMsg.includes("version_number")) {
+        NotificationsManager.fromBackend("Failed to load policy versions: " + errMsg);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadVersions();
+  }, [policyName, accessToken]);
+
+  const handleCreateNewVersion = async () => {
+    if (!accessToken) return;
+    Modal.confirm({
+      title: "Create New Version",
+      content: "Create a new draft version from the current policy?",
+      okText: "Create",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setActionLoading("create");
+        try {
+          await createPolicyVersion(accessToken, currentPolicyId);
+          NotificationsManager.success("New version created successfully");
+          await loadVersions();
+          onVersionCreated();
+        } catch (error) {
+          console.error("Failed to create version:", error);
+          const errMsg = error instanceof Error ? error.message : String(error);
+          if (
+            errMsg.includes("column") ||
+            errMsg.includes("version_number") ||
+            errMsg.includes("schema")
+          ) {
+            NotificationsManager.error(
+              "Database migration required. Run: poetry run prisma migrate dev --name add_policy_versioning"
+            );
+          } else {
+            NotificationsManager.fromBackend("Failed to create version: " + errMsg);
+          }
+        } finally {
+          setActionLoading(null);
+        }
+      },
+    });
+  };
+
+  const handlePromoteToPublished = async (policyId: string, versionNumber: number) => {
+    if (!accessToken) return;
+    Modal.confirm({
+      title: "Promote to Published",
+      content: `Promote version ${versionNumber} to Published status?`,
+      okText: "Promote",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setActionLoading(policyId);
+        try {
+          await updatePolicyVersionStatus(accessToken, policyId, "published");
+          NotificationsManager.success("Version promoted to Published");
+          await loadVersions();
+        } catch (error) {
+          console.error("Failed to promote version:", error);
+          NotificationsManager.fromBackend(
+            "Failed to promote version: " + (error instanceof Error ? error.message : String(error))
+          );
+        } finally {
+          setActionLoading(null);
+        }
+      },
+    });
+  };
+
+  const handlePromoteToProduction = async (policyId: string, versionNumber: number) => {
+    if (!accessToken) return;
+    Modal.confirm({
+      title: "Promote to Production",
+      content: `Promote version ${versionNumber} to Production? Any existing production version will be demoted to Published.`,
+      okText: "Promote",
+      cancelText: "Cancel",
+      okType: "primary",
+      onOk: async () => {
+        setActionLoading(policyId);
+        try {
+          await updatePolicyVersionStatus(accessToken, policyId, "production");
+          NotificationsManager.success("Version promoted to Production");
+          await loadVersions();
+        } catch (error) {
+          console.error("Failed to promote version:", error);
+          NotificationsManager.fromBackend(
+            "Failed to promote version: " + (error instanceof Error ? error.message : String(error))
+          );
+        } finally {
+          setActionLoading(null);
+        }
+      },
+    });
+  };
+
+  const handleDemote = async (policyId: string, versionNumber: number) => {
+    if (!accessToken) return;
+    Modal.confirm({
+      title: "Demote Version",
+      content: `Demote version ${versionNumber} from Production to Published?`,
+      okText: "Demote",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setActionLoading(policyId);
+        try {
+          await updatePolicyVersionStatus(accessToken, policyId, "published");
+          NotificationsManager.success("Version demoted to Published");
+          await loadVersions();
+        } catch (error) {
+          console.error("Failed to demote version:", error);
+          NotificationsManager.fromBackend(
+            "Failed to demote version: " + (error instanceof Error ? error.message : String(error))
+          );
+        } finally {
+          setActionLoading(null);
+        }
+      },
+    });
+  };
+
+  const formatDate = (dateString?: string | null) => {
+    if (!dateString) return "N/A";
+    return new Date(dateString).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  };
+
+  const getActionButtons = (version: Policy) => {
+    const isProcessing = actionLoading === version.policy_id;
+    const status = version.version_status;
+
+    if (status === "draft") {
+      return (
+        <Button
+          size="xs"
+          variant="secondary"
+          icon={ChevronUpIcon}
+          onClick={() => handlePromoteToPublished(version.policy_id, version.version_number ?? 1)}
+          loading={!!isProcessing}
+          disabled={!!actionLoading}
+        >
+          Publish
+        </Button>
+      );
+    }
+    if (status === "published") {
+      return (
+        <Button
+          size="xs"
+          variant="primary"
+          icon={ChevronUpIcon}
+          onClick={() =>
+            handlePromoteToProduction(version.policy_id, version.version_number ?? 1)
+          }
+          loading={!!isProcessing}
+          disabled={!!actionLoading}
+        >
+          To Production
+        </Button>
+      );
+    }
+    if (status === "production") {
+      return (
+        <Button
+          size="xs"
+          variant="secondary"
+          icon={ChevronDownIcon}
+          onClick={() => handleDemote(version.policy_id, version.version_number ?? 1)}
+          loading={!!isProcessing}
+          disabled={!!actionLoading}
+        >
+          Demote
+        </Button>
+      );
+    }
+    return null;
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center p-8">
+        <Spin size="default" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4" style={{ padding: 12 }}>
+      <div className="flex justify-between items-center mb-2" style={{ minHeight: 32 }}>
+        <span className="text-sm font-medium m-0" style={{ lineHeight: "32px" }}>
+          Versions
+        </span>
+        <Button
+          size="xs"
+          icon={PlusIcon}
+          onClick={handleCreateNewVersion}
+          loading={actionLoading === "create"}
+          disabled={!!actionLoading}
+        >
+          New Version
+        </Button>
+      </div>
+      <Divider style={{ margin: "12px 0" }} />
+      <div className="space-y-3">
+        {versions.length === 0 ? (
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            No versions found
+          </Text>
+        ) : (
+          versions.map((version) => {
+            const isActive = version.policy_id === currentPolicyId;
+            const versionNumber = version.version_number ?? 1;
+            const status = version.version_status ?? "draft";
+            return (
+              <div
+                key={version.policy_id}
+                className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                  isActive
+                    ? "bg-blue-50 border-blue-300 shadow-sm"
+                    : "bg-white border-gray-200 hover:border-gray-300"
+                }`}
+                onClick={() => onVersionSelect(version)}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Text strong style={{ fontSize: 14 }}>
+                      v{versionNumber}
+                    </Text>
+                    {isActive && <CheckCircleIcon className="w-4 h-4 text-blue-500" />}
+                  </div>
+                  <VersionStatusBadge status={status as "draft" | "published" | "production"} size="xs" />
+                </div>
+                <div className="flex items-center gap-1 mb-2">
+                  <ClockIcon className="w-3 h-3 text-gray-400" />
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {formatDate(version.created_at)}
+                  </Text>
+                </div>
+                {version.description && (
+                  <Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: "block", marginBottom: 8 }}
+                    className="line-clamp-2"
+                  >
+                    {version.description}
+                  </Text>
+                )}
+                <div className="flex justify-end">{getActionButtons(version)}</div>
+              </div>
+            );
+          })
+        )}
+      </div>
+      <Divider style={{ margin: "16px 0" }} />
+      {versions.length >= 2 && (
+        <div className="mb-4">
+          <Button
+            size="xs"
+            variant="secondary"
+            icon={SwitchHorizontalIcon}
+            onClick={() => {
+              setComparePolicyId1(currentPolicyId);
+              setComparePolicyId2(
+                versions.find((v) => v.policy_id !== currentPolicyId)?.policy_id ?? ""
+              );
+              setCompareModalOpen(true);
+            }}
+          >
+            Compare versions
+          </Button>
+        </div>
+      )}
+      <Modal
+        title="Compare versions"
+        open={compareModalOpen}
+        onCancel={() => {
+          setCompareModalOpen(false);
+          setComparePolicyId1("");
+          setComparePolicyId2("");
+        }}
+        footer={null}
+        width={720}
+        destroyOnClose
+      >
+        <Form layout="vertical" className="mb-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Form.Item label="Version A">
+              <Select
+                placeholder="Select version"
+                value={comparePolicyId1 || undefined}
+                onChange={setComparePolicyId1}
+                style={{ width: "100%" }}
+                options={versions.map((v) => ({
+                  label: `v${v.version_number ?? 1} (${v.version_status ?? "draft"})`,
+                  value: v.policy_id,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item label="Version B">
+              <Select
+                placeholder="Select version"
+                value={comparePolicyId2 || undefined}
+                onChange={setComparePolicyId2}
+                style={{ width: "100%" }}
+                options={versions.map((v) => ({
+                  label: `v${v.version_number ?? 1} (${v.version_status ?? "draft"})`,
+                  value: v.policy_id,
+                }))}
+              />
+            </Form.Item>
+          </div>
+        </Form>
+        {comparePolicyId1 && comparePolicyId2 && comparePolicyId1 !== comparePolicyId2 && (
+          <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+            <VersionComparison
+              policyId1={comparePolicyId1}
+              policyId2={comparePolicyId2}
+              accessToken={accessToken}
+            />
+          </div>
+        )}
+        {comparePolicyId1 && comparePolicyId2 && comparePolicyId1 === comparePolicyId2 && (
+          <Text type="secondary">Select two different versions to compare.</Text>
+        )}
+      </Modal>
     </div>
   );
 };
@@ -974,6 +1623,8 @@ interface FlowBuilderPageProps {
   updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
   isAdmin: boolean;
   onGuardrailUpdated?: () => void;
+  onVersionSelect?: (version: Policy) => void;
+  onVersionCreated?: () => void;
 }
 
 export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
@@ -986,6 +1637,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   updatePolicy,
   isAdmin,
   onGuardrailUpdated,
+  onVersionSelect,
+  onVersionCreated,
 }) => {
   const isEditing = !!editingPolicy?.policy_id;
 
@@ -997,6 +1650,15 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     getInitialPipelineFromPolicy(editingPolicy)
   );
 
+  // Sync local state when editingPolicy changes (e.g. user selected another version in sidebar)
+  useEffect(() => {
+    if (editingPolicy) {
+      setPolicyName(editingPolicy.policy_name || "");
+      setDescription(editingPolicy.description || "");
+      setPipeline(getInitialPipelineFromPolicy(editingPolicy));
+    }
+  }, [editingPolicy?.policy_id]);
+
   const handleSave = async () => {
     if (!policyName.trim()) {
       message.error("Please enter a policy name");
@@ -1007,7 +1669,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       return;
     }
 
-    const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
+    const steps = Array.isArray(pipeline?.steps) ? pipeline.steps : [];
+    const emptySteps = steps.filter((s) => !s.guardrail);
     if (emptySteps.length > 0) {
       message.error("Please select a guardrail for all steps");
       return;
@@ -1015,7 +1678,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
 
     setIsSubmitting(true);
     try {
-      const guardrailsFromPipeline = pipeline.steps
+      const guardrailsFromPipeline = steps
         .map((s) => s.guardrail)
         .filter(Boolean);
 
@@ -1024,7 +1687,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         description: description || undefined,
         guardrails_add: guardrailsFromPipeline,
         guardrails_remove: [],
-        pipeline: pipeline,
+        pipeline: { mode: pipeline?.mode ?? "pre_call", steps },
       };
 
       if (isEditing && editingPolicy) {
@@ -1135,29 +1798,50 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           backgroundColor: "#fff",
           borderBottom: "1px solid #e5e7eb",
           flexShrink: 0,
+          minWidth: 0,
         }}
       >
         <TextInput
           placeholder="Add a description (optional)..."
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          style={{ maxWidth: 500 }}
+          style={{ maxWidth: "100%", width: 560 }}
         />
       </div>
 
-      {/* Flow builder canvas + test panel */}
+      {/* Flow builder canvas + test panel (with optional version sidebar when editing) */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+        {isEditing && editingPolicy && onVersionSelect && onVersionCreated && (
+          <div
+            style={{
+              width: 260,
+              flexShrink: 0,
+              borderRight: "1px solid #e5e7eb",
+              backgroundColor: "#fff",
+              overflowY: "auto",
+            }}
+          >
+            <FlowBuilderVersionSidebar
+              editingPolicy={editingPolicy}
+              accessToken={accessToken}
+              onVersionSelect={onVersionSelect}
+              onVersionCreated={onVersionCreated}
+            />
+          </div>
+        )}
         <div
           style={{
             flex: 1,
             minHeight: 0,
+            minWidth: 400,
+            overflowX: "auto",
             overflowY: "auto",
             display: "flex",
             justifyContent: "center",
             padding: "32px 24px",
           }}
         >
-          <div style={{ maxWidth: 760, width: "100%" }}>
+          <div style={{ minWidth: 760, width: "100%", maxWidth: 760, flexShrink: 0 }}>
             <PipelineFlowBuilder
               pipeline={pipeline}
               onChange={setPipeline}

@@ -721,12 +721,9 @@ class PolicyRegistry:
         """
         Get all versions of a policy by policy name.
 
-        Args:
-            policy_name: Name of the policy
-            prisma_client: The Prisma client instance
-
-        Returns:
-            List of PolicyDBResponse objects ordered by version_number desc
+        Returns empty list when the policy has no versions (e.g. older policies
+        created before versioning) or when the query fails (e.g. schema mismatch),
+        so callers always get a valid response instead of 404/500.
         """
         try:
             versions = await prisma_client.db.litellm_policytable.find_many(
@@ -758,8 +755,10 @@ class PolicyRegistry:
                 for v in versions
             ]
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error getting policy versions: {e}")
-            raise Exception(f"Error getting policy versions: {str(e)}")
+            verbose_proxy_logger.warning(
+                "Error getting policy versions (returning empty list): %s", e
+            )
+            return []
 
     async def update_policy_status(
         self,
