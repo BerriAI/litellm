@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import warnings
@@ -1469,6 +1470,8 @@ health_check_interval = None
 health_check_concurrency = None
 health_check_details = None
 health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
+background_health_check_loop_active = False
+background_health_check_cycle_seq = 0
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
@@ -1916,6 +1919,29 @@ def run_ollama_serve():
         )
 
 
+def _get_process_rss_mb() -> Optional[float]:
+    """
+    Get process RSS memory in MB.
+    On Linux, ru_maxrss is in KB. On macOS, ru_maxrss is in bytes.
+    """
+    try:
+        import resource
+
+        ru_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return float(ru_maxrss) / (1024 * 1024)
+        return float(ru_maxrss) / 1024
+    except Exception:
+        return None
+
+
+def _rss_mb_for_log() -> str:
+    rss_mb = _get_process_rss_mb()
+    if rss_mb is None:
+        return "unknown"
+    return f"{rss_mb:.2f}"
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -1923,7 +1949,10 @@ async def _run_background_health_check():
     Update health_check_results, based on this.
     Uses shared health check state when Redis is available to coordinate across pods.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_concurrency, health_check_details, use_shared_health_check, redis_usage_cache, prisma_client
+    global health_check_results, llm_model_list, health_check_interval
+    global health_check_concurrency, health_check_details, use_shared_health_check
+    global redis_usage_cache, prisma_client
+    global background_health_check_loop_active, background_health_check_cycle_seq
 
     if (
         health_check_interval is None
@@ -1931,6 +1960,24 @@ async def _run_background_health_check():
         or health_check_interval <= 0
     ):
         return
+
+    if background_health_check_loop_active:
+        verbose_proxy_logger.warning(
+            "background_health_check_loop_overlap_detected existing_loop_active=true interval_seconds=%s max_concurrency=%s shared=%s",
+            health_check_interval,
+            health_check_concurrency,
+            use_shared_health_check,
+        )
+    background_health_check_loop_active = True
+    verbose_proxy_logger.info(
+        "background_health_check_loop_started interval_seconds=%s max_concurrency=%s shared=%s details=%s thread_count=%d rss_mb=%s",
+        health_check_interval,
+        health_check_concurrency,
+        use_shared_health_check,
+        health_check_details,
+        threading.active_count(),
+        _rss_mb_for_log(),
+    )
 
     # Initialize shared health check manager if Redis is available and feature is enabled
     shared_health_manager = None
@@ -1947,8 +1994,13 @@ async def _run_background_health_check():
         verbose_proxy_logger.info("Initialized shared health check manager")
 
     while True:
+        background_health_check_cycle_seq += 1
+        cycle_id = f"bg-{background_health_check_cycle_seq}"
+        cycle_start_time = time.monotonic()
+
         # make 1 deep copy of llm_model_list on every health check iteration
         _llm_model_list = copy.deepcopy(llm_model_list) or []
+        model_count_total = len(_llm_model_list)
 
         # filter out models that have disabled background health checks
         _llm_model_list = [
@@ -1956,6 +2008,52 @@ async def _run_background_health_check():
             for m in _llm_model_list
             if not m.get("model_info", {}).get("disable_background_health_check", False)
         ]
+        model_count_enabled = len(_llm_model_list)
+        expected_peak_in_flight = model_count_enabled
+        if (
+            isinstance(health_check_concurrency, int)
+            and health_check_concurrency > 0
+            and model_count_enabled > 0
+        ):
+            expected_peak_in_flight = min(model_count_enabled, health_check_concurrency)
+
+        verbose_proxy_logger.debug(
+            "background_health_check_cycle_start cycle_id=%s model_count_total=%d model_count_enabled=%d interval_seconds=%s max_concurrency=%s expected_peak_in_flight=%d shared=%s thread_count=%d rss_mb=%s",
+            cycle_id,
+            model_count_total,
+            model_count_enabled,
+            health_check_interval,
+            health_check_concurrency,
+            expected_peak_in_flight,
+            shared_health_manager is not None,
+            threading.active_count(),
+            _rss_mb_for_log(),
+        )
+
+        instrumentation_context = {
+            "enabled": True,
+            "source": "proxy_background_loop",
+            "cycle_id": cycle_id,
+        }
+
+        async def _run_direct_health_check_with_instrumentation():
+            try:
+                return await perform_health_check(
+                    model_list=_llm_model_list,
+                    details=health_check_details,
+                    max_concurrency=health_check_concurrency,
+                    instrumentation_context=instrumentation_context,
+                )
+            except TypeError as e:
+                if "instrumentation_context" not in str(e):
+                    raise
+                # Backward compatibility for monkeypatched or wrapped callables
+                # that do not accept instrumentation_context.
+                return await perform_health_check(
+                    model_list=_llm_model_list,
+                    details=health_check_details,
+                    max_concurrency=health_check_concurrency,
+                )
 
         # Use shared health check if available, otherwise fall back to direct health check
         # Convert health_check_details to bool for perform_shared_health_check (defaults to True if None)
@@ -1978,16 +2076,12 @@ async def _run_background_health_check():
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=_llm_model_list,
-                    details=health_check_details,
-                    max_concurrency=health_check_concurrency,
+                healthy_endpoints, unhealthy_endpoints = (
+                    await _run_direct_health_check_with_instrumentation()
                 )
         else:
-            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                model_list=_llm_model_list,
-                details=health_check_details,
-                max_concurrency=health_check_concurrency,
+            healthy_endpoints, unhealthy_endpoints = (
+                await _run_direct_health_check_with_instrumentation()
             )
 
         # Update the global variable with the health check results
@@ -1995,6 +2089,25 @@ async def _run_background_health_check():
         health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+        cycle_duration_ms = (time.monotonic() - cycle_start_time) * 1000
+        verbose_proxy_logger.debug(
+            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
+            cycle_id,
+            model_count_enabled,
+            len(healthy_endpoints),
+            len(unhealthy_endpoints),
+            cycle_duration_ms,
+            health_check_interval,
+            threading.active_count(),
+            _rss_mb_for_log(),
+        )
+        if cycle_duration_ms > (health_check_interval * 1000):
+            verbose_proxy_logger.warning(
+                "background_health_check_cycle_duration_exceeded_interval cycle_id=%s duration_ms=%.2f interval_seconds=%s",
+                cycle_id,
+                cycle_duration_ms,
+                health_check_interval,
+            )
 
         # Save background health checks to database (non-blocking)
         if prisma_client is not None:
@@ -2903,6 +3016,14 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            verbose_proxy_logger.info(
+                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s",
+                use_background_health_checks,
+                use_shared_health_check,
+                health_check_interval,
+                health_check_concurrency,
+                health_check_details,
+            )
 
             ### RBAC ###
             rbac_role_permissions = general_settings.get("role_permissions", None)
