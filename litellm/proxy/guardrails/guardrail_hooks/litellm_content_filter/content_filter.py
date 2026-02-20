@@ -965,7 +965,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             # Convert asterisks (*) in keywords to regex wildcards
             # Asterisks are used in the source data to obfuscate profanity (e.g., "fu*c*k" -> "fuck")
             # We treat * as a wildcard matching zero or one character
-            keyword_pattern_str = keyword.replace("*", ".?")
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
 
             # Use word boundary matching for single words to avoid false positives
             # (e.g., "men" should not match "recommend")
@@ -1116,7 +1116,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 },
             )
         elif action == ContentFilterAction.MASK:
-            keyword_pattern_for_masking = keyword.replace("*", ".?")
+            keyword_pattern_for_masking = self._keyword_to_regex_pattern(keyword)
             text = re.sub(
                 keyword_pattern_for_masking,
                 self.keyword_redaction_tag,
@@ -1200,7 +1200,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 },
             )
         elif action == ContentFilterAction.MASK:
-            keyword_pattern_for_masking = keyword.replace("*", ".?")
+            keyword_pattern_for_masking = self._keyword_to_regex_pattern(keyword)
             text = re.sub(
                 keyword_pattern_for_masking,
                 self.keyword_redaction_tag,
@@ -1266,7 +1266,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Check blocked words - iterate through ALL blocked words
         text_lower = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
-            keyword_pattern_str = keyword.replace("*", ".?")
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
             if re.search(keyword_pattern_str, text_lower):
                 text = self._handle_blocked_word_match(
                     keyword, action, description, text, detections
@@ -1274,6 +1274,17 @@ class ContentFilterGuardrail(CustomGuardrail):
                 text_lower = text.lower()  # Update after masking
 
         return text
+
+    @staticmethod
+    def _keyword_to_regex_pattern(keyword: str) -> str:
+        """
+        Convert a keyword into a safe regex pattern.
+
+        Escape all regex metacharacters to prevent malformed patterns from
+        user/template keywords. Preserve existing '*' wildcard semantics by
+        translating escaped '*' into '.?'.
+        """
+        return re.escape(keyword).replace(r"\*", ".?")
 
     def _mask_content(self, text: str, pattern_name: str) -> str:
         """
