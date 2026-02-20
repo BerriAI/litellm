@@ -489,7 +489,7 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
-            "model": "anthropic/claude-3-7-sonnet-latest",
+            "model": "anthropic/claude-sonnet-4-5-20250929",
             "thinking": {"type": "enabled", "budget_tokens": 16000},
         }
 
@@ -701,7 +701,7 @@ def test_anthropic_tool_with_image():
     ]
 
     result = prompt_factory(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         messages=messages,
         custom_llm_provider="anthropic",
     )
@@ -761,7 +761,7 @@ def test_anthropic_map_openai_params_tools_and_json_schema():
     mapped_params = litellm.AnthropicConfig().map_openai_params(
         non_default_params=args["non_default_params"],
         optional_params={},
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         drop_params=False,
     )
 
@@ -803,7 +803,7 @@ def test_anthropic_map_openai_params_tools_with_defs():
     mapped_params = litellm.AnthropicConfig().map_openai_params(
         non_default_params=args["non_default_params"],
         optional_params={},
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         drop_params=False,
     )
 
@@ -1133,7 +1133,7 @@ def test_anthropic_custom_headers():
     with patch.object(client, "post") as mock_post:
         try:
             resp = completion(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-sonnet-4-5-20250929",
                 headers={"anthropic-beta": "computer-use-2025-01-24"},
                 messages=[
                     {"role": "user", "content": "What is the capital of France?"}
