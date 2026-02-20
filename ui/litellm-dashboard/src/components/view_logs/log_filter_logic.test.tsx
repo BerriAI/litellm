@@ -570,6 +570,63 @@ describe("useLogFilterLogic", () => {
     );
   });
 
+  it("should refetch when startTime changes and backend filters are active", async () => {
+    vi.mocked(uiSpendLogsCall).mockResolvedValue(
+      createPaginatedResponse([createLogEntry()]),
+    );
+    const logs = createPaginatedResponse([createLogEntry()]);
+    const { result, rerender } = renderHook(
+      (props: { startTime?: string }) =>
+        useLogFilterLogic({ ...defaultProps, logs, ...props }),
+      { wrapper, initialProps: { startTime: "2025-01-01T00:00:00Z" } },
+    );
+
+    act(() => {
+      result.current.handleFilterChange({ "Key Alias": "alias-1" });
+    });
+
+    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
+      timeout: 500,
+    });
+
+    rerender({ startTime: "2025-01-02T00:00:00Z" });
+
+    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
+      timeout: 500,
+    });
+    expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        start_date: "2025-01-02 00:00:00",
+      }),
+    );
+  });
+
+  it("should refetch when isCustomDate changes and backend filters are active", async () => {
+    vi.mocked(uiSpendLogsCall).mockResolvedValue(
+      createPaginatedResponse([createLogEntry()]),
+    );
+    const logs = createPaginatedResponse([createLogEntry()]);
+    const { result, rerender } = renderHook(
+      (props: { isCustomDate?: boolean }) =>
+        useLogFilterLogic({ ...defaultProps, logs, ...props }),
+      { wrapper, initialProps: { isCustomDate: false } },
+    );
+
+    act(() => {
+      result.current.handleFilterChange({ "Key Alias": "alias-1" });
+    });
+
+    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
+      timeout: 500,
+    });
+
+    rerender({ isCustomDate: true });
+
+    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
+      timeout: 500,
+    });
+  });
+
   it("should not call setCurrentPage when handleFilterChange receives identical filters", async () => {
     const setCurrentPage = vi.fn();
     const logs = createPaginatedResponse([createLogEntry()]);
