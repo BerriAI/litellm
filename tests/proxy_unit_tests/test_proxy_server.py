@@ -962,7 +962,7 @@ async def test_team_update_redis():
         litellm.proxy.proxy_server, "proxy_logging_obj"
     )
 
-    redis_cache = RedisCache()
+    redis_cache = RedisCache(host="localhost")
 
     with patch.object(
         redis_cache,
