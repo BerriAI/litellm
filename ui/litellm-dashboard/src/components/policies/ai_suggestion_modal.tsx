@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Modal, Spin, Checkbox, Select, Input, Typography, Tooltip } from "antd";
 import { Button, Card } from "@tremor/react";
 import { CheckCircleOutlined, CloseCircleOutlined, InfoCircleOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
-import { suggestPolicyTemplates, modelHubCall, testPolicyTemplate, enrichPolicyTemplate } from "../networking";
+import { suggestPolicyTemplates, modelHubCall, testPolicyTemplate, enrichPolicyTemplateStream } from "../networking";
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -30,6 +30,22 @@ interface AiSuggestionModalProps {
 
 const MAX_EXAMPLES = 4;
 
+const hasItems = (items?: any[]): boolean => Array.isArray(items) && items.length > 0;
+
+const normalizeCompetitorNames = (names: string[] = []): string[] => {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const name of names) {
+    const trimmed = (name || "").trim();
+    if (!trimmed) continue;
+    const dedupeKey = trimmed.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    normalized.push(trimmed);
+  }
+  return normalized;
+};
+
 const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   visible,
   onSelectTemplates,
@@ -55,7 +71,9 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   const [collapsedResults, setCollapsedResults] = useState<Set<string>>(new Set());
   // Enrichment state for competitor templates
   const [enrichedDefs, setEnrichedDefs] = useState<Record<string, any[]>>({});
+  const [enrichedCompetitors, setEnrichedCompetitors] = useState<Record<string, string[]>>({});
   const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichStatusMessage, setEnrichStatusMessage] = useState("");
   const [enrichBrandName, setEnrichBrandName] = useState("");
 
   useEffect(() => {
@@ -97,7 +115,9 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     setTestOverallAction(null);
     setCollapsedResults(new Set());
     setEnrichedDefs({});
+    setEnrichedCompetitors({});
     setIsEnriching(false);
+    setEnrichStatusMessage("");
     setEnrichBrandName("");
   };
 
@@ -170,20 +190,41 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     return suggestion.template || allTemplates.find((t) => t.id === suggestion.template_id);
   };
 
-  const getSelectedTemplateObjects = (): any[] => {
+  const selectedTemplates = useMemo(() => {
     if (!suggestions) return [];
 
     const byId = new Map<string, any>();
     for (const suggestion of suggestions) {
       if (!selectedIds.has(suggestion.template_id)) continue;
-      const template = getTemplateBySuggestion(suggestion);
+      const template =
+        suggestion.template || allTemplates.find((t) => t.id === suggestion.template_id);
       if (template?.id) byId.set(template.id, template);
     }
     return Array.from(byId.values());
-  };
+  }, [suggestions, selectedIds, allTemplates]);
 
   const handleUseSelected = () => {
-    const selected = getSelectedTemplateObjects();
+    const selected = selectedTemplates.map((template) => {
+      const templateId = template.id;
+      const enrichedGuardrailDefinitions = enrichedDefs[templateId];
+      const discoveredCompetitors = enrichedCompetitors[templateId];
+      const hasEnrichedGuardrailDefinitions = hasItems(enrichedGuardrailDefinitions);
+      const hasDiscoveredCompetitors = hasItems(discoveredCompetitors);
+
+      if (!hasEnrichedGuardrailDefinitions && !hasDiscoveredCompetitors) {
+        return template;
+      }
+
+      return {
+        ...template,
+        ...(hasEnrichedGuardrailDefinitions
+          ? { guardrailDefinitions: enrichedGuardrailDefinitions }
+          : {}),
+        ...(hasDiscoveredCompetitors
+          ? { discoveredCompetitors: normalizeCompetitorNames(discoveredCompetitors) }
+          : {}),
+      };
+    });
     resetState();
     onSelectTemplates(selected);
   };
@@ -200,10 +241,6 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     });
   };
 
-  const getTemplateById = (id: string) =>
-    getSelectedTemplateObjects().find((t) => t.id === id) ||
-    allTemplates.find((t) => t.id === id);
-
   const toggleResultCollapse = (name: string) => {
     setCollapsedResults((prev) => {
       const next = new Set(prev);
@@ -213,18 +250,19 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     });
   };
 
-  const getSelectedTemplatesNeedingEnrichment = (): any[] => {
-    return getSelectedTemplateObjects().filter((t) => t?.llm_enrichment);
-  };
+  const selectedTemplatesNeedingEnrichment = useMemo(
+    () => selectedTemplates.filter((t) => t?.llm_enrichment),
+    [selectedTemplates]
+  );
 
-  const needsEnrichment = getSelectedTemplatesNeedingEnrichment().length > 0;
+  const needsEnrichment = selectedTemplatesNeedingEnrichment.length > 0;
 
-  const getAllSelectedGuardrailDefs = (): any[] => {
+  const allSelectedGuardrailDefs = useMemo(() => {
     const defs: any[] = [];
-    for (const template of getSelectedTemplateObjects()) {
+    for (const template of selectedTemplates) {
       const id = template.id;
       // Use enriched defs if available, otherwise use template's original
-      if (enrichedDefs[id]) {
+      if (hasItems(enrichedDefs[id])) {
         defs.push(...enrichedDefs[id]);
       } else {
         if (template?.guardrailDefinitions) {
@@ -233,38 +271,107 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
       }
     }
     return defs;
-  };
+  }, [selectedTemplates, enrichedDefs]);
+
+  const allSelectedGeneratedCompetitors = useMemo(() => {
+    const competitors = new Set<string>();
+    for (const template of selectedTemplates) {
+      const templateCompetitors = normalizeCompetitorNames(
+        enrichedCompetitors[template.id] || []
+      );
+      for (const competitor of templateCompetitors) {
+        competitors.add(competitor);
+      }
+    }
+    return Array.from(competitors);
+  }, [selectedTemplates, enrichedCompetitors]);
+
+  const hasEnrichedGuardrailsForSelection = useMemo(
+    () => selectedTemplates.some((template) => hasItems(enrichedDefs[template.id])),
+    [selectedTemplates, enrichedDefs]
+  );
 
   const handleEnrichCompetitors = async () => {
     if (!accessToken || !selectedModel) return;
-    const templatesToEnrich = getSelectedTemplatesNeedingEnrichment();
+    const templatesToEnrich = selectedTemplatesNeedingEnrichment;
     if (templatesToEnrich.length === 0) return;
 
     setIsEnriching(true);
+    setEnrichStatusMessage("");
     try {
       for (const template of templatesToEnrich) {
         const paramName = template.llm_enrichment.parameter;
-        const result = await enrichPolicyTemplate(
-          accessToken,
-          template.id,
-          { [paramName]: enrichBrandName },
-          selectedModel,
-        );
-        setEnrichedDefs((prev) => ({
-          ...prev,
-          [template.id]: result.guardrailDefinitions,
-        }));
+        setEnrichStatusMessage(`Discovering competitors for ${template.title}...`);
+
+        // Keep existing guardrails until streaming completes to avoid temporary empty payloads.
+        setEnrichedDefs((prev) => {
+          const { [template.id]: _removed, ...rest } = prev;
+          return rest;
+        });
+        setEnrichedCompetitors((prev) => ({ ...prev, [template.id]: [] }));
+
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finish = (cb: () => void) => {
+            if (settled) return;
+            settled = true;
+            cb();
+          };
+
+          enrichPolicyTemplateStream(
+            accessToken,
+            template.id,
+            { [paramName]: enrichBrandName },
+            selectedModel,
+            (name) => {
+              setEnrichedCompetitors((prev) => {
+                const existing = prev[template.id] || [];
+                if (existing.some((c) => c.toLowerCase() === name.toLowerCase())) {
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  [template.id]: [...existing, name],
+                };
+              });
+            },
+            (result) => {
+              finish(() => {
+                setEnrichedDefs((prev) => ({
+                  ...prev,
+                  [template.id]: result.guardrailDefinitions || [],
+                }));
+                setEnrichedCompetitors((prev) => ({
+                  ...prev,
+                  [template.id]:
+                    result.competitors && result.competitors.length > 0
+                      ? normalizeCompetitorNames(result.competitors)
+                      : prev[template.id] || [],
+                }));
+                resolve();
+              });
+            },
+            (error) => {
+              finish(() => reject(new Error(error)));
+            },
+            undefined,
+            (status) => setEnrichStatusMessage(status)
+          ).catch((error) => {
+            finish(() => reject(error));
+          });
+        });
       }
     } catch (e) {
       console.error("Failed to enrich templates:", e);
     } finally {
       setIsEnriching(false);
+      setEnrichStatusMessage("");
     }
   };
 
   const handleRunTest = async () => {
     if (!accessToken || !testInputText.trim()) return;
-    const allDefs = getAllSelectedGuardrailDefs();
+    const allDefs = allSelectedGuardrailDefs;
     if (allDefs.length === 0) return;
 
     setIsTestLoading(true);
@@ -405,8 +512,13 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   };
 
   // Helper to render the test panel
-  const renderTestPanel = () => (
-    <div className="space-y-4 h-full flex flex-col">
+  const renderTestPanel = () => {
+    const generatedCompetitors = allSelectedGeneratedCompetitors;
+    const hasGeneratedCompetitors = generatedCompetitors.length > 0;
+    const hasEnrichedGuardrails = hasEnrichedGuardrailsForSelection;
+
+    return (
+      <div className="space-y-4 h-full flex flex-col">
       {/* Test header */}
       <div className="pb-3 border-b border-gray-200">
         <div className="flex items-center justify-between mb-1">
@@ -422,7 +534,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
         </div>
         <div className="flex flex-wrap gap-1.5 mb-1.5">
           {Array.from(selectedIds).map((id) => {
-            const t = getSelectedTemplateObjects().find((template) => template.id === id);
+            const t = selectedTemplates.find((template) => template.id === id);
             return t ? (
               <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
                 {t.title}
@@ -431,31 +543,32 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
           })}
         </div>
         <p className="text-xs text-gray-500">
-          {getAllSelectedGuardrailDefs().length} guardrails across {selectedIds.size} template{selectedIds.size !== 1 ? "s" : ""}
+          {allSelectedGuardrailDefs.length} guardrails across {selectedIds.size} template{selectedIds.size !== 1 ? "s" : ""}
         </p>
       </div>
 
       {/* Enrichment section for competitor templates */}
-      {needsEnrichment && Object.keys(enrichedDefs).length > 0 && (
-        <div className="p-3 bg-green-50 rounded-lg border border-green-200">
+      {needsEnrichment && (
+        <div className={`p-3 rounded-lg border space-y-2 ${
+          hasEnrichedGuardrails
+            ? "bg-green-50 border-green-200"
+            : "bg-amber-50 border-amber-200"
+        }`}>
           <div className="flex items-center gap-2">
-            <CheckCircleOutlined className="text-green-600" />
-            <span className="text-xs font-medium text-green-800">
-              Competitor names loaded for {enrichBrandName}
-            </span>
-          </div>
-        </div>
-      )}
-      {needsEnrichment && Object.keys(enrichedDefs).length === 0 && (
-        <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 space-y-2">
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <span className="text-xs font-medium text-amber-800">
+            {hasEnrichedGuardrails ? (
+              <CheckCircleOutlined className="text-green-600" />
+            ) : (
+              <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+            )}
+            <span className={`text-xs font-medium ${
+              hasEnrichedGuardrails ? "text-green-800" : "text-amber-800"
+            }`}>
               Competitor template requires your brand name to discover competitors
             </span>
           </div>
+
           <div className="flex gap-2">
             <Input
               size="small"
@@ -471,8 +584,44 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
               loading={isEnriching}
               disabled={!enrichBrandName.trim() || isEnriching}
             >
-              {isEnriching ? "Discovering..." : "Discover"}
+              {isEnriching ? "Discovering..." : hasEnrichedGuardrails ? "Re-discover" : "Discover"}
             </Button>
+          </div>
+
+          {isEnriching && enrichStatusMessage && (
+            <div className="flex items-center gap-2 p-2 bg-blue-50 rounded border border-blue-100">
+              <Spin size="small" />
+              <span className="text-xs text-blue-700">{enrichStatusMessage}</span>
+            </div>
+          )}
+
+          {hasEnrichedGuardrails && (
+            <div className="flex items-center gap-2">
+              <CheckCircleOutlined className="text-green-600" />
+              <span className="text-xs text-green-800">
+                Competitor names loaded for {enrichBrandName}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {needsEnrichment && hasGeneratedCompetitors && (
+        <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-blue-800">
+              Generated Competitors ({generatedCompetitors.length})
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+            {generatedCompetitors.map((name) => (
+              <span
+                key={name}
+                className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-white text-blue-700 border border-blue-200"
+              >
+                {name}
+              </span>
+            ))}
           </div>
         </div>
       )}
@@ -510,8 +659,8 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
           className="w-full"
         >
           {isTestLoading
-            ? `Testing ${getAllSelectedGuardrailDefs().length} guardrails...`
-            : `Test ${getAllSelectedGuardrailDefs().length} guardrails`}
+            ? `Testing ${allSelectedGuardrailDefs.length} guardrails...`
+            : `Test ${allSelectedGuardrailDefs.length} guardrails`}
         </Button>
       </div>
 
@@ -631,8 +780,9 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
       {testResults && testResults.length === 0 && !isTestLoading && (
         <p className="text-xs text-gray-400 text-center py-3">No testable guardrails in selected templates.</p>
       )}
-    </div>
-  );
+      </div>
+    );
+  };
 
   return (
     <Modal
@@ -815,7 +965,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                 Test Suggestions
               </Button>
             )}
-            <Button onClick={handleUseSelected} disabled={selectedIds.size === 0}>
+            <Button onClick={handleUseSelected} disabled={selectedIds.size === 0 || isEnriching}>
               Use {selectedIds.size} Selected Template{selectedIds.size !== 1 ? "s" : ""}
             </Button>
           </div>
