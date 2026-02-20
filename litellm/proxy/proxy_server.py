@@ -4157,60 +4157,74 @@ class ProxyConfig:
 
         ex. Vector Stores, Guardrails, MCP tools, etc.
         """
+        import asyncio
+
+        from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+            CacheSettingsManager,
+        )
+
         if config_map is None:
             config_map = {}
+
+        # Build list of independent DB init tasks to run concurrently.
+        # Previously these ran sequentially (~13 queries x round-trip latency).
+        # Running them concurrently cuts wall-clock time per cycle so cycles
+        # don't overlap and pile up DB connections.
+        tasks = []
         if self._should_load_db_object(object_type="guardrails"):
-            await self._init_guardrails_in_db(prisma_client=prisma_client)
-
+            tasks.append(self._init_guardrails_in_db(prisma_client=prisma_client))
         if self._should_load_db_object(object_type="policies"):
-            await self._init_policies_in_db(prisma_client=prisma_client)
-
+            tasks.append(self._init_policies_in_db(prisma_client=prisma_client))
         if self._should_load_db_object(object_type="vector_stores"):
-            await self._init_vector_stores_in_db(prisma_client=prisma_client)
-
+            tasks.append(self._init_vector_stores_in_db(prisma_client=prisma_client))
         if self._should_load_db_object(object_type="vector_store_indexes"):
-            await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
+            )
         if self._should_load_db_object(object_type="mcp"):
-            await self._init_mcp_servers_in_db()
-
+            tasks.append(self._init_mcp_servers_in_db())
         if self._should_load_db_object(object_type="agents"):
-            await self._init_agents_in_db(prisma_client=prisma_client)
-
+            tasks.append(self._init_agents_in_db(prisma_client=prisma_client))
         if self._should_load_db_object(object_type="pass_through_endpoints"):
-            await self._init_pass_through_endpoints_in_db(config_map=config_map)
-
+            tasks.append(
+                self._init_pass_through_endpoints_in_db(config_map=config_map)
+            )
         if self._should_load_db_object(object_type="prompts"):
-            await self._init_prompts_in_db(prisma_client=prisma_client)
-
+            tasks.append(self._init_prompts_in_db(prisma_client=prisma_client))
         if self._should_load_db_object(object_type="search_tools"):
-            await self._init_search_tools_in_db(prisma_client=prisma_client)
-
+            tasks.append(self._init_search_tools_in_db(prisma_client=prisma_client))
         if self._should_load_db_object(object_type="model_cost_map"):
-            await self._check_and_reload_model_cost_map(
-                prisma_client=prisma_client, config_map=config_map
+            tasks.append(
+                self._check_and_reload_model_cost_map(
+                    prisma_client=prisma_client, config_map=config_map
+                )
             )
-
         if self._should_load_db_object(object_type="anthropic_beta_headers"):
-            await self._check_and_reload_anthropic_beta_headers(
-                prisma_client=prisma_client, config_map=config_map
+            tasks.append(
+                self._check_and_reload_anthropic_beta_headers(
+                    prisma_client=prisma_client, config_map=config_map
+                )
             )
-        
         if self._should_load_db_object(object_type="sso_settings"):
-            await self._init_sso_settings_in_db(prisma_client=prisma_client)
+            tasks.append(self._init_sso_settings_in_db(prisma_client=prisma_client))
         if self._should_load_db_object(object_type="cache_settings"):
-            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
-                CacheSettingsManager,
+            tasks.append(
+                CacheSettingsManager.init_cache_settings_in_db(
+                    prisma_client=prisma_client, proxy_config=self
+                )
             )
-
-            await CacheSettingsManager.init_cache_settings_in_db(
-                prisma_client=prisma_client, proxy_config=self
-            )
-
         if self._should_load_db_object(object_type="semantic_filter_settings"):
-            await self._init_semantic_filter_settings_in_db(
-                prisma_client=prisma_client, config_map=config_map
+            tasks.append(
+                self._init_semantic_filter_settings_in_db(
+                    prisma_client=prisma_client, config_map=config_map
+                )
             )
+
+        # Run all DB init tasks concurrently. Each task handles its own errors
+        # internally, so we use return_exceptions=True to prevent one failure
+        # from cancelling others.
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _init_semantic_filter_settings_in_db(
         self,
