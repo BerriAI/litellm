@@ -82,8 +82,13 @@ class BaseResponsesAPIStreamingIterator:
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
 
-    def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
-        """Process a single chunk of data from the stream"""
+    def _transform_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
+        """
+        Parse and transform a raw SSE chunk into a ResponsesAPIStreamingResponse.
+
+        Returns None if the chunk should be skipped (empty, SSE control, parse error).
+        This does NOT call post-streaming hooks — callers handle that.
+        """
         if not chunk:
             return None
 
@@ -123,55 +128,91 @@ class BaseResponsesAPIStreamingIterator:
                     )
                     setattr(openai_responses_api_chunk, "response", response)
 
-                # Allow callbacks to modify chunk before returning
-                openai_responses_api_chunk = run_async_function(
-                    async_function=self._call_post_streaming_deployment_hook,
-                    chunk=openai_responses_api_chunk,
-                )
-
-                # Store the completed response
-                if (
-                    openai_responses_api_chunk
-                    and getattr(openai_responses_api_chunk, "type", None)
-                    == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-                ):
-                    self.completed_response = openai_responses_api_chunk
-                    # Add cost to usage object if include_cost_in_streaming_usage is True
-                    if (
-                        litellm.include_cost_in_streaming_usage
-                        and self.logging_obj is not None
-                    ):
-                        response_obj: Optional[ResponsesAPIResponse] = getattr(
-                            openai_responses_api_chunk, "response", None
-                        )
-                        if response_obj:
-                            usage_obj: Optional[ResponseAPIUsage] = getattr(
-                                response_obj, "usage", None
-                            )
-                            if usage_obj is not None:
-                                try:
-                                    cost: Optional[float] = (
-                                        self.logging_obj._response_cost_calculator(
-                                            result=response_obj
-                                        )
-                                    )
-                                    if cost is not None:
-                                        setattr(usage_obj, "cost", cost)
-                                except Exception:
-                                    # If cost calculation fails, continue without cost
-                                    pass
-
-                    self._handle_logging_completed_response()
-
                 return openai_responses_api_chunk
 
             return None
         except json.JSONDecodeError:
             # If we can't parse the chunk, continue
             return None
+
+    def _finalize_chunk(
+        self, openai_responses_api_chunk: Optional[ResponsesAPIStreamingResponse]
+    ) -> Optional[ResponsesAPIStreamingResponse]:
+        """
+        Post-hook processing: store completed response, calculate cost, trigger logging.
+        """
+        if openai_responses_api_chunk is None:
+            return None
+
+        # Store the completed response
+        if (
+            getattr(openai_responses_api_chunk, "type", None)
+            == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        ):
+            self.completed_response = openai_responses_api_chunk
+            # Add cost to usage object if include_cost_in_streaming_usage is True
+            if (
+                litellm.include_cost_in_streaming_usage
+                and self.logging_obj is not None
+            ):
+                response_obj: Optional[ResponsesAPIResponse] = getattr(
+                    openai_responses_api_chunk, "response", None
+                )
+                if response_obj:
+                    usage_obj: Optional[ResponseAPIUsage] = getattr(
+                        response_obj, "usage", None
+                    )
+                    if usage_obj is not None:
+                        try:
+                            cost: Optional[float] = (
+                                self.logging_obj._response_cost_calculator(
+                                    result=response_obj
+                                )
+                            )
+                            if cost is not None:
+                                setattr(usage_obj, "cost", cost)
+                        except Exception:
+                            # If cost calculation fails, continue without cost
+                            pass
+
+            self._handle_logging_completed_response()
+
+        return openai_responses_api_chunk
+
+    def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
+        """Process a single chunk of data from the stream (sync path)."""
+        try:
+            openai_responses_api_chunk = self._transform_chunk(chunk)
+            if openai_responses_api_chunk is not None:
+                # Allow callbacks to modify chunk before returning (sync: uses thread+event loop)
+                openai_responses_api_chunk = run_async_function(
+                    async_function=self._call_post_streaming_deployment_hook,
+                    chunk=openai_responses_api_chunk,
+                )
+            return self._finalize_chunk(openai_responses_api_chunk)
         except Exception as e:
             # Trigger failure hooks before re-raising
             # This ensures failures are logged even when _process_chunk is called directly
+            self._handle_failure(e)
+            raise
+
+    async def _aprocess_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
+        """
+        Process a single chunk of data from the stream (async path).
+
+        Unlike _process_chunk, this directly awaits the post-streaming hook
+        instead of using run_async_function (which spawns a thread + event loop
+        per call, causing ~956x overhead when called from an async context).
+        """
+        try:
+            openai_responses_api_chunk = self._transform_chunk(chunk)
+            if openai_responses_api_chunk is not None:
+                # Allow callbacks to modify chunk before returning (async: direct await)
+                openai_responses_api_chunk = await self._call_post_streaming_deployment_hook(
+                    chunk=openai_responses_api_chunk,
+                )
+            return self._finalize_chunk(openai_responses_api_chunk)
+        except Exception as e:
             self._handle_failure(e)
             raise
 
@@ -371,7 +412,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.finished = True
                     raise StopAsyncIteration
 
-                result = self._process_chunk(chunk)
+                result = await self._aprocess_chunk(chunk)
 
                 if self.finished:
                     raise StopAsyncIteration
