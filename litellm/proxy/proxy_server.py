@@ -10701,7 +10701,11 @@ async def get_image():
     if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
         if os.path.exists(logo_path):
             return FileResponse(logo_path, media_type="image/jpeg")
-        # Fall through to cache or default if custom path doesn't exist
+        # Custom path doesn't exist — fall back to default
+        verbose_proxy_logger.warning(
+            f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
+        )
+        logo_path = default_logo
 
     # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
     if os.path.exists(cache_path):

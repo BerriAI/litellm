@@ -3266,6 +3266,51 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
     )
 
 
+@pytest.mark.asyncio
+async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch):
+    """
+    Test that when UI_LOGO_PATH points to a non-existent file AND there is no
+    cached_logo.jpg, get_image serves the default logo instead of the
+    non-existent custom path.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.setenv("UI_LOGO_PATH", "/app/nonexistent_logo.jpg")
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+
+    calls_to_file_response = []
+
+    def fake_file_response(path, **kwargs):
+        calls_to_file_response.append(path)
+        return MagicMock()
+
+    def exists_side_effect(path):
+        # Neither the custom logo nor the cache exist
+        if path == "/app/nonexistent_logo.jpg":
+            return False
+        if "cached_logo.jpg" in path:
+            return False
+        return True
+
+    with patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
+         patch("litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response):
+
+        await get_image()
+
+    assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
+    served_path = calls_to_file_response[0]
+    assert served_path != "/app/nonexistent_logo.jpg", (
+        "Should not attempt to serve a non-existent custom logo"
+    )
+    assert served_path.endswith("logo.jpg"), (
+        f"Expected fallback to default logo.jpg, got {served_path}"
+    )
+
+
 def test_get_config_normalizes_string_callbacks(monkeypatch):
     """
     Test that /get/config/callbacks normalizes string callbacks to lists.
