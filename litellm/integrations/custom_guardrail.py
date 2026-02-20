@@ -31,11 +31,6 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-try:
-    from fastapi.exceptions import HTTPException
-except ImportError:
-    HTTPException = None  # type: ignore
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 dc = DualCache()
@@ -677,6 +672,10 @@ class CustomGuardrail(CustomLogger):
 
         if isinstance(e, ModifyResponseException):
             return True
+        try:
+            from fastapi.exceptions import HTTPException
+        except ImportError:
+            HTTPException = None  # type: ignore
         if (
             HTTPException is not None
             and isinstance(e, HTTPException)
