@@ -932,14 +932,7 @@ class AmazonConverseConfig(BaseConfig):
                     self._validate_request_metadata(value)  # type: ignore
                     optional_params["requestMetadata"] = value
             if param == "service_tier" and isinstance(value, str):
-                # Map OpenAI service_tier (string) to Bedrock serviceTier (object)
-                # OpenAI values: "auto", "default", "flex", "priority"
-                # Bedrock values: "default", "flex", "priority" (no "auto")
-                bedrock_tier = value
-                if value == "auto":
-                    bedrock_tier = "default"  # Bedrock doesn't support "auto"
-                if bedrock_tier in ("default", "flex", "priority"):
-                    optional_params["serviceTier"] = {"type": bedrock_tier}
+                self._map_service_tier_param(value, optional_params)
 
             if param == "web_search_options" and isinstance(value, dict):
                 # Note: we use `isinstance(value, dict)` instead of `value and isinstance(value, dict)`
@@ -969,6 +962,18 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(auto={})
 
         return optional_params
+
+    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
+        """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
+
+        OpenAI values: "auto", "default", "flex", "priority"
+        Bedrock values: "default", "flex", "priority" (no "auto")
+        """
+        bedrock_tier = value
+        if value == "auto":
+            bedrock_tier = "default"  # Bedrock doesn't support "auto"
+        if bedrock_tier in ("default", "flex", "priority"):
+            optional_params["serviceTier"] = {"type": bedrock_tier}
 
     def _translate_response_format_param(
         self,
