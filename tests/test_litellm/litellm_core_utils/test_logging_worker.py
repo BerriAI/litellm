@@ -5,6 +5,7 @@ Tests for the LoggingWorker class to ensure graceful shutdown handling.
 import asyncio
 import contextvars
 from unittest.mock import AsyncMock, patch
+import unittest.mock as mock
 
 import pytest
 
@@ -380,7 +381,6 @@ class TestLoggingWorker:
         # RuntimeError about a stale queue and exits instead of crashing.
         # We test this by directly calling _worker_loop with a queue bound
         # to a *different* loop (mock).
-        import unittest.mock as mock
 
         old_queue = worker._queue
         fake_old_loop = mock.MagicMock()
@@ -416,8 +416,6 @@ class TestLoggingWorker:
 
         This tests the fix for GitHub issue #14521.
         """
-        import unittest.mock as mock
-
         worker = LoggingWorker(timeout=1.0, max_queue_size=10)
 
         # Start the worker
