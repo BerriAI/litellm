@@ -3869,17 +3869,14 @@ async def validate_key_list_check(
     return complete_user_info
 
 
-async def get_admin_team_ids(
+async def _fetch_user_team_objects(
     complete_user_info: Optional[LiteLLM_UserTable],
-    user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-) -> List[str]:
-    """
-    Get all team IDs where the user is an admin.
-    """
-    if complete_user_info is None:
+) -> List[LiteLLM_TeamTable]:
+    """Fetch team objects for all teams a user belongs to (single DB query)."""
+    if complete_user_info is None or not complete_user_info.teams:
         return []
-    # Get all teams that user is an admin of
+
     teams: Optional[
         List[BaseModel]
     ] = await prisma_client.db.litellm_teamtable.find_many(
@@ -3888,14 +3885,45 @@ async def get_admin_team_ids(
     if teams is None:
         return []
 
-    teams_pydantic_obj = [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
+    return [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
 
-    admin_team_ids = [
+
+def _get_admin_team_ids_from_objects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_objects: List[LiteLLM_TeamTable],
+) -> List[str]:
+    """Filter team objects to those where the user is an admin."""
+    return [
         team.team_id
-        for team in teams_pydantic_obj
+        for team in team_objects
         if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
     ]
-    return admin_team_ids
+
+
+def _get_member_team_ids_from_objects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_objects: List[LiteLLM_TeamTable],
+) -> List[str]:
+    """Filter team objects to those where the user is a member (any role)."""
+    return [
+        team.team_id
+        for team in team_objects
+        if any(
+            member.user_id is not None
+            and member.user_id == user_api_key_dict.user_id
+            for member in team.members_with_roles
+        )
+    ]
+
+
+async def get_admin_team_ids(
+    complete_user_info: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> List[str]:
+    """Get all team IDs where the user is an admin."""
+    team_objects = await _fetch_user_team_objects(complete_user_info, prisma_client)
+    return _get_admin_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
 async def get_member_team_ids(
@@ -3909,34 +3937,8 @@ async def get_member_team_ids(
     Used to determine which teams' service accounts (keys with user_id=NULL)
     a regular team member can see.
     """
-    if complete_user_info is None:
-        return []
-
-    if not complete_user_info.teams:
-        return []
-
-    # Get all teams that user belongs to
-    teams: Optional[
-        List[BaseModel]
-    ] = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
-    )
-    if teams is None:
-        return []
-
-    teams_pydantic_obj = [LiteLLM_TeamTable(**team.model_dump()) for team in teams]
-
-    # Return team IDs where the user is a member (any role)
-    member_team_ids = [
-        team.team_id
-        for team in teams_pydantic_obj
-        if any(
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
-            for member in team.members_with_roles
-        )
-    ]
-    return member_team_ids
+    team_objects = await _fetch_user_team_objects(complete_user_info, prisma_client)
+    return _get_member_team_ids_from_objects(user_api_key_dict, team_objects)
 
 
 @router.get(
@@ -4022,26 +4024,28 @@ async def list_keys(
             prisma_client=prisma_client,
         )
 
-        if include_team_keys:
-            admin_team_ids = await get_admin_team_ids(
+        # Fetch team objects once when needed for either admin or member filtering.
+        # This avoids duplicate DB queries for the same team data.
+        if include_team_keys or include_created_by_keys:
+            team_objects = await _fetch_user_team_objects(
                 complete_user_info=complete_user_info,
-                user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,
+            )
+            member_team_ids = _get_member_team_ids_from_objects(
+                user_api_key_dict=user_api_key_dict,
+                team_objects=team_objects,
+            )
+        else:
+            team_objects = []
+            member_team_ids = None
+
+        if include_team_keys:
+            admin_team_ids = _get_admin_team_ids_from_objects(
+                user_api_key_dict=user_api_key_dict,
+                team_objects=team_objects,
             )
         else:
             admin_team_ids = None
-
-        # Compute member_team_ids when either include_team_keys or
-        # include_created_by_keys is True. This ensures created_by visibility
-        # is scoped to teams the user currently belongs to.
-        if include_team_keys or include_created_by_keys:
-            member_team_ids = await get_member_team_ids(
-                complete_user_info=complete_user_info,
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-            )
-        else:
-            member_team_ids = None
 
         if not user_id and user_api_key_dict.user_role not in [
             LitellmUserRoles.PROXY_ADMIN.value,
