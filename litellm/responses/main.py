@@ -491,10 +491,7 @@ async def aresponses(
                 custom_llm_provider=custom_llm_provider,
             )
 
-        # Shell execution loop for native Responses API providers that
-        # injected the _litellm_shell function tool.  The completion bridge
-        # handles its own loop internally, so this only fires for native
-        # provider responses that still contain pending shell calls.
+        # Shell execution loop for native Responses API providers with pending shell calls.
         if isinstance(response, ResponsesAPIResponse):
             from litellm.responses.shell_tool_handler import (
                 _extract_shell_calls_from_responses_api,
