@@ -301,6 +301,7 @@ def team_token_tuple():
     return team_id, token, public_jwk
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
 async def test_team_token_output(prisma_client, audience, monkeypatch):
