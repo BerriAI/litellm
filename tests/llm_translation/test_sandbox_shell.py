@@ -485,3 +485,495 @@ class TestSandboxShellExecutionLoop:
             )
 
         mock_exec.assert_called_once_with(["date"])
+
+
+# ---------------------------------------------------------------------------
+# Sync completion bridge shell execution loop
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxShellExecutionLoopSync:
+    """Verify the *synchronous* shell execution loop in the completion bridge."""
+
+    def test_single_shell_call_sync(self):
+        """Sync loop: model calls _litellm_shell once, then produces text."""
+        shell_call = _make_tool_call_response(
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id="call_1",
+                    type="function",
+                    function=Function(
+                        name="_litellm_shell",
+                        arguments='{"command": ["echo", "hello"]}',
+                    ),
+                )
+            ]
+        )
+        final = _make_text_response("The output was hello.")
+
+        handler = LiteLLMCompletionTransformationHandler()
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        with (
+            patch(
+                "litellm.responses.litellm_completion_transformation.handler.litellm.completion",
+                return_value=final,
+            ) as mock_completion,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value={"success": True, "output": "hello\n", "error": "", "files": []},
+            ) as mock_exec,
+        ):
+            result = handler._run_shell_execution_loop_sync(
+                initial_response=shell_call,
+                completion_args={
+                    "model": "mistral/mistral-large-latest",
+                    "messages": [{"role": "user", "content": "echo hello"}],
+                    "tools": [shell_fn_tool],
+                },
+            )
+
+        mock_exec.assert_called_once_with(["echo", "hello"])
+        assert mock_completion.call_count == 1
+        assert result.id == "resp-shell-final"
+
+    def test_no_loop_when_no_shell_calls_sync(self):
+        """Sync loop is a no-op when the model doesn't call _litellm_shell."""
+        text_response = _make_text_response("No shell needed.")
+
+        handler = LiteLLMCompletionTransformationHandler()
+
+        result = handler._run_shell_execution_loop_sync(
+            initial_response=text_response,
+            completion_args={
+                "model": "mistral/mistral-large-latest",
+                "messages": [{"role": "user", "content": "hello"}],
+                "tools": [],
+            },
+        )
+
+        assert result is text_response
+
+    def test_failed_command_sync(self):
+        """Sync loop: failed command error is included in tool result."""
+        shell_call = _make_tool_call_response(
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id="call_1",
+                    type="function",
+                    function=Function(
+                        name="_litellm_shell",
+                        arguments='{"command": ["false"]}',
+                    ),
+                )
+            ]
+        )
+        final = _make_text_response("The command failed.")
+
+        handler = LiteLLMCompletionTransformationHandler()
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        with (
+            patch(
+                "litellm.responses.litellm_completion_transformation.handler.litellm.completion",
+                return_value=final,
+            ) as mock_completion,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value={"success": False, "output": "", "error": "exit 1", "files": []},
+            ),
+        ):
+            result = handler._run_shell_execution_loop_sync(
+                initial_response=shell_call,
+                completion_args={
+                    "model": "cohere/command-r-plus",
+                    "messages": [{"role": "user", "content": "run false"}],
+                    "tools": [shell_fn_tool],
+                },
+            )
+
+        msgs = mock_completion.call_args.kwargs["messages"]
+        tool_msg = msgs[-1]
+        assert "STDERR" in tool_msg["content"]
+        assert "non-zero" in tool_msg["content"]
+        assert result.id == "resp-shell-final"
+
+
+# ---------------------------------------------------------------------------
+# shell_tool_handler — utility functions for native Responses API path
+# ---------------------------------------------------------------------------
+
+
+class TestShellToolHandlerUtilities:
+    """Tests for litellm.responses.shell_tool_handler utility functions."""
+
+    def test_extract_shell_calls_from_responses_api_dict_output(self):
+        """Extract _litellm_shell calls from ResponsesAPIResponse with dict output."""
+        from litellm.responses.shell_tool_handler import (
+            _extract_shell_calls_from_responses_api,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            **{
+                "id": "resp-1",
+                "created_at": 1000,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_1",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": ["ls", "-la"]}',
+                        "id": "out-1",
+                        "status": "completed",
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+        calls = _extract_shell_calls_from_responses_api(response)
+        assert len(calls) == 1
+        assert calls[0]["call_id"] == "fc_1"
+        assert calls[0]["command"] == ["ls", "-la"]
+
+    def test_extract_shell_calls_ignores_other_function_calls(self):
+        """Only _litellm_shell calls should be extracted."""
+        from litellm.responses.shell_tool_handler import (
+            _extract_shell_calls_from_responses_api,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            **{
+                "id": "resp-2",
+                "created_at": 1000,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_1",
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                        "id": "out-1",
+                        "status": "completed",
+                    },
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "hello"}],
+                    },
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+        calls = _extract_shell_calls_from_responses_api(response)
+        assert len(calls) == 0
+
+    def test_extract_shell_calls_string_command(self):
+        """A string command should be wrapped in a list."""
+        from litellm.responses.shell_tool_handler import (
+            _extract_shell_calls_from_responses_api,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            **{
+                "id": "resp-3",
+                "created_at": 1000,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_1",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": "pwd"}',
+                        "id": "out-1",
+                        "status": "completed",
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+        calls = _extract_shell_calls_from_responses_api(response)
+        assert len(calls) == 1
+        assert calls[0]["command"] == ["pwd"]
+
+    def test_responses_api_has_shell_tool(self):
+        from litellm.responses.shell_tool_handler import responses_api_has_shell_tool
+
+        shell_fn = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+        other_fn = {"type": "function", "function": {"name": "foo", "parameters": {}}}
+
+        assert responses_api_has_shell_tool([shell_fn]) is True
+        assert responses_api_has_shell_tool([other_fn]) is False
+        assert responses_api_has_shell_tool([other_fn, shell_fn]) is True
+        assert responses_api_has_shell_tool(None) is False
+        assert responses_api_has_shell_tool([]) is False
+
+    def test_build_follow_up_input(self):
+        """Follow-up input should include assistant messages, function calls, and outputs."""
+        from litellm.responses.shell_tool_handler import _build_follow_up_input
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        response = ResponsesAPIResponse(
+            **{
+                "id": "resp-1",
+                "created_at": 1000,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "Running command..."}],
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_1",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": ["ls"]}',
+                        "id": "out-1",
+                        "status": "completed",
+                    },
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        follow_up = _build_follow_up_input(
+            response=response,
+            shell_calls=[{"call_id": "fc_1", "command": ["ls"]}],
+            shell_results=[{"call_id": "fc_1", "output": "file.txt\n"}],
+        )
+
+        assert len(follow_up) == 3
+        assert follow_up[0]["type"] == "message"
+        assert follow_up[0]["role"] == "assistant"
+        assert follow_up[1]["type"] == "function_call"
+        assert follow_up[1]["name"] == "_litellm_shell"
+        assert follow_up[2]["type"] == "function_call_output"
+        assert follow_up[2]["call_id"] == "fc_1"
+        assert follow_up[2]["output"] == "file.txt\n"
+
+
+# ---------------------------------------------------------------------------
+# Native Responses API shell execution loop (async)
+# ---------------------------------------------------------------------------
+
+
+class TestNativeResponsesAPIShellLoop:
+    """Test the shell execution loop for the native Responses API path."""
+
+    @pytest.mark.asyncio
+    async def test_async_loop_single_shell_call(self):
+        """
+        Native path: model calls _litellm_shell once, handler executes
+        via sandbox and re-invokes aresponses, getting a final text response.
+        """
+        from litellm.responses.shell_tool_handler import (
+            run_shell_execution_loop_responses_api,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        shell_response = ResponsesAPIResponse(
+            **{
+                "id": "resp-native-1",
+                "created_at": 1000,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_1",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": ["whoami"]}',
+                        "id": "out-1",
+                        "status": "completed",
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        final_response = ResponsesAPIResponse(
+            **{
+                "id": "resp-native-2",
+                "created_at": 1001,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "You are root."}],
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        with (
+            patch(
+                "litellm.responses.main.aresponses",
+                new_callable=AsyncMock,
+                return_value=final_response,
+            ) as mock_aresponses,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value={"success": True, "output": "root\n", "error": "", "files": []},
+            ) as mock_exec,
+        ):
+            result = await run_shell_execution_loop_responses_api(
+                response=shell_response,
+                model="xai/grok-3",
+                tools=[shell_fn_tool],
+            )
+
+        mock_exec.assert_called_once_with(["whoami"])
+        mock_aresponses.assert_called_once()
+        call_kwargs = mock_aresponses.call_args
+        assert call_kwargs.kwargs["previous_response_id"] == "resp-native-1"
+        assert result.id == "resp-native-2"
+        assert result.output[0]["content"][0]["text"] == "You are root."
+
+    @pytest.mark.asyncio
+    async def test_async_loop_no_op_when_no_shell_calls(self):
+        """Loop is a no-op when there are no _litellm_shell calls in the output."""
+        from litellm.responses.shell_tool_handler import (
+            run_shell_execution_loop_responses_api,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        text_response = ResponsesAPIResponse(
+            **{
+                "id": "resp-text",
+                "created_at": 1000,
+                "model": "xai/grok-3",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "Hello!"}],
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        result = await run_shell_execution_loop_responses_api(
+            response=text_response,
+            model="xai/grok-3",
+            tools=[],
+        )
+
+        assert result is text_response
+
+    @pytest.mark.asyncio
+    async def test_async_loop_two_sequential_calls(self):
+        """
+        Native path: model calls _litellm_shell twice in sequence.
+        """
+        from litellm.responses.shell_tool_handler import (
+            run_shell_execution_loop_responses_api,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        first_response = ResponsesAPIResponse(
+            **{
+                "id": "resp-1",
+                "created_at": 1000,
+                "model": "volcengine/ep-xxx",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_1",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": ["pwd"]}',
+                        "id": "out-1",
+                        "status": "completed",
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        second_response = ResponsesAPIResponse(
+            **{
+                "id": "resp-2",
+                "created_at": 1001,
+                "model": "volcengine/ep-xxx",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_2",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": ["ls"]}',
+                        "id": "out-2",
+                        "status": "completed",
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        final_response = ResponsesAPIResponse(
+            **{
+                "id": "resp-3",
+                "created_at": 1002,
+                "model": "volcengine/ep-xxx",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg-1",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "You are in /sandbox with a.txt."}],
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        with (
+            patch(
+                "litellm.responses.main.aresponses",
+                new_callable=AsyncMock,
+                side_effect=[second_response, final_response],
+            ) as mock_aresponses,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                side_effect=[
+                    {"success": True, "output": "/sandbox\n", "error": "", "files": []},
+                    {"success": True, "output": "a.txt\n", "error": "", "files": []},
+                ],
+            ) as mock_exec,
+        ):
+            result = await run_shell_execution_loop_responses_api(
+                response=first_response,
+                model="volcengine/ep-xxx",
+                tools=[shell_fn_tool],
+            )
+
+        assert mock_exec.call_count == 2
+        assert mock_aresponses.call_count == 2
+        assert result.id == "resp-3"

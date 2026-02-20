@@ -86,6 +86,15 @@ class LiteLLMCompletionTransformationHandler:
             **kwargs,
         )
 
+        needs_shell = LiteLLMCompletionResponsesConfig.request_has_litellm_shell_tool(
+            litellm_completion_request.get("tools")
+        )
+        if needs_shell and isinstance(litellm_completion_response, ModelResponse):
+            litellm_completion_response = self._run_shell_execution_loop_sync(
+                initial_response=litellm_completion_response,
+                completion_args=completion_args,
+            )
+
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: ResponsesAPIResponse = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
@@ -227,6 +236,74 @@ class LiteLLMCompletionTransformationHandler:
                 for tc in msg.tool_calls
             ]
         return assistant_dict
+
+    def _run_shell_execution_loop_sync(
+        self,
+        initial_response: ModelResponse,
+        completion_args: Dict[str, Any],
+    ) -> ModelResponse:
+        """Synchronous version of :meth:`_run_shell_execution_loop`."""
+        from litellm.llms.litellm_proxy.skills.sandbox_executor import (
+            SkillsSandboxExecutor,
+        )
+
+        current_response = initial_response
+        shell_calls = self._extract_shell_tool_calls(current_response)
+        if not shell_calls:
+            return current_response
+
+        executor = SkillsSandboxExecutor()
+        messages: List[Dict[str, Any]] = list(
+            completion_args.get("messages") or []
+        )
+
+        for _iteration in range(_MAX_SHELL_ITERATIONS):
+            if not shell_calls:
+                break
+
+            messages.append(self._build_assistant_message(current_response))
+
+            for sc in shell_calls:
+                result = executor.execute_shell_command(sc["command"])
+                output_parts: List[str] = []
+                if result.get("output"):
+                    output_parts.append(result["output"])
+                if result.get("error"):
+                    output_parts.append(f"STDERR:\n{result['error']}")
+                if not result.get("success"):
+                    output_parts.append("[command exited with non-zero status]")
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": sc["id"],
+                        "content": "\n".join(output_parts) or "(no output)",
+                    }
+                )
+
+            verbose_logger.debug(
+                "LiteLLMCompletionTransformationHandler: sync shell loop iteration %d, "
+                "executed %d command(s)",
+                _iteration + 1,
+                len(shell_calls),
+            )
+
+            next_args = dict(completion_args)
+            next_args["messages"] = messages
+            next_args.pop("stream", None)
+
+            current_response = litellm.completion(**next_args)  # type: ignore[assignment]
+
+            shell_calls = self._extract_shell_tool_calls(current_response)
+
+        if shell_calls:
+            verbose_logger.warning(
+                "LiteLLMCompletionTransformationHandler: max shell iterations "
+                "(%d) reached, returning last response",
+                _MAX_SHELL_ITERATIONS,
+            )
+
+        return current_response
 
     async def _run_shell_execution_loop(
         self,

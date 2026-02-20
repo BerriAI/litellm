@@ -491,6 +491,35 @@ async def aresponses(
                 custom_llm_provider=custom_llm_provider,
             )
 
+        # Shell execution loop for native Responses API providers that
+        # injected the _litellm_shell function tool.  The completion bridge
+        # handles its own loop internally, so this only fires for native
+        # provider responses that still contain pending shell calls.
+        if isinstance(response, ResponsesAPIResponse):
+            from litellm.responses.shell_tool_handler import (
+                _extract_shell_calls_from_responses_api,
+                run_shell_execution_loop_responses_api,
+            )
+
+            if _extract_shell_calls_from_responses_api(response):
+                shell_loop_params = {
+                    k: v
+                    for k, v in {
+                        "custom_llm_provider": custom_llm_provider,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "max_output_tokens": max_output_tokens,
+                        "instructions": instructions,
+                    }.items()
+                    if v is not None
+                }
+                response = await run_shell_execution_loop_responses_api(
+                    response=response,
+                    model=model,
+                    tools=tools,
+                    **shell_loop_params,
+                )
+
         if response is None:
             raise ValueError(
                 f"Got an unexpected None response from the Responses API: {response}"
@@ -756,6 +785,33 @@ def responses(
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
+
+        # Sync shell execution loop for native Responses API providers.
+        # Only applies to sync (non-async) calls; async is handled in aresponses().
+        if not _is_async and isinstance(response, ResponsesAPIResponse):
+            from litellm.responses.shell_tool_handler import (
+                _extract_shell_calls_from_responses_api,
+                run_shell_execution_loop_responses_api_sync,
+            )
+
+            if _extract_shell_calls_from_responses_api(response):
+                shell_loop_params = {
+                    k: v
+                    for k, v in {
+                        "custom_llm_provider": custom_llm_provider,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        "max_output_tokens": max_output_tokens,
+                        "instructions": instructions,
+                    }.items()
+                    if v is not None
+                }
+                response = run_shell_execution_loop_responses_api_sync(
+                    response=response,
+                    model=model,
+                    tools=tools,
+                    **shell_loop_params,
+                )
 
         return response
     except Exception as e:
