@@ -102,6 +102,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_active = False
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
+        self._accumulated_reasoning_content_parts: List[str] = []
 
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
@@ -812,17 +813,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(chunk)
                         if self._reasoning_active and not self._reasoning_done_emitted:
-                            # get raw ModelResponse
-                            text_reasoning = self.create_litellm_model_response()
-                            # reasoning_content only
+                            # Incrementally accumulate reasoning content instead of
+                            # calling stream_chunk_builder on every chunk (O(n²))
+                            delta = chunk.choices[0].delta if chunk.choices else None
+                            if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                                self._accumulated_reasoning_content_parts.append(delta.reasoning_content)
                             if self._is_reasoning_end(chunk):
-                                reasoning_content = ""
-                                # best effort to obtain reasoning_content from chat model response
-                                if text_reasoning and text_reasoning.choices:
-                                    choice = text_reasoning.choices[0]
-                                    # Check if it's a Choices object (has message) or StreamingChoices (has delta)
-                                    if hasattr(choice, "message"):
-                                        reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
+                                reasoning_content = "".join(self._accumulated_reasoning_content_parts)
                                 
                                 # Ensure we have a valid reasoning_item_id
                                 reasoning_item_id = self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
