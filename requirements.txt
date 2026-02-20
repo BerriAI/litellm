@@ -68,7 +68,7 @@ jinja2==3.1.6 # for prompt templates
 aioboto3==15.5.0 # for async sagemaker calls (updated to match boto3 1.40.73)
 aiohttp==3.13.3 # for network calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
-pydantic>=2.11,<3 # proxy + openai req. + mcp
+pydantic>=2.11.3,<3 # proxy + openai req. + mcp
 jsonschema>=4.23.0,<5.0.0 # validating json schema - aligned with openapi-core + mcp
 websockets==15.0.1 # for realtime API
 soundfile==0.12.1 # for audio file processing
