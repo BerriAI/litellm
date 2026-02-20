@@ -10699,7 +10699,9 @@ async def get_image():
 
     # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
     if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
-        return FileResponse(logo_path, media_type="image/jpeg")
+        if os.path.exists(logo_path):
+            return FileResponse(logo_path, media_type="image/jpeg")
+        # Fall through to cache or default if custom path doesn't exist
 
     # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
     if os.path.exists(cache_path):
