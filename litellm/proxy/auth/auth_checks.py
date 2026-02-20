@@ -57,6 +57,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -1982,6 +1983,39 @@ class ExperimentalUIJWTToken:
             )
 
 
+async def _fetch_key_object_from_db_with_reconnect(
+    hashed_token: str,
+    prisma_client: PrismaClient,
+    parent_otel_span: Optional[Span],
+    proxy_logging_obj: Optional[ProxyLogging],
+) -> Optional[BaseModel]:
+    """
+    Fetch key object from DB and retry once if a DB connection error can be healed.
+    """
+    try:
+        return await prisma_client.get_data(
+            token=hashed_token,
+            table_name="combined_view",
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        if PrismaDBExceptionHandler.is_database_connection_error(e):
+            did_reconnect = False
+            if hasattr(prisma_client, "attempt_db_reconnect"):
+                did_reconnect = await prisma_client.attempt_db_reconnect(
+                    reason="auth_get_key_object_lookup_failure"
+                )
+            if did_reconnect:
+                return await prisma_client.get_data(
+                    token=hashed_token,
+                    table_name="combined_view",
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+        raise
+
+
 @log_db_metrics
 async def get_key_object(
     hashed_token: str,
@@ -2020,33 +2054,14 @@ async def get_key_object(
         )
 
     # else, check db
-    try:
-        _valid_token: Optional[BaseModel] = await prisma_client.get_data(
-            token=hashed_token,
-            table_name="combined_view",
+    _valid_token: Optional[BaseModel] = (
+        await _fetch_key_object_from_db_with_reconnect(
+            hashed_token=hashed_token,
+            prisma_client=prisma_client,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-    except Exception as e:
-        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-
-        if PrismaDBExceptionHandler.is_database_connection_error(e):
-            did_reconnect = False
-            if hasattr(prisma_client, "attempt_db_reconnect"):
-                did_reconnect = await prisma_client.attempt_db_reconnect(
-                    reason="auth_get_key_object_lookup_failure"
-                )
-            if did_reconnect:
-                _valid_token = await prisma_client.get_data(
-                    token=hashed_token,
-                    table_name="combined_view",
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-            else:
-                raise
-        else:
-            raise
+    )
 
     if _valid_token is None:
         raise ProxyException(
