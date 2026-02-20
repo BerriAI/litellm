@@ -5,6 +5,7 @@ import {
   PlayCircleOutlined,
   RiseOutlined,
   SafetyOutlined,
+  SettingOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
 import { Card, Col, Grid, Title } from "@tremor/react";
@@ -16,10 +17,12 @@ import {
   policiesTable,
   type PerformanceRow,
 } from "./mockData";
+import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "./MetricCard";
 import { ScoreChart } from "./ScoreChart";
 
 interface GuardrailsOverviewProps {
+  accessToken?: string | null;
   onSelectGuardrail: (id: string) => void;
 }
 
@@ -59,11 +62,15 @@ function computeMetrics(data: PerformanceRow[]) {
 
 type RerunState = "idle" | "running" | "done";
 
-export function GuardrailsOverview({ onSelectGuardrail }: GuardrailsOverviewProps) {
+export function GuardrailsOverview({
+  accessToken = null,
+  onSelectGuardrail,
+}: GuardrailsOverviewProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("guardrails");
   const [sortBy, setSortBy] = useState<SortKey>("failRate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [rerunState, setRerunState] = useState<RerunState>("idle");
+  const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
 
   useEffect(() => {
     if (rerunState !== "done") return;
@@ -357,26 +364,34 @@ export function GuardrailsOverview({ onSelectGuardrail }: GuardrailsOverviewProp
                 : "Click a policy to view details, logs, and configuration"}
             </p>
           </div>
-          <Button
-            type="default"
-            icon={
-              rerunState === "idle" ? (
-                <PlayCircleOutlined />
-              ) : rerunState === "done" ? (
-                <CheckCircleOutlined className="text-green-600" />
-              ) : (
-                <Spin size="small" />
-              )
-            }
-            disabled={rerunState === "running"}
-            onClick={handleRerun}
-          >
-            {rerunState === "idle"
-              ? "Re-run AI on last 100 logs"
-              : rerunState === "running"
-                ? "Re-running on 100 logs…"
-                : "Re-run complete"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="default"
+              icon={<SettingOutlined />}
+              onClick={() => setEvaluationModalOpen(true)}
+              title="Evaluation settings"
+            />
+            <Button
+              type="default"
+              icon={
+                rerunState === "idle" ? (
+                  <PlayCircleOutlined />
+                ) : rerunState === "done" ? (
+                  <CheckCircleOutlined className="text-green-600" />
+                ) : (
+                  <Spin size="small" />
+                )
+              }
+              disabled={rerunState === "running"}
+              onClick={handleRerun}
+            >
+              {rerunState === "idle"
+                ? "Re-run AI on last 100 logs"
+                : rerunState === "running"
+                  ? "Re-running on 100 logs…"
+                  : "Re-run complete"}
+            </Button>
+          </div>
         </div>
         <Table
           columns={columns}
@@ -390,6 +405,12 @@ export function GuardrailsOverview({ onSelectGuardrail }: GuardrailsOverviewProp
           })}
         />
       </Card>
+
+      <EvaluationSettingsModal
+        open={evaluationModalOpen}
+        onClose={() => setEvaluationModalOpen(false)}
+        accessToken={accessToken}
+      />
     </div>
   );
 }
