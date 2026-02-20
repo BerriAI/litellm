@@ -105,6 +105,7 @@ async def list_policy_versions(policy_name: str):
             policy_name=policy_name,
             prisma_client=prisma_client,
         )
+
         return PolicyListDBResponse(policies=versions, total_count=len(versions))
     except Exception as e:
         verbose_proxy_logger.exception(f"Error listing policy versions: {e}")

@@ -44,6 +44,41 @@ const ACTION_LABELS: Record<string, string> = {
   modify_response: "Custom Response",
 };
 
+/** Fake policy with multiple versions for demo (no backend). Name: "Flow builder demo". */
+const DEMO_POLICY_NAME = "Flow builder demo";
+
+function createDemoVersion(
+  policyId: string,
+  versionNumber: number,
+  versionStatus: "draft" | "published" | "production",
+  steps: PipelineStep[]
+): Policy {
+  return {
+    policy_id: policyId,
+    policy_name: DEMO_POLICY_NAME,
+    inherit: null,
+    description: `Demo version ${versionNumber} – switch, edit, and test without saving.`,
+    guardrails_add: steps.map((s) => s.guardrail).filter(Boolean),
+    guardrails_remove: [],
+    condition: null,
+    pipeline: { mode: "pre_call", steps },
+    version_number: versionNumber,
+    version_status: versionStatus,
+    parent_version_id: null,
+    is_latest: versionNumber === 2,
+  };
+}
+
+const MOCK_DEMO_VERSIONS: Policy[] = [
+  createDemoVersion("demo-v1", 1, "production", [
+    { ...createDefaultStep(), guardrail: "pii_masking", on_pass: "next", on_fail: "block" },
+  ]),
+  createDemoVersion("demo-v2", 2, "draft", [
+    { ...createDefaultStep(), guardrail: "pii_masking", on_pass: "next", on_fail: "block" },
+    { ...createDefaultStep(), guardrail: "prompt_injection", on_pass: "allow", on_fail: "block" },
+  ]),
+];
+
 function createDefaultStep(): PipelineStep {
   return {
     guardrail: "",
@@ -1248,6 +1283,8 @@ interface FlowBuilderVersionSidebarProps {
   accessToken: string | null;
   onVersionSelect: (version: Policy) => void;
   onVersionCreated: () => void;
+  /** When set, use this list instead of fetching (demo mode). New Version only calls onVersionCreated. */
+  versionsOverride?: Policy[] | null;
 }
 
 const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
@@ -1255,19 +1292,23 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
   accessToken,
   onVersionSelect,
   onVersionCreated,
+  versionsOverride,
 }) => {
   const policyName = editingPolicy.policy_name;
   const currentPolicyId = editingPolicy.policy_id;
+  const isDemoMode = versionsOverride != null;
 
   const [versions, setVersions] = useState<Policy[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!isDemoMode);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [compareModalOpen, setCompareModalOpen] = useState(false);
   const [comparePolicyId1, setComparePolicyId1] = useState<string>("");
   const [comparePolicyId2, setComparePolicyId2] = useState<string>("");
 
+  const displayVersions = isDemoMode ? versionsOverride! : versions;
+
   const loadVersions = async () => {
-    if (!accessToken || !policyName) return;
+    if (!accessToken || !policyName || isDemoMode) return;
     setIsLoading(true);
     try {
       const response: PolicyVersionListResponse = await listPolicyVersions(accessToken, policyName);
@@ -1284,10 +1325,28 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
   };
 
   useEffect(() => {
+    if (isDemoMode) {
+      setIsLoading(false);
+      return;
+    }
     loadVersions();
-  }, [policyName, accessToken]);
+  }, [policyName, accessToken, isDemoMode]);
 
-  const handleCreateNewVersion = async () => {
+  const handleCreateNewVersion = () => {
+    if (isDemoMode) {
+      Modal.confirm({
+        title: "Create New Version",
+        content: "Add a new draft version from the current pipeline? (Demo – not saved to server.)",
+        okText: "Create",
+        cancelText: "Cancel",
+        onOk: () => {
+          setActionLoading("create");
+          onVersionCreated();
+          setActionLoading(null);
+        },
+      });
+      return;
+    }
     if (!accessToken) return;
     Modal.confirm({
       title: "Create New Version",
@@ -1297,10 +1356,13 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
       onOk: async () => {
         setActionLoading("create");
         try {
-          await createPolicyVersion(accessToken, currentPolicyId);
+          const newPolicy = await createPolicyVersion(accessToken, currentPolicyId);
           NotificationsManager.success("New version created successfully");
           await loadVersions();
           onVersionCreated();
+          if (newPolicy?.policy_id) {
+            onVersionSelect(newPolicy as Policy);
+          }
         } catch (error) {
           console.error("Failed to create version:", error);
           const errMsg = error instanceof Error ? error.message : String(error);
@@ -1408,6 +1470,7 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
   };
 
   const getActionButtons = (version: Policy) => {
+    if (isDemoMode) return null;
     const isProcessing = actionLoading === version.policy_id;
     const status = version.version_status;
 
@@ -1484,12 +1547,12 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
       </div>
       <Divider style={{ margin: "12px 0" }} />
       <div className="space-y-3">
-        {versions.length === 0 ? (
+        {displayVersions.length === 0 ? (
           <Text type="secondary" style={{ fontSize: 13 }}>
             No versions found
           </Text>
         ) : (
-          versions.map((version) => {
+          displayVersions.map((version) => {
             const isActive = version.policy_id === currentPolicyId;
             const versionNumber = version.version_number ?? 1;
             const status = version.version_status ?? "draft";
@@ -1534,7 +1597,7 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
         )}
       </div>
       <Divider style={{ margin: "16px 0" }} />
-      {versions.length >= 2 && (
+      {!isDemoMode && displayVersions.length >= 2 && (
         <div className="mb-4">
           <Button
             size="xs"
@@ -1543,7 +1606,7 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
             onClick={() => {
               setComparePolicyId1(currentPolicyId);
               setComparePolicyId2(
-                versions.find((v) => v.policy_id !== currentPolicyId)?.policy_id ?? ""
+                displayVersions.find((v) => v.policy_id !== currentPolicyId)?.policy_id ?? ""
               );
               setCompareModalOpen(true);
             }}
@@ -1551,6 +1614,11 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
             Compare versions
           </Button>
         </div>
+      )}
+      {isDemoMode && (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          Demo – switch versions and use New Version. Changes are not saved.
+        </Text>
       )}
       <Modal
         title="Compare versions"
@@ -1572,7 +1640,7 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
                 value={comparePolicyId1 || undefined}
                 onChange={setComparePolicyId1}
                 style={{ width: "100%" }}
-                options={versions.map((v) => ({
+                options={displayVersions.map((v) => ({
                   label: `v${v.version_number ?? 1} (${v.version_status ?? "draft"})`,
                   value: v.policy_id,
                 }))}
@@ -1584,7 +1652,7 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
                 value={comparePolicyId2 || undefined}
                 onChange={setComparePolicyId2}
                 style={{ width: "100%" }}
-                options={versions.map((v) => ({
+                options={displayVersions.map((v) => ({
                   label: `v${v.version_number ?? 1} (${v.version_status ?? "draft"})`,
                   value: v.policy_id,
                 }))}
@@ -1592,7 +1660,7 @@ const FlowBuilderVersionSidebar: React.FC<FlowBuilderVersionSidebarProps> = ({
             </Form.Item>
           </div>
         </Form>
-        {comparePolicyId1 && comparePolicyId2 && comparePolicyId1 !== comparePolicyId2 && (
+        {comparePolicyId1 && comparePolicyId2 && comparePolicyId1 !== comparePolicyId2 && !isDemoMode && (
           <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
             <VersionComparison
               policyId1={comparePolicyId1}
@@ -1640,26 +1708,51 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   onVersionSelect,
   onVersionCreated,
 }) => {
-  const isEditing = !!editingPolicy?.policy_id;
+  const isDemoMode = editingPolicy == null;
+  const [demoVersions, setDemoVersions] = useState<Policy[]>(() => [...MOCK_DEMO_VERSIONS]);
+  const [activeDemoVersion, setActiveDemoVersion] = useState<Policy>(() => MOCK_DEMO_VERSIONS[0]);
 
-  const [policyName, setPolicyName] = useState(editingPolicy?.policy_name || "");
-  const [description, setDescription] = useState(editingPolicy?.description || "");
+  const effectivePolicy = isDemoMode ? activeDemoVersion : editingPolicy!;
+  const isEditing = !!effectivePolicy?.policy_id && !isDemoMode;
+
+  const [policyName, setPolicyName] = useState(effectivePolicy?.policy_name || "");
+  const [description, setDescription] = useState(effectivePolicy?.description || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
   const [pipeline, setPipeline] = useState<GuardrailPipeline>(() =>
-    getInitialPipelineFromPolicy(editingPolicy)
+    getInitialPipelineFromPolicy(effectivePolicy)
   );
 
-  // Sync local state when editingPolicy changes (e.g. user selected another version in sidebar)
+  // Sync local state when effective policy changes (switch version or real policy change)
   useEffect(() => {
-    if (editingPolicy) {
-      setPolicyName(editingPolicy.policy_name || "");
-      setDescription(editingPolicy.description || "");
-      setPipeline(getInitialPipelineFromPolicy(editingPolicy));
+    if (effectivePolicy) {
+      setPolicyName(effectivePolicy.policy_name || "");
+      setDescription(effectivePolicy.description || "");
+      setPipeline(getInitialPipelineFromPolicy(effectivePolicy));
     }
-  }, [editingPolicy?.policy_id]);
+  }, [effectivePolicy?.policy_id]);
+
+  const handleDemoVersionSelect = (version: Policy) => {
+    setActiveDemoVersion(version);
+  };
+
+  const handleDemoVersionCreated = () => {
+    const nextNum = demoVersions.length + 1;
+    const newVersion = createDemoVersion(
+      `demo-v${nextNum}-${Date.now()}`,
+      nextNum,
+      "draft",
+      pipeline?.steps ?? [createDefaultStep()]
+    );
+    setDemoVersions((prev) => [...prev, newVersion]);
+    setActiveDemoVersion(newVersion);
+  };
 
   const handleSave = async () => {
+    if (isDemoMode) {
+      message.info("Demo mode – changes are not saved. Use a real policy to save.");
+      return;
+    }
     if (!policyName.trim()) {
       message.error("Please enter a policy name");
       return;
@@ -1758,9 +1851,20 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
             placeholder="Policy name..."
             value={policyName}
             onChange={(e) => setPolicyName(e.target.value)}
-            disabled={isEditing}
+            disabled={isEditing || isDemoMode}
             style={{ width: 240 }}
           />
+          {(isEditing || isDemoMode) && effectivePolicy && (
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, color: "#6b7280" }}>
+                v{effectivePolicy.version_number ?? 1}
+              </span>
+              <VersionStatusBadge
+                status={(effectivePolicy.version_status as "draft" | "published" | "production") ?? "draft"}
+                size="xs"
+              />
+            </span>
+          )}
           <span
             style={{
               fontSize: 11,
@@ -1785,8 +1889,13 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
           >
             {showTestPanel ? "Hide Test" : "Test Pipeline"}
           </Button>
-          <Button onClick={handleSave} loading={isSubmitting}>
-            {isEditing ? "Update Policy" : "Save Policy"}
+          <Button
+            onClick={handleSave}
+            loading={isSubmitting}
+            disabled={isDemoMode}
+            title={isDemoMode ? "Demo – changes are not saved" : undefined}
+          >
+            {isDemoMode ? "Save disabled (demo)" : isEditing ? "Update Policy" : "Save Policy"}
           </Button>
         </div>
       </div>
@@ -1809,9 +1918,9 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         />
       </div>
 
-      {/* Flow builder canvas + test panel (with optional version sidebar when editing) */}
+      {/* Flow builder canvas + test panel (with version sidebar when editing or demo) */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
-        {isEditing && editingPolicy && onVersionSelect && onVersionCreated && (
+        {(isDemoMode || (isEditing && editingPolicy && onVersionSelect && onVersionCreated)) && (
           <div
             style={{
               width: 260,
@@ -1822,10 +1931,11 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
             }}
           >
             <FlowBuilderVersionSidebar
-              editingPolicy={editingPolicy}
+              editingPolicy={effectivePolicy}
               accessToken={accessToken}
-              onVersionSelect={onVersionSelect}
-              onVersionCreated={onVersionCreated}
+              onVersionSelect={isDemoMode ? handleDemoVersionSelect : onVersionSelect!}
+              onVersionCreated={isDemoMode ? handleDemoVersionCreated : onVersionCreated!}
+              versionsOverride={isDemoMode ? demoVersions : null}
             />
           </div>
         )}

@@ -441,9 +441,20 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
             />
 
             <div className="flex justify-between items-center mb-4">
-              <Button onClick={handleAddPolicy} disabled={!accessToken}>
-                + Add New Policy
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={handleAddPolicy} disabled={!accessToken}>
+                  + Add New Policy
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setEditingPolicy(null);
+                    setShowFlowBuilder(true);
+                  }}
+                >
+                  Try flow builder (demo)
+                </Button>
+              </div>
             </div>
 
             {selectedPolicyId ? (
