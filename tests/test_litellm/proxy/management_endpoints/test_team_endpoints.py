@@ -2156,11 +2156,25 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         
         # Mock team lookup
         mock_teams = [
-            Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
-            Mock(model_dump=lambda: {"team_id": "team_2", "team_alias": "Team 2"}),
+            Mock(
+                team_id="team_1",
+                model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"},
+                dict=lambda: {"team_id": "team_1", "team_alias": "Team 1"},
+            ),
+            Mock(
+                team_id="team_2",
+                model_dump=lambda: {"team_id": "team_2", "team_alias": "Team 2"},
+                dict=lambda: {"team_id": "team_2", "team_alias": "Team 2"},
+            ),
         ]
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
         mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+
+        # Mock team memberships (required for v2 response with keys)
+        mock_db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+
+        # Mock keys per team (required for v2 response with keys)
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
         # Should NOT raise an exception
         result = await list_team_v2(
@@ -2207,11 +2221,25 @@ async def test_list_team_v2_security_check_admin_user():
         
         # Mock team lookup
         mock_teams = [
-            Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
-            Mock(model_dump=lambda: {"team_id": "team_2", "team_alias": "Team 2"}),
+            Mock(
+                team_id="team_1",
+                model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"},
+                dict=lambda: {"team_id": "team_1", "team_alias": "Team 1"},
+            ),
+            Mock(
+                team_id="team_2",
+                model_dump=lambda: {"team_id": "team_2", "team_alias": "Team 2"},
+                dict=lambda: {"team_id": "team_2", "team_alias": "Team 2"},
+            ),
         ]
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=mock_teams)
         mock_db.litellm_teamtable.count = AsyncMock(return_value=2)
+
+        # Mock team memberships (required for v2 response with keys)
+        mock_db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+
+        # Mock keys per team (required for v2 response with keys)
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
         # Should NOT raise an exception
         result = await list_team_v2(
@@ -2331,6 +2359,83 @@ async def test_list_team_v2_with_invalid_status():
         assert exc_info.value.status_code == 400
         assert "Invalid status value" in str(exc_info.value.detail)
         assert "deleted" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_returns_teams_with_keys():
+    """
+    Test that list_team_v2 returns teams with keys when keys exist for a team.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+
+        mock_team = Mock(
+            team_id="team_with_keys",
+            model_dump=lambda: {
+                "team_id": "team_with_keys",
+                "team_alias": "Team With Keys",
+            },
+            dict=lambda: {
+                "team_id": "team_with_keys",
+                "team_alias": "Team With Keys",
+            },
+        )
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+
+        mock_db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+
+        # Mock keys for the team - return a key object
+        mock_key = Mock(
+            model_dump=lambda: {
+                "token_id": "key_123",
+                "key_alias": "test-key",
+                "team_id": "team_with_keys",
+                "token": "hashed_secret",
+            },
+            dict=lambda: {
+                "token_id": "key_123",
+                "key_alias": "test-key",
+                "team_id": "team_with_keys",
+                "token": "hashed_secret",
+            },
+        )
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(
+            return_value=[mock_key]
+        )
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        assert "teams" in result
+        assert len(result["teams"]) == 1
+        team = result["teams"][0]
+        assert hasattr(team, "keys") and team.keys is not None
+        assert len(team.keys) == 1
+        # Token should be sanitized (removed) from key response
+        assert "token" not in team.keys[0]
+        assert team.keys[0]["token_id"] == "key_123"
+        assert team.keys[0]["key_alias"] == "test-key"
 
 
 @pytest.mark.asyncio
