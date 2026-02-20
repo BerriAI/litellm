@@ -268,3 +268,52 @@ class TestProxyHeaderExtraction:
         # Verify headers are extracted and prefixed correctly
         assert headers.get("llm_provider-x-request-id") == "req-abc123"
         assert headers.get("llm_provider-x-ms-region") == "eastus"
+
+    def test_proxy_forwards_retry_after_from_upstream_429(self):
+        """
+        When upstream provider returns 429 with retry-after header,
+        proxy should forward it as a bare 'retry-after' header (not just
+        'llm_provider-retry-after').
+
+        Ref: https://github.com/BerriAI/litellm/issues/21553
+        """
+        from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+            get_response_headers,
+        )
+        from litellm.exceptions import RateLimitError
+
+        mock_response = httpx.Response(
+            status_code=429,
+            headers={
+                "retry-after": "57",
+                "x-ratelimit-limit-tokens": "100000",
+                "x-ratelimit-remaining-tokens": "0",
+                "content-type": "application/json",
+            },
+            request=httpx.Request(
+                "POST", "https://api.openai.com/v1/chat/completions"
+            ),
+        )
+        error = RateLimitError(
+            message="Rate limit exceeded",
+            model="gpt-4",
+            llm_provider="azure",
+            response=mock_response,
+        )
+
+        # Simulate proxy header extraction logic from
+        # common_request_processing.py _handle_llm_api_exception
+        headers = getattr(error, "headers", None) or {}
+        if not headers:
+            _response = getattr(error, "response", None)
+            if _response is not None:
+                _response_headers = getattr(_response, "headers", None)
+                if _response_headers:
+                    headers = get_response_headers(dict(_response_headers))
+
+        # The bare retry-after header should be present for OpenAI SDK compat
+        assert headers.get("retry-after") == "57"
+        # The prefixed version should also be present
+        assert headers.get("llm_provider-retry-after") == "57"
+        # OpenAI-compatible rate limit headers should be preserved
+        assert headers.get("x-ratelimit-limit-tokens") == "100000"
