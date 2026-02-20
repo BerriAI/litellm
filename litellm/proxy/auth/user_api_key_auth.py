@@ -78,6 +78,7 @@ except ImportError as e:
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
+
 custom_litellm_key_header = APIKeyHeader(
     name=SpecialHeaders.custom_litellm_api_key.value,
     auto_error=False,
@@ -493,13 +494,41 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 request=request, api_key=api_key, user_custom_auth=user_custom_auth
             )
             if response is not None and isinstance(response, UserAPIKeyAuth):
-                return UserAPIKeyAuth.model_validate(response)
+                valid_token = UserAPIKeyAuth.model_validate(response)
+                await common_checks(
+                    request=request,
+                    request_body=request_data,
+                    team_object=None,
+                    user_object=None,
+                    end_user_object=None,
+                    general_settings=general_settings,
+                    global_proxy_spend=None,
+                    route=route,
+                    llm_router=llm_router,
+                    proxy_logging_obj=proxy_logging_obj,
+                    valid_token=valid_token,
+                )
+                return valid_token
             elif response is not None and isinstance(response, str):
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
-            return UserAPIKeyAuth.model_validate(response)
+            valid_token = UserAPIKeyAuth.model_validate(response)
+            await common_checks(
+                request=request,
+                request_body=request_data,
+                team_object=None,
+                user_object=None,
+                end_user_object=None,
+                general_settings=general_settings,
+                global_proxy_spend=None,
+                route=route,
+                llm_router=llm_router,
+                proxy_logging_obj=proxy_logging_obj,
+                valid_token=valid_token,
+            )
+            return valid_token
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
         #### IF JWT ####
