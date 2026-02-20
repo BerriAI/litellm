@@ -13,7 +13,7 @@ the results until the model produces a final non-tool-call response.
 """
 
 import json
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.responses.litellm_completion_transformation.transformation import (
