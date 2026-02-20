@@ -26,7 +26,9 @@ import {
   createPolicyAttachmentCall,
   createGuardrailCall,
   enrichPolicyTemplate,
+  provisionPartnerGuardrailCall,
 } from "../networking";
+import { PartnerGuardrailSelection } from "./guardrail_selection_modal";
 import {
   Policy,
   PolicyAttachment,
@@ -281,7 +283,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setPendingTemplate(null);
   };
 
-  const handleGuardrailSelectionConfirm = async (selectedGuardrailDefinitions: any[]) => {
+  const handleGuardrailSelectionConfirm = async (
+    selectedGuardrailDefinitions: any[],
+    partnerGuardrails?: PartnerGuardrailSelection[]
+  ) => {
     if (!accessToken || !selectedTemplate) return;
 
     setIsCreatingGuardrails(true);
@@ -293,7 +298,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       // Create selected guardrails
       for (const guardrailDef of selectedGuardrailDefinitions) {
         const guardrailName = guardrailDef.guardrail_name;
-        
+
         try {
           await createGuardrailCall(accessToken, guardrailDef);
           createdGuardrails.push(guardrailName);
@@ -301,6 +306,28 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         } catch (error) {
           console.error(`Failed to create guardrail "${guardrailName}":`, error);
           failedGuardrails.push(guardrailName);
+        }
+      }
+
+      // Provision partner guardrails
+      if (partnerGuardrails && partnerGuardrails.length > 0) {
+        for (const pg of partnerGuardrails) {
+          const partnerName = `${selectedTemplate.id}-${pg.provider}`;
+          try {
+            await provisionPartnerGuardrailCall(accessToken, {
+              guardrail_name: partnerName,
+              provider: pg.provider,
+              credential_name: pg.credential_name,
+              provision_config: pg.provision_config,
+              aws_region_name: pg.aws_region_name,
+              mode: "pre_call",
+              default_on: true,
+            });
+            createdGuardrails.push(`${partnerName} (partner)`);
+          } catch (error) {
+            console.error(`Failed to provision partner guardrail "${pg.provider}":`, error);
+            failedGuardrails.push(`${partnerName} (partner)`);
+          }
         }
       }
 
@@ -520,6 +547,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               onCancel={handleGuardrailSelectionCancel}
               isLoading={isCreatingGuardrails}
               progressInfo={templateQueueProgress}
+              accessToken={accessToken || undefined}
             />
 
             <TemplateParameterModal

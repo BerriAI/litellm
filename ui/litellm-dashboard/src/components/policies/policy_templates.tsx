@@ -9,6 +9,11 @@ import {
 } from "@heroicons/react/outline";
 import { getPolicyTemplates } from "../networking";
 
+interface PartnerGuardrailInfo {
+  provider: string;
+  label: string;
+}
+
 interface PolicyTemplateCardProps {
   title: string;
   description: string;
@@ -19,8 +24,13 @@ interface PolicyTemplateCardProps {
   tags: string[];
   inherits?: string;
   complexity: "Low" | "Medium" | "High";
+  partnerGuardrails?: PartnerGuardrailInfo[];
   onUseTemplate: () => void;
 }
+
+const partnerProviderLogoMap: Record<string, string> = {
+  bedrock: "../ui/assets/logos/bedrock.svg",
+};
 
 const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
   title,
@@ -32,6 +42,7 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
   tags,
   inherits,
   complexity,
+  partnerGuardrails,
   onUseTemplate,
 }) => {
   const getComplexityStyle = () => {
@@ -83,6 +94,23 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
           <span className="font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
             {inherits}
           </span>
+        </div>
+      )}
+
+      {partnerGuardrails && partnerGuardrails.length > 0 && (
+        <div className="mb-4 flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-orange-50 border border-orange-200">
+          {partnerProviderLogoMap[partnerGuardrails[0].provider] && (
+            <img
+              src={partnerProviderLogoMap[partnerGuardrails[0].provider]}
+              alt={partnerGuardrails[0].provider}
+              style={{ height: "16px", width: "16px", objectFit: "contain" }}
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
+            />
+          )}
+          <span className="text-xs font-medium text-orange-800">
+            Partner guardrail available
+          </span>
+          <span className="text-[10px] text-orange-500 ml-auto">Optional</span>
         </div>
       )}
 
@@ -290,6 +318,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpen
                 tags={template.tags || []}
                 inherits={template.inherits}
                 complexity={template.complexity}
+                partnerGuardrails={template.partnerGuardrails}
                 onUseTemplate={() => onUseTemplate(template)}
               />
             ))}
