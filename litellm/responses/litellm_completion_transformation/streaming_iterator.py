@@ -3,7 +3,6 @@ import uuid
 from typing import List, Optional, Union, cast
 
 import litellm
-from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -103,6 +102,156 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
 
+        # -- Incremental response accumulation (avoids expensive stream_chunk_builder) --
+        self._accumulated_content_parts: List[str] = []
+        self._accumulated_reasoning_content_parts: List[str] = []
+        self._accumulated_tool_calls: dict[int, dict] = {}  # index -> tool_call dict
+        self._last_usage: Optional[dict] = None
+        self._last_finish_reason: Optional[str] = None
+        self._first_chunk_id: Optional[str] = None
+        self._first_chunk_created: Optional[int] = None
+        self._first_chunk_model: Optional[str] = None
+        self._last_annotations: Optional[list] = None
+
+
+    def _accumulate_chunk(self, chunk: ModelResponseStream) -> None:
+        """
+        Incrementally accumulate response data from each streaming chunk.
+        This avoids the expensive stream_chunk_builder call at stream end.
+        """
+        # Capture metadata from first chunk
+        if self._first_chunk_id is None:
+            self._first_chunk_id = chunk.id
+            self._first_chunk_created = chunk.created
+            self._first_chunk_model = chunk.model
+
+        if not chunk.choices:
+            return
+
+        choice = chunk.choices[0]
+        delta = choice.delta
+
+        # Accumulate finish_reason
+        if choice.finish_reason is not None:
+            self._last_finish_reason = choice.finish_reason
+
+        # Accumulate text content
+        if delta.content:
+            self._accumulated_content_parts.append(delta.content)
+
+        # Accumulate reasoning content
+        if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+            self._accumulated_reasoning_content_parts.append(delta.reasoning_content)
+
+        # Accumulate tool calls
+        if hasattr(delta, "tool_calls") and delta.tool_calls:
+            for tc in delta.tool_calls:
+                tc_dict = tc if isinstance(tc, dict) else (tc.model_dump() if hasattr(tc, "model_dump") else vars(tc))
+                idx = tc_dict.get("index", 0)
+                if idx not in self._accumulated_tool_calls:
+                    self._accumulated_tool_calls[idx] = {
+                        "id": tc_dict.get("id"),
+                        "type": tc_dict.get("type", "function"),
+                        "function": {
+                            "name": "",
+                            "arguments": "",
+                        },
+                    }
+                existing = self._accumulated_tool_calls[idx]
+                fn = tc_dict.get("function", {})
+                if isinstance(fn, dict):
+                    if fn.get("name"):
+                        existing["function"]["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        existing["function"]["arguments"] += fn["arguments"]
+                elif hasattr(fn, "name") and fn.name:
+                    existing["function"]["name"] += fn.name
+                    if hasattr(fn, "arguments") and fn.arguments:
+                        existing["function"]["arguments"] += fn.arguments
+                if tc_dict.get("id") and not existing.get("id"):
+                    existing["id"] = tc_dict["id"]
+
+        # Accumulate annotations
+        if hasattr(delta, "annotations") and delta.annotations:
+            self._last_annotations = delta.annotations
+
+        # Capture usage from the last chunk that has it
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            self._last_usage = usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
+
+    def _build_model_response_from_accumulated(self) -> Optional[ModelResponse]:
+        """
+        Build a ModelResponse from incrementally accumulated data.
+        This replaces the expensive stream_chunk_builder call.
+        """
+        from litellm.types.utils import Choices, Message, Usage
+
+        content = "".join(self._accumulated_content_parts) if self._accumulated_content_parts else None
+        reasoning_content = "".join(self._accumulated_reasoning_content_parts) if self._accumulated_reasoning_content_parts else None
+
+        message_kwargs: dict = {
+            "role": "assistant",
+        }
+        if content is not None:
+            message_kwargs["content"] = content
+        if reasoning_content:
+            message_kwargs["reasoning_content"] = reasoning_content
+
+        # Build tool calls if any
+        if self._accumulated_tool_calls:
+            from litellm.types.utils import ChatCompletionMessageToolCall, Function
+            tool_calls = []
+            for idx in sorted(self._accumulated_tool_calls.keys()):
+                tc = self._accumulated_tool_calls[idx]
+                tool_calls.append(
+                    ChatCompletionMessageToolCall(
+                        id=tc.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                        type="function",
+                        function=Function(
+                            name=tc["function"]["name"],
+                            arguments=tc["function"]["arguments"],
+                        ),
+                    )
+                )
+            message_kwargs["tool_calls"] = tool_calls
+            if content is None:
+                message_kwargs["content"] = None
+
+        if self._last_annotations:
+            message_kwargs["annotations"] = self._last_annotations
+
+        message = Message(**message_kwargs)
+
+        # Build usage
+        if self._last_usage:
+            usage = Usage(**self._last_usage)
+        else:
+            usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+        choice = Choices(
+            finish_reason=self._last_finish_reason or "stop",
+            index=0,
+            message=message,
+        )
+
+        response = ModelResponse(
+            id=self._first_chunk_id or f"chatcmpl-{uuid.uuid4().hex[:24]}",
+            choices=[choice],
+            created=self._first_chunk_created or int(time.time()),
+            model=self._first_chunk_model or self.model,
+            usage=usage,
+        )
+
+        # Carry over hidden params from the stream wrapper if available
+        response_headers = getattr(self.litellm_custom_stream_wrapper, "response_headers", None)
+        if response_headers is not None:
+            response._response_headers = response_headers
+        hidden_params = getattr(self.litellm_custom_stream_wrapper, "_hidden_params", None)
+        if hidden_params is not None:
+            response._hidden_params = hidden_params
+
+        return response
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
@@ -456,13 +605,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def create_litellm_model_response(
         self,
     ) -> Optional[ModelResponse]:
-        return cast(
-            Optional[ModelResponse],
-            stream_chunk_builder(
-                chunks=self.collected_chat_completion_chunks,
-                logging_obj=self.litellm_logging_obj,
-            ),
-        )
+        """
+        Build the complete ModelResponse from incrementally accumulated data.
+        This replaces the expensive stream_chunk_builder call that previously
+        iterated over all collected chunks with 10+ list comprehensions.
+        """
+        return self._build_model_response_from_accumulated()
 
     def create_reasoning_summary_text_done_event(
         self,
@@ -809,20 +957,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
                         self._ensure_output_item_for_chunk(chunk)
-                        # Proceed to transformation
-                        self.collected_chat_completion_chunks.append(chunk)
+                        # Incrementally accumulate response data (replaces collected_chat_completion_chunks)
+                        self._accumulate_chunk(chunk)
                         if self._reasoning_active and not self._reasoning_done_emitted:
-                            # get raw ModelResponse
-                            text_reasoning = self.create_litellm_model_response()
-                            # reasoning_content only
                             if self._is_reasoning_end(chunk):
-                                reasoning_content = ""
-                                # best effort to obtain reasoning_content from chat model response
-                                if text_reasoning and text_reasoning.choices:
-                                    choice = text_reasoning.choices[0]
-                                    # Check if it's a Choices object (has message) or StreamingChoices (has delta)
-                                    if hasattr(choice, "message"):
-                                        reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
+                                # Use incrementally accumulated reasoning content instead of
+                                # expensive stream_chunk_builder rebuild
+                                reasoning_content = "".join(self._accumulated_reasoning_content_parts)
                                 
                                 # Ensure we have a valid reasoning_item_id
                                 reasoning_item_id = self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
@@ -905,7 +1046,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     # Emit any just-queued output_item event
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
-                    self.collected_chat_completion_chunks.append(chunk)
+                    # Incrementally accumulate response data (replaces collected_chat_completion_chunks)
+                    self._accumulate_chunk(chunk)
                     response_api_chunk = (
                         self._transform_chat_completion_chunk_to_response_api_chunk(
                             chunk
