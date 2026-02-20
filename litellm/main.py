@@ -2472,6 +2472,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "nebius"
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
+            or custom_llm_provider == "glm"
             or custom_llm_provider in litellm.openai_compatible_providers
             or JSONProviderRegistry.exists(
                 custom_llm_provider
