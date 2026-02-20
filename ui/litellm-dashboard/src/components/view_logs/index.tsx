@@ -960,6 +960,16 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
                 <span>{row.original.metadata.litellm_overhead_time_ms} ms</span>
               </div>
             )}
+            {row.original.metadata?.attempted_retries !== undefined && row.original.metadata?.attempted_retries !== null && (
+              <div className="flex">
+                <span className="font-medium w-1/3">Retries:</span>
+                <span>
+                  {row.original.metadata.attempted_retries > 0
+                    ? `${row.original.metadata.attempted_retries}${row.original.metadata.max_retries !== undefined && row.original.metadata.max_retries !== null ? ` / ${row.original.metadata.max_retries}` : ''}`
+                    : 'Not Retried'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
