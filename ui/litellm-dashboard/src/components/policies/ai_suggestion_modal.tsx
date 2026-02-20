@@ -10,6 +10,7 @@ const { Text } = Typography;
 interface SuggestedTemplate {
   template_id: string;
   reason: string;
+  template?: any;
 }
 
 interface GuardrailTestResult {
@@ -164,8 +165,25 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     setCollapsedResults(new Set());
   };
 
+  const getTemplateBySuggestion = (suggestion: SuggestedTemplate) => {
+    // Prefer template payload from suggest API response; fallback to loaded catalog lookup.
+    return suggestion.template || allTemplates.find((t) => t.id === suggestion.template_id);
+  };
+
+  const getSelectedTemplateObjects = (): any[] => {
+    if (!suggestions) return [];
+
+    const byId = new Map<string, any>();
+    for (const suggestion of suggestions) {
+      if (!selectedIds.has(suggestion.template_id)) continue;
+      const template = getTemplateBySuggestion(suggestion);
+      if (template?.id) byId.set(template.id, template);
+    }
+    return Array.from(byId.values());
+  };
+
   const handleUseSelected = () => {
-    const selected = allTemplates.filter((t) => selectedIds.has(t.id));
+    const selected = getSelectedTemplateObjects();
     resetState();
     onSelectTemplates(selected);
   };
@@ -183,6 +201,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   };
 
   const getTemplateById = (id: string) =>
+    getSelectedTemplateObjects().find((t) => t.id === id) ||
     allTemplates.find((t) => t.id === id);
 
   const toggleResultCollapse = (name: string) => {
@@ -195,23 +214,21 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   };
 
   const getSelectedTemplatesNeedingEnrichment = (): any[] => {
-    return Array.from(selectedIds)
-      .map((id) => getTemplateById(id))
-      .filter((t) => t?.llm_enrichment);
+    return getSelectedTemplateObjects().filter((t) => t?.llm_enrichment);
   };
 
   const needsEnrichment = getSelectedTemplatesNeedingEnrichment().length > 0;
 
   const getAllSelectedGuardrailDefs = (): any[] => {
     const defs: any[] = [];
-    for (const id of selectedIds) {
+    for (const template of getSelectedTemplateObjects()) {
+      const id = template.id;
       // Use enriched defs if available, otherwise use template's original
       if (enrichedDefs[id]) {
         defs.push(...enrichedDefs[id]);
       } else {
-        const t = getTemplateById(id);
-        if (t?.guardrailDefinitions) {
-          defs.push(...t.guardrailDefinitions);
+        if (template?.guardrailDefinitions) {
+          defs.push(...template.guardrailDefinitions);
         }
       }
     }
@@ -293,7 +310,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     return (
       <div className="space-y-3">
         {suggestions.map((suggestion) => {
-          const template = getTemplateById(suggestion.template_id);
+          const template = getTemplateBySuggestion(suggestion);
           if (!template) return null;
           const isSelected = selectedIds.has(suggestion.template_id);
           return (
@@ -405,7 +422,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
         </div>
         <div className="flex flex-wrap gap-1.5 mb-1.5">
           {Array.from(selectedIds).map((id) => {
-            const t = getTemplateById(id);
+            const t = getSelectedTemplateObjects().find((template) => template.id === id);
             return t ? (
               <span key={id} className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
                 {t.title}
