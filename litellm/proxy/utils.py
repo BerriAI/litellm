@@ -2266,6 +2266,18 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
+        self._db_reconnect_lock = asyncio.Lock()
+        self._db_health_watchdog_task: Optional[asyncio.Task] = None
+        self._db_last_reconnect_attempt_ts: float = 0.0
+        self._db_reconnect_cooldown_seconds: int = max(
+            1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15"))
+        )
+        self._db_health_watchdog_interval_seconds: int = max(
+            5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "30"))
+        )
+        self._db_health_watchdog_enabled: bool = (
+            str_to_bool(os.getenv("PRISMA_HEALTH_WATCHDOG_ENABLED", "true")) is True
+        )
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -3532,6 +3544,119 @@ class PrismaClient:
                 )
             )
             raise e
+
+    async def attempt_db_reconnect(self, reason: str, force: bool = False) -> bool:
+        """
+        Attempt to reconnect the Prisma client in a singleflight manner.
+
+        Returns:
+            bool: True if reconnection succeeded, else False.
+        """
+        now = time.time()
+        if (
+            force is False
+            and now - self._db_last_reconnect_attempt_ts
+            < self._db_reconnect_cooldown_seconds
+        ):
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt due to cooldown. reason=%s",
+                reason,
+            )
+            return False
+
+        async with self._db_reconnect_lock:
+            now = time.time()
+            if (
+                force is False
+                and now - self._db_last_reconnect_attempt_ts
+                < self._db_reconnect_cooldown_seconds
+            ):
+                verbose_proxy_logger.debug(
+                    "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
+                    reason,
+                )
+                return False
+
+            self._db_last_reconnect_attempt_ts = now
+            verbose_proxy_logger.warning(
+                "Attempting Prisma DB reconnect. reason=%s", reason
+            )
+
+            try:
+                await self.disconnect()
+            except Exception as disconnect_err:
+                verbose_proxy_logger.debug(
+                    "Prisma DB disconnect before reconnect failed (ignored): %s",
+                    disconnect_err,
+                )
+
+            try:
+                await self.connect()
+                await self.health_check()
+                verbose_proxy_logger.info(
+                    "Prisma DB reconnect succeeded. reason=%s", reason
+                )
+                return True
+            except Exception as reconnect_err:
+                verbose_proxy_logger.error(
+                    "Prisma DB reconnect failed. reason=%s error=%s",
+                    reason,
+                    reconnect_err,
+                )
+                return False
+
+    async def start_db_health_watchdog_task(self) -> None:
+        """
+        Start a background task that probes DB health and attempts reconnect on failure.
+        """
+        if self._db_health_watchdog_enabled is not True:
+            verbose_proxy_logger.debug(
+                "Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED"
+            )
+            return
+        if self._db_health_watchdog_task is not None:
+            return
+        self._db_health_watchdog_task = asyncio.create_task(
+            self._db_health_watchdog_loop()
+        )
+        verbose_proxy_logger.info(
+            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss)",
+            self._db_health_watchdog_interval_seconds,
+            self._db_reconnect_cooldown_seconds,
+        )
+
+    async def stop_db_health_watchdog_task(self) -> None:
+        """
+        Stop DB health watchdog task gracefully.
+        """
+        if self._db_health_watchdog_task is None:
+            return
+        self._db_health_watchdog_task.cancel()
+        try:
+            await self._db_health_watchdog_task
+        except asyncio.CancelledError:
+            pass
+        self._db_health_watchdog_task = None
+        verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
+
+    async def _db_health_watchdog_loop(self) -> None:
+        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+        while True:
+            try:
+                await asyncio.sleep(self._db_health_watchdog_interval_seconds)
+                await self.health_check()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if PrismaDBExceptionHandler.is_database_connection_error(e):
+                    await self.attempt_db_reconnect(
+                        reason="db_health_watchdog_connection_error"
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Prisma DB health watchdog observed non-DB error: %s", e
+                    )
 
     @backoff.on_exception(
         backoff.expo,
