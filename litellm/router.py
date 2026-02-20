@@ -5128,6 +5128,9 @@ class Router:
         verbose_router_logger.debug(
             f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
         )
+        ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
+        _metadata["attempted_retries"] = 0
+        _metadata["max_retries"] = num_retries  # Updated after overrides in exception handler
         try:
             self._handle_mock_testing_rate_limit_error(
                 model_group=model_group, kwargs=kwargs
@@ -5193,6 +5196,9 @@ class Router:
                     regular_fallbacks=fallbacks,
                     content_policy_fallbacks=content_policy_fallbacks,
                 )
+            # Update max_retries after overrides (deployment_num_retries / retry_policy)
+            _metadata["max_retries"] = num_retries
+
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
@@ -5215,6 +5221,9 @@ class Router:
 
             for current_attempt in range(num_retries):
                 try:
+                    # Update retry tracking metadata before each retry attempt
+                    _metadata["attempted_retries"] = current_attempt + 1
+                    _metadata["max_retries"] = num_retries
                     # if the function call is successful, no exception will be raised and we'll break out of the loop
                     response = await self.make_call(original_function, *args, **kwargs)
                     if coroutine_checker.is_async_callable(
