@@ -24,7 +24,12 @@ try:
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
     )
 except ImportError:
-    pass
+    class _A2ACardResolver:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def get_agent_card(self, *args, **kwargs):
+            raise ImportError("a2a-sdk is not installed")
 
 
 def is_localhost_or_internal_url(url: Optional[str]) -> bool:
