@@ -34,6 +34,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         vertex_ai_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
         vertex_ai_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
         
+        project_id: Optional[str] = None
         if "Authorization" not in headers:
             vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
 
@@ -54,7 +55,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
                 custom_api_base=api_base,
                 vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
-                project_id=project_id,
+                project_id=project_id or "",
                 partner=VertexPartnerProvider.claude,
                 stream=optional_params.get("stream", False),
                 model=model,
