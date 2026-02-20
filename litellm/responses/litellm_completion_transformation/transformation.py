@@ -169,7 +169,8 @@ class LiteLLMCompletionResponsesConfig:
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []  # type: ignore
+            responses_api_request.get("tools") or [],  # type: ignore
+            custom_llm_provider=custom_llm_provider,
         )
 
         response_format = None
@@ -1267,9 +1268,35 @@ class LiteLLMCompletionResponsesConfig:
         """
         return ChatCompletionSystemMessage(role="system", content=instructions or "")
 
+    SHELL_TOOL_SUPPORTED_PROVIDERS = {"anthropic", "bedrock"}
+
+    @staticmethod
+    def _transform_shell_tool_for_provider(
+        shell_tool: Dict[str, Any],
+        custom_llm_provider: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Map the unified Responses API ``shell`` tool to the provider's
+        Chat Completion equivalent.
+
+        Currently supported:
+        - **Anthropic / Bedrock** → ``bash_20250124`` hosted tool
+        """
+        if custom_llm_provider in LiteLLMCompletionResponsesConfig.SHELL_TOOL_SUPPORTED_PROVIDERS:
+            return {"type": "bash_20250124", "name": "bash"}
+
+        raise ValueError(
+            f"The Responses API 'shell' tool is not supported for provider "
+            f"'{custom_llm_provider}'. Supported providers for shell→bash mapping: "
+            f"{sorted(LiteLLMCompletionResponsesConfig.SHELL_TOOL_SUPPORTED_PROVIDERS)}. "
+            f"For providers with a native Responses API endpoint (OpenAI, Azure), "
+            f"shell tools are passed through directly."
+        )
+
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        custom_llm_provider: Optional[str] = None,
     ) -> Tuple[
         List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
         Optional[OpenAIWebSearchOptions],
@@ -1302,13 +1329,11 @@ class LiteLLMCompletionResponsesConfig:
                     user_location=_user_location,
                 )
             elif tool.get("type") == "shell":
-                raise ValueError(
-                    "The Responses API 'shell' tool is not supported when using the "
-                    "Chat Completion translation layer. Shell tools are only supported "
-                    "by providers with native Responses API endpoints (OpenAI, Azure). "
-                    "If your provider adds shell support, its ResponsesAPIConfig should "
-                    "override `transform_shell_tool_params`."
+                mapped = LiteLLMCompletionResponsesConfig._transform_shell_tool_for_provider(
+                    shell_tool=tool,
+                    custom_llm_provider=custom_llm_provider,
                 )
+                chat_completion_tools.append(cast(ChatCompletionToolParam, mapped))
             elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic

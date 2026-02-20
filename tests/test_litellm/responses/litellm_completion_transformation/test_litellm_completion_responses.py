@@ -1275,8 +1275,73 @@ class TestToolTransformation:
 class TestShellToolTransformation:
     """Test cases for shell tool handling across the Responses API pipeline"""
 
-    def test_shell_tool_raises_error_in_chat_completion_bridge(self):
-        """Shell tools should raise a clear error in the Chat Completion translation path"""
+    # -------------------------------------------------------------------
+    # Anthropic / Bedrock: shell → bash_20250124 mapping
+    # -------------------------------------------------------------------
+
+    def test_shell_tool_maps_to_bash_for_anthropic(self):
+        """Shell tool should map to bash_20250124 for Anthropic"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="anthropic",
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "bash_20250124"
+        assert result_tools[0]["name"] == "bash"
+
+    def test_shell_tool_maps_to_bash_for_bedrock(self):
+        """Shell tool should map to bash_20250124 for Bedrock"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="bedrock",
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "bash_20250124"
+        assert result_tools[0]["name"] == "bash"
+
+    def test_shell_tool_mixed_with_function_tools_anthropic(self):
+        """Shell tool should coexist with function tools for Anthropic"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "shell",
+                "environment": {"type": "container_auto"},
+            },
+        ]
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools,
+            custom_llm_provider="anthropic",
+        )
+
+        assert len(result_tools) == 2
+        assert result_tools[0]["function"]["name"] == "get_weather"
+        assert result_tools[1]["type"] == "bash_20250124"
+        assert result_tools[1]["name"] == "bash"
+
+    # -------------------------------------------------------------------
+    # Unsupported providers: clear error
+    # -------------------------------------------------------------------
+
+    def test_shell_tool_raises_error_for_unsupported_provider(self):
+        """Shell tools should raise a clear error for unsupported providers"""
         shell_tool = {
             "type": "shell",
             "environment": {"type": "container_auto"},
@@ -1284,8 +1349,46 @@ class TestShellToolTransformation:
 
         with pytest.raises(ValueError, match="shell.*tool.*not supported"):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=[shell_tool]
+                tools=[shell_tool],
+                custom_llm_provider="vertex_ai",
             )
+
+    def test_shell_tool_raises_error_when_no_provider(self):
+        """Shell tools should raise a clear error when no provider is specified"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[shell_tool],
+            )
+
+    def test_shell_tool_with_mixed_tools_raises_error_unsupported(self):
+        """If a shell tool is in a list with other tools for an unsupported provider, error fires"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "shell",
+                "environment": {"type": "container_auto"},
+            },
+        ]
+
+        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools,
+                custom_llm_provider="vertex_ai",
+            )
+
+    # -------------------------------------------------------------------
+    # Non-shell tools are unaffected
+    # -------------------------------------------------------------------
 
     def test_shell_tool_error_does_not_affect_other_tools(self):
         """Other tools in the same request should not be impacted by the shell error path"""
@@ -1302,26 +1405,6 @@ class TestShellToolTransformation:
 
         assert len(result_tools) == 1
         assert result_tools[0]["function"]["name"] == "get_weather"
-
-    def test_shell_tool_with_mixed_tools_raises_error(self):
-        """If a shell tool is in a list with other tools, the error should still fire"""
-        tools = [
-            {
-                "type": "function",
-                "name": "get_weather",
-                "description": "Get weather",
-                "parameters": {"type": "object", "properties": {}},
-            },
-            {
-                "type": "shell",
-                "environment": {"type": "container_auto"},
-            },
-        ]
-
-        with pytest.raises(ValueError, match="shell.*tool.*not supported"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
 
     def test_openai_passthrough_shell_tool(self):
         """OpenAI config should passthrough shell tools unchanged"""
