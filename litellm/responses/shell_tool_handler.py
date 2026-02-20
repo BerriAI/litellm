@@ -305,6 +305,7 @@ async def run_shell_execution_loop_responses_api(
             model=model,
             tools=tools,
             previous_response_id=current_response.id,
+            _in_shell_loop=True,
             **call_params,
         )
 
@@ -360,6 +361,7 @@ def run_shell_execution_loop_responses_api_sync(
             model=model,
             tools=tools,
             previous_response_id=current_response.id,
+            _in_shell_loop=True,
             **call_params,
         )
 

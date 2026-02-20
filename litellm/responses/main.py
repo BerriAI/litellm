@@ -492,13 +492,18 @@ async def aresponses(
             )
 
         # Shell execution loop for native Responses API providers with pending shell calls.
-        if isinstance(response, ResponsesAPIResponse):
+        _in_shell_loop = kwargs.pop("_in_shell_loop", False)
+        if (
+            not _in_shell_loop
+            and isinstance(response, ResponsesAPIResponse)
+        ):
             from litellm.responses.shell_tool_handler import (
                 _extract_shell_calls_from_responses_api,
+                responses_api_has_shell_tool,
                 run_shell_execution_loop_responses_api,
             )
 
-            if _extract_shell_calls_from_responses_api(response):
+            if responses_api_has_shell_tool(tools) and _extract_shell_calls_from_responses_api(response):
                 shell_loop_params = {
                     k: v
                     for k, v in {
@@ -785,13 +790,15 @@ def responses(
 
         # Sync shell execution loop for native Responses API providers.
         # Only applies to sync (non-async) calls; async is handled in aresponses().
-        if not _is_async and isinstance(response, ResponsesAPIResponse):
+        _in_shell_loop = kwargs.pop("_in_shell_loop", False)
+        if not _is_async and not _in_shell_loop and isinstance(response, ResponsesAPIResponse):
             from litellm.responses.shell_tool_handler import (
                 _extract_shell_calls_from_responses_api,
+                responses_api_has_shell_tool,
                 run_shell_execution_loop_responses_api_sync,
             )
 
-            if _extract_shell_calls_from_responses_api(response):
+            if responses_api_has_shell_tool(tools) and _extract_shell_calls_from_responses_api(response):
                 shell_loop_params = {
                     k: v
                     for k, v in {
