@@ -8,6 +8,7 @@ import {
   CheckCircleIcon,
 } from "@heroicons/react/outline";
 import { getPolicyTemplates } from "../networking";
+import { partnerProviderLogoMap } from "./types";
 
 interface PartnerGuardrailInfo {
   provider: string;
@@ -27,10 +28,6 @@ interface PolicyTemplateCardProps {
   partnerGuardrails?: PartnerGuardrailInfo[];
   onUseTemplate: () => void;
 }
-
-const partnerProviderLogoMap: Record<string, string> = {
-  bedrock: "../ui/assets/logos/bedrock.svg",
-};
 
 const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
   title,

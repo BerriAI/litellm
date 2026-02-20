@@ -99,3 +99,45 @@ export interface PipelineTestResult {
   error_message: string | null;
   modify_response_message: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Guardrail selection modal types
+// ---------------------------------------------------------------------------
+
+export interface GuardrailInfo {
+  guardrail_name: string;
+  description: string;
+  alreadyExists: boolean;
+  definition: any;
+}
+
+export interface PartnerGuardrailConfig {
+  provider: string;
+  label: string;
+  description: string;
+  credential_provider: string;
+  provision_config: Record<string, any>;
+}
+
+export interface PartnerGuardrailSelection {
+  provider: string;
+  credential_name: string;
+  provision_config: Record<string, any>;
+  aws_region_name?: string;
+}
+
+export const AWS_REGIONS = [
+  "us-east-1",
+  "us-east-2",
+  "us-west-2",
+  "eu-west-1",
+  "eu-west-2",
+  "eu-central-1",
+  "ap-southeast-1",
+  "ap-southeast-2",
+  "ap-northeast-1",
+];
+
+export const partnerProviderLogoMap: Record<string, string> = {
+  bedrock: "../ui/assets/logos/bedrock.svg",
+};
