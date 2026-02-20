@@ -1029,6 +1029,7 @@ from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from test_key_generate_prisma import prisma_client
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.parametrize(
     "user_role",
     [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.PROXY_ADMIN.value],
@@ -1910,6 +1911,10 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
         assert new_data["failure_callback"] == expected_failure_callbacks
 
 
+@pytest.mark.skipif(
+    not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"),
+    reason="Requires GEMINI_API_KEY or GOOGLE_API_KEY.",
+)
 @pytest.mark.asyncio
 async def test_gemini_pass_through_endpoint():
     from starlette.datastructures import URL
