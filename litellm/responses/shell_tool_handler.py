@@ -19,7 +19,9 @@ a final non-tool-call response.
 import json
 from typing import Any, Dict, List, Optional, Union
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.litellm_proxy.skills.sandbox_executor import SkillsSandboxExecutor
 
 _SHELL_TOOL_NAME = "_litellm_shell"
 MAX_SHELL_ITERATIONS = 10
@@ -122,11 +124,6 @@ async def run_responses_shell_execution_loop(
     command in a sandbox, sends the ``function_call_output`` back, and
     repeats until the model returns a final response without shell calls.
     """
-    import litellm
-    from litellm.llms.litellm_proxy.skills.sandbox_executor import (
-        SkillsSandboxExecutor,
-    )
-
     shell_calls = extract_shell_calls_from_response(response)
     if not shell_calls:
         return response
