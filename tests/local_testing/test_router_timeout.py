@@ -3,6 +3,8 @@
 
 import asyncio
 import os
+
+DEFAULT_ANTHROPIC_MODEL = os.getenv("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 import sys
 import time
 import traceback
@@ -160,7 +162,7 @@ def test_router_timeout_with_retries_anthropic_model(num_retries, expected_call_
             {
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
-                    "model": "anthropic/claude-3-haiku-20240307",
+                    "model": f"anthropic/{DEFAULT_ANTHROPIC_MODEL}",
                 },
             }
         ],
