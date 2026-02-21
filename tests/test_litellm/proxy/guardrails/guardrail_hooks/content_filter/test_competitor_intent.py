@@ -116,6 +116,46 @@ class TestContentFilterWithCompetitorIntent:
     """Integration: ContentFilterGuardrail with competitor_intent_config."""
 
     @pytest.mark.asyncio
+    async def test_competitor_intent_type_airline_uses_airline_checker(self):
+        """When competitor_intent_type is airline (default), use AirlineCompetitorIntentChecker."""
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
+            ContentFilterGuardrail
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-airline",
+            competitor_intent_config={
+                "competitor_intent_type": "airline",
+                "brand_self": ["emirates", "ek"],
+                "locations": ["qatar", "doha"],
+                "policy": {"competitor_comparison": "refuse"},
+            },
+        )
+        assert guardrail._competitor_intent_checker is not None
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import \
+            AirlineCompetitorIntentChecker
+        assert isinstance(guardrail._competitor_intent_checker, AirlineCompetitorIntentChecker)
+
+    @pytest.mark.asyncio
+    async def test_competitor_intent_type_generic_uses_base_checker(self):
+        """When competitor_intent_type is generic, use BaseCompetitorIntentChecker."""
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import \
+            BaseCompetitorIntentChecker
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
+            ContentFilterGuardrail
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-generic",
+            competitor_intent_config={
+                "competitor_intent_type": "generic",
+                "brand_self": ["acme"],
+                "competitors": ["widget inc", "gadget corp"],
+                "policy": {"competitor_comparison": "refuse"},
+            },
+        )
+        assert guardrail._competitor_intent_checker is not None
+        assert isinstance(guardrail._competitor_intent_checker, BaseCompetitorIntentChecker)
+
+    @pytest.mark.asyncio
     async def test_apply_guardrail_with_competitor_intent_allow(self):
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
             ContentFilterGuardrail

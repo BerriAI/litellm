@@ -10,19 +10,8 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Pattern,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
+                    Optional, Pattern, Tuple, Union, cast)
 
 import yaml
 from fastapi import HTTPException
@@ -31,34 +20,22 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import (
-    GenericGuardrailAPIInputs,
-    GuardrailStatus,
-    GuardrailTracingDetail,
-    ModelResponseStream,
-)
+from litellm.types.utils import (GenericGuardrailAPIInputs, GuardrailStatus,
+                                 GuardrailTracingDetail, ModelResponseStream)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-from litellm.types.guardrails import (
-    BlockedWord,
-    ContentFilterAction,
-    ContentFilterPattern,
-    GuardrailEventHooks,
-    Mode,
-)
+from litellm.types.guardrails import (BlockedWord, ContentFilterAction,
+                                      ContentFilterPattern,
+                                      GuardrailEventHooks, Mode)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    BlockedWordDetection,
-    CategoryKeywordDetection,
-    CompetitorIntentDetection,
-    CompetitorIntentResult,
-    ContentFilterCategoryConfig,
-    ContentFilterDetection,
-    PatternDetection,
-)
+    BlockedWordDetection, CategoryKeywordDetection, CompetitorIntentDetection,
+    CompetitorIntentResult, ContentFilterCategoryConfig,
+    ContentFilterDetection, PatternDetection)
 
-from .competitor_intent import AirlineCompetitorIntentChecker
+from .competitor_intent import (AirlineCompetitorIntentChecker,
+                                BaseCompetitorIntentChecker)
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS = 1
@@ -206,15 +183,24 @@ class ContentFilterGuardrail(CustomGuardrail):
             {}
         )  # category_name -> {identifier_words, block_words, action, severity}
 
-        # Competitor intent checker (optional, generic; industry presets add domain_words etc.)
-        self._competitor_intent_checker: Optional[AirlineCompetitorIntentChecker] = None
+        # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
+        self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
         if competitor_intent_config and isinstance(competitor_intent_config, dict):
             try:
-                self._competitor_intent_checker = AirlineCompetitorIntentChecker(
-                    competitor_intent_config
+                competitor_intent_type = competitor_intent_config.get(
+                    "competitor_intent_type", "airline"
                 )
+                if competitor_intent_type == "generic":
+                    self._competitor_intent_checker = BaseCompetitorIntentChecker(
+                        competitor_intent_config
+                    )
+                else:
+                    self._competitor_intent_checker = AirlineCompetitorIntentChecker(
+                        competitor_intent_config
+                    )
                 verbose_proxy_logger.debug(
-                    "ContentFilterGuardrail: competitor intent checker enabled"
+                    "ContentFilterGuardrail: competitor intent checker enabled (%s)",
+                    competitor_intent_type,
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -1822,8 +1808,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     @staticmethod
     def get_config_model():
-        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-            LitellmContentFilterGuardrailConfigModel,
-        )
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
+            LitellmContentFilterGuardrailConfigModel
 
         return LitellmContentFilterGuardrailConfigModel

@@ -384,7 +384,7 @@ describe("ContentFilterManager", () => {
     );
 
     await waitFor(() => {
-      expect(mockOnDataChange).toHaveBeenCalledWith([], [], []);
+      expect(mockOnDataChange).toHaveBeenCalledWith([], [], [], false, null);
     });
   });
 

@@ -7817,6 +7817,38 @@ export const getCategoryYaml = async (accessToken: string, categoryName: string)
   }
 };
 
+export const getMajorAirlines = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/ui/major_airlines`
+      : `/guardrails/ui/major_airlines`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(
+        `Failed to get major airlines. Status: ${response.status}, Error:`,
+        errorData
+      );
+      handleError(errorData);
+      throw new Error(`Failed to get major airlines: ${response.status} ${errorData}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get major airlines:", error);
+    throw error;
+  }
+};
+
 export const getAgentsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
