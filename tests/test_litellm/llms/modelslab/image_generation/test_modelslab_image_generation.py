@@ -4,7 +4,7 @@ Tests for ModelsLab Image Generation transformation
 Tests the transformation of OpenAI-compatible requests/responses to ModelsLab format.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -191,12 +191,13 @@ class TestModelsLabImageGenerationConfig:
         assert result.data[0].url == "https://pub-cdn.modelslab.com/image1.png"
         assert result.data[1].url == "https://pub-cdn.modelslab.com/image2.png"
 
-    def test_transform_image_generation_response_processing_raises(self):
+    def test_transform_image_generation_response_processing_polls_and_succeeds(self):
+        """When ModelsLab returns status=processing, it should poll until success."""
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.json.return_value = {
             "status": "processing",
             "id": 12345,
-            "fetch_result": "https://modelslab.com/api/v6/fetch/12345",
+            "fetch_result": "https://modelslab.com/api/v6/images/fetch/12345",
             "eta": 10,
             "message": "Image generation in progress",
         }
@@ -206,21 +207,59 @@ class TestModelsLabImageGenerationConfig:
         model_response = ImageResponse(data=[])
         mock_logging = MagicMock()
 
-        with pytest.raises(Exception) as exc_info:
-            self.config.transform_image_generation_response(
+        # Mock the polling method to return a successful result immediately
+        polled_data = {
+            "status": "success",
+            "output": ["https://pub-cdn.modelslab.com/result.png"],
+            "generationTime": 5.2,
+            "id": 12345,
+        }
+
+        with patch.object(self.config, "_poll_sync", return_value=polled_data) as mock_poll:
+            result = self.config.transform_image_generation_response(
                 model="modelslab/flux",
                 raw_response=mock_response,
                 model_response=model_response,
                 logging_obj=mock_logging,
+                request_data={"key": "test-key"},
+                optional_params={},
+                litellm_params={"api_key": "test-key"},
+                encoding=None,
+            )
+
+        # Verify polling was triggered with the generation ID
+        mock_poll.assert_called_once()
+        call_kwargs = mock_poll.call_args.kwargs
+        assert call_kwargs["generation_id"] == 12345
+
+        # Verify the final response contains the polled image URL
+        assert len(result.data) == 1
+        assert result.data[0].url == "https://pub-cdn.modelslab.com/result.png"
+
+    def test_transform_image_generation_response_processing_missing_id_raises(self):
+        """processing response without an ID should raise immediately."""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "status": "processing",
+            # no "id" field
+            "message": "processing",
+        }
+        mock_response.status_code = 200
+        mock_response.headers = {}
+
+        model_response = ImageResponse(data=[])
+
+        with pytest.raises(Exception):
+            self.config.transform_image_generation_response(
+                model="modelslab/flux",
+                raw_response=mock_response,
+                model_response=model_response,
+                logging_obj=MagicMock(),
                 request_data={},
                 optional_params={},
                 litellm_params={},
                 encoding=None,
             )
-
-        error_msg = str(exc_info.value)
-        assert "processing" in error_msg.lower()
-        assert "https://modelslab.com/api/v6/fetch/12345" in error_msg
 
     def test_transform_image_generation_response_error_raises(self):
         mock_response = MagicMock(spec=httpx.Response)

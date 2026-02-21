@@ -1,7 +1,21 @@
+"""
+ModelsLab Image Generation Provider
+
+API docs: https://docs.modelslab.com/image-generation/community-models/text2img
+
+Auth note: ModelsLab uses key-in-body authentication — the API key is embedded
+in the JSON request body as "key" rather than via a Bearer header. This means
+the key will appear in LiteLLM's request logging (pre_call) and any observability
+backends (LangFuse, etc.). Users should treat MODELSLAB_API_KEY with appropriate
+care and rotate it if it is inadvertently logged.
+"""
+
+import time
 from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -19,10 +33,14 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+MODELSLAB_POLLING_INTERVAL = 3  # seconds between polls
+MODELSLAB_POLLING_TIMEOUT = 300  # 5 minutes max
+
 
 class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://modelslab.com/api/v6"
     IMAGE_GENERATION_ENDPOINT: str = "images/text2img"
+    FETCH_ENDPOINT: str = "images/fetch"
 
     def get_supported_openai_params(
         self, model: str
@@ -112,10 +130,10 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        # API key goes in the request body, not in headers
+        # ModelsLab uses key-in-body auth. See module docstring for security note.
         api_key = litellm_params.get("api_key") or get_secret_str("MODELSLAB_API_KEY")
 
-        # Strip provider prefix from model name for model_id
+        # Strip provider prefix from model name (e.g. "modelslab/flux" → "flux")
         model_id = model
         if "/" in model_id:
             model_id = model_id.split("/", 1)[1]
@@ -127,6 +145,82 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
             **optional_params,
         }
         return request_body
+
+    def _resolve_api_key(self, request_data: dict, litellm_params: dict) -> str:
+        """Extract the API key from request data or environment."""
+        return (
+            request_data.get("key")
+            or litellm_params.get("api_key")
+            or get_secret_str("MODELSLAB_API_KEY")
+            or ""
+        )
+
+    def _poll_sync(
+        self,
+        generation_id: int,
+        api_key: str,
+        base_url: str,
+        timeout_secs: float = MODELSLAB_POLLING_TIMEOUT,
+    ) -> dict:
+        """
+        Poll ModelsLab fetch endpoint until image generation completes.
+
+        ModelsLab fetch endpoint: POST /api/v6/images/fetch/{id}
+        Body: {"key": "<api_key>"}
+        Returns same response schema as text2img.
+        """
+        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+
+        client = _get_httpx_client()
+        start_time = time.time()
+        fetch_url = f"{base_url.rstrip('/')}/{self.FETCH_ENDPOINT}/{generation_id}"
+
+        verbose_logger.debug(f"ModelsLab: polling fetch URL {fetch_url}")
+
+        while True:
+            if time.time() - start_time > timeout_secs:
+                raise TimeoutError(
+                    f"ModelsLab image generation timed out after {timeout_secs}s. "
+                    f"Generation ID: {generation_id}"
+                )
+
+            response = client.post(
+                url=fetch_url,
+                json={"key": api_key},
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            status = data.get("status", "")
+
+            verbose_logger.debug(f"ModelsLab: poll status={status}, id={generation_id}")
+
+            if status == "success":
+                return data
+            elif status == "error":
+                raise ValueError(
+                    f"ModelsLab generation failed: {data.get('message', 'Unknown error')}"
+                )
+            elif status == "processing":
+                time.sleep(MODELSLAB_POLLING_INTERVAL)
+            else:
+                raise ValueError(
+                    f"ModelsLab unexpected status '{status}' for generation {generation_id}"
+                )
+
+    def _build_image_response(
+        self,
+        response_data: dict,
+        model_response: ImageResponse,
+    ) -> ImageResponse:
+        """Map ModelsLab success response to LiteLLM ImageResponse."""
+        if not model_response.data:
+            model_response.data = []
+
+        for url in response_data.get("output", []):
+            model_response.data.append(ImageObject(url=url))
+
+        return model_response
 
     def transform_image_generation_response(
         self,
@@ -153,33 +247,41 @@ class ModelsLabImageGenerationConfig(BaseImageGenerationConfig):
         status = response_data.get("status", "")
 
         if status == "error":
-            error_message = response_data.get("message", "Unknown error from ModelsLab")
             raise self.get_error_class(
-                error_message=f"ModelsLab error: {error_message}",
+                error_message=f"ModelsLab error: {response_data.get('message', 'Unknown error')}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         if status == "processing":
-            fetch_url = response_data.get("fetch_result", "")
-            eta = response_data.get("eta", "unknown")
-            msg = response_data.get("message", "Image is still processing")
-            raise self.get_error_class(
-                error_message=(
-                    f"ModelsLab image is still processing. ETA: {eta}s. "
-                    f"Fetch result at: {fetch_url}. Message: {msg}"
-                ),
-                status_code=202,
-                headers=raw_response.headers,
+            generation_id = response_data.get("id")
+            if not generation_id:
+                raise self.get_error_class(
+                    error_message="ModelsLab returned 'processing' without a generation ID",
+                    status_code=raw_response.status_code,
+                    headers=raw_response.headers,
+                )
+
+            verbose_logger.debug(
+                f"ModelsLab: generation {generation_id} is processing, starting poll..."
             )
 
-        # status == "success"
-        if not model_response.data:
-            model_response.data = []
+            resolved_key = self._resolve_api_key(request_data, litellm_params)
+            base_url = (
+                get_secret_str("MODELSLAB_API_BASE") or self.DEFAULT_BASE_URL
+            )
 
-        output_urls = response_data.get("output", [])
-        for url in output_urls:
-            image_obj = ImageObject(url=url)
-            model_response.data.append(image_obj)
+            response_data = self._poll_sync(
+                generation_id=generation_id,
+                api_key=resolved_key,
+                base_url=base_url,
+            )
 
-        return model_response
+        if status in ("success",) or response_data.get("status") == "success":
+            return self._build_image_response(response_data, model_response)
+
+        raise self.get_error_class(
+            error_message=f"Unexpected ModelsLab response: {response_data}",
+            status_code=raw_response.status_code,
+            headers=raw_response.headers,
+        )
