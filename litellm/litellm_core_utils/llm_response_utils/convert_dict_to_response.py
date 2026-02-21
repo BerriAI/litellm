@@ -628,6 +628,8 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 )
 
             if "id" in response_object:
+                # Preserve the auto-generated id from ModelResponse.__init__
+                # when the provider returns a falsy id (None, "")
                 model_response_object.id = response_object["id"] or model_response_object.id
 
             if "system_fingerprint" in response_object:
