@@ -603,6 +603,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "prompt_cache_retention",
     "safety_identifier",
     "verbosity",
+    "store",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
