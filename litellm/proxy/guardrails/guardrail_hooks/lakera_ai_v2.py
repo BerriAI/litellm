@@ -362,6 +362,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         lakera_guardrail_response, _ = await self.call_v2_guard(
             messages=post_call_messages,
             request_data=data,
+            event_type=GuardrailEventHooks.post_call,
         )
 
         # Handle flagged content
