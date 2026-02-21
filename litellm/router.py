@@ -6227,10 +6227,13 @@ class Router:
 
     def _is_auto_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
-        Check if the deployment is an auto-router deployment.
+        Check if the deployment is an auto-router deployment (semantic router).
 
         Returns True if the litellm_params model starts with "auto_router/"
+        but NOT "auto_router/complexity_router" (which uses complexity routing).
         """
+        if litellm_params.model.startswith("auto_router/complexity_router"):
+            return False  # This is handled by complexity_router
         if litellm_params.model.startswith("auto_router/"):
             return True
         return False
