@@ -12,10 +12,11 @@ All /policy management endpoints
 import copy
 import json
 import os
-from typing import TYPE_CHECKING, AsyncIterator, List, Literal, Optional, cast
+from typing import (TYPE_CHECKING, Any, AsyncIterator, List, Literal, Optional,
+                    cast)
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -24,8 +25,12 @@ from litellm.constants import (COMPETITOR_LLM_TEMPERATURE,
                                DEFAULT_COMPETITOR_DISCOVERY_MODEL,
                                MAX_COMPETITOR_NAMES)
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.openai.chat.guardrail_translation.handler import \
+    OpenAIChatCompletionsHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.guardrail_hooks.custom_code import (
+    RESPONSE_REJECTION_GUARDRAIL_CODE, CustomCodeGuardrail)
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -39,7 +44,7 @@ from litellm.types.proxy.policy_engine import (PolicyGuardrailsResponse,
                                                PolicyTestResponse,
                                                PolicyValidateRequest,
                                                PolicyValidationResponse)
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import \
@@ -69,18 +74,30 @@ class GuardrailErrorEntry(TypedDict):
     message: str
 
 
-class ApplyPoliciesResult(TypedDict):
-    """Result of apply_policies: inputs plus any guardrail failures."""
+class _ApplyPoliciesResultBase(TypedDict):
+    """Base result of apply_policies: inputs plus any guardrail failures."""
 
     inputs: GenericGuardrailAPIInputs
     guardrail_errors: List[GuardrailErrorEntry]
 
 
-class ApplyPoliciesPerItemResult(TypedDict):
-    """Result for one input when using inputs_list."""
+class ApplyPoliciesResult(_ApplyPoliciesResultBase, total=False):
+    """Result of apply_policies. agent_response set when agent_id provided."""
+
+    agent_response: Any
+
+
+class _ApplyPoliciesPerItemResultBase(TypedDict):
+    """Base result for one input when using inputs_list."""
 
     inputs: GenericGuardrailAPIInputs
     guardrail_errors: List[GuardrailErrorEntry]
+
+
+class ApplyPoliciesPerItemResult(_ApplyPoliciesPerItemResultBase, total=False):
+    """Result for one input when using inputs_list. agent_response set when agent_id provided."""
+
+    agent_response: Any
 
 
 class ApplyPoliciesListResult(TypedDict):
@@ -185,21 +202,78 @@ async def apply_policies(
     return {"inputs": current_inputs, "guardrail_errors": guardrail_errors}
 
 
+def _chat_body_from_inputs(
+    inputs: GenericGuardrailAPIInputs, agent_id: str, request_data: dict
+) -> dict:
+    """Build a chat completion request body from guardrail inputs and agent_id."""
+    messages: List[dict]
+    structured = inputs.get("structured_messages")
+    texts = inputs.get("texts")
+    if structured:
+        messages = list(structured)  # type: ignore[arg-type]
+    elif texts:
+        if len(texts) == 1:
+            messages = [{"role": "user", "content": texts[0]}]
+        else:
+            messages = [{"role": "user", "content": "\n".join(texts)}]
+    else:
+        messages = [{"role": "user", "content": "Hello"}]
+    body: dict = {"model": agent_id, "messages": messages, "stream": False}
+    if request_data:
+        body.setdefault("metadata", {}).update(request_data)
+    return body
+
+
+def _request_with_json_body(body: dict) -> Request:
+    """Create a Starlette Request that will return the given dict as parsed JSON body."""
+    body_bytes = json.dumps(body).encode()
+    received: List[bool] = [False]
+
+    async def receive() -> dict:
+        if received[0]:
+            return {"type": "http.disconnect"}
+        received[0] = True
+        return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+    scope: dict = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "scheme": "http",
+        "server": ("localhost", 8000),
+        "client": ("127.0.0.1", 0),
+        "root_path": "",
+        "app": None,
+        "asgi": {"version": "3.0", "spec_version": "2.0"},
+    }
+    return Request(scope, receive=receive)
+
+
 class TestPoliciesAndGuardrailsRequest(BaseModel):
     """Request body for POST /utils/test_policies_and_guardrails."""
 
-    policy_names: Optional[List[str]] = Field(default=None, description="Policy names to resolve guardrails from")
-    guardrail_names: Optional[List[str]] = Field(default=None, description="Guardrail names to apply directly")
-    inputs: Optional[dict] = Field(
-        default=None,
-        description="GenericGuardrailAPIInputs, e.g. { \"texts\": [\"...\"] }. Use inputs_list for per-input processing.",
+    policy_names: Optional[List[str]] = Field(
+        default=None, description="Policy names to resolve guardrails from"
     )
-    inputs_list: Optional[List[dict]] = Field(
-        default=None,
+    guardrail_names: Optional[List[str]] = Field(
+        default=None, description="Guardrail names to apply directly"
+    )
+    inputs_list: List[GenericGuardrailAPIInputs] = Field(
+        default=[],
         description="List of GenericGuardrailAPIInputs; each item processed separately (for batch compliance testing).",
     )
-    request_data: dict = Field(default_factory=dict, description="Request context (model, user_id, etc.)")
-    input_type: Literal["request", "response"] = Field(default="request", description="Whether inputs are request or response")
+    request_data: dict = Field(
+        default_factory=dict, description="Request context (model, user_id, etc.)"
+    )
+    input_type: Literal["request", "response"] = Field(
+        default="request", description="Whether inputs are request or response"
+    )
+    agent_id: Optional[str] = Field(
+        default=None,
+        description="When set, call chat completion with this model/agent for each input and include the response in the result.",
+    )
 
 
 @router.post(
@@ -223,40 +297,86 @@ async def test_policies_and_guardrails(
     """
     from litellm.litellm_core_utils.litellm_logging import \
         Logging as LiteLLMLoggingObj
-    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.proxy_server import chat_completion, proxy_logging_obj
     from litellm.proxy.utils import handle_exception_on_proxy
+
+    def _serialize_chat_response(response: Any) -> Any:
+        if hasattr(response, "model_dump"):
+            return response.model_dump(exclude_unset=True)
+        if isinstance(response, dict):
+            return response
+        return response
+
+    async def _get_agent_response(
+        inputs: GenericGuardrailAPIInputs,
+        agent_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Any:
+        body = _chat_body_from_inputs(inputs, agent_id, data.request_data)
+        req = _request_with_json_body(body)
+        resp = Response()
+        result = await chat_completion(
+            request=req,
+            fastapi_response=resp,
+            model=agent_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+        return _serialize_chat_response(result)
 
     try:
         logging_obj = cast(LiteLLMLoggingObj, proxy_logging_obj)
-        if data.inputs_list is not None:
-            results: List[ApplyPoliciesPerItemResult] = []
-            for inp in data.inputs_list:
-                inputs_typed = cast(GenericGuardrailAPIInputs, inp)
-                item_result = await apply_policies(
-                    policy_names=data.policy_names,
-                    inputs=inputs_typed,
-                    request_data=data.request_data,
-                    input_type=data.input_type,
-                    proxy_logging_obj=logging_obj,
-                    guardrail_names=data.guardrail_names,
-                )
-                results.append(
-                    ApplyPoliciesPerItemResult(
-                        inputs=item_result["inputs"],
-                        guardrail_errors=item_result["guardrail_errors"],
-                    )
-                )
-            return ApplyPoliciesListResult(results=results)
-        if data.inputs is not None:
-            inputs_typed = cast(GenericGuardrailAPIInputs, data.inputs)
-            return await apply_policies(
+
+        results: List[ApplyPoliciesPerItemResult] = []
+        for inp in data.inputs_list:
+            item_result = await apply_policies(
                 policy_names=data.policy_names,
-                inputs=inputs_typed,
+                inputs=inp,
                 request_data=data.request_data,
                 input_type=data.input_type,
                 proxy_logging_obj=logging_obj,
                 guardrail_names=data.guardrail_names,
             )
+            item: ApplyPoliciesPerItemResult = {
+                "inputs": item_result["inputs"],
+                "guardrail_errors": item_result["guardrail_errors"],
+            }
+            if data.agent_id is not None:
+                item["agent_response"] = await _get_agent_response(
+                    item_result["inputs"],
+                    data.agent_id,
+                    user_api_key_dict,
+                )
+                # run response through response_rejection_guardrail (reuses handler extraction + apply)
+                response_rejection_guardrail = CustomCodeGuardrail(
+                    custom_code=RESPONSE_REJECTION_GUARDRAIL_CODE,
+                    guardrail_name="response_rejection",
+                )
+                try:
+                    model_response = ModelResponse.model_validate(
+                        item["agent_response"]
+                    )
+                    handler = OpenAIChatCompletionsHandler()
+                    await handler.process_output_response(
+                        response=model_response,
+                        guardrail_to_apply=response_rejection_guardrail,
+                        litellm_logging_obj=logging_obj,
+                        user_api_key_dict=user_api_key_dict,
+                    )
+                except Exception as guardrail_err:
+                    item["guardrail_errors"] = list(item["guardrail_errors"])
+                    detail = getattr(guardrail_err, "detail", None)
+                    if isinstance(detail, dict) and "error" in detail:
+                        err_msg = detail["error"]
+                    else:
+                        err_msg = str(detail if detail is not None else guardrail_err)
+                    item["guardrail_errors"].append(
+                        GuardrailErrorEntry(
+                            guardrail_name="response_rejection",
+                            message=err_msg,
+                        )
+                    )
+            results.append(item)
+        return ApplyPoliciesListResult(results=results)
         raise ValueError("Either inputs or inputs_list must be provided")
     except Exception as e:
         raise handle_exception_on_proxy(e)
@@ -581,11 +701,15 @@ def _validate_enrichment_request(data: EnrichTemplateRequest) -> tuple[dict, dic
     templates = _load_policy_templates_from_local_backup()
     template = next((t for t in templates if t.get("id") == data.template_id), None)
     if template is None:
-        raise HTTPException(status_code=404, detail=f"Template '{data.template_id}' not found")
+        raise HTTPException(
+            status_code=404, detail=f"Template '{data.template_id}' not found"
+        )
 
     llm_enrichment = template.get("llm_enrichment")
     if llm_enrichment is None:
-        raise HTTPException(status_code=400, detail="Template does not support LLM enrichment")
+        raise HTTPException(
+            status_code=400, detail="Template does not support LLM enrichment"
+        )
 
     # Validate competitors list size if provided
     if data.competitors and len(data.competitors) > MAX_COMPETITOR_NAMES:
@@ -695,7 +819,11 @@ async def _stream_llm_competitor_names(
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
             name = _clean_competitor_line(line)
-            if name and name.lower() not in existing_lower and count < MAX_COMPETITOR_NAMES:
+            if (
+                name
+                and name.lower() not in existing_lower
+                and count < MAX_COMPETITOR_NAMES
+            ):
                 existing_lower.add(name.lower())
                 count += 1
                 yield name, False
@@ -744,9 +872,7 @@ async def _stream_competitor_events(
             "{{" + llm_enrichment["parameter"] + "}}", brand_name
         )
         try:
-            async for name, _ in _stream_llm_competitor_names(
-                prompt, model, []
-            ):
+            async for name, _ in _stream_llm_competitor_names(prompt, model, []):
                 if name:
                     competitors.append(name)
                     yield f"data: {json.dumps({'type': 'competitor', 'name': name})}\n\n"
@@ -893,10 +1019,7 @@ def _build_all_names_per_competitor(
     competitors: list[str], variations_map: dict[str, list[str]]
 ) -> dict[str, list[str]]:
     """Build canonical + variation name lists for each competitor."""
-    return {
-        comp: [comp] + variations_map.get(comp, [])
-        for comp in competitors
-    }
+    return {comp: [comp] + variations_map.get(comp, []) for comp in competitors}
 
 
 def _build_competitor_guardrail_definitions(
@@ -912,7 +1035,9 @@ def _build_competitor_guardrail_definitions(
 
     output_blocked = _build_name_blocked_words(competitors, all_names)
     recommendation_blocked = _build_recommendation_blocked_words(competitors, all_names)
-    comparison_blocked = _build_comparison_blocked_words(competitors, all_names, brand_name)
+    comparison_blocked = _build_comparison_blocked_words(
+        competitors, all_names, brand_name
+    )
 
     blocked_words_map = {
         "competitor-output-blocker": output_blocked,
@@ -943,7 +1068,11 @@ def _build_name_blocked_words(
     result = []
     for comp in competitors:
         for name in all_names[comp]:
-            desc = f"Competitor: {comp}" if name == comp else f"Competitor variation ({comp}): {name}"
+            desc = (
+                f"Competitor: {comp}"
+                if name == comp
+                else f"Competitor variation ({comp}): {name}"
+            )
             result.append({"keyword": name, "action": "BLOCK", "description": desc})
     return result
 
@@ -956,11 +1085,13 @@ def _build_recommendation_blocked_words(
     for comp in competitors:
         for name in all_names[comp]:
             for prefix in ["try", "use", "switch to", "consider"]:
-                result.append({
-                    "keyword": f"{prefix} {name}",
-                    "action": "BLOCK",
-                    "description": f"Recommendation to competitor ({comp})",
-                })
+                result.append(
+                    {
+                        "keyword": f"{prefix} {name}",
+                        "action": "BLOCK",
+                        "description": f"Recommendation to competitor ({comp})",
+                    }
+                )
     return result
 
 
@@ -971,23 +1102,29 @@ def _build_comparison_blocked_words(
     result = []
     for comp in competitors:
         for name in all_names[comp]:
-            result.append({
-                "keyword": f"{name} is better",
-                "action": "BLOCK",
-                "description": f"Unfavorable comparison ({comp})",
-            })
+            result.append(
+                {
+                    "keyword": f"{name} is better",
+                    "action": "BLOCK",
+                    "description": f"Unfavorable comparison ({comp})",
+                }
+            )
 
     # Brand-level comparisons (only need one entry each, not per-competitor)
-    result.append({
-        "keyword": f"better than {brand_name}",
-        "action": "BLOCK",
-        "description": "Unfavorable comparison",
-    })
-    result.append({
-        "keyword": f"{brand_name} is worse",
-        "action": "BLOCK",
-        "description": "Unfavorable comparison",
-    })
+    result.append(
+        {
+            "keyword": f"better than {brand_name}",
+            "action": "BLOCK",
+            "description": "Unfavorable comparison",
+        }
+    )
+    result.append(
+        {
+            "keyword": f"{brand_name} is worse",
+            "action": "BLOCK",
+            "description": "Unfavorable comparison",
+        }
+    )
 
     return result
 
@@ -1121,7 +1258,9 @@ async def _test_guardrail_definitions(
                 request_data={},
                 input_type="request",
             )
-            output_text = output.get("texts", [text])[0] if output.get("texts") else text
+            output_text = (
+                output.get("texts", [text])[0] if output.get("texts") else text
+            )
 
             if output_text != text:
                 action = "masked"

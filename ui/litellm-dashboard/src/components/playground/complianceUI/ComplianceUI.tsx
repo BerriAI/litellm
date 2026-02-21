@@ -39,6 +39,7 @@ import {
   Send,
   Shield,
   Smile,
+  Square,
   Trash2,
   TrendingDown,
   Upload,
@@ -161,6 +162,7 @@ export default function ComplianceUI({
   const [isRunning, setIsRunning] = useState(false);
   const [resultFilter, setResultFilter] = useState<ResultFilter>("all");
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
+  const batchAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -570,6 +572,9 @@ export default function ComplianceUI({
 
   const runTests = useCallback(async () => {
     if (selectedPromptIds.size === 0 || !accessToken) return;
+    const controller = new AbortController();
+    batchAbortControllerRef.current = controller;
+    const signal = controller.signal;
     setIsRunning(true);
     setResultFilter("all");
     setRightTab("batch-results");
@@ -590,100 +595,62 @@ export default function ComplianceUI({
     }));
     setTestResults(pendingResults);
     try {
-      if (backendMode === "chat_completions" && fixedModel) {
-        const newResults = [...pendingResults];
-        for (let index = 0; index < selected.length; index++) {
-          const row = pendingResults[index];
-          const prompt = allTexts[index];
-          let responseText = "";
-          try {
-            await makeOpenAIChatCompletionRequest(
-              [{ role: "user", content: prompt }],
-              (chunk: string) => {
-                responseText += chunk;
-              },
-          fixedModel,
-          accessToken,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-              selectedPolicies.length > 0 ? selectedPolicies : undefined,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              requestProxyBaseUrl,
-              undefined
-            );
-            const actualResult: "blocked" | "allowed" = "allowed";
-            newResults[index] = {
-              ...row,
-              actualResult,
-              returnedText: responseText,
-              isMatch: row.expectedResult === "pass",
-              status: "complete" as const,
-            };
-          } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : String(err);
-            newResults[index] = {
-              ...row,
-              actualResult: "blocked" as const,
-              isMatch: false,
-              triggeredBy: errorMessage,
-              status: "complete" as const,
-            };
-          }
-          setTestResults([...newResults]);
-        }
-      } else {
-        const inputsList = allTexts.map((text) => ({ texts: [text] }));
-        const response = await testPoliciesAndGuardrails(accessToken, {
+      const useAgentId = backendMode === "chat_completions" && fixedModel;
+      const response = await testPoliciesAndGuardrails(
+        accessToken,
+        {
           policy_names:
             selectedPolicies.length > 0 ? selectedPolicies : undefined,
           guardrail_names:
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-          inputs_list: inputsList,
+          inputs_list: allTexts.map((text) => ({ texts: [text] })),
           request_data: {},
           input_type: "request",
-        });
-        const results = response.results ?? [];
-        setTestResults(
-          pendingResults.map((row, index) => {
-            const item = results[index];
-            const guardrail_errors = item?.guardrail_errors ?? [];
-            const actualResult: "blocked" | "allowed" =
-              guardrail_errors.length > 0 ? "blocked" : "allowed";
-            const triggeredBy =
-              guardrail_errors.length > 0
-                ? guardrail_errors
-                    .map((e) => `${e.guardrail_name}: ${e.message}`)
-                    .join("; ")
+          ...(useAgentId ? { agent_id: fixedModel } : {}),
+        },
+        signal
+      );
+      const results = response.results ?? [];
+      setTestResults(
+        pendingResults.map((row, index) => {
+          const item = results[index];
+          const guardrail_errors = item?.guardrail_errors ?? [];
+          const actualResult: "blocked" | "allowed" =
+            guardrail_errors.length > 0 ? "blocked" : "allowed";
+          const triggeredBy =
+            guardrail_errors.length > 0
+              ? guardrail_errors
+                  .map((e) => `${e.guardrail_name}: ${e.message}`)
+                  .join("; ")
+              : undefined;
+          let returnedText: string | undefined;
+          if (item?.agent_response != null) {
+            const choices = (item.agent_response as { choices?: Array<{ message?: { content?: string } }> }).choices;
+            returnedText =
+              Array.isArray(choices) && choices[0]?.message?.content != null
+                ? String(choices[0].message.content)
                 : undefined;
-            const returnedText =
-              Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0
-                ? item.inputs.texts[0]
-                : undefined;
-            return {
-              ...row,
-              actualResult,
-              isMatch:
-                (row.expectedResult === "fail" && actualResult === "blocked") ||
-                (row.expectedResult === "pass" && actualResult === "allowed"),
-              triggeredBy,
-              returnedText,
-              status: "complete" as const,
-            };
-          })
-        );
-      }
+          }
+          if (returnedText === undefined && Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0) {
+            returnedText = item.inputs.texts[0] as string;
+          }
+          return {
+            ...row,
+            actualResult,
+            isMatch:
+              (row.expectedResult === "fail" && actualResult === "blocked") ||
+              (row.expectedResult === "pass" && actualResult === "allowed"),
+            triggeredBy,
+            returnedText,
+            status: "complete" as const,
+          };
+        })
+      );
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        // Stopped by user; leave partial results as-is (already set in loop)
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       setTestResults(
         pendingResults.map((row) => ({
@@ -694,8 +661,10 @@ export default function ComplianceUI({
           status: "complete" as const,
         }))
       );
+    } finally {
+      setIsRunning(false);
+      batchAbortControllerRef.current = null;
     }
-    setIsRunning(false);
   }, [
     accessToken,
     selectedPromptIds,
@@ -959,23 +928,30 @@ export default function ComplianceUI({
           </div>
 
           <div className="flex flex-col gap-1.5 pt-6 flex-shrink-0">
-            <button
-              type="button"
-              onClick={runTests}
-              disabled={selectedPromptIds.size === 0 || isRunning || disabledPersonalKeyCreation}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || isRunning || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
-            >
-              {isRunning ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Running...
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5" /> Simulate (
-                  {selectedPromptIds.size})
-                </>
-              )}
-            </button>
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={() => batchAbortControllerRef.current?.abort()}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-red-600 text-white hover:bg-red-700"
+              >
+                <Square className="w-3.5 h-3.5" /> Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={runTests}
+                disabled={selectedPromptIds.size === 0 || disabledPersonalKeyCreation}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+              >
+                <Play className="w-3.5 h-3.5" /> Simulate (
+                {selectedPromptIds.size})
+              </button>
+            )}
+            {isRunning && (
+              <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" /> Running...
+              </span>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1738,6 +1714,16 @@ export default function ComplianceUI({
                                         : "False positive — incorrectly blocked"}
                                   </span>
                                 </div>
+                                {result.returnedText != null && result.returnedText !== "" && (
+                                  <div className="mt-1.5">
+                                    <span className="text-gray-400 block mb-0.5">
+                                      LLM response:
+                                    </span>
+                                    <div className="text-gray-700 bg-gray-50 rounded px-2 py-1.5 border border-gray-100 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                                      {result.returnedText}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
