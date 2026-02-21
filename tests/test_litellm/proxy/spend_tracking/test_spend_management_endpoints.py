@@ -1324,6 +1324,10 @@ class TestSpendLogsPayload:
     async def test_spend_logs_payload_success_log_with_api_base(self, monkeypatch):
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
+        # Clear any env overrides that would change the recorded api_base
+        monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
         # litellm._turn_on_debug()
 
@@ -1397,8 +1401,12 @@ class TestSpendLogsPayload:
                 assert False, f"Dictionary mismatch: {differences}"
 
     @pytest.mark.asyncio
-    async def test_spend_logs_payload_success_log_with_router(self):
+    async def test_spend_logs_payload_success_log_with_router(self, monkeypatch):
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        # Clear any env overrides that would change the recorded api_base
+        monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
 
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
         # litellm._turn_on_debug()
