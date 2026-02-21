@@ -2,7 +2,7 @@
 
 This guide outlines the process for safely rolling back a LiteLLM Proxy deployment to a previous version.
 
-We recommend rolling back to the previous [stable release](https://github.com/BerriAI/litellm/releases). Stable releases come out every week and follow the `main-stable` tag convention.
+We recommend rolling back to the previous [stable release](https://github.com/BerriAI/litellm/releases). Stable releases come out every week and follow the `main-v<VERSION>-stable` tag convention (e.g., `main-v1.77.2-stable`).
 
 ## 1. Determine Rollback Scope
 
