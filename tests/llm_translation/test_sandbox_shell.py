@@ -437,7 +437,8 @@ class TestSandboxShellExecutionLoop:
     async def test_parallel_shell_and_function_calls(self):
         """
         When model calls both _litellm_shell and a regular function in
-        parallel, only the shell call is executed by the sandbox.
+        parallel, only the shell call is executed and only shell tool calls
+        appear in the assistant message sent to the next completion call.
         """
         mixed_response = _make_tool_call_response(
             tool_calls=[
@@ -469,7 +470,7 @@ class TestSandboxShellExecutionLoop:
                 "litellm.responses.litellm_completion_transformation.handler.litellm.acompletion",
                 new_callable=AsyncMock,
                 return_value=final,
-            ),
+            ) as mock_acompletion,
             patch(
                 "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
                 return_value={"success": True, "output": "Thu Feb 20 2026\n", "error": "", "files": []},
@@ -485,6 +486,16 @@ class TestSandboxShellExecutionLoop:
             )
 
         mock_exec.assert_called_once_with(["date"])
+
+        msgs = mock_acompletion.call_args.kwargs["messages"]
+        assistant_msg = msgs[1]
+        assert assistant_msg["role"] == "assistant"
+        tc_names = [tc["function"]["name"] for tc in assistant_msg.get("tool_calls", [])]
+        assert "_litellm_shell" in tc_names, "Shell tool call should be in the assistant message"
+        assert "get_weather" not in tc_names, (
+            "Non-shell tool call must be excluded from assistant message to avoid "
+            "provider errors about missing tool results"
+        )
 
     @pytest.mark.asyncio
     async def test_max_iterations_cap_async(self):

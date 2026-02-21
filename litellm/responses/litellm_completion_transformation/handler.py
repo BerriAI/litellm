@@ -219,9 +219,15 @@ class LiteLLMCompletionTransformationHandler:
         return shell_calls
 
     @staticmethod
-    def _build_assistant_message(response: ModelResponse) -> Dict[str, Any]:
+    def _build_assistant_message(
+        response: ModelResponse,
+        shell_call_ids: Optional[set] = None,
+    ) -> Dict[str, Any]:
         """
         Build a Chat Completion assistant message dict from a ModelResponse.
+
+        When *shell_call_ids* is provided, only those tool calls are included
+        so the provider won't reject the request for missing tool results.
         """
         msg = response.choices[0].message  # type: ignore[union-attr]
         assistant_dict: Dict[str, Any] = {
@@ -229,7 +235,7 @@ class LiteLLMCompletionTransformationHandler:
             "content": getattr(msg, "content", None),
         }
         if getattr(msg, "tool_calls", None):
-            assistant_dict["tool_calls"] = [
+            tool_calls = [
                 {
                     "id": tc.id,
                     "type": "function",
@@ -239,7 +245,10 @@ class LiteLLMCompletionTransformationHandler:
                     },
                 }
                 for tc in (msg.tool_calls or [])
+                if shell_call_ids is None or tc.id in shell_call_ids
             ]
+            if tool_calls:
+                assistant_dict["tool_calls"] = tool_calls
         return assistant_dict
 
     def _prepare_next_completion(
@@ -260,7 +269,10 @@ class LiteLLMCompletionTransformationHandler:
         The async variant (:meth:`_async_prepare_next_completion`) offloads
         sandbox calls to a thread pool.
         """
-        messages.append(self._build_assistant_message(current_response))
+        shell_call_ids = {sc["id"] for sc in shell_calls}
+        messages.append(
+            self._build_assistant_message(current_response, shell_call_ids)
+        )
         messages.extend(
             execute_shell_calls_for_completion(executor, shell_calls)
         )
@@ -293,7 +305,10 @@ class LiteLLMCompletionTransformationHandler:
         Runs each ``execute_shell_command`` call in a thread pool via
         ``run_in_executor`` to avoid blocking the event loop.
         """
-        messages.append(self._build_assistant_message(current_response))
+        shell_call_ids = {sc["id"] for sc in shell_calls}
+        messages.append(
+            self._build_assistant_message(current_response, shell_call_ids)
+        )
 
         loop = asyncio.get_running_loop()
         for sc in shell_calls:
