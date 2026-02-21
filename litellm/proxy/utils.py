@@ -4565,9 +4565,6 @@ def validate_model_access(
             )
 
 
-# Fields within each choice that must be preserved as null (not stripped)
-# for OpenAI API compatibility. Each tuple is (sub_object, field_name).
-# To add a new preserved field, just append a tuple here.
 _PRESERVED_NONE_FIELDS: List[tuple] = [
     ("message", "content"),  # null when tool_calls present (issue #6677)
     ("message", "role"),  # always required by OpenAI spec
@@ -4577,6 +4574,7 @@ _PRESERVED_NONE_FIELDS: List[tuple] = [
 
 def model_dump_with_preserved_fields(
     obj: Any,
+    preserve_fields: Optional[List[str]] = None,
     exclude_unset: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -4588,6 +4586,7 @@ def model_dump_with_preserved_fields(
 
     Args:
         obj: The Pydantic BaseModel instance to serialize
+        preserve_fields: Deprecated, kept for backward compatibility.
         exclude_unset: Whether to exclude fields that were not explicitly set
 
     Returns:
@@ -4600,9 +4599,7 @@ def model_dump_with_preserved_fields(
         return result
 
     obj_choices = obj.choices
-    for i, choice_dict in enumerate(choices):
-        choice_obj = obj_choices[i]
-
+    for choice_obj, choice_dict in zip(obj_choices, choices):
         for sub_object, field_name in _PRESERVED_NONE_FIELDS:
             sub_dict = choice_dict.get(sub_object)
             if sub_dict is None:
