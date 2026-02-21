@@ -135,20 +135,20 @@ class ComplexityRouter(CustomLogger):
     def _keyword_matches(self, text: str, keyword: str) -> bool:
         """
         Check if a keyword matches in text using word boundary matching.
-        
-        For short keywords (<5 chars), uses regex word boundaries to avoid
-        false positives (e.g., "api" matching "capital").
-        For longer keywords/phrases, uses substring matching.
+
+        For single-word keywords, uses regex word boundaries to avoid
+        false positives (e.g., "error" matching "terrorism", "class" matching "classical").
+        For multi-word phrases, uses substring matching.
         """
         kw_lower = keyword.lower()
-        
-        # For short keywords, use word boundary matching to avoid false positives
-        # e.g., "api" should not match "capital", "git" should not match "digital"
-        if len(kw_lower) < 5 and " " not in kw_lower:
+
+        # For single-word keywords, use word boundary matching to avoid false positives
+        # e.g., "api" should not match "capital", "error" should not match "terrorism"
+        if " " not in kw_lower:
             pattern = r'\b' + re.escape(kw_lower) + r'\b'
             return bool(re.search(pattern, text))
-        
-        # For longer keywords or phrases, substring matching is fine
+
+        # For multi-word phrases, substring matching is fine
         return kw_lower in text
     
     def _score_keyword_match(
@@ -159,26 +159,31 @@ class ComplexityRouter(CustomLogger):
         signal_label: str,
         thresholds: Tuple[int, int],  # (low, high)
         scores: Tuple[float, float, float],  # (none, low, high)
-    ) -> DimensionScore:
-        """Score based on keyword matches using word boundary matching."""
+    ) -> Tuple[DimensionScore, int]:
+        """Score based on keyword matches using word boundary matching.
+
+        Returns:
+            Tuple of (DimensionScore, match_count) so callers can reuse the count.
+        """
         low_threshold, high_threshold = thresholds
         score_none, score_low, score_high = scores
-        
+
         matches = [kw for kw in keywords if self._keyword_matches(text, kw)]
-        
-        if len(matches) >= high_threshold:
+        match_count = len(matches)
+
+        if match_count >= high_threshold:
             return DimensionScore(
                 name,
                 score_high,
                 f"{signal_label} ({', '.join(matches[:3])})"
-            )
-        if len(matches) >= low_threshold:
+            ), match_count
+        if match_count >= low_threshold:
             return DimensionScore(
                 name,
                 score_low,
                 f"{signal_label} ({', '.join(matches[:3])})"
-            )
-        return DimensionScore(name, score_none, None)
+            ), match_count
+        return DimensionScore(name, score_none, None), match_count
     
     def _score_multi_step(self, text: str) -> DimensionScore:
         """Score based on multi-step patterns."""
@@ -223,62 +228,47 @@ class ComplexityRouter(CustomLogger):
         # Estimate tokens
         estimated_tokens = self._estimate_tokens(prompt)
         
-        # Score all dimensions
+        # Score all dimensions, capturing match counts where needed
+        code_score, _ = self._score_keyword_match(
+            full_text, self.code_keywords, "codePresence", "code",
+            (1, 2), (0, 0.5, 1.0),
+        )
+        reasoning_score, reasoning_match_count = self._score_keyword_match(
+            user_text, self.reasoning_keywords, "reasoningMarkers", "reasoning",
+            (1, 2), (0, 0.7, 1.0),
+        )
+        technical_score, _ = self._score_keyword_match(
+            full_text, self.technical_keywords, "technicalTerms", "technical",
+            (2, 4), (0, 0.5, 1.0),
+        )
+        simple_score, _ = self._score_keyword_match(
+            full_text, self.simple_keywords, "simpleIndicators", "simple",
+            (1, 2), (0, -1.0, -1.0),
+        )
+
         dimensions: List[DimensionScore] = [
             self._score_token_count(estimated_tokens),
-            self._score_keyword_match(
-                full_text,
-                self.code_keywords,
-                "codePresence",
-                "code",
-                (1, 2),
-                (0, 0.5, 1.0),
-            ),
-            # Reasoning markers only from user prompt (not system)
-            self._score_keyword_match(
-                user_text,
-                self.reasoning_keywords,
-                "reasoningMarkers",
-                "reasoning",
-                (1, 2),
-                (0, 0.7, 1.0),
-            ),
-            self._score_keyword_match(
-                full_text,
-                self.technical_keywords,
-                "technicalTerms",
-                "technical",
-                (2, 4),
-                (0, 0.5, 1.0),
-            ),
-            self._score_keyword_match(
-                full_text,
-                self.simple_keywords,
-                "simpleIndicators",
-                "simple",
-                (1, 2),
-                (0, -1.0, -1.0),  # Negative scores for simple indicators
-            ),
+            code_score,
+            reasoning_score,
+            technical_score,
+            simple_score,
             self._score_multi_step(full_text),
             self._score_question_complexity(prompt),
         ]
-        
+
         # Collect signals
         signals = [d.signal for d in dimensions if d.signal is not None]
-        
+
         # Compute weighted score
         weights = self.config.dimension_weights
         weighted_score = sum(
-            d.score * weights.get(d.name, 0) 
+            d.score * weights.get(d.name, 0)
             for d in dimensions
         )
-        
+
         # Check for reasoning override (2+ reasoning markers)
-        reasoning_matches = [
-            kw for kw in self.reasoning_keywords 
-            if self._keyword_matches(user_text, kw)
-        ]
-        if len(reasoning_matches) >= 2:
+        # Reuse match count from _score_keyword_match to avoid scanning twice
+        if reasoning_match_count >= 2:
             return ComplexityTier.REASONING, weighted_score, signals
         
         # Map score to tier
