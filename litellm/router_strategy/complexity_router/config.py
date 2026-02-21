@@ -50,10 +50,11 @@ DEFAULT_TECHNICAL_KEYWORDS: List[str] = [
     "machine learning", "neural network", "deep learning",
     "encryption", "authentication", "authorization",
     "performance", "latency", "throughput", "benchmark",
-    "concurrency", "parallel", "threading", "async",
+    "concurrency", "parallel", "threading",
     "memory", "cpu", "gpu", "optimization",
     "protocol", "tcp", "http", "grpc", "websocket",
-    "kubernetes", "docker", "container", "orchestration",
+    "container", "orchestration",
+    # Note: "async", "kubernetes", "docker" are in DEFAULT_CODE_KEYWORDS
 ]
 
 DEFAULT_SIMPLE_KEYWORDS: List[str] = [
