@@ -723,9 +723,7 @@ async def info_organization(organization_id: str):
                 "litellm_budget_table": True,
                 "members": {
                     "include": {
-                        "user": {
-                            "select": {"user_email": True},
-                        }
+                        "user": True,
                     }
                 },
                 "teams": True,
