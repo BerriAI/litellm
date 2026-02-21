@@ -20,7 +20,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
 
 
 class LakeraAIGuardrail(CustomGuardrail):
@@ -146,6 +146,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         if not payload:
             return messages
 
+        messages = copy.deepcopy(messages)
         # For each message, find its detections on the fly
         for idx, msg in enumerate(messages):
             content = msg.get("content", "")
@@ -160,6 +161,13 @@ class LakeraAIGuardrail(CustomGuardrail):
             detected_modifications = [d for d in payload if d.get("message_id") == idx]
             if not detected_modifications:
                 continue
+
+            # Apply masks from end to start so earlier indices remain valid after each replacement
+            detected_modifications = sorted(
+                detected_modifications,
+                key=lambda d: (d.get("start", 0), d.get("end", 0)),
+                reverse=True,
+            )
 
             for modification in detected_modifications:
                 start, end = modification.get("start", 0), modification.get("end", 0)
@@ -356,7 +364,8 @@ class LakeraAIGuardrail(CustomGuardrail):
             if role and content:
                 response_messages.append({"role": role, "content": content})
 
-        post_call_messages = original_messages + response_messages
+        # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
+        post_call_messages = copy.deepcopy(original_messages) + response_messages
 
         # Call Lakera guardrail
         lakera_guardrail_response, _ = await self.call_v2_guard(
@@ -369,7 +378,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         if lakera_guardrail_response.get("flagged") is True:
             # If only PII violations exist, mask the PII in the response and allow
             if self._is_only_pii_violation(lakera_guardrail_response):
-                masked_entity_count: Dict = {}
+                masked_entity_count = {}
                 masked_messages = self._mask_pii_in_messages(
                     messages=post_call_messages,
                     lakera_response=lakera_guardrail_response,
@@ -382,7 +391,10 @@ class LakeraAIGuardrail(CustomGuardrail):
                             "role": msg.get("role", "assistant"),
                             "content": msg.get("content", ""),
                         }
-                return response_dict
+                add_guardrail_to_applied_guardrails_header(
+                    request_data=data, guardrail_name=self.guardrail_name
+                )
+                return ModelResponse(**response_dict)
 
             action = getattr(self, "on_flagged", "block")
             if action == "monitor":

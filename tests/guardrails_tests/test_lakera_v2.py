@@ -13,7 +13,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from fastapi import HTTPException
-from litellm.types.utils import CallTypes as LitellmCallTypes
+from litellm.types.utils import CallTypes as LitellmCallTypes, ModelResponse
 
 
 @pytest.mark.asyncio
@@ -503,6 +503,8 @@ async def test_lakera_post_call_masks_pii_and_allows():
             response=llm_response,
         )
 
-        assert result["choices"][0]["message"]["content"] != "Your email is test@example.com"
-        assert "[MASKED" in result["choices"][0]["message"]["content"]
+        assert isinstance(result, ModelResponse), "PII masking path must return ModelResponse"
+        result_dict = result.model_dump()
+        assert result_dict["choices"][0]["message"]["content"] != "Your email is test@example.com"
+        assert "[MASKED" in result_dict["choices"][0]["message"]["content"]
 
