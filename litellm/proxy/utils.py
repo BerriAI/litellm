@@ -4565,7 +4565,7 @@ def validate_model_access(
             )
 
 
-_PRESERVED_NONE_FIELDS: List[tuple] = [
+_PRESERVED_NONE_FIELDS: List[tuple[str, str]] = [
     ("message", "content"),  # null when tool_calls present (issue #6677)
     ("message", "role"),  # always required by OpenAI spec
     ("delta", "content"),  # null in streaming chunks
