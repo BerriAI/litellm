@@ -5,7 +5,7 @@ Common helpers / utils across al OpenAI endpoints
 import hashlib
 import json
 import ssl
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 import httpx
 import openai
@@ -24,9 +24,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
 )
 
+
 def _get_client_init_params(cls: type) -> List[str]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
-    return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+    return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]  # type: ignore[misc]
 
 
 _OPENAI_INIT_PARAMS: List[str] = _get_client_init_params(OpenAI)
