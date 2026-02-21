@@ -721,7 +721,13 @@ async def info_organization(organization_id: str):
             where={"organization_id": organization_id},
             include={
                 "litellm_budget_table": True,
-                "members": True,
+                "members": {
+                    "include": {
+                        "user": {
+                            "select": {"user_email": True},
+                        }
+                    }
+                },
                 "teams": True,
                 "object_permission": True,
             },
