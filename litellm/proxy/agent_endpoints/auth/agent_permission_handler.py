@@ -266,7 +266,7 @@ class AgentRequestHandler:
         except Exception as e:
             # litellm-dashboard is the default UI team and will never have agents;
             # skip noisy warnings for it.
-            if user_api_key_auth.team_id != "litellm-dashboard":
+            if user_api_key_auth.team_id != UI_SESSION_TOKEN_TEAM_ID:
                 verbose_logger.warning(
                     f"Failed to get allowed agents for team: {str(e)}"
                 )
