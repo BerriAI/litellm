@@ -1355,3 +1355,204 @@ def test_get_error_information_error_code_priority():
     result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
     assert result["error_code"] == ""
     assert result["error_class"] == "NoCodeException"
+
+
+def test_credential_name_injected_as_tag():
+    """
+    Test that litellm_credential_name from litellm_params is injected into
+    request_tags in the standard logging payload.
+
+    In the real flow, litellm_credential_name is captured into litellm_params
+    by get_litellm_params() via _OPTIONAL_KWARGS_KEYS.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging,
+    )
+    from datetime import datetime
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-cred-tag",
+        function_id="test-function",
+    )
+
+    mock_response = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.001,
+        "custom_llm_provider": "openai",
+        "litellm_params": {
+            "litellm_credential_name": "my-openai-credential",
+        },
+    }
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert "my-openai-credential" in payload["request_tags"]
+
+
+def test_credential_name_not_injected_when_absent():
+    """
+    Test that when litellm_credential_name is not in litellm_params,
+    request_tags are unchanged.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging,
+    )
+    from datetime import datetime
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-no-cred",
+        function_id="test-function",
+    )
+
+    mock_response = {
+        "id": "chatcmpl-456",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.001,
+        "custom_llm_provider": "openai",
+    }
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    # No credential-related tags should be present
+    for tag in payload["request_tags"]:
+        assert tag.startswith("User-Agent:")
+
+
+def test_credential_name_not_duplicated_in_tags():
+    """
+    Test that if the credential name already exists in the tags list,
+    it is not duplicated.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging,
+    )
+    from datetime import datetime
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-dup-cred",
+        function_id="test-function",
+    )
+
+    mock_response = {
+        "id": "chatcmpl-789",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi!"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.001,
+        "custom_llm_provider": "openai",
+        "litellm_params": {
+            "litellm_credential_name": "my-openai-credential",
+            "metadata": {"tags": ["my-openai-credential", "other-tag"]},
+        },
+    }
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    credential_count = payload["request_tags"].count("my-openai-credential")
+    assert credential_count == 1, (
+        f"Expected credential name once, found {credential_count} times"
+    )

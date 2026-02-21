@@ -5076,6 +5076,11 @@ def get_standard_logging_object_payload(
             litellm_params=litellm_params, proxy_server_request=proxy_server_request
         )
 
+        # Inject credential name as tag for spend tracking
+        credential_name = litellm_params.get("litellm_credential_name")
+        if credential_name and credential_name not in request_tags:
+            request_tags.append(credential_name)
+
         # cleanup timestamps
         (
             start_time_float,
