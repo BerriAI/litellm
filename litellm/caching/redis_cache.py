@@ -1105,6 +1105,10 @@ class RedisCache(BaseCache):
 
     async def disconnect(self):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        try:
+            self.redis_client.close()
+        except Exception:
+            pass
     
     async def test_connection(self) -> dict:
         """
