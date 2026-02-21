@@ -146,12 +146,12 @@ def test_precomputed_init_params_match_inspect_signature():
         _OPENAI_INIT_PARAMS,
     )
 
-    expected_openai = [
+    expected_openai = tuple(
         p for p in inspect.signature(OpenAI.__init__).parameters if p != "self"
-    ]
-    expected_azure = [
+    )
+    expected_azure = tuple(
         p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self"
-    ]
+    )
 
     assert _OPENAI_INIT_PARAMS == expected_openai
     assert _AZURE_OPENAI_INIT_PARAMS == expected_azure
@@ -161,6 +161,17 @@ def test_precomputed_init_params_match_inspect_signature():
 def test_get_openai_client_initialization_param_fields(client_type):
     """Verify the method returns the correct pre-computed params for each client type."""
     result = BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type)
-    assert isinstance(result, list)
+    assert isinstance(result, tuple)
     assert len(result) > 0
     assert "self" not in result
+
+
+@pytest.mark.parametrize("client_type", ["openai", "azure"])
+def test_get_openai_client_cache_key(client_type):
+    """Verify get_openai_client_cache_key doesn't raise on tuple + tuple concatenation."""
+    key = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={"api_key": "sk-test"},
+        client_type=client_type,
+    )
+    assert isinstance(key, str)
+    assert "api_key=sk-test" in key
