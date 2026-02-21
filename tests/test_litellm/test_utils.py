@@ -6,9 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from jsonschema import validate
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy.utils import is_valid_api_key
@@ -20,11 +18,9 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import CallTypes
 from litellm.utils import (
-    ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
     _is_streaming_request,
-    get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
 )
@@ -38,22 +34,13 @@ def test_check_provider_match_azure_ai_allows_openai_and_azure():
     This is needed for Azure Model Router which can route to OpenAI models.
     """
     # azure_ai should match openai models
-    assert _check_provider_match(
-        model_info={"litellm_provider": "openai"},
-        custom_llm_provider="azure_ai"
-    ) is True
+    assert _check_provider_match(model_info={"litellm_provider": "openai"}, custom_llm_provider="azure_ai") is True
 
     # azure_ai should match azure models
-    assert _check_provider_match(
-        model_info={"litellm_provider": "azure"},
-        custom_llm_provider="azure_ai"
-    ) is True
+    assert _check_provider_match(model_info={"litellm_provider": "azure"}, custom_llm_provider="azure_ai") is True
 
     # azure_ai should NOT match other providers
-    assert _check_provider_match(
-        model_info={"litellm_provider": "anthropic"},
-        custom_llm_provider="azure_ai"
-    ) is False
+    assert _check_provider_match(model_info={"litellm_provider": "anthropic"}, custom_llm_provider="azure_ai") is False
 
 
 def test_check_provider_match_github_allows_upstream_provider_metadata():
@@ -61,48 +48,42 @@ def test_check_provider_match_github_allows_upstream_provider_metadata():
     Test that github provider can match upstream provider metadata.
     GitHub Models can provide models from multiple providers.
     """
-    assert _check_provider_match(
-        model_info={"litellm_provider": "openai"},
-        custom_llm_provider="github",
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "openai"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
 
-    assert _check_provider_match(
-        model_info={"litellm_provider": "github"},
-        custom_llm_provider="github",
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "github"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
 
-    assert _check_provider_match(
-        model_info={"litellm_provider": "anthropic"},
-        custom_llm_provider="github",
-    ) is True
+    assert (
+        _check_provider_match(
+            model_info={"litellm_provider": "anthropic"},
+            custom_llm_provider="github",
+        )
+        is True
+    )
 
 
 def test_supports_function_calling_github_openai_alias():
     assert litellm.utils.supports_function_calling(model="github/gpt-4o-mini") is True
-    assert (
-        litellm.utils.supports_function_calling(
-            model="gpt-4o-mini", custom_llm_provider="github"
-        )
-        is True
-    )
+    assert litellm.utils.supports_function_calling(model="gpt-4o-mini", custom_llm_provider="github") is True
 
 
 def test_supports_function_calling_github_anthropic_alias():
-    assert (
-        litellm.utils.supports_function_calling(
-            model="github/claude-3-5-sonnet-latest"
-        )
-        is True
-    )
+    assert litellm.utils.supports_function_calling(model="github/claude-3-5-sonnet-latest") is True
 
 
 def test_supports_function_calling_unknown_github_alias_returns_false():
-    assert (
-        litellm.utils.supports_function_calling(
-            model="github/non-existent-model-for-capability-check"
-        )
-        is False
-    )
+    assert litellm.utils.supports_function_calling(model="github/non-existent-model-for-capability-check") is False
 
 
 def test_get_optional_params_image_gen():
@@ -155,9 +136,7 @@ def test_get_optional_params_image_gen_vertex_ai_size():
         drop_params=True,
     )
     assert optional_params is not None
-    assert (
-        "aspectRatio" not in optional_params
-    )  # aspectRatio should not be set if size is not provided
+    assert "aspectRatio" not in optional_params  # aspectRatio should not be set if size is not provided
     assert optional_params["sampleCount"] == 1
 
 
@@ -178,26 +157,19 @@ def test_all_model_configs():
         VertexAILlama3Config,
     )
 
-    assert (
-        "max_completion_tokens"
-        in VertexAILlama3Config().get_supported_openai_params(model="llama3")
-    )
-    assert VertexAILlama3Config().map_openai_params(
-        {"max_completion_tokens": 10}, {}, "llama3", drop_params=False
-    ) == {"max_tokens": 10}
+    assert "max_completion_tokens" in VertexAILlama3Config().get_supported_openai_params(model="llama3")
+    assert VertexAILlama3Config().map_openai_params({"max_completion_tokens": 10}, {}, "llama3", drop_params=False) == {
+        "max_tokens": 10
+    }
 
-    assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params(
-        model="jamba-1.5-mini@001"
-    )
+    assert "max_completion_tokens" in VertexAIAi21Config().get_supported_openai_params(model="jamba-1.5-mini@001")
     assert VertexAIAi21Config().map_openai_params(
         {"max_completion_tokens": 10}, {}, "jamba-1.5-mini@001", drop_params=False
     ) == {"max_tokens": 10}
 
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 
-    assert "max_completion_tokens" in FireworksAIConfig().get_supported_openai_params(
-        model="llama3"
-    )
+    assert "max_completion_tokens" in FireworksAIConfig().get_supported_openai_params(model="llama3")
     assert FireworksAIConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
@@ -207,9 +179,7 @@ def test_all_model_configs():
 
     from litellm.llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 
-    assert "max_completion_tokens" in NvidiaNimConfig().get_supported_openai_params(
-        model="llama3"
-    )
+    assert "max_completion_tokens" in NvidiaNimConfig().get_supported_openai_params(model="llama3")
     assert NvidiaNimConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
@@ -219,9 +189,7 @@ def test_all_model_configs():
 
     from litellm.llms.ollama.chat.transformation import OllamaChatConfig
 
-    assert "max_completion_tokens" in OllamaChatConfig().get_supported_openai_params(
-        model="llama3"
-    )
+    assert "max_completion_tokens" in OllamaChatConfig().get_supported_openai_params(model="llama3")
     assert OllamaChatConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
@@ -231,9 +199,7 @@ def test_all_model_configs():
 
     from litellm.llms.predibase.chat.transformation import PredibaseConfig
 
-    assert "max_completion_tokens" in PredibaseConfig().get_supported_openai_params(
-        model="llama3"
-    )
+    assert "max_completion_tokens" in PredibaseConfig().get_supported_openai_params(model="llama3")
     assert PredibaseConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
@@ -245,10 +211,7 @@ def test_all_model_configs():
         CodestralTextCompletionConfig,
     )
 
-    assert (
-        "max_completion_tokens"
-        in CodestralTextCompletionConfig().get_supported_openai_params(model="llama3")
-    )
+    assert "max_completion_tokens" in CodestralTextCompletionConfig().get_supported_openai_params(model="llama3")
     assert CodestralTextCompletionConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
@@ -260,9 +223,7 @@ def test_all_model_configs():
         VolcEngineChatConfig as VolcEngineConfig,
     )
 
-    assert "max_completion_tokens" in VolcEngineConfig().get_supported_openai_params(
-        model="llama3"
-    )
+    assert "max_completion_tokens" in VolcEngineConfig().get_supported_openai_params(model="llama3")
     assert VolcEngineConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
@@ -272,9 +233,7 @@ def test_all_model_configs():
 
     from litellm.llms.ai21.chat.transformation import AI21ChatConfig
 
-    assert "max_completion_tokens" in AI21ChatConfig().get_supported_openai_params(
-        "jamba-1.5-mini@001"
-    )
+    assert "max_completion_tokens" in AI21ChatConfig().get_supported_openai_params("jamba-1.5-mini@001")
     assert AI21ChatConfig().map_openai_params(
         model="jamba-1.5-mini@001",
         non_default_params={"max_completion_tokens": 10},
@@ -284,9 +243,7 @@ def test_all_model_configs():
 
     from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 
-    assert "max_completion_tokens" in AzureOpenAIConfig().get_supported_openai_params(
-        model="gpt-3.5-turbo"
-    )
+    assert "max_completion_tokens" in AzureOpenAIConfig().get_supported_openai_params(model="gpt-3.5-turbo")
     assert AzureOpenAIConfig().map_openai_params(
         model="gpt-3.5-turbo",
         non_default_params={"max_completion_tokens": 10},
@@ -297,11 +254,8 @@ def test_all_model_configs():
 
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
-    assert (
-        "max_completion_tokens"
-        in AmazonConverseConfig().get_supported_openai_params(
-            model="anthropic.claude-3-sonnet-20240229-v1:0"
-        )
+    assert "max_completion_tokens" in AmazonConverseConfig().get_supported_openai_params(
+        model="anthropic.claude-3-sonnet-20240229-v1:0"
     )
     assert AmazonConverseConfig().map_openai_params(
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -314,10 +268,7 @@ def test_all_model_configs():
         CodestralTextCompletionConfig,
     )
 
-    assert (
-        "max_completion_tokens"
-        in CodestralTextCompletionConfig().get_supported_openai_params(model="llama3")
-    )
+    assert "max_completion_tokens" in CodestralTextCompletionConfig().get_supported_openai_params(model="llama3")
     assert CodestralTextCompletionConfig().map_openai_params(
         model="llama3",
         non_default_params={"max_completion_tokens": 10},
@@ -327,11 +278,8 @@ def test_all_model_configs():
 
     from litellm import AmazonAnthropicClaudeConfig, AmazonAnthropicConfig
 
-    assert (
-        "max_completion_tokens"
-        in AmazonAnthropicClaudeConfig().get_supported_openai_params(
-            model="anthropic.claude-3-sonnet-20240229-v1:0"
-        )
+    assert "max_completion_tokens" in AmazonAnthropicClaudeConfig().get_supported_openai_params(
+        model="anthropic.claude-3-sonnet-20240229-v1:0"
     )
 
     assert AmazonAnthropicClaudeConfig().map_openai_params(
@@ -341,10 +289,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    assert (
-        "max_completion_tokens"
-        in AmazonAnthropicConfig().get_supported_openai_params(model="")
-    )
+    assert "max_completion_tokens" in AmazonAnthropicConfig().get_supported_openai_params(model="")
 
     assert AmazonAnthropicConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
@@ -368,11 +313,8 @@ def test_all_model_configs():
         VertexAIAnthropicConfig,
     )
 
-    assert (
-        "max_completion_tokens"
-        in VertexAIAnthropicConfig().get_supported_openai_params(
-            model="claude-3-5-sonnet-20240620"
-        )
+    assert "max_completion_tokens" in VertexAIAnthropicConfig().get_supported_openai_params(
+        model="claude-3-5-sonnet-20240620"
     )
 
     assert VertexAIAnthropicConfig().map_openai_params(
@@ -387,9 +329,7 @@ def test_all_model_configs():
         VertexGeminiConfig,
     )
 
-    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params(
-        model="gemini-1.0-pro"
-    )
+    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params(model="gemini-1.0-pro")
 
     assert VertexGeminiConfig().map_openai_params(
         model="gemini-1.0-pro",
@@ -398,12 +338,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_output_tokens": 10}
 
-    assert (
-        "max_completion_tokens"
-        in GoogleAIStudioGeminiConfig().get_supported_openai_params(
-            model="gemini-1.0-pro"
-        )
-    )
+    assert "max_completion_tokens" in GoogleAIStudioGeminiConfig().get_supported_openai_params(model="gemini-1.0-pro")
 
     assert GoogleAIStudioGeminiConfig().map_openai_params(
         model="gemini-1.0-pro",
@@ -412,9 +347,7 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_output_tokens": 10}
 
-    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params(
-        model="gemini-1.0-pro"
-    )
+    assert "max_completion_tokens" in VertexGeminiConfig().get_supported_openai_params(model="gemini-1.0-pro")
 
     assert VertexGeminiConfig().map_openai_params(
         model="gemini-1.0-pro",
@@ -440,9 +373,7 @@ def test_anthropic_web_search_in_model_info():
 
         model_info = get_model_info(model)
         assert model_info is not None
-        assert (
-            model_info["supports_web_search"] is True
-        ), f"Model {model} should support web search"
+        assert model_info["supports_web_search"] is True, f"Model {model} should support web search"
         assert (
             model_info["search_context_cost_per_query"] is not None
         ), f"Model {model} should have a search context cost per query"
@@ -545,9 +476,7 @@ def validate_model_cost_values(model_data, exceptions=None):
                         continue
 
                 if isinstance(cost_value, (int, float)) and cost_value > 1:
-                    violations.append(
-                        f"Model '{model_id}' has {field} = {cost_value} which exceeds 1"
-                    )
+                    violations.append(f"Model '{model_id}' has {field} = {cost_value} which exceeds 1")
 
         # Check nested cost fields
         for field in nested_cost_fields:
@@ -621,9 +550,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
                 "input_cost_per_video_per_second_above_8s_interval": {"type": "number"},
-                "input_cost_per_video_per_second_above_15s_interval": {
-                    "type": "number"
-                },
+                "input_cost_per_video_per_second_above_15s_interval": {"type": "number"},
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
@@ -675,13 +602,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_128k_tokens": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
-                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
-                    "type": "number"
-                },
+                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {"type": "number"},
                 "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
-                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
-                    "type": "number"
-                },
+                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {"type": "number"},
                 "output_cost_per_image_premium_image": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
@@ -807,9 +730,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
-    actual_json.pop(
-        "sample_spec", None
-    )  # remove the sample, whose schema is inconsistent with the real data
+    actual_json.pop("sample_spec", None)  # remove the sample, whose schema is inconsistent with the real data
 
     # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
@@ -845,7 +766,7 @@ def test_max_tokens_consistency():
 
     # Load the model configuration
     config_path = Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
-    with open(config_path, 'r') as f:
+    with open(config_path, "r") as f:
         models = json.load(f)
 
     inconsistencies = []
@@ -857,22 +778,26 @@ def test_max_tokens_consistency():
 
         # Check if both max_tokens and max_output_tokens exist
         if isinstance(config, dict):
-            max_tokens = config.get('max_tokens')
-            max_output_tokens = config.get('max_output_tokens')
+            max_tokens = config.get("max_tokens")
+            max_output_tokens = config.get("max_output_tokens")
 
             # Only validate if both exist
             if max_tokens is not None and max_output_tokens is not None:
                 if max_tokens != max_output_tokens:
-                    inconsistencies.append({
-                        'model': model_name,
-                        'max_tokens': max_tokens,
-                        'max_output_tokens': max_output_tokens
-                    })
+                    inconsistencies.append(
+                        {
+                            "model": model_name,
+                            "max_tokens": max_tokens,
+                            "max_output_tokens": max_output_tokens,
+                        }
+                    )
 
     if inconsistencies:
         error_msg = f"\n\n❌ Found {len(inconsistencies)} models with max_tokens != max_output_tokens:\n\n"
         for item in inconsistencies[:10]:  # Show first 10
-            error_msg += f"  {item['model']}: max_tokens={item['max_tokens']}, max_output_tokens={item['max_output_tokens']}\n"
+            error_msg += (
+                f"  {item['model']}: max_tokens={item['max_tokens']}, max_output_tokens={item['max_output_tokens']}\n"
+            )
 
         if len(inconsistencies) > 10:
             error_msg += f"\n  ... and {len(inconsistencies) - 10} more\n"
@@ -892,11 +817,11 @@ def test_get_model_info_gemini():
     for model, info in model_map.items():
         if (
             model.startswith("gemini/")
-            and not "gemma" in model
-            and not "learnlm" in model
-            and not "imagen" in model
-            and not "veo" in model
-            and not "robotics" in model
+            and "gemma" not in model
+            and "learnlm" not in model
+            and "imagen" not in model
+            and "veo" not in model
+            and "robotics" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -909,15 +834,10 @@ def test_openai_models_in_model_info():
     model_map = litellm.model_cost
     violated_models = []
     for model, info in model_map.items():
-        if (
-            info.get("litellm_provider") == "openai"
-            and info.get("supports_vision") is True
-        ):
+        if info.get("litellm_provider") == "openai" and info.get("supports_vision") is True:
             if info.get("supports_pdf_input") is not True:
                 violated_models.append(model)
-    assert (
-        len(violated_models) == 0
-    ), f"The following models should support pdf input: {violated_models}"
+    assert len(violated_models) == 0, f"The following models should support pdf input: {violated_models}"
 
 
 def test_supports_tool_choice_simple_tests():
@@ -925,18 +845,8 @@ def test_supports_tool_choice_simple_tests():
     simple sanity checks
     """
     assert litellm.utils.supports_tool_choice(model="gpt-4o") == True
-    assert (
-        litellm.utils.supports_tool_choice(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
-        )
-        == True
-    )
-    assert (
-        litellm.utils.supports_tool_choice(
-            model="anthropic.claude-3-sonnet-20240229-v1:0"
-        )
-        is True
-    )
+    assert litellm.utils.supports_tool_choice(model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0") == True
+    assert litellm.utils.supports_tool_choice(model="anthropic.claude-3-sonnet-20240229-v1:0") is True
 
     assert (
         litellm.utils.supports_tool_choice(
@@ -946,17 +856,10 @@ def test_supports_tool_choice_simple_tests():
         is True
     )
 
+    assert litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
+    assert litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0") is False
     assert (
-        litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0")
-        is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(
-            model="us.amazon.nova-micro-v1:0", custom_llm_provider="bedrock_converse"
-        )
+        litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0", custom_llm_provider="bedrock_converse")
         is False
     )
 
@@ -1049,9 +952,7 @@ def test_supports_computer_use_utility():
 
     try:
         # Test a model known to support computer_use from backup JSON
-        supports_cu_anthropic = supports_computer_use(
-            model="anthropic/claude-4-sonnet-20250514"
-        )
+        supports_cu_anthropic = supports_computer_use(model="anthropic/claude-4-sonnet-20250514")
         assert supports_cu_anthropic is True
 
         # Test a model known not to have the flag or set to false (defaults to False via get_model_info)
@@ -1094,9 +995,7 @@ def test_get_model_info_shows_supports_computer_use():
     model_known_not_to_support_computer_use = "gpt-3.5-turbo"
     info_gpt = litellm.get_model_info(model_known_not_to_support_computer_use)
     print(f"Info for {model_known_not_to_support_computer_use}: {info_gpt}")
-    assert (
-        info_gpt.get("supports_computer_use") is None
-    )  # Expecting None due to the default in ModelInfoBase
+    assert info_gpt.get("supports_computer_use") is None  # Expecting None due to the default in ModelInfoBase
 
 
 @pytest.mark.parametrize(
@@ -1207,20 +1106,14 @@ class TestProxyFunctionCalling:
             ("command-nightly", "litellm_proxy/command-nightly", False),
         ],
     )
-    def test_proxy_function_calling_support_consistency(
-        self, direct_model, proxy_model, expected_result
-    ):
+    def test_proxy_function_calling_support_consistency(self, direct_model, proxy_model, expected_result):
         """Test that proxy models have the same function calling support as their direct counterparts."""
         direct_result = supports_function_calling(direct_model)
         proxy_result = supports_function_calling(proxy_model)
 
         # Both should match the expected result
-        assert (
-            direct_result == expected_result
-        ), f"Direct model {direct_model} should return {expected_result}"
-        assert (
-            proxy_result == expected_result
-        ), f"Proxy model {proxy_model} should return {expected_result}"
+        assert direct_result == expected_result, f"Direct model {direct_model} should return {expected_result}"
+        assert proxy_result == expected_result, f"Proxy model {proxy_model} should return {expected_result}"
 
         # Direct and proxy should be consistent
         assert (
@@ -1292,9 +1185,7 @@ class TestProxyFunctionCalling:
             ("litellm_proxy/local-mistral", "ollama/mistral", False),
         ],
     )
-    def test_proxy_custom_model_names_without_config(
-        self, proxy_model_name, underlying_model, expected_proxy_result
-    ):
+    def test_proxy_custom_model_names_without_config(self, proxy_model_name, underlying_model, expected_proxy_result):
         """
         Test proxy models with custom model names that differ from underlying models.
 
@@ -1305,9 +1196,7 @@ class TestProxyFunctionCalling:
         # Test the underlying model directly first to establish what it SHOULD return
         try:
             underlying_result = supports_function_calling(underlying_model)
-            print(
-                f"Underlying model {underlying_model} supports function calling: {underlying_result}"
-            )
+            print(f"Underlying model {underlying_model} supports function calling: {underlying_result}")
         except Exception as e:
             print(f"Warning: Could not test underlying model {underlying_model}: {e}")
 
@@ -1329,9 +1218,7 @@ class TestProxyFunctionCalling:
         # Case 1: Custom model name that cannot be resolved
         custom_model = "litellm_proxy/my-custom-claude"
         result = supports_function_calling(custom_model)
-        assert (
-            result is False
-        ), "Custom model names return False without proxy config context"
+        assert result is False, "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
         resolvable_model = "litellm_proxy/claude-sonnet-4-5-20250929"
@@ -1370,9 +1257,7 @@ class TestProxyFunctionCalling:
             ),  # Hints at Bedrock Claude 3 Sonnet
         ],
     )
-    def test_proxy_models_with_naming_hints(
-        self, proxy_model_with_hints, expected_result
-    ):
+    def test_proxy_models_with_naming_hints(self, proxy_model_with_hints, expected_result):
         """
         Test proxy models with names that provide hints about the underlying model.
 
@@ -1384,14 +1269,10 @@ class TestProxyFunctionCalling:
 
         # Currently these will return False, but we document the expected behavior
         # In the future, we could implement smarter model name inference
-        print(
-            f"Model {proxy_model_with_hints}: current={proxy_result}, desired={expected_result}"
-        )
+        print(f"Model {proxy_model_with_hints}: current={proxy_result}, desired={expected_result}")
 
         # For now, we expect False (current behavior), but document the limitation
-        assert (
-            proxy_result is False
-        ), f"Current limitation: {proxy_model_with_hints} returns False without inference"
+        assert proxy_result is False, f"Current limitation: {proxy_model_with_hints} returns False without inference"
 
     @pytest.mark.parametrize(
         "proxy_model,expected_result",
@@ -1416,9 +1297,7 @@ class TestProxyFunctionCalling:
         """
         try:
             result = supports_function_calling(model=proxy_model)
-            assert (
-                result == expected_result
-            ), f"Proxy model {proxy_model} returned {result}, expected {expected_result}"
+            assert result == expected_result, f"Proxy model {proxy_model} returned {result}, expected {expected_result}"
         except Exception as e:
             pytest.fail(f"Error testing proxy model {proxy_model}: {e}")
 
@@ -1458,17 +1337,11 @@ class TestProxyFunctionCalling:
         parameter explicitly set to None, which is a common usage pattern.
         """
         try:
-            result = supports_function_calling(
-                model=model_name, custom_llm_provider=None
-            )
+            result = supports_function_calling(model=model_name, custom_llm_provider=None)
             # All the models in this test should support function calling
-            assert (
-                result is True
-            ), f"Model {model_name} should support function calling but returned {result}"
+            assert result is True, f"Model {model_name} should support function calling but returned {result}"
         except Exception as e:
-            pytest.fail(
-                f"Error testing {model_name} with custom_llm_provider=None: {e}"
-            )
+            pytest.fail(f"Error testing {model_name} with custom_llm_provider=None: {e}")
 
     def test_edge_cases_and_malformed_proxy_models(self):
         """Test edge cases and malformed proxy model names."""
@@ -1504,10 +1377,8 @@ class TestProxyFunctionCalling:
         direct_result = supports_function_calling(model=direct_model)
         proxy_result = supports_function_calling(model=proxy_model)
 
-        print(f"\nDemonstration of proxy model resolution:")
-        print(
-            f"Direct model '{direct_model}' supports function calling: {direct_result}"
-        )
+        print("\nDemonstration of proxy model resolution:")
+        print(f"Direct model '{direct_model}' supports function calling: {direct_result}")
         print(f"Proxy model '{proxy_model}' supports function calling: {proxy_result}")
 
         # This assertion will currently fail due to the bug
@@ -1520,8 +1391,7 @@ class TestProxyFunctionCalling:
             )
 
         assert direct_result == proxy_result, (
-            f"Proxy model resolution issue: {direct_model} -> {direct_result}, "
-            f"{proxy_model} -> {proxy_result}"
+            f"Proxy model resolution issue: {direct_model} -> {direct_result}, " f"{proxy_model} -> {proxy_result}"
         )
 
     @pytest.mark.parametrize(
@@ -1698,9 +1568,7 @@ class TestProxyFunctionCalling:
                     underlying_result is True
                 ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
         except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
+            print(f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}")
 
         # Test the proxy model - should return False due to lack of configuration context
         proxy_result = supports_function_calling(proxy_model_name)
@@ -1787,9 +1655,7 @@ class TestProxyFunctionCalling:
                 result = supports_function_calling(model)
                 print(f"Direct test - {model}: {result}")
                 # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
+                assert result is True, f"Claude 3 model should support function calling: {model}"
             except Exception as e:
                 print(f"Could not test {model}: {e}")
 
@@ -1967,9 +1833,7 @@ class TestProxyFunctionCalling:
                     underlying_result is True
                 ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
         except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
+            print(f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}")
 
         # Test the proxy model - should return False due to lack of configuration context
         proxy_result = supports_function_calling(proxy_model_name)
@@ -2056,9 +1920,7 @@ class TestProxyFunctionCalling:
                 result = supports_function_calling(model)
                 print(f"Direct test - {model}: {result}")
                 # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
+                assert result is True, f"Claude 3 model should support function calling: {model}"
             except Exception as e:
                 print(f"Could not test {model}: {e}")
 
@@ -2236,9 +2098,7 @@ class TestProxyFunctionCalling:
                     underlying_result is True
                 ), f"Claude 3 models should support function calling: {underlying_bedrock_model}"
         except Exception as e:
-            print(
-                f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}"
-            )
+            print(f"  Warning: Could not test underlying model {underlying_bedrock_model}: {e}")
 
         # Test the proxy model - should return False due to lack of configuration context
         proxy_result = supports_function_calling(proxy_model_name)
@@ -2325,9 +2185,7 @@ class TestProxyFunctionCalling:
                 result = supports_function_calling(model)
                 print(f"Direct test - {model}: {result}")
                 # Claude 3 models should support function calling
-                assert (
-                    result is True
-                ), f"Claude 3 model should support function calling: {model}"
+                assert result is True, f"Claude 3 model should support function calling: {model}"
             except Exception as e:
                 print(f"Could not test {model}: {e}")
 
@@ -2337,16 +2195,17 @@ def test_register_model_with_scientific_notation():
     Test that the register_model function can handle scientific notation in the model name.
     """
     import uuid
-    
+
     # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
     test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
-    
+
     # Clear LRU caches that might have stale data
     from litellm.utils import (
         _invalidate_model_cost_lowercase_map,
     )
+
     _invalidate_model_cost_lowercase_map()
-    
+
     model_cost_dict = {
         test_model_name: {
             "max_tokens": 8192,
@@ -2365,7 +2224,7 @@ def test_register_model_with_scientific_notation():
     assert registered_model["output_cost_per_token"] == 6e-07
     assert registered_model["litellm_provider"] == "openai"
     assert registered_model["mode"] == "chat"
-    
+
     # Clean up after test
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
@@ -2519,17 +2378,13 @@ def test_block_key_hashing_logic():
         # Additional verification: if it should be hashed, verify it's actually a hash
         if should_be_hashed:
             # SHA-256 hashes are 64 characters long and contain only hex digits
-            assert (
-                len(hashed_token) == 64
-            ), f"Hash length should be 64, got {len(hashed_token)} for {input_key}"
+            assert len(hashed_token) == 64, f"Hash length should be 64, got {len(hashed_token)} for {input_key}"
             assert all(
                 c in "0123456789abcdef" for c in hashed_token
             ), f"Hash should contain only hex digits for {input_key}"
         else:
             # If not hashed, it should be the original string
-            assert (
-                hashed_token == input_key
-            ), f"Non-hashed key should remain unchanged: {input_key}"
+            assert hashed_token == input_key, f"Non-hashed key should remain unchanged: {input_key}"
 
     print("✅ All block_key hashing logic tests passed!")
 
@@ -2556,9 +2411,7 @@ def test_generate_gcp_iam_access_token():
     mock_iam_credentials_v1.GenerateAccessTokenRequest = Mock()
 
     # Test successful token generation by mocking sys.modules
-    with patch.dict(
-        "sys.modules", {"google.cloud.iam_credentials_v1": mock_iam_credentials_v1}
-    ):
+    with patch.dict("sys.modules", {"google.cloud.iam_credentials_v1": mock_iam_credentials_v1}):
         from litellm._redis import _generate_gcp_iam_access_token
 
         result = _generate_gcp_iam_access_token(service_account)
@@ -2597,15 +2450,111 @@ def test_generate_gcp_iam_access_token_import_error():
         assert "pip install google-cloud-iam" in str(exc_info.value)
 
 
+def test_generate_azure_ad_redis_token():
+    """Test _generate_azure_ad_redis_token with mocked Azure credential."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "azure-access-token-12345"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    with patch("azure.identity.DefaultAzureCredential", return_value=mock_credential):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token()
+
+        assert result == expected_token
+        mock_credential.get_token.assert_called_once_with("https://redis.azure.com/.default")
+
+
+def test_generate_azure_ad_redis_token_service_principal():
+    """Test _generate_azure_ad_redis_token with service principal credentials."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "sp-access-token-67890"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    with patch("azure.identity.ClientSecretCredential", return_value=mock_credential) as mock_cls:
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token(
+            azure_client_id="test-client-id",
+            azure_tenant_id="test-tenant-id",
+            azure_client_secret="test-secret",
+        )
+
+        assert result == expected_token
+        mock_cls.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            client_secret="test-secret",
+        )
+
+
+def test_generate_azure_ad_redis_token_import_error():
+    """Test that _generate_azure_ad_redis_token raises ImportError when azure-identity is missing."""
+    from unittest.mock import patch
+    from litellm._redis import _generate_azure_ad_redis_token
+
+    original_import = __builtins__["__import__"]
+
+    def mock_import(name, *args, **kwargs):
+        if name == "azure.identity":
+            raise ImportError("No module named 'azure.identity'")
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=mock_import):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_azure_ad_redis_token()
+
+        assert "azure-identity is required" in str(exc_info.value)
+
+
+def test_redis_client_logic_azure_ad_auth():
+    """Test that _get_redis_client_logic sets up Azure AD auth when REDIS_AZURE_AD_TOKEN=true."""
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(
+        os.environ,
+        {
+            "REDIS_HOST": "myredis.redis.cache.windows.net",
+            "REDIS_PORT": "6380",
+            "REDIS_AZURE_AD_TOKEN": "true",
+            "REDIS_SSL": "true",
+        },
+        clear=True,
+    ):
+        from litellm._redis import _get_redis_client_logic
+
+        redis_kwargs = _get_redis_client_logic()
+
+        # Should have redis_connect_func set
+        assert "redis_connect_func" in redis_kwargs
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_redis_ad_token")
+        assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
+
+        # Azure-specific kwargs should be removed
+        assert "azure_redis_ad_token" not in redis_kwargs
+        assert "azure_client_id" not in redis_kwargs
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
 
 
 def test_model_info_for_vertex_ai_deepseek_model():
-    model_info = litellm.get_model_info(
-        model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas"
-    )
+    model_info = litellm.get_model_info(model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas")
     assert model_info is not None
     assert model_info["litellm_provider"] == "vertex_ai-deepseek_models"
     assert model_info["mode"] == "chat"
@@ -2728,9 +2677,7 @@ class TestGetValidModelsWithCLI:
             ]
         }
 
-        with patch.object(
-            litellm.module_level_client, "get", return_value=mock_response
-        ) as mock_get:
+        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
             # Test the exact pattern used in cli_token_usage.py
             result = litellm.get_valid_models(
                 check_provider_endpoint=True,
@@ -2968,15 +2915,15 @@ class TestProxyLoggingBudgetAlerts:
         proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
             type=alert_type, user_info=user_info
         )
-        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
-            type=alert_type, user_info=user_info
-        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(type=alert_type, user_info=user_info)
 
-    async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_alerting_none(self):
+    async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_alerting_none(
+        self,
+    ):
         """
         Test that soft_budget alerts with alert_emails bypass the alerting=None check
         and send emails even when alerting is None.
-        
+
         This tests the new logic that allows team-specific soft budget email alerts
         via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
         """
@@ -3012,7 +2959,9 @@ class TestProxyLoggingBudgetAlerts:
             type="soft_budget", user_info=user_info
         )
 
-    async def test_budget_alerts_soft_budget_without_alert_emails_respects_alerting_none(self):
+    async def test_budget_alerts_soft_budget_without_alert_emails_respects_alerting_none(
+        self,
+    ):
         """
         Test that soft_budget alerts WITHOUT alert_emails still respect alerting=None
         and do not send emails when alerting is None.
@@ -3045,7 +2994,9 @@ class TestProxyLoggingBudgetAlerts:
         proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
         proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
 
-    async def test_budget_alerts_soft_budget_with_empty_alert_emails_respects_alerting_none(self):
+    async def test_budget_alerts_soft_budget_with_empty_alert_emails_respects_alerting_none(
+        self,
+    ):
         """
         Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
         """
@@ -3182,11 +3133,12 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
         {"role": "user", "content": "Build a feature"},
         {
             "role": "assistant",
-            "thinking_blocks": [
-                {"type": "thinking", "thinking": "Let me analyze the requirements..."}
-            ],
+            "thinking_blocks": [{"type": "thinking", "thinking": "Let me analyze the requirements..."}],
             "tool_calls": [
-                {"id": "toolu_1", "function": {"name": "file_editor", "arguments": "{}"}}
+                {
+                    "id": "toolu_1",
+                    "function": {"name": "file_editor", "arguments": "{}"},
+                }
             ],
         },
         {
@@ -3199,7 +3151,10 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
             # NO thinking_blocks - Claude sometimes doesn't include them
             "content": [{"type": "text", "text": "Let me explore more..."}],
             "tool_calls": [
-                {"id": "toolu_2", "function": {"name": "file_editor", "arguments": "{}"}}
+                {
+                    "id": "toolu_2",
+                    "function": {"name": "file_editor", "arguments": "{}"},
+                }
             ],
         },
     ]
@@ -3212,10 +3167,9 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
 
     # So we should NOT drop thinking - the combination tells us thinking is in use
     # The fix uses both checks: only drop if last has none AND no message has any
-    should_drop_thinking = (
-        last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-        and not any_assistant_message_has_thinking_blocks(messages)
-    )
+    should_drop_thinking = last_assistant_with_tool_calls_has_no_thinking_blocks(
+        messages
+    ) and not any_assistant_message_has_thinking_blocks(messages)
     assert should_drop_thinking is False
 
 
@@ -3425,37 +3379,27 @@ class TestMetadataNoneHandling:
     def test_metadata_none_get_previous_models(self):
         """kwargs.get("metadata") or {} should return {} when metadata is None."""
         kwargs = {"metadata": None}
-        previous_models = (kwargs.get("metadata") or {}).get(
-            "previous_models", None
-        )
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
         assert previous_models is None
 
     def test_metadata_none_model_group_check(self):
         """'model_group' in (kwargs.get("metadata") or {}) should not raise TypeError."""
         kwargs = {"metadata": None}
-        _is_litellm_router_call = "model_group" in (
-            kwargs.get("metadata") or {}
-        )
+        _is_litellm_router_call = "model_group" in (kwargs.get("metadata") or {})
         assert _is_litellm_router_call is False
 
     def test_metadata_missing_key(self):
         """Should work when metadata key is completely absent."""
         kwargs = {}
-        previous_models = (kwargs.get("metadata") or {}).get(
-            "previous_models", None
-        )
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
         assert previous_models is None
 
     def test_metadata_present_with_values(self):
         """Should work when metadata has actual values."""
         kwargs = {"metadata": {"previous_models": ["model1"], "model_group": "test"}}
-        previous_models = (kwargs.get("metadata") or {}).get(
-            "previous_models", None
-        )
+        previous_models = (kwargs.get("metadata") or {}).get("previous_models", None)
         assert previous_models == ["model1"]
-        _is_litellm_router_call = "model_group" in (
-            kwargs.get("metadata") or {}
-        )
+        _is_litellm_router_call = "model_group" in (kwargs.get("metadata") or {})
         assert _is_litellm_router_call is True
 
     def test_metadata_none_causes_error_with_old_pattern(self):
