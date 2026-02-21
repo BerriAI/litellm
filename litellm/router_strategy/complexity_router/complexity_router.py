@@ -115,8 +115,8 @@ class ComplexityRouter(CustomLogger):
     def _score_token_count(self, estimated_tokens: int) -> DimensionScore:
         """Score based on token count."""
         thresholds = self.config.token_thresholds
-        simple_threshold = thresholds.get("simple", 50)
-        complex_threshold = thresholds.get("complex", 500)
+        simple_threshold = thresholds.get("simple", 15)
+        complex_threshold = thresholds.get("complex", 400)
         
         if estimated_tokens < simple_threshold:
             return DimensionScore(
@@ -221,7 +221,11 @@ class ComplexityRouter(CustomLogger):
             - score: The raw weighted score
             - signals: List of triggered signals for debugging
         """
-        # Combine text for analysis
+        # Combine text for analysis.
+        # System prompt is intentionally included in code/technical/simple scoring
+        # because it provides deployment-level context (e.g., "You are a Python assistant"
+        # signals that code-capable models are appropriate). Reasoning markers use
+        # user_text only to prevent system prompts from forcing REASONING tier.
         full_text = f"{system_prompt or ''} {prompt}".lower()
         user_text = prompt.lower()
         
@@ -273,9 +277,9 @@ class ComplexityRouter(CustomLogger):
         
         # Map score to tier
         boundaries = self.config.tier_boundaries
-        simple_medium = boundaries.get("simple_medium", 0.25)
-        medium_complex = boundaries.get("medium_complex", 0.50)
-        complex_reasoning = boundaries.get("complex_reasoning", 0.75)
+        simple_medium = boundaries.get("simple_medium", 0.15)
+        medium_complex = boundaries.get("medium_complex", 0.35)
+        complex_reasoning = boundaries.get("complex_reasoning", 0.60)
         
         if weighted_score < simple_medium:
             tier = ComplexityTier.SIMPLE
