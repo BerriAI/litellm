@@ -2506,10 +2506,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             # Add GitHub Copilot headers (same as /responses endpoint does)
             if custom_llm_provider == "github_copilot":
+                from litellm.llms.github_copilot.authenticator import Authenticator
                 from litellm.llms.github_copilot.common_utils import (
                     get_copilot_default_headers,
                 )
-                from litellm.llms.github_copilot.authenticator import Authenticator
 
                 copilot_auth = Authenticator()
                 copilot_api_key = copilot_auth.get_api_key()
@@ -7230,6 +7230,71 @@ def stream_chunk_builder(  # noqa: PLR0915
         # Initialize the response dictionary
         response = processor.build_base_response(chunks)
 
+        # Fast path for the common text-only streaming case:
+        # avoid repeated multi-pass list scans over chunks.
+        simple_content_parts: List[str] = []
+        is_simple_text_stream = True
+        for chunk in chunks:
+            if len(chunk["choices"]) == 0:
+                continue
+
+            choice = chunk["choices"][0]
+            delta_obj = choice.get("delta", {}) if isinstance(choice, dict) else getattr(choice, "delta", {})
+            if isinstance(delta_obj, dict):
+                delta = delta_obj
+            elif hasattr(delta_obj, "model_dump"):
+                delta = cast(Dict[str, Any], delta_obj.model_dump())
+            else:
+                delta = {}
+
+            if (
+                delta.get("tool_calls") is not None
+                or delta.get("function_call") is not None
+                or delta.get("reasoning_content") is not None
+                or delta.get("thinking_blocks") is not None
+                or delta.get("annotations") is not None
+                or delta.get("audio") is not None
+                or delta.get("images") is not None
+                or delta.get("provider_specific_fields") is not None
+            ):
+                is_simple_text_stream = False
+                break
+
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                simple_content_parts.append(content)
+
+        if is_simple_text_stream:
+            if simple_content_parts:
+                response["choices"][0]["message"]["content"] = "".join(simple_content_parts)
+            completion_output = get_content_from_model_response(response)
+            usage = processor.calculate_usage(
+                chunks=chunks,
+                model=model,
+                completion_output=completion_output,
+                messages=messages,
+                reasoning_tokens=0,
+            )
+            setattr(response, "usage", usage)
+
+            # Propagate provider_specific_fields from chunk hidden params when present.
+            for chunk in reversed(chunks):
+                if isinstance(chunk, dict):
+                    hidden = chunk.get("_hidden_params")
+                else:
+                    hidden = getattr(chunk, "_hidden_params", None)
+                if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
+                    response._hidden_params.setdefault(
+                        "provider_specific_fields", {}
+                    ).update(hidden["provider_specific_fields"])
+                    break
+
+            if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+                setattr(
+                    usage, "cost", logging_obj._response_cost_calculator(result=response)
+                )
+            return response
+
         tool_call_chunks = [
             chunk
             for chunk in chunks
@@ -7386,8 +7451,11 @@ def stream_chunk_builder(  # noqa: PLR0915
         # Propagate provider_specific_fields from the last chunk (contains provider
         # metadata like traffic_type set during streaming)
         for chunk in reversed(chunks):
-            hidden = getattr(chunk, "_hidden_params", None)
-            if hidden and "provider_specific_fields" in hidden:
+            if isinstance(chunk, dict):
+                hidden = chunk.get("_hidden_params")
+            else:
+                hidden = getattr(chunk, "_hidden_params", None)
+            if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
                 response._hidden_params.setdefault(
                     "provider_specific_fields", {}
                 ).update(hidden["provider_specific_fields"])
