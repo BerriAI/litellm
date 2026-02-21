@@ -1632,7 +1632,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details["litellm_params"]["metadata"] = {}
                 self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(logging_result, "_hidden_params", {})  # type: ignore
 
-        if "response_cost" in hidden_params:
+        if self.model_call_details.get("cache_hit") is True:
+            self.model_call_details["response_cost"] = 0.0
+        elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
         else:
             self.model_call_details["response_cost"] = self._response_cost_calculator(
