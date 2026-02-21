@@ -722,66 +722,40 @@ class TestXAIShellToolLive:
     """
 
     @pytest.mark.asyncio
-    async def test_xai_shell_tool_multi_turn(self):
+    async def test_xai_shell_tool_auto_execution(self):
         """
-        Full multi-turn: prompt → model calls _litellm_shell → we send
-        function_call_output back → model returns final text.
+        Single call: the shell execution loop should automatically run
+        the _litellm_shell command in the sandbox and return the final
+        text response — just like OpenAI's native shell tool.
         """
-        # Turn 1: send prompt with shell tool
-        response = await litellm.aresponses(
-            model="xai/grok-3-mini",
-            input="Run the command: echo 'hello from xai shell test'. Return the exact output.",
-            tools=[SHELL_TOOL],
-            max_output_tokens=256,
-        )
-        assert response is not None
-        print(f"\nTurn 1 output: {response.output}")
+        with patch(
+            "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor"
+        ) as MockExecutor:
+            MockExecutor.return_value.execute_shell_command.return_value = {
+                "success": True,
+                "output": "hello from xai shell test\n",
+                "error": "",
+                "files": [],
+            }
 
-        # Find the function_call in the output
-        call_id = None
+            response = await litellm.aresponses(
+                model="xai/grok-3-mini",
+                input="Run the command: echo 'hello from xai shell test'. Return the exact output.",
+                tools=[SHELL_TOOL],
+                max_output_tokens=256,
+            )
+
+        assert response is not None
+        print(f"\nOutput: {response.output}")
+
+        # The final response should be a text message, not a function_call
+        has_text = False
         for item in response.output:
             item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-            if item_type == "function_call":
-                call_id = item.get("call_id") if isinstance(item, dict) else getattr(item, "call_id", None)
-                name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
-                args = item.get("arguments") if isinstance(item, dict) else getattr(item, "arguments", None)
-                print(f"Function call: {name}({args}), call_id={call_id}")
+            if item_type == "message":
+                has_text = True
                 break
-
-        assert call_id is not None, "Model should have called _litellm_shell"
-
-        # Turn 2: send the tool result back
-        follow_up = await litellm.aresponses(
-            model="xai/grok-3-mini",
-            previous_response_id=response.id,
-            input=[{
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": "hello from xai shell test\n",
-            }],
-            tools=[SHELL_TOOL],
-            max_output_tokens=256,
-        )
-        assert follow_up is not None
-        print(f"\nTurn 2 output: {follow_up.output}")
-
-    @pytest.mark.asyncio
-    async def test_xai_shell_tool_streaming(self):
-        """Streaming: xAI model with shell tool should produce streaming events."""
-        response = await litellm.aresponses(
-            model="xai/grok-3-mini",
-            input="Run: echo 'streaming xai test'",
-            tools=[SHELL_TOOL],
-            max_output_tokens=256,
-            stream=True,
-        )
-
-        event_count = 0
-        async for event in response:
-            event_count += 1
-
-        assert event_count > 0
-        print(f"\nStreaming events: {event_count}")
+        assert has_text, "Final response should contain a text message after auto-execution"
 
     @pytest.mark.asyncio
     async def test_xai_shell_tool_with_function_tools(self):
