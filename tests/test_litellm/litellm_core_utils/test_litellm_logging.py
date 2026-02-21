@@ -406,6 +406,125 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_stream_event.assert_not_called()
 
 
+def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
+    """Ensure CustomGuardrail logging_hook is skipped when should_run_guardrail is False."""
+    import datetime
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class DummyGuardrail(CustomGuardrail):
+        pass
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+
+    model_response = ModelResponse(
+        id="resp-guardrail-skip",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    guardrail = DummyGuardrail(
+        guardrail_name="dummy-guardrail",
+        event_hook=GuardrailEventHooks.logging_only,
+    )
+    guardrail.should_run_guardrail = MagicMock(return_value=False)
+    guardrail.logging_hook = MagicMock(
+        return_value=(logging_obj.model_call_details, model_response)
+    )
+
+    dummy_logger = DummyLogger()
+    dummy_logger.logging_hook = MagicMock(
+        return_value=(logging_obj.model_call_details, model_response)
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[guardrail, dummy_logger],
+    ):
+        logging_obj.success_handler(
+            result=model_response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            cache_hit=False,
+        )
+
+    guardrail.should_run_guardrail.assert_called_once()
+    guardrail_call_kwargs = guardrail.should_run_guardrail.call_args.kwargs
+    assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
+    guardrail.logging_hook.assert_not_called()
+    dummy_logger.logging_hook.assert_called_once()
+
+
+def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
+    """Ensure CustomGuardrail logging_hook runs when should_run_guardrail is True."""
+    import datetime
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class DummyGuardrail(CustomGuardrail):
+        pass
+
+    logging_obj.stream = False
+
+    model_response = ModelResponse(
+        id="resp-guardrail-run",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    guardrail = DummyGuardrail(
+        guardrail_name="dummy-guardrail",
+        event_hook=GuardrailEventHooks.logging_only,
+    )
+    guardrail.should_run_guardrail = MagicMock(return_value=True)
+
+    def _guardrail_logging_hook(kwargs, result, call_type):
+        updated_kwargs = dict(kwargs)
+        updated_kwargs["guardrail_hook_ran"] = True
+        return updated_kwargs, result
+
+    guardrail.logging_hook = MagicMock(side_effect=_guardrail_logging_hook)
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[guardrail],
+    ):
+        logging_obj.success_handler(
+            result=model_response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            cache_hit=False,
+        )
+
+    guardrail.should_run_guardrail.assert_called_once()
+    guardrail_call_kwargs = guardrail.should_run_guardrail.call_args.kwargs
+    assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
+    guardrail.logging_hook.assert_called_once()
+    assert logging_obj.model_call_details.get("guardrail_hook_ran") is True
+    
+
 def test_get_user_agent_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
