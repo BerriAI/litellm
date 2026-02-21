@@ -84,21 +84,21 @@ DEFAULT_CREATIVE_KEYWORDS: List[str] = [
 
 DEFAULT_DIMENSION_WEIGHTS: Dict[str, float] = {
     "tokenCount": 0.10,        # Reduced - length is less important than content
-    "codePresence": 0.25,      # Increased - code requests need capable models
+    "codePresence": 0.30,      # High - code requests need capable models
     "reasoningMarkers": 0.25,  # High - explicit reasoning requests
-    "technicalTerms": 0.20,    # Increased - technical content matters
-    "simpleIndicators": 0.10,  # Reduced - don't over-penalize simple patterns
-    "multiStepPatterns": 0.05,
-    "questionComplexity": 0.05,
+    "technicalTerms": 0.25,    # High - technical content matters
+    "simpleIndicators": 0.05,  # Low - don't over-penalize simple patterns
+    "multiStepPatterns": 0.03,
+    "questionComplexity": 0.02,
 }
 
 
 # ─── Default Tier Boundaries ───
 
 DEFAULT_TIER_BOUNDARIES: Dict[str, float] = {
-    "simple_medium": 0.25,
-    "medium_complex": 0.50,
-    "complex_reasoning": 0.75,
+    "simple_medium": 0.15,      # Lower threshold to catch more MEDIUM cases
+    "medium_complex": 0.35,     # Lower threshold to catch technical COMPLEX cases
+    "complex_reasoning": 0.60,  # Reasoning tier reserved for explicit reasoning markers
 }
 
 
