@@ -11,7 +11,7 @@ brand_self so all other major airlines are treated as competitors.
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (
     BaseCompetitorIntentChecker,
