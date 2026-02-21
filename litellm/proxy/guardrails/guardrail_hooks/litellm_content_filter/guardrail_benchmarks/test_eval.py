@@ -228,8 +228,8 @@ def _content_filter(category: str):
 
     guardrail = ContentFilterGuardrail(
         guardrail_name=f"{category}_eval",
-        categories=[  # type: ignore[arg-type,list-item]
-            {
+        categories=[
+            {  # type: ignore[list-item]
                 "category": category,
                 "enabled": True,
                 "action": "BLOCK",
