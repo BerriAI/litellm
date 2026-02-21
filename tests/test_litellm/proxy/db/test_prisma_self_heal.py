@@ -31,9 +31,9 @@ def mock_proxy_logging():
 @pytest.mark.asyncio
 async def test_attempt_db_reconnect_should_succeed(mock_proxy_logging):
     client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
-    client.disconnect = AsyncMock(return_value=None)
-    client.connect = AsyncMock(return_value=None)
-    client.health_check = AsyncMock(return_value=[{"result": 1}])
+    client.db.disconnect = AsyncMock(return_value=None)
+    client.db.connect = AsyncMock(return_value=None)
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
 
     result = await client.attempt_db_reconnect(
         reason="unit_test_reconnect_success",
@@ -41,17 +41,17 @@ async def test_attempt_db_reconnect_should_succeed(mock_proxy_logging):
     )
 
     assert result is True
-    client.disconnect.assert_awaited_once()
-    client.connect.assert_awaited_once()
-    client.health_check.assert_awaited_once()
+    client.db.disconnect.assert_awaited_once()
+    client.db.connect.assert_awaited_once()
+    client.db.query_raw.assert_awaited_once_with("SELECT 1")
 
 
 @pytest.mark.asyncio
 async def test_attempt_db_reconnect_should_skip_when_in_cooldown(mock_proxy_logging):
     client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
-    client.disconnect = AsyncMock(return_value=None)
-    client.connect = AsyncMock(return_value=None)
-    client.health_check = AsyncMock(return_value=[{"result": 1}])
+    client.db.disconnect = AsyncMock(return_value=None)
+    client.db.connect = AsyncMock(return_value=None)
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
     client._db_reconnect_cooldown_seconds = 120
     client._db_last_reconnect_attempt_ts = time.time()
 
@@ -61,9 +61,9 @@ async def test_attempt_db_reconnect_should_skip_when_in_cooldown(mock_proxy_logg
     )
 
     assert result is False
-    client.disconnect.assert_not_called()
-    client.connect.assert_not_called()
-    client.health_check.assert_not_called()
+    client.db.disconnect.assert_not_called()
+    client.db.connect.assert_not_called()
+    client.db.query_raw.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -85,6 +85,43 @@ async def test_attempt_db_reconnect_should_set_cooldown_after_attempt(mock_proxy
 
     assert result is True
     assert client._db_last_reconnect_attempt_ts == 200.0
+
+
+@pytest.mark.asyncio
+async def test_run_reconnect_cycle_watchdog_should_use_direct_db_ops(mock_proxy_logging):
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client.disconnect = AsyncMock(side_effect=AssertionError("wrapper disconnect used"))
+    client.connect = AsyncMock(side_effect=AssertionError("wrapper connect used"))
+    client.db.disconnect = AsyncMock(return_value=None)
+    client.db.connect = AsyncMock(return_value=None)
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+
+    await client._run_reconnect_cycle(timeout_seconds=None)
+
+    client.db.disconnect.assert_awaited_once()
+    client.db.connect.assert_awaited_once()
+    client.db.query_raw.assert_awaited_once_with("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_run_reconnect_cycle_timeout_should_use_single_overall_budget(
+    mock_proxy_logging,
+):
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client.db.disconnect = AsyncMock(return_value=None)
+
+    async def _slow_connect():
+        await asyncio.sleep(0.08)
+
+    async def _slow_query(_query: str):
+        await asyncio.sleep(0.08)
+        return [{"result": 1}]
+
+    client.db.connect = AsyncMock(side_effect=_slow_connect)
+    client.db.query_raw = AsyncMock(side_effect=_slow_query)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await client._run_reconnect_cycle(timeout_seconds=0.1)
 
 
 @pytest.mark.asyncio
