@@ -1536,7 +1536,7 @@ class Router:
             )
             raise e
 
-    async def _acompletion_streaming_iterator(
+    async def _acompletion_streaming_iterator(  # noqa: PLR0915
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
