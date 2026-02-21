@@ -169,7 +169,7 @@ export default function TeamKeysTab({
                           key={cell.id}
                           style={{
                             width: cell.column.getSize(),
-                            maxWidth: "8-x",
+                            maxWidth: "8px",
                             whiteSpace: "pre-wrap",
                             overflow: "hidden",
                           }}

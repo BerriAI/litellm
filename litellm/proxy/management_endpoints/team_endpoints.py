@@ -3355,6 +3355,21 @@ async def list_team_v2(
             prisma_client, _team_ids, user_id=user_id
         )
 
+        # Fetch keys for all teams in a single query (avoids N+1)
+        keys_by_team: Dict[str, List[Dict]] = {}
+        if _team_ids:
+            all_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"team_id": {"in": _team_ids}}
+            )
+            for key in all_keys:
+                try:
+                    key_dict = key.model_dump()
+                except Exception:
+                    key_dict = key.dict()
+                key_dict.pop("token", None)
+                tid = key_dict.get("team_id")
+                keys_by_team.setdefault(tid, []).append(key_dict)
+
         team_list: List[Union[TeamListResponseObject, LiteLLM_TeamTable]] = []
         for team in teams:
             _team_memberships: List[LiteLLM_TeamMembership] = []
@@ -3362,20 +3377,7 @@ async def list_team_v2(
                 if tm.team_id == team.team_id:
                     _team_memberships.append(tm)
 
-            # Fetch keys for this team 
-            keys = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"team_id": team.team_id}
-            )
-
-            # Sanitize keys
-            sanitized_keys = []
-            for key in keys:
-                try:
-                    key_dict = key.model_dump()
-                except Exception:
-                    key_dict = key.dict()
-                key_dict.pop("token", None)
-                sanitized_keys.append(key_dict)
+            sanitized_keys = keys_by_team.get(team.team_id, [])
 
             try:
                 team_dict = team.model_dump()
@@ -3467,6 +3469,21 @@ async def list_team(
         prisma_client, _team_ids, user_id=user_id
     )
 
+    # Fetch keys for all teams in a single query (avoids N+1)
+    keys_by_team: Dict[str, List[Any]] = {}
+    if _team_ids:
+        all_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": {"in": _team_ids}}
+        )
+        for key in all_keys:
+            try:
+                key_dict = key.model_dump()
+            except Exception:
+                key_dict = key.dict()
+            key_dict.pop("token", None)
+            tid = key_dict.get("team_id")
+            keys_by_team.setdefault(tid, []).append(key_dict)
+
     returned_responses: List[TeamListResponseObject] = []
     for team in filtered_response:
         _team_memberships: List[LiteLLM_TeamMembership] = []
@@ -3474,10 +3491,7 @@ async def list_team(
             if tm.team_id == team.team_id:
                 _team_memberships.append(tm)
 
-        # add all keys that belong to the team
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={"team_id": team.team_id}
-        )
+        keys = keys_by_team.get(team.team_id, [])
 
         try:
             returned_responses.append(

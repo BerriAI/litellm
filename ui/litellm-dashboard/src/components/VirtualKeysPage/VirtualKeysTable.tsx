@@ -19,7 +19,7 @@ import {
   TableRow,
 } from "@tremor/react";
 import { Skeleton } from "antd";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
@@ -81,11 +81,13 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   const totalCount = keys?.total_count || 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
-  // Use the filter logic hook
+  // Stabilize keys array reference to prevent useFilterLogic effect from re-running infinitely
+  const keysArray = useMemo(() => keys?.keys ?? [], [keys?.keys]);
 
+  // Use the filter logic hook
   const { filters, filteredKeys, allKeyAliases, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
-      keys: keys?.keys || [],
+      keys: keysArray,
       teams,
       organizations,
     });
@@ -397,7 +399,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                               key={cell.id}
                               style={{
                                 width: cell.column.getSize(),
-                                maxWidth: "8-x",
+                                maxWidth: "8px",
                                 whiteSpace: "pre-wrap",
                                 overflow: "hidden",
                               }}
