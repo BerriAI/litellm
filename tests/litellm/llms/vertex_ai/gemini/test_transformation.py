@@ -288,3 +288,62 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+def test_audio_in_get_supported_openai_params():
+        """
+            Test that 'audio' is included in VertexGeminiConfig.get_supported_openai_params().
+                Fixes issue #21702 where 'audio' was missing causing TTS requests to fail.
+                    """
+        config = VertexGeminiConfig()
+        supported_params = config.get_supported_openai_params(model="vertex_ai/gemini-2.5-flash-preview-tts")
+        assert "audio" in supported_params, (
+            "'audio' must be in get_supported_openai_params() for Vertex AI Gemini TTS to work. "
+            "See: https://github.com/BerriAI/litellm/issues/21702"
+        )
+
+def test_audio_param_maps_to_speech_config():
+        """
+            Test that when 'audio' param is passed to map_openai_params(), it is mapped
+                to 'speechConfig' in optional_params (not dropped).
+                    Fixes issue #21702 where 'audio' was filtered before reaching map_openai_params().
+                        """
+        config = VertexGeminiConfig()
+        audio_value = {"voice": "Kore"}
+        non_default_params = {"audio": audio_value}
+        optional_params = {}
+        result = config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model="vertex_ai/gemini-2.5-flash-preview-tts",
+            drop_params=False,
+        )
+        assert "speechConfig" in result, (
+            "'audio' param must be mapped to 'speechConfig' in map_openai_params(). "
+            "See: https://github.com/BerriAI/litellm/issues/21702"
+        )
+
+def test_audio_not_filtered_by_get_supported_openai_params():
+        """
+            Regression test: 'audio' param must NOT be filtered out by get_supported_openai_params().
+                Before fix, 'audio' was absent from the supported params list, so litellm would
+                    raise UnsupportedParamsError or silently drop it before map_openai_params().
+                        After fix, 'audio' is listed and correctly passes through to speechConfig mapping.
+                            """
+        config = VertexGeminiConfig()
+        model = "vertex_ai/gemini-2.5-flash-preview-tts"
+        supported = config.get_supported_openai_params(model=model)
+
+    # Core regression: 'audio' must be present so it is not dropped
+        assert "audio" in supported
+
+    # Verify it is not filtered when passed to map_openai_params
+    audio_param = {"voice": "Kore"}
+    result = config.map_openai_params(
+                non_default_params={"audio": audio_param},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+    # The 'audio' param should have been mapped to 'speechConfig', not dropped
+    assert "speechConfig" in result
+    assert "audio" not in result, "'audio' should be transformed to 'speechConfig', not kept as-is"
