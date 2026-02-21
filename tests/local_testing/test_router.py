@@ -3,6 +3,8 @@
 
 import asyncio
 import os
+
+DEFAULT_ANTHROPIC_MODEL = os.getenv("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 import sys
 import time
 import traceback
@@ -105,7 +107,7 @@ async def test_router_provider_wildcard_routing():
     print("router model list = ", router.get_model_list())
 
     response1 = await router.acompletion(
-        model="anthropic/claude-sonnet-4-5-20250929",
+        model=f"anthropic/{DEFAULT_ANTHROPIC_MODEL}",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -126,7 +128,7 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model="claude-sonnet-4-5-20250929",
+        model=DEFAULT_ANTHROPIC_MODEL,
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -1650,7 +1652,7 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": "claude-3-5-haiku-20241022",
+                "model": DEFAULT_ANTHROPIC_MODEL,
                 "api_key": anthropic_api_key,
             },
         }
