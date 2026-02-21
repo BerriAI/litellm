@@ -74,8 +74,8 @@ model_list:
         
         # Token count thresholds
         token_thresholds:
-          simple: 50    # Below this = "short"
-          complex: 500  # Above this = "long"
+          simple: 15    # Below this = "short" (default: 15)
+          complex: 400  # Above this = "long" (default: 400)
         
         # Dimension weights (must sum to ~1.0)
         dimension_weights:
