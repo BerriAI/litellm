@@ -225,8 +225,10 @@ class TestProxyInitializationHelpers:
         assert modified_url == ""
 
     @patch("uvicorn.run")
-    @patch("atexit.register")  # 🔥 critical
-    def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):
+    @patch("atexit.register")  # critical
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_skip_server_startup(self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
@@ -239,7 +241,12 @@ class TestProxyInitializationHelpers:
             KeyManagementSettings=MagicMock(),
             save_worker_config=MagicMock(),
         )
+        # Remove DATABASE_URL/DIRECT_URL so the CLI doesn't attempt
+        # real prisma operations when these are set in CI.
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
             "sys.modules",
             {
                 "proxy_server": mock_proxy_module,
@@ -260,7 +267,7 @@ class TestProxyInitializationHelpers:
             # --- skip startup ---
             result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
 
@@ -269,7 +276,7 @@ class TestProxyInitializationHelpers:
 
             result = runner.invoke(run_server, ["--local"])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
 
     @patch("uvicorn.run")
@@ -594,7 +601,7 @@ class TestHealthAppFactory:
 
         from litellm.proxy.proxy_cli import run_server
 
-        runner = CliRunner()
+        runner = CliRunner(mix_stderr=False)
 
         # Mock subprocess.run to simulate prisma being available
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -602,20 +609,18 @@ class TestHealthAppFactory:
         # Mock should_update_prisma_schema to return True (so setup_database gets called)
         mock_should_update_schema.return_value = True
 
-        mock_app = MagicMock()
-        mock_proxy_config = MagicMock()
-        mock_key_mgmt = MagicMock()
-        mock_save_worker_config = MagicMock()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
 
         with patch.dict(
             "sys.modules",
             {
-                "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
-                )
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"

@@ -13,6 +13,7 @@ import { Guardrail, GuardrailDefinitionLocation } from "./guardrails/types";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
 import { CustomCodeModal } from "./guardrails/custom_code";
+import GuardrailGarden from "./guardrails/guardrail_garden";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -106,12 +107,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const handleDeleteConfirm = async () => {
     if (!guardrailToDelete || !accessToken) return;
 
-    // Log removed to maintain clean production code
     setIsDeleting(true);
     try {
       await deleteGuardrailCall(accessToken, guardrailToDelete.guardrail_id);
       NotificationsManager.success(`Guardrail "${guardrailToDelete.guardrail_name}" deleted successfully`);
-      await fetchGuardrails(); // Refresh the list
+      await fetchGuardrails();
     } catch (error) {
       console.error("Error deleting guardrail:", error);
       NotificationsManager.fromBackend("Failed to delete guardrail");
@@ -136,11 +136,21 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <TabGroup index={activeTab} onIndexChange={setActiveTab}>
         <TabList className="mb-4">
+          <Tab>Guardrail Garden</Tab>
           <Tab>Guardrails</Tab>
           <Tab disabled={!accessToken || guardrailsList.length === 0}>Test Playground</Tab>
         </TabList>
 
         <TabPanels>
+          {/* Guardrail Garden Tab */}
+          <TabPanel>
+            <GuardrailGarden
+              accessToken={accessToken}
+              onGuardrailCreated={handleSuccess}
+            />
+          </TabPanel>
+
+          {/* Existing Guardrails Tab */}
           <TabPanel>
             <div className="flex justify-between items-center mb-4">
               <Dropdown
@@ -223,6 +233,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
             />
           </TabPanel>
 
+          {/* Test Playground Tab */}
           <TabPanel>
             <GuardrailTestPlayground
               guardrailsList={guardrailsList}

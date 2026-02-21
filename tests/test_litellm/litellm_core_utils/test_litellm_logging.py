@@ -1474,3 +1474,5 @@ def test_get_error_information_error_code_priority():
     result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
     assert result["error_code"] == ""
     assert result["error_class"] == "NoCodeException"
+
+

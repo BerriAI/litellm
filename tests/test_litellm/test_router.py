@@ -1726,6 +1726,54 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["custom_llm_provider"] == "bedrock"
 
 
+def test_get_deployment_credentials_with_provider_resolves_credential_name():
+    """
+    Test that get_deployment_credentials_with_provider correctly resolves
+    litellm_credential_name to actual credential values (for UI-created models).
+    """
+    from litellm.types.utils import CredentialItem
+    
+    # Setup credential list with a test credential
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="test-azure-cred",
+            credential_info={"custom_llm_provider": "azure"},
+            credential_values={
+                "api_key": "resolved-api-key",
+                "api_base": "https://resolved.openai.azure.com",
+                "api_version": "2024-02-01"
+            }
+        )
+    ]
+    
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "litellm_credential_name": "test-azure-cred",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="azure-gpt-4"
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "resolved-api-key"
+    assert credentials["api_base"] == "https://resolved.openai.azure.com"
+    assert credentials["api_version"] == "2024-02-01"
+    assert credentials["custom_llm_provider"] == "azure"
+    # Ensure credential name is removed after resolution
+    assert "litellm_credential_name" not in credentials
+    
+    # Cleanup
+    litellm.credential_list = []
+
+
 def test_get_available_guardrail_single_deployment():
     """
     Test get_available_guardrail returns the single guardrail when only one exists.
@@ -2186,3 +2234,80 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
 
     # Request tool_choice should be preserved (merged tools still applied)
     assert kwargs["tool_choice"] == "none"
+
+
+def test_credential_name_injected_as_tag():
+    """
+    Test that litellm_credential_name from deployment litellm_params
+    is injected as a tag into metadata during _update_kwargs_with_deployment.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "xai-model",
+                "litellm_params": {
+                    "model": "xai/grok-4-1-fast",
+                    "litellm_credential_name": "xAI",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="xai-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert "Credential: xAI" in kwargs["metadata"]["tags"]
+    assert "A.101" in kwargs["metadata"]["tags"]
+
+
+def test_credential_name_not_duplicated_in_tags():
+    """
+    Test that if the credential tag already exists in the tags list,
+    it is not duplicated.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "xai-model",
+                "litellm_params": {
+                    "model": "xai/grok-4-1-fast",
+                    "litellm_credential_name": "xAI",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["Credential: xAI", "A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="xai-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["metadata"]["tags"].count("Credential: xAI") == 1
+
+
+def test_credential_name_not_injected_when_absent():
+    """
+    Test that when no litellm_credential_name is set, tags are unchanged.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["metadata"]["tags"] == ["A.101"]
