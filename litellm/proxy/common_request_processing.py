@@ -24,6 +24,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    LITELLM_DETAILED_TIMING,
+    MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -42,6 +44,11 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import ServerToolUse
+
+# Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
+StreamChunkSerializer = Callable[[Any], str]
+# Type alias for streaming error serializer (ProxyException -> wire format)
+StreamErrorSerializer = Callable[[ProxyException], str]
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -282,7 +289,7 @@ def _override_openai_response_model(
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
         if downstream_model != requested_model:
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.debug(
                 "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
                 log_context,
                 requested_model,
@@ -301,7 +308,7 @@ def _override_openai_response_model(
 
     downstream_model = getattr(response_obj, "model", None)
     if downstream_model != requested_model:
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.debug(
             "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
             log_context,
             requested_model,
@@ -429,6 +436,19 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-overhead-duration-ms": str(
                 hidden_params.get("litellm_overhead_time_ms", None)
             ),
+            "x-litellm-callback-duration-ms": str(
+                hidden_params.get("callback_duration_ms", None)
+            ),
+            **(
+                {
+                    "x-litellm-timing-pre-processing-ms": str(hidden_params.get("timing_pre_processing_ms", None)),
+                    "x-litellm-timing-llm-api-ms": str(hidden_params.get("timing_llm_api_ms", None)),
+                    "x-litellm-timing-post-processing-ms": str(hidden_params.get("timing_post_processing_ms", None)),
+                    "x-litellm-timing-message-copy-ms": str(hidden_params.get("timing_message_copy_ms", None)),
+                }
+                if LITELLM_DETAILED_TIMING
+                else {}
+            ),
             "x-litellm-fastest_response_batch_completion": (
                 str(fastest_response_batch_completion)
                 if fastest_response_batch_completion is not None
@@ -521,6 +541,17 @@ class ProxyBaseLLMRequestProcessing:
             "acancel_interaction",
             "asend_message",
             "call_mcp_tool",
+            "acreate_eval",
+            "alist_evals",
+            "aget_eval",
+            "aupdate_eval",
+            "adelete_eval",
+            "acancel_eval",
+            "acreate_run",
+            "alist_runs",
+            "aget_run",
+            "acancel_run",
+            "adelete_run",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -603,6 +634,23 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
+        
+        ### AUTO STREAM USAGE TRACKING ###
+        # If always_include_stream_usage is enabled and this is a streaming request
+        # automatically add stream_options={'include_usage': True} if not already set
+        if (
+            general_settings.get("always_include_stream_usage", False) is True
+            and self.data.get("stream", False) is True
+        ):
+            # Only set if stream_options is not already provided by the client
+            if "stream_options" not in self.data:
+                self.data["stream_options"] = {"include_usage": True}
+            elif (
+                isinstance(self.data["stream_options"], dict)
+                and "include_usage" not in self.data["stream_options"]
+            ):
+                self.data["stream_options"]["include_usage"] = True
+        
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -651,6 +699,24 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    def _debug_log_request_payload(self) -> None:
+        """Log request payload at DEBUG level, truncating if too large."""
+        if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            return
+        _payload_str = json.dumps(self.data, default=str)
+        if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
+                len(_payload_str),
+                MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+                list(self.data.keys()) if isinstance(self.data, dict) else type(self.data).__name__,
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM:\n%s",
+                json.dumps(self.data, indent=4, default=str),
+            )
 
     async def base_process_llm_request(
         self,
@@ -703,6 +769,17 @@ class ProxyBaseLLMRequestProcessing:
             "acancel_interaction",
             "acancel_batch",
             "afile_delete",
+            "acreate_eval",
+            "alist_evals",
+            "aget_eval",
+            "aupdate_eval",
+            "adelete_eval",
+            "acancel_eval",
+            "acreate_run",
+            "alist_runs",
+            "aget_run",
+            "acancel_run",
+            "adelete_run",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -725,12 +802,7 @@ class ProxyBaseLLMRequestProcessing:
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
-        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-            verbose_proxy_logger.debug(
-                "Request received by LiteLLM:\n{}".format(
-                    json.dumps(self.data, indent=4, default=str)
-                ),
-            )
+        self._debug_log_request_payload()
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
             request=request,
@@ -1193,22 +1265,24 @@ class ProxyBaseLLMRequestProcessing:
             return chunk
 
     @staticmethod
-    async def async_sse_data_generator(
-        response,
+    async def async_streaming_data_generator(
+        response: Any,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
-    ):
+        *,
+        serialize_chunk: StreamChunkSerializer,
+        serialize_error: StreamErrorSerializer,
+    ) -> AsyncGenerator[str, None]:
         """
-        Anthropic /messages and Google /generateContent streaming data generator require SSE events
+        Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
+        cost injection, then yields chunks via serialize_chunk; on exception runs
+        failure hook and yields via serialize_error. Use for SSE or NDJSON.
         """
-
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for (
-                chunk
-            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -1216,7 +1290,6 @@ class ProxyBaseLLMRequestProcessing:
                 verbose_proxy_logger.debug(
                     "async_data_generator: received streaming chunk - {}".format(chunk)
                 )
-                ### CALL HOOKS ### - modify outgoing data
                 chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                     user_api_key_dict=user_api_key_dict,
                     response=chunk,
@@ -1227,30 +1300,34 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                     response_str = litellm.get_response_string(response_obj=chunk)
                     str_so_far += response_str
+                elif hasattr(chunk, "model_dump"):
+                    try:
+                        d = chunk.model_dump(mode="json", exclude_none=True)
+                        if isinstance(d, dict):
+                            str_so_far += str(d.get("content", ""))
+                    except Exception:
+                        pass
+                elif isinstance(chunk, dict):
+                    str_so_far += str(chunk.get("content", ""))
 
-                # Inject cost into Anthropic-style SSE usage for /v1/messages for any provider
                 model_name = request_data.get("model", "")
                 chunk = (
                     ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                         chunk, model_name
                     )
                 )
-
-                # Format chunk using helper function
-                yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
+                yield serialize_chunk(chunk)
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
                     str(e)
                 )
             )
-            # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
                 request_data=request_data,
             )
-            # Use transformed exception if callback returned one, otherwise use original
             if transformed_exception is not None:
                 e = transformed_exception
             verbose_proxy_logger.debug(
@@ -1259,18 +1336,36 @@ class ProxyBaseLLMRequestProcessing:
 
             if isinstance(e, HTTPException):
                 raise e
-            else:
-                error_traceback = traceback.format_exc()
-                error_msg = f"{str(e)}\n\n{error_traceback}"
-
+            error_traceback = traceback.format_exc()
+            error_msg = f"{str(e)}\n\n{error_traceback}"
             proxy_exception = ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
-            error_returned = json.dumps({"error": proxy_exception.to_dict()})
-            yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+            yield serialize_error(proxy_exception)
+
+    @staticmethod
+    async def async_sse_data_generator(
+        response: Any,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
+        proxy_logging_obj: ProxyLogging,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Anthropic /messages and Google /generateContent streaming data generator require SSE events.
+        Delegates to async_streaming_data_generator with SSE serializers.
+        """
+        async for chunk in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_error=lambda proxy_exc: f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n",
+        ):
+            yield chunk
 
     @staticmethod
     def _process_chunk_with_cost_injection(chunk: Any, model_name: str) -> Any:

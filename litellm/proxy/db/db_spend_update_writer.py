@@ -12,7 +12,7 @@ import os
 import random
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast, overload
 
 import litellm
@@ -792,7 +792,10 @@ class DBSpendUpdateWriter:
                             ) in key_list_transactions.items():
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "last_active": datetime.now(timezone.utc),
+                                    },
                                 )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
@@ -1724,13 +1727,6 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug(
                 "prisma_client is None. Skipping writing spend logs to db."
             )
-            return
-        base_daily_transaction = (
-            await self._common_add_spend_log_transaction_to_daily_transaction(
-                payload, prisma_client, "agent"
-            )
-        )
-        if base_daily_transaction is None:
             return
         if payload["agent_id"] is None:
             verbose_proxy_logger.debug(

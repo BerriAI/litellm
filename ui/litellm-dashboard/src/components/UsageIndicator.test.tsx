@@ -6,6 +6,7 @@ import UsageIndicator from "./UsageIndicator";
 
 vi.mock("./networking", () => ({
   getRemainingUsers: vi.fn(),
+  getLicenseInfo: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useDisableUsageIndicator", () => ({
