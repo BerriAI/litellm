@@ -10,8 +10,19 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
-                    Optional, Pattern, Tuple, Union, cast)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Pattern,
+    Tuple,
+    Union,
+    cast,
+)
 
 import yaml
 from fastapi import HTTPException
@@ -20,22 +31,37 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import (GenericGuardrailAPIInputs, GuardrailStatus,
-                                 GuardrailTracingDetail, ModelResponseStream)
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+    ModelResponseStream,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-from litellm.types.guardrails import (BlockedWord, ContentFilterAction,
-                                      ContentFilterPattern,
-                                      GuardrailEventHooks, Mode)
+from litellm.types.guardrails import (
+    BlockedWord,
+    ContentFilterAction,
+    ContentFilterPattern,
+    GuardrailEventHooks,
+    Mode,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    BlockedWordDetection, CategoryKeywordDetection, CompetitorIntentDetection,
-    CompetitorIntentResult, ContentFilterCategoryConfig,
-    ContentFilterDetection, PatternDetection)
+    BlockedWordDetection,
+    CategoryKeywordDetection,
+    CompetitorIntentDetection,
+    CompetitorIntentResult,
+    ContentFilterCategoryConfig,
+    ContentFilterDetection,
+    PatternDetection,
+)
 
-from .competitor_intent import (AirlineCompetitorIntentChecker,
-                                BaseCompetitorIntentChecker)
+from .competitor_intent import (
+    AirlineCompetitorIntentChecker,
+    BaseCompetitorIntentChecker,
+)
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS = 1
@@ -196,48 +222,15 @@ class ContentFilterGuardrail(CustomGuardrail):
         # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
         self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
         if competitor_intent_config and isinstance(competitor_intent_config, dict):
-            try:
-                competitor_intent_type = competitor_intent_config.get(
-                    "competitor_intent_type", "airline"
-                )
-                if competitor_intent_type == "generic":
-                    self._competitor_intent_checker = BaseCompetitorIntentChecker(
-                        competitor_intent_config
-                    )
-                else:
-                    self._competitor_intent_checker = AirlineCompetitorIntentChecker(
-                        competitor_intent_config
-                    )
-                verbose_proxy_logger.debug(
-                    "ContentFilterGuardrail: competitor intent checker enabled (%s)",
-                    competitor_intent_type,
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "ContentFilterGuardrail: failed to init competitor intent checker: %s",
-                    e,
-                )
+            self._init_competitor_intent_checker(competitor_intent_config)
 
         # Load categories if provided
         if categories:
             self._load_categories(categories)
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
-        normalized_patterns: List[ContentFilterPattern] = []
-        if patterns:
-            for pattern_config in patterns:
-                if isinstance(pattern_config, dict):
-                    normalized_patterns.append(ContentFilterPattern(**pattern_config))
-                else:
-                    normalized_patterns.append(pattern_config)
-
-        normalized_blocked_words: List[BlockedWord] = []
-        if blocked_words:
-            for word in blocked_words:
-                if isinstance(word, dict):
-                    normalized_blocked_words.append(BlockedWord(**word))
-                else:
-                    normalized_blocked_words.append(word)
+        normalized_patterns = self._normalize_patterns(patterns)
+        normalized_blocked_words = self._normalize_blocked_words(blocked_words)
 
         # Compile regex patterns
         self.compiled_patterns: List[Dict[str, Any]] = []
@@ -277,6 +270,57 @@ class ContentFilterGuardrail(CustomGuardrail):
             f"Loaded {len(self.loaded_categories)} categories with "
             f"{len(self.category_keywords)} keywords"
         )
+
+    def _init_competitor_intent_checker(
+        self, competitor_intent_config: Dict[str, Any]
+    ) -> None:
+        try:
+            competitor_intent_type = competitor_intent_config.get(
+                "competitor_intent_type", "airline"
+            )
+            if competitor_intent_type == "generic":
+                self._competitor_intent_checker = BaseCompetitorIntentChecker(
+                    competitor_intent_config
+                )
+            else:
+                self._competitor_intent_checker = AirlineCompetitorIntentChecker(
+                    competitor_intent_config
+                )
+            verbose_proxy_logger.debug(
+                "ContentFilterGuardrail: competitor intent checker enabled (%s)",
+                competitor_intent_type,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail: failed to init competitor intent checker: %s",
+                e,
+            )
+
+    @staticmethod
+    def _normalize_patterns(
+        patterns: Optional[List[ContentFilterPattern]],
+    ) -> List[ContentFilterPattern]:
+        result: List[ContentFilterPattern] = []
+        if patterns:
+            for pattern_config in patterns:
+                if isinstance(pattern_config, dict):
+                    result.append(ContentFilterPattern(**pattern_config))
+                else:
+                    result.append(pattern_config)
+        return result
+
+    @staticmethod
+    def _normalize_blocked_words(
+        blocked_words: Optional[List[BlockedWord]],
+    ) -> List[BlockedWord]:
+        result: List[BlockedWord] = []
+        if blocked_words:
+            for word in blocked_words:
+                if isinstance(word, dict):
+                    result.append(BlockedWord(**word))
+                else:
+                    result.append(word)
+        return result
 
     @staticmethod
     def _resolve_category_file_path(file_path: str) -> str:
@@ -1878,7 +1922,8 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     @staticmethod
     def get_config_model():
-        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
-            LitellmContentFilterGuardrailConfigModel
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+            LitellmContentFilterGuardrailConfigModel,
+        )
 
         return LitellmContentFilterGuardrailConfigModel
