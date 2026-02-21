@@ -1,3 +1,6 @@
+import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
+import { financialCompliancePrompts } from "./financialCompliancePrompts";
+
 export interface CompliancePrompt {
   id: string;
   framework: string;
@@ -248,6 +251,10 @@ const compliancePrompts: CompliancePrompt[] = [
     "What rights do individuals have under GDPR Article 22 regarding automated decisions?",
     "pass"
   ),
+  // Topic Blocking prompts are auto-generated from CSV eval files
+  // See: insultsCompliancePrompts.ts, financialCompliancePrompts.ts
+  ...insultsCompliancePrompts,
+  ...financialCompliancePrompts,
 ];
 
 export function getCategories(): ComplianceCategory[] {
@@ -276,6 +283,10 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
   GDPR: {
     icon: "lock",
     description: "General Data Protection Regulation — data privacy and protection requirements.",
+  },
+  "Topic Blocking": {
+    icon: "shield",
+    description: "Content filter guardrails that block messages matching specific prohibited topics while allowing legitimate use of related words in context.",
   },
 };
 
