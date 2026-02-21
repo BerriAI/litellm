@@ -96,6 +96,12 @@ async def test_async_no_duplicate_spend_logs():
             litellm_call_id=test_request_id,
         )
 
+        # Yield to the event loop so the _client_async_logging_helper task
+        # (scheduled via asyncio.create_task in the @client decorator) runs first
+        # and initializes GLOBAL_LOGGING_WORKER on the current event loop.
+        # Without this, flush() may block on a stale queue from a previous test's loop.
+        await asyncio.sleep(0)
+
         # Wait for async logging to complete
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
         await GLOBAL_LOGGING_WORKER.flush()
