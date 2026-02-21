@@ -110,6 +110,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [blockedWords, setBlockedWords] = useState<any[]>([]);
   const [selectedContentCategories, setSelectedContentCategories] = useState<any[]>([]);
   const [pendingCategorySelection, setPendingCategorySelection] = useState<string>("");
+  const [competitorIntentEnabled, setCompetitorIntentEnabled] = useState(false);
+  const [competitorIntentConfig, setCompetitorIntentConfig] = useState<any>(null);
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
     rules: [],
     default_action: "deny",
@@ -175,6 +177,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setBlockedWords([]);
     setSelectedContentCategories([]);
     setPendingCategorySelection("");
+    setCompetitorIntentEnabled(false);
+    setCompetitorIntentConfig(null);
 
     setToolPermissionConfig({
       rules: [],
@@ -254,7 +258,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setCurrentStep(currentStep - 1);
   };
 
-  const handleAddAndContinue = () => {
+  const handleAddAndContinue = (competitorIntentOnly?: boolean) => {
+    // Competitor intent only: just advance to next step (no category to add)
+    if (competitorIntentOnly) {
+      setCurrentStep(currentStep + 1);
+      return;
+    }
+
     if (!pendingCategorySelection || !guardrailSettings) return;
 
     const contentFilterSettings = guardrailSettings.content_filter_settings;
@@ -363,12 +373,20 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
       }
 
-      // For Content Filter, add patterns, blocked words, and categories
+      // For Content Filter, add patterns, blocked words, categories, and optionally competitor intent
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
         // Validate that at least one content filter setting is configured
-        if (selectedPatterns.length === 0 && blockedWords.length === 0 && selectedContentCategories.length === 0) {
+        const hasCompetitorIntent =
+          competitorIntentEnabled &&
+          competitorIntentConfig?.brand_self?.length > 0;
+        if (
+          selectedPatterns.length === 0 &&
+          blockedWords.length === 0 &&
+          selectedContentCategories.length === 0 &&
+          !hasCompetitorIntent
+        ) {
           NotificationsManager.fromBackend(
-            "Please configure at least one setting (denied topic, pattern, or word filter)"
+            "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)"
           );
           setLoading(false);
           return;
@@ -397,6 +415,25 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             action: c.action,
             severity_threshold: c.severity_threshold || "medium",
           }));
+        }
+        if (competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0) {
+          guardrailData.litellm_params.competitor_intent_config = {
+            competitor_intent_type: competitorIntentConfig.competitor_intent_type ?? "airline",
+            brand_self: competitorIntentConfig.brand_self,
+            locations:
+              competitorIntentConfig.locations?.length > 0
+                ? competitorIntentConfig.locations
+                : undefined,
+            competitors:
+              competitorIntentConfig.competitor_intent_type === "generic" &&
+              competitorIntentConfig.competitors?.length > 0
+                ? competitorIntentConfig.competitors
+                : undefined,
+            policy: competitorIntentConfig.policy,
+            threshold_high: competitorIntentConfig.threshold_high,
+            threshold_medium: competitorIntentConfig.threshold_medium,
+            threshold_low: competitorIntentConfig.threshold_low,
+          };
         }
       }
       // Add config values to the guardrail_info if provided
@@ -712,6 +749,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         onPendingCategorySelectionChange={setPendingCategorySelection}
         accessToken={accessToken}
         showStep={step}
+        competitorIntentEnabled={competitorIntentEnabled}
+        competitorIntentConfig={competitorIntentConfig}
+        onCompetitorIntentChange={(enabled, config) => {
+          setCompetitorIntentEnabled(enabled);
+          setCompetitorIntentConfig(config);
+        }}
       />
     );
   };
@@ -769,28 +812,52 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     }
   };
 
-  const getStepConfigs = () => {
-    const isContentFilter = shouldRenderContentFilterConfigSettings(selectedProvider);
-    const isPII = shouldRenderPIIConfigSettings(selectedProvider);
+  const renderStepButtons = () => {
+    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 4 : 2;
+    const isLastStep = currentStep === totalSteps - 1;
+    const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
+    const hasPendingCategory = pendingCategorySelection !== "";
+    const hasCompetitorIntentConfigured =
+      competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
+    const canContinueFromCategoriesStep = hasPendingCategory || hasCompetitorIntentConfigured;
 
-    const steps = [
-      { title: "Guardrail details", optional: false },
-      {
-        title: isPII
-          ? "PII Configuration"
-          : isContentFilter
-            ? "Denied topics"
-            : "Provider Configuration",
-        optional: true,
-      },
-    ];
-
-    if (isContentFilter) {
-      steps.push({ title: "Patterns", optional: true });
-      steps.push({ title: "Word filters", optional: true });
-    }
-
-    return steps;
+    return (
+      <div className="flex justify-end space-x-2 mt-4">
+        {currentStep > 0 && (
+          <Button onClick={prevStep}>
+            Previous
+          </Button>
+        )}
+        {isCategoriesStep ? (
+          <>
+            <Button onClick={nextStep}>
+              Skip
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => handleAddAndContinue(hasCompetitorIntentConfigured)}
+              disabled={!canContinueFromCategoriesStep}
+            >
+              {hasPendingCategory ? "Add & Continue →" : "Continue →"}
+            </Button>
+          </>
+        ) : (
+          <>
+            {!isLastStep && (
+              <Button type="primary" onClick={nextStep}>Next</Button>
+            )}
+            {isLastStep && (
+              <Button type="primary" onClick={handleSubmit} loading={loading}>
+                Create Guardrail
+              </Button>
+            )}
+          </>
+        )}
+        <Button onClick={handleClose}>
+          Cancel
+        </Button>
+      </div>
+    );
   };
 
   const stepConfigs = getStepConfigs();

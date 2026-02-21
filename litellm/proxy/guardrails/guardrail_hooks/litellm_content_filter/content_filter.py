@@ -10,19 +10,8 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Pattern,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
+                    Optional, Pattern, Tuple, Union, cast)
 
 import yaml
 from fastapi import HTTPException
@@ -31,31 +20,22 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import (
-    GenericGuardrailAPIInputs,
-    GuardrailStatus,
-    GuardrailTracingDetail,
-    ModelResponseStream,
-)
+from litellm.types.utils import (GenericGuardrailAPIInputs, GuardrailStatus,
+                                 GuardrailTracingDetail, ModelResponseStream)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-from litellm.types.guardrails import (
-    BlockedWord,
-    ContentFilterAction,
-    ContentFilterPattern,
-    GuardrailEventHooks,
-    Mode,
-)
+from litellm.types.guardrails import (BlockedWord, ContentFilterAction,
+                                      ContentFilterPattern,
+                                      GuardrailEventHooks, Mode)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    BlockedWordDetection,
-    CategoryKeywordDetection,
-    ContentFilterCategoryConfig,
-    ContentFilterDetection,
-    PatternDetection,
-)
+    BlockedWordDetection, CategoryKeywordDetection, CompetitorIntentDetection,
+    CompetitorIntentResult, ContentFilterCategoryConfig,
+    ContentFilterDetection, PatternDetection)
 
+from .competitor_intent import (AirlineCompetitorIntentChecker,
+                                BaseCompetitorIntentChecker)
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS = 1
@@ -162,6 +142,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         severity_threshold: str = "medium",
         llm_router: Optional[Router] = None,
         image_model: Optional[str] = None,
+        competitor_intent_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -211,6 +192,31 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.conditional_categories: Dict[str, Dict[str, Any]] = (
             {}
         )  # category_name -> {identifier_words, block_words, action, severity}
+
+        # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
+        self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
+        if competitor_intent_config and isinstance(competitor_intent_config, dict):
+            try:
+                competitor_intent_type = competitor_intent_config.get(
+                    "competitor_intent_type", "airline"
+                )
+                if competitor_intent_type == "generic":
+                    self._competitor_intent_checker = BaseCompetitorIntentChecker(
+                        competitor_intent_config
+                    )
+                else:
+                    self._competitor_intent_checker = AirlineCompetitorIntentChecker(
+                        competitor_intent_config
+                    )
+                verbose_proxy_logger.debug(
+                    "ContentFilterGuardrail: competitor intent checker enabled (%s)",
+                    competitor_intent_type,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "ContentFilterGuardrail: failed to init competitor intent checker: %s",
+                    e,
+                )
 
         # Load categories if provided
         if categories:
@@ -1220,9 +1226,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 pattern_name=pattern_name.upper()
             )
             text = self._mask_spans(text, spans, redaction_tag)
-            verbose_proxy_logger.info(
-                f"Masked all {pattern_name} matches in content"
-            )
+            verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
 
         return text
 
@@ -1453,7 +1457,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             masked_entity_count: Dictionary to update with counts
         """
         for detection in detections:
-            if detection["action"] == ContentFilterAction.MASK.value:
+            if detection.get("type") == "competitor_intent":
+                continue
+            if detection.get("action") == ContentFilterAction.MASK.value:
                 detection_type = detection["type"]
                 if detection_type == "pattern":
                     pattern_detection = cast(PatternDetection, detection)
@@ -1479,18 +1485,27 @@ class ContentFilterGuardrail(CustomGuardrail):
         """Build match_details list from content filter detections."""
         match_details: List[dict] = []
         for detection in detections:
-            detail: dict = {"type": detection["type"], "action_taken": detection["action"]}
+            action_taken = detection.get("action", detection.get("action_hint", ""))
+            detail: dict = {"type": detection["type"], "action_taken": action_taken}
             if detection["type"] == "pattern":
                 detail["detection_method"] = "regex"
-                detail["snippet"] = cast(PatternDetection, detection).get("pattern_name", "")
+                detail["snippet"] = cast(PatternDetection, detection).get(
+                    "pattern_name", ""
+                )
             elif detection["type"] == "blocked_word":
                 detail["detection_method"] = "keyword"
-                detail["snippet"] = cast(BlockedWordDetection, detection).get("keyword", "")
+                detail["snippet"] = cast(BlockedWordDetection, detection).get(
+                    "keyword", ""
+                )
             elif detection["type"] == "category_keyword":
                 detail["detection_method"] = "keyword"
                 cat_det = cast(CategoryKeywordDetection, detection)
                 detail["snippet"] = cat_det.get("keyword", "")
                 detail["category"] = cat_det.get("category", "")
+            elif detection["type"] == "competitor_intent":
+                detail["detection_method"] = "intent"
+                detail["snippet"] = detection.get("intent", "")
+                detail["confidence"] = detection.get("confidence")
             match_details.append(detail)
         return match_details
 
@@ -1500,19 +1515,28 @@ class ContentFilterGuardrail(CustomGuardrail):
         for detection in detections:
             if detection["type"] == "pattern":
                 methods.add("regex")
+            elif detection["type"] == "competitor_intent":
+                methods.add("intent")
             else:
                 methods.add("keyword")
         return ",".join(sorted(methods)) if methods else ""
 
     def _get_patterns_checked_count(self) -> int:
         """Get total number of patterns and keywords that were evaluated."""
-        return len(self.compiled_patterns) + len(self.blocked_words) + len(self.category_keywords)
+        return (
+            len(self.compiled_patterns)
+            + len(self.blocked_words)
+            + len(self.category_keywords)
+        )
 
     def _get_policy_templates(self) -> Optional[str]:
         """Get comma-separated policy template names from loaded categories."""
         if not self.loaded_categories:
             return None
-        names = [cat.description or cat.category_name for cat in self.loaded_categories.values()]
+        names = [
+            cat.description or cat.category_name
+            for cat in self.loaded_categories.values()
+        ]
         return ", ".join(names) if names else None
 
     def _compute_risk_score(
@@ -1550,6 +1574,72 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return round(min(10.0, score), 1)
 
+    def _apply_competitor_intent_policy(
+        self,
+        intent_result: CompetitorIntentResult,
+        request_data: dict,
+        detections: List[ContentFilterDetection],
+    ) -> None:
+        """
+        Apply policy for competitor intent result: refuse (raise), reframe (passthrough), or log_only/allow (return).
+        Appends competitor_intent detection to detections. Never returns for refuse/reframe.
+        """
+        intent_val = intent_result.get("intent", "other")
+        confidence_val = intent_result.get("confidence", 0.0)
+        action_hint_val = intent_result.get("action_hint", "allow")
+        evidence_list = intent_result.get("evidence", [])
+        detection: CompetitorIntentDetection = {
+            "type": "competitor_intent",
+            "intent": intent_val,
+            "confidence": confidence_val,
+            "action_hint": action_hint_val,
+            "entities": intent_result.get("entities", {}),
+            "signals": intent_result.get("signals", []),
+            "evidence": [dict(e) for e in evidence_list],
+        }
+        detections.append(detection)
+
+        if action_hint_val == "refuse":
+            msg = "Content blocked: competitor comparison or ranking intent detected."
+            if self._competitor_intent_checker and getattr(
+                self._competitor_intent_checker, "refuse_message_template", None
+            ):
+                msg = self._competitor_intent_checker.refuse_message_template or msg
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail: competitor intent refuse - %s", intent_val
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": msg,
+                    "intent": intent_val,
+                    "confidence": confidence_val,
+                },
+            )
+        if action_hint_val == "reframe":
+            msg = (
+                "I can help with questions about our products and services. "
+                "Would you like to compare specific features or get more information?"
+            )
+            if self._competitor_intent_checker and getattr(
+                self._competitor_intent_checker, "reframe_message_template", None
+            ):
+                msg = self._competitor_intent_checker.reframe_message_template or msg
+            verbose_proxy_logger.info(
+                "ContentFilterGuardrail: competitor intent reframe - %s", intent_val
+            )
+            self.raise_passthrough_exception(
+                violation_message=msg,
+                request_data=request_data,
+                detection_info=dict(intent_result),
+            )
+        # log_only or allow: just log (detection already appended)
+        verbose_proxy_logger.debug(
+            "ContentFilterGuardrail: competitor intent %s (action_hint=%s)",
+            intent_val,
+            action_hint_val,
+        )
+
     def _log_guardrail_information(
         self,
         request_data: dict,
@@ -1581,6 +1671,28 @@ class ContentFilterGuardrail(CustomGuardrail):
                 else [dict(detection) for detection in detections]
             )
 
+        # Competitor intent: add confidence and classification to tracing if present
+        tracing_kw: Dict[str, Any] = {
+            "guardrail_id": self.config_guardrail_id or self.guardrail_name,
+            "policy_template": self.config_policy_template
+            or self._get_policy_templates(),
+            "detection_method": (
+                self._get_detection_methods(detections) if detections else None
+            ),
+            "match_details": (
+                self._build_match_details(detections) if detections else None
+            ),
+            "patterns_checked": self._get_patterns_checked_count(),
+            "risk_score": self._compute_risk_score(
+                detections, masked_entity_count, status
+            ),
+        }
+        for d in detections:
+            if isinstance(d, dict) and d.get("type") == "competitor_intent":
+                tracing_kw["confidence_score"] = d.get("confidence")
+                tracing_kw["classification"] = dict(d)
+                break
+
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=guardrail_json_response,
@@ -1590,14 +1702,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
             masked_entity_count=masked_entity_count,
-            tracing_detail=GuardrailTracingDetail(
-                guardrail_id=self.config_guardrail_id or self.guardrail_name,
-                policy_template=self.config_policy_template or self._get_policy_templates(),
-                detection_method=self._get_detection_methods(detections) if detections else None,
-                match_details=self._build_match_details(detections) if detections else None,
-                patterns_checked=self._get_patterns_checked_count(),
-                risk_score=self._compute_risk_score(detections, masked_entity_count, status),
-            ),
+            tracing_detail=GuardrailTracingDetail(**tracing_kw),
         )
 
     async def apply_guardrail(
@@ -1645,6 +1750,13 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             processed_texts = []
             for text in texts:
+                # Competitor intent check first (optional; may refuse/reframe)
+                if self._competitor_intent_checker and text:
+                    intent_result = self._competitor_intent_checker.run(text)
+                    if intent_result.get("intent", "other") != "other":
+                        self._apply_competitor_intent_policy(
+                            intent_result, request_data, detections
+                        )
                 filtered_text = self._filter_single_text(text, detections=detections)
                 processed_texts.append(filtered_text)
 
@@ -1766,8 +1878,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     @staticmethod
     def get_config_model():
-        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-            LitellmContentFilterGuardrailConfigModel,
-        )
+        from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
+            LitellmContentFilterGuardrailConfigModel
 
         return LitellmContentFilterGuardrailConfigModel

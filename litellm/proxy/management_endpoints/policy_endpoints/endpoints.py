@@ -12,14 +12,7 @@ All /policy management endpoints
 import copy
 import json
 import os
-from typing import (
-    TYPE_CHECKING,
-    AsyncIterator,
-    List,
-    Literal,
-    Optional,
-    cast,
-)
+from typing import TYPE_CHECKING, AsyncIterator, List, Literal, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -27,11 +20,9 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import (
-    COMPETITOR_LLM_TEMPERATURE,
-    DEFAULT_COMPETITOR_DISCOVERY_MODEL,
-    MAX_COMPETITOR_NAMES,
-)
+from litellm.constants import (COMPETITOR_LLM_TEMPERATURE,
+                               DEFAULT_COMPETITOR_DISCOVERY_MODEL,
+                               MAX_COMPETITOR_NAMES)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -39,21 +30,20 @@ from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
-from litellm.types.proxy.policy_engine import (
-    PolicyGuardrailsResponse,
-    PolicyInfoResponse,
-    PolicyListResponse,
-    PolicyMatchContext,
-    PolicyScopeResponse,
-    PolicySummaryItem,
-    PolicyTestResponse,
-    PolicyValidateRequest,
-    PolicyValidationResponse,
-)
+from litellm.types.proxy.policy_engine import (PolicyGuardrailsResponse,
+                                               PolicyInfoResponse,
+                                               PolicyListResponse,
+                                               PolicyMatchContext,
+                                               PolicyScopeResponse,
+                                               PolicySummaryItem,
+                                               PolicyTestResponse,
+                                               PolicyValidateRequest,
+                                               PolicyValidationResponse)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
 
 router = APIRouter()
 
@@ -84,6 +74,19 @@ class ApplyPoliciesResult(TypedDict):
 
     inputs: GenericGuardrailAPIInputs
     guardrail_errors: List[GuardrailErrorEntry]
+
+
+class ApplyPoliciesPerItemResult(TypedDict):
+    """Result for one input when using inputs_list."""
+
+    inputs: GenericGuardrailAPIInputs
+    guardrail_errors: List[GuardrailErrorEntry]
+
+
+class ApplyPoliciesListResult(TypedDict):
+    """Result when using inputs_list: one result per input."""
+
+    results: List[ApplyPoliciesPerItemResult]
 
 
 async def apply_policies(
@@ -187,7 +190,14 @@ class TestPoliciesAndGuardrailsRequest(BaseModel):
 
     policy_names: Optional[List[str]] = Field(default=None, description="Policy names to resolve guardrails from")
     guardrail_names: Optional[List[str]] = Field(default=None, description="Guardrail names to apply directly")
-    inputs: dict = Field(description="GenericGuardrailAPIInputs, e.g. { \"texts\": [\"...\"] }")
+    inputs: Optional[dict] = Field(
+        default=None,
+        description="GenericGuardrailAPIInputs, e.g. { \"texts\": [\"...\"] }. Use inputs_list for per-input processing.",
+    )
+    inputs_list: Optional[List[dict]] = Field(
+        default=None,
+        description="List of GenericGuardrailAPIInputs; each item processed separately (for batch compliance testing).",
+    )
     request_data: dict = Field(default_factory=dict, description="Request context (model, user_id, etc.)")
     input_type: Literal["request", "response"] = Field(default="request", description="Whether inputs are request or response")
 
@@ -206,26 +216,48 @@ async def test_policies_and_guardrails(
     """
     Apply policies and/or guardrails to inputs (for compliance UI testing).
 
-    Runs all guardrails in order; failures are collected and returned in guardrail_errors.
-    Returns inputs (possibly modified) and any guardrail errors so the UI can show which
-    guardrails failed and why.
+    Use inputs_list for batch testing: each input is processed as a separate call so
+    per-input block/allow and errors are returned.
+
+    Use inputs for a single call (legacy).
     """
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
     from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        inputs_typed = cast(GenericGuardrailAPIInputs, data.inputs)
         logging_obj = cast(LiteLLMLoggingObj, proxy_logging_obj)
-        result = await apply_policies(
-            policy_names=data.policy_names,
-            inputs=inputs_typed,
-            request_data=data.request_data,
-            input_type=data.input_type,
-            proxy_logging_obj=logging_obj,
-            guardrail_names=data.guardrail_names,
-        )
-        return result
+        if data.inputs_list is not None:
+            results: List[ApplyPoliciesPerItemResult] = []
+            for inp in data.inputs_list:
+                inputs_typed = cast(GenericGuardrailAPIInputs, inp)
+                item_result = await apply_policies(
+                    policy_names=data.policy_names,
+                    inputs=inputs_typed,
+                    request_data=data.request_data,
+                    input_type=data.input_type,
+                    proxy_logging_obj=logging_obj,
+                    guardrail_names=data.guardrail_names,
+                )
+                results.append(
+                    ApplyPoliciesPerItemResult(
+                        inputs=item_result["inputs"],
+                        guardrail_errors=item_result["guardrail_errors"],
+                    )
+                )
+            return ApplyPoliciesListResult(results=results)
+        if data.inputs is not None:
+            inputs_typed = cast(GenericGuardrailAPIInputs, data.inputs)
+            return await apply_policies(
+                policy_names=data.policy_names,
+                inputs=inputs_typed,
+                request_data=data.request_data,
+                input_type=data.input_type,
+                proxy_logging_obj=logging_obj,
+                guardrail_names=data.guardrail_names,
+            )
+        raise ValueError("Either inputs or inputs_list must be provided")
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -506,7 +538,8 @@ async def get_policy_templates(
         return _load_policy_templates_from_local_backup()
 
     try:
-        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.llms.custom_httpx.http_handler import \
+            get_async_httpx_client
         from litellm.types.llms.custom_http import httpxSpecialProvider
 
         async_client = get_async_httpx_client(
@@ -981,9 +1014,8 @@ async def suggest_policy_templates(
 
     Calls an LLM with tool calling to match user requirements to available templates.
     """
-    from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import (
-        AiPolicySuggester,
-    )
+    from litellm.proxy.management_endpoints.policy_endpoints.ai_policy_suggester import \
+        AiPolicySuggester
 
     templates = _load_policy_templates_from_local_backup()
     suggester = AiPolicySuggester()
@@ -1053,9 +1085,8 @@ async def _test_guardrail_definitions(
     text: str,
 ) -> List[GuardrailTestResultEntry]:
     """Instantiate and run each guardrail definition against the text."""
-    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
-        ContentFilterGuardrail,
-    )
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
+        ContentFilterGuardrail
 
     results: List[GuardrailTestResultEntry] = []
 
