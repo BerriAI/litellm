@@ -125,3 +125,13 @@ class TestGetLitellmParamsExplicitFields:
     def test_no_log_from_explicit_param(self):
         result = get_litellm_params(no_log=True)
         assert result["no-log"] is True
+
+    def test_litellm_credential_name_captured(self):
+        """litellm_credential_name should be captured via _OPTIONAL_KWARGS_KEYS."""
+        result = get_litellm_params(litellm_credential_name="my-credential")
+        assert result["litellm_credential_name"] == "my-credential"
+
+    def test_litellm_credential_name_absent(self):
+        """When litellm_credential_name is not passed, it should not appear."""
+        result = get_litellm_params()
+        assert "litellm_credential_name" not in result
