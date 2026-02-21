@@ -1977,28 +1977,34 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     start_date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
     end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Call the endpoint with both start and end dates.
-    # We don't need `summarize=true` as it's the default.
-    response = client.get(
-        "/spend/logs",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
     )
+    try:
+        # Call the endpoint with both start and end dates.
+        # We don't need `summarize=true` as it's the default.
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    # ASSERTIONS
-    assert response.status_code == 200
-    data = response.json()
+        # ASSERTIONS
+        assert response.status_code == 200
+        data = response.json()
 
-    # Check that the response is not empty and has the summarized structure.
-    assert isinstance(data, list)
-    assert len(data) > 0
-    assert "startTime" in data[0]
-    assert "spend" in data[0]
-    assert "users" in data[0]
-    assert "models" in data[0]
+        # Check that the response is not empty and has the summarized structure.
+        assert isinstance(data, list)
+        assert len(data) > 0
+        assert "startTime" in data[0]
+        assert "spend" in data[0]
+        assert "users" in data[0]
+        assert "models" in data[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
