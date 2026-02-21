@@ -7,6 +7,7 @@ All values are configurable via proxy config.yaml.
 
 from enum import Enum
 from typing import Dict, List, Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -20,7 +21,7 @@ class ComplexityTier(str, Enum):
 
 # ─── Default Keyword Lists ───
 # Note: Keywords should be full words/phrases to avoid substring false positives.
-# The matching logic uses word boundary detection for short keywords (<5 chars).
+# The matching logic uses word boundary detection for single-word keywords.
 
 DEFAULT_CODE_KEYWORDS: List[str] = [
     "function", "class", "def", "const", "let", "var",
@@ -64,19 +65,6 @@ DEFAULT_SIMPLE_KEYWORDS: List[str] = [
     "hello", "hi", "hey", "thanks", "thank you",
     "goodbye", "bye", "okay",
     # Note: "ok" removed due to false positives (matches "token", "book", etc.)
-]
-
-DEFAULT_MULTI_STEP_PATTERNS: List[str] = [
-    "first", "then", "next", "after that", "finally",
-    "step 1", "step 2", "step 3",
-    "1.", "2.", "3.",
-    "a)", "b)", "c)",
-]
-
-DEFAULT_CREATIVE_KEYWORDS: List[str] = [
-    "write a story", "write a poem", "creative writing",
-    "brainstorm", "imagine", "fiction", "narrative",
-    "character", "plot", "setting", "dialogue",
 ]
 
 
