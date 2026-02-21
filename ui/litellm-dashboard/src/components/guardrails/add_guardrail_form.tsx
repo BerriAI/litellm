@@ -1,4 +1,5 @@
-import { Button, Form, Input, Modal, Select, Steps, Tag, Typography } from "antd";
+import { Form, Input, Modal, Select, Tag, Typography } from "antd";
+import { Button } from "@tremor/react";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
@@ -21,7 +22,6 @@ import ToolPermissionRulesEditor, {
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
-const { Step } = Steps;
 
 // Define human-friendly descriptions for each mode
 const modeDescriptions = {
@@ -368,7 +368,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         // Validate that at least one content filter setting is configured
         if (selectedPatterns.length === 0 && blockedWords.length === 0 && selectedContentCategories.length === 0) {
           NotificationsManager.fromBackend(
-            "Please configure at least one content filter setting (category, pattern, or keyword)"
+            "Please configure at least one setting (denied topic, pattern, or word filter)"
           );
           setLoading(false);
           return;
@@ -769,83 +769,156 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     }
   };
 
-  const renderStepButtons = () => {
-    const totalSteps = shouldRenderContentFilterConfigSettings(selectedProvider) ? 4 : 2;
-    const isLastStep = currentStep === totalSteps - 1;
-    const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
-    const hasPendingCategory = pendingCategorySelection !== "";
+  const getStepConfigs = () => {
+    const isContentFilter = shouldRenderContentFilterConfigSettings(selectedProvider);
+    const isPII = shouldRenderPIIConfigSettings(selectedProvider);
 
-    return (
-      <div className="flex justify-end space-x-2 mt-4">
-        {currentStep > 0 && (
-          <Button onClick={prevStep}>
-            Previous
-          </Button>
-        )}
-        {isCategoriesStep ? (
-          <>
-            <Button onClick={nextStep}>
-              Skip
-            </Button>
-            <Button 
-              type="primary" 
-              onClick={handleAddAndContinue}
-              disabled={!hasPendingCategory}
-            >
-              Add & Continue →
-            </Button>
-          </>
-        ) : (
-          <>
-            {!isLastStep && (
-              <Button type="primary" onClick={nextStep}>Next</Button>
-            )}
-            {isLastStep && (
-              <Button type="primary" onClick={handleSubmit} loading={loading}>
-                Create Guardrail
-              </Button>
-            )}
-          </>
-        )}
-        <Button onClick={handleClose}>
-          Cancel
-        </Button>
-      </div>
-    );
+    const steps = [
+      { title: "Guardrail details", optional: false },
+      {
+        title: isPII
+          ? "PII Configuration"
+          : isContentFilter
+            ? "Denied topics"
+            : "Provider Configuration",
+        optional: true,
+      },
+    ];
+
+    if (isContentFilter) {
+      steps.push({ title: "Patterns", optional: true });
+      steps.push({ title: "Word filters", optional: true });
+    }
+
+    return steps;
   };
 
-  return (
-    <Modal title="Add Guardrail" open={visible} onCancel={handleClose} footer={null} width={800}>
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          mode: "pre_call",
-          default_on: false,
-        }}
-      >
-        <Steps current={currentStep} className="mb-6" style={{ overflow: "visible" }}>
-          <Step title="Basic Info" />
-          <Step
-            title={
-              shouldRenderPIIConfigSettings(selectedProvider)
-                ? "PII Configuration"
-                : shouldRenderContentFilterConfigSettings(selectedProvider)
-                  ? "Default Categories"
-                  : "Provider Configuration"
-            }
-          />
-          {shouldRenderContentFilterConfigSettings(selectedProvider) && (
-            <>
-              <Step title="Patterns" />
-              <Step title="Keywords" />
-            </>
-          )}
-        </Steps>
+  const stepConfigs = getStepConfigs();
 
-        {renderStepContent()}
-        {renderStepButtons()}
-      </Form>
+  return (
+    <Modal
+      title={null}
+      open={visible}
+      onCancel={handleClose}
+      footer={null}
+      width={1000}
+      closable={false}
+      className="top-8"
+      styles={{
+        body: { padding: 0 },
+      }}
+    >
+      <div className="flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <h3 className="text-base font-semibold text-gray-900 m-0">Create guardrail</h3>
+          <button
+            onClick={handleClose}
+            className="text-gray-400 hover:text-gray-600 bg-transparent border-none cursor-pointer text-base leading-none p-1"
+          >
+            &#x2715;
+          </button>
+        </div>
+
+        {/* Scrollable content - inline vertical stepper */}
+        <div className="overflow-auto px-6 py-4" style={{ maxHeight: "calc(80vh - 120px)" }}>
+          <Form
+            form={form}
+            layout="vertical"
+            initialValues={{
+              mode: "pre_call",
+              default_on: false,
+            }}
+          >
+            {stepConfigs.map((step, index) => {
+              const isDone = index < currentStep;
+              const isCurrent = index === currentStep;
+              const isLast = index === stepConfigs.length - 1;
+              return (
+                <div key={index} className="relative flex gap-4" style={{ paddingBottom: isLast ? 0 : 8 }}>
+                  {/* Vertical line + step indicator */}
+                  <div className="flex flex-col items-center flex-shrink-0" style={{ width: 24 }}>
+                    <div
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0"
+                      style={{
+                        background: isDone ? "#4f46e5" : isCurrent ? "#fff" : "#f8fafc",
+                        color: isDone ? "#fff" : isCurrent ? "#4f46e5" : "#94a3b8",
+                        border: isCurrent ? "2px solid #4f46e5" : isDone ? "none" : "1px solid #e2e8f0",
+                      }}
+                    >
+                      {isDone ? "\u2713" : index + 1}
+                    </div>
+                    {!isLast && (
+                      <div
+                        className="flex-1"
+                        style={{
+                          width: 1,
+                          background: isDone ? "#4f46e5" : "#e2e8f0",
+                          minHeight: 16,
+                        }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Step content */}
+                  <div className="flex-1 min-w-0" style={{ paddingBottom: isLast ? 0 : 16 }}>
+                    {/* Step header - clickable for completed steps */}
+                    <div
+                      className={`flex items-center gap-2 ${isDone ? "cursor-pointer" : ""}`}
+                      onClick={() => { if (isDone) setCurrentStep(index); }}
+                      style={{ minHeight: 24 }}
+                    >
+                      <span
+                        className="text-sm"
+                        style={{
+                          fontWeight: isCurrent ? 600 : 500,
+                          color: isCurrent ? "#1e293b" : isDone ? "#4f46e5" : "#94a3b8",
+                        }}
+                      >
+                        {step.title}
+                      </span>
+                      {step.optional && !isCurrent && (
+                        <span className="text-[11px] text-slate-400">optional</span>
+                      )}
+                      {isDone && (
+                        <span className="text-[11px] text-indigo-500 hover:underline">Edit</span>
+                      )}
+                    </div>
+
+                    {/* Expanded form content for current step */}
+                    {isCurrent && (
+                      <div className="mt-3">
+                        {renderStepContent()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </Form>
+        </div>
+
+        {/* Bottom bar */}
+        <div className="flex items-center justify-end space-x-3 px-6 py-3 border-t border-gray-200">
+          <Button variant="secondary" onClick={handleClose}>
+            Cancel
+          </Button>
+          {currentStep > 0 && (
+            <Button variant="secondary" onClick={prevStep}>
+              Previous
+            </Button>
+          )}
+          {currentStep < stepConfigs.length - 1 ? (
+            <Button variant="primary" onClick={nextStep}>
+              Next
+            </Button>
+          ) : (
+            <Button variant="primary" onClick={handleSubmit} loading={loading}>
+              Create Guardrail
+            </Button>
+          )}
+        </div>
+      </div>
     </Modal>
   );
 };

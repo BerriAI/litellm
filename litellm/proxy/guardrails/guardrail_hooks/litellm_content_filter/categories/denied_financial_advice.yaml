@@ -1,5 +1,6 @@
 # Financial advice and investment guidance detection
 category_name: "denied_financial_advice"
+display_name: "Denied Financial / Investment Advice"
 description: "Detects requests for personalized financial advice, investment recommendations, or financial planning that should be provided by licensed financial advisors"
 default_action: "BLOCK"
 
