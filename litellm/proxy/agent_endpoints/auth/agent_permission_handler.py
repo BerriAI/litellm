@@ -264,7 +264,12 @@ class AgentRequestHandler:
 
             return list(set(all_agents))
         except Exception as e:
-            verbose_logger.warning(f"Failed to get allowed agents for team: {str(e)}")
+            # litellm-dashboard is the default UI team and will never have agents;
+            # skip noisy warnings for it.
+            if user_api_key_auth.team_id != "litellm-dashboard":
+                verbose_logger.warning(
+                    f"Failed to get allowed agents for team: {str(e)}"
+                )
             return []
 
     @staticmethod
