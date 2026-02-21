@@ -205,7 +205,7 @@ async def test_openai_shell_tool_live_non_streaming():
     """
     try:
         response = await litellm.aresponses(
-            model="openai/gpt-4.1",
+            model="openai/gpt-5.2",
             input="Run: echo 'hello from shell tool test'",
             tools=[SHELL_TOOL],
             tool_choice="auto",
@@ -235,7 +235,7 @@ async def test_openai_shell_tool_live_streaming():
     """
     try:
         stream = await litellm.aresponses(
-            model="openai/gpt-4.1",
+            model="openai/gpt-5.2",
             input="Run: echo 'streaming shell test'",
             tools=[SHELL_TOOL],
             tool_choice="auto",
