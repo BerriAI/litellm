@@ -33,11 +33,20 @@ const modeDescriptions = {
   during_mcp_call: "During MCP Tool Call - Runs in parallel with MCP tool execution for monitoring",
 };
 
+interface GuardrailPreset {
+  provider: string;
+  categoryName?: string;
+  guardrailNameSuggestion: string;
+  mode: string;
+  defaultOn: boolean;
+}
+
 interface AddGuardrailFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+  preset?: GuardrailPreset;
 }
 
 interface GuardrailSettings {
@@ -90,7 +99,7 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
-const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, preset }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -153,6 +162,36 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
     fetchData();
   }, [accessToken]);
+
+  // Apply preset when settings are loaded and form becomes visible
+  useEffect(() => {
+    if (!preset || !visible || !guardrailSettings) return;
+
+    // Set provider
+    setSelectedProvider(preset.provider);
+    form.setFieldsValue({
+      provider: preset.provider,
+      guardrail_name: preset.guardrailNameSuggestion,
+      mode: preset.mode,
+      default_on: preset.defaultOn,
+    });
+
+    // Pre-select content category if specified
+    if (preset.categoryName && guardrailSettings.content_filter_settings?.content_categories) {
+      const category = guardrailSettings.content_filter_settings.content_categories.find(
+        (c: any) => c.name === preset.categoryName
+      );
+      if (category) {
+        setSelectedContentCategories([{
+          id: `category-${Date.now()}`,
+          category: category.name,
+          display_name: category.display_name,
+          action: category.default_action as "BLOCK" | "MASK",
+          severity_threshold: "medium",
+        }]);
+      }
+    }
+  }, [preset, visible, guardrailSettings]);
 
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
@@ -858,6 +897,30 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         </Button>
       </div>
     );
+  };
+
+  const getStepConfigs = () => {
+    const isContentFilter = shouldRenderContentFilterConfigSettings(selectedProvider);
+    const isPII = shouldRenderPIIConfigSettings(selectedProvider);
+
+    const steps = [
+      { title: "Guardrail details", optional: false },
+      {
+        title: isPII
+          ? "PII Configuration"
+          : isContentFilter
+            ? "Denied topics"
+            : "Provider Configuration",
+        optional: true,
+      },
+    ];
+
+    if (isContentFilter) {
+      steps.push({ title: "Patterns", optional: true });
+      steps.push({ title: "Word filters", optional: true });
+    }
+
+    return steps;
   };
 
   const stepConfigs = getStepConfigs();
