@@ -162,11 +162,9 @@ def get_available_content_categories() -> List[Dict[str, str]]:
                     category_data = yaml.safe_load(f)
 
                 if category_data and "category_name" in category_data:
-                    # Use explicit display_name from YAML if provided,
-                    # otherwise auto-generate from category_name
-                    display_name = category_data.get(
-                        "display_name",
-                        category_data["category_name"].replace("_", " ").title(),
+                    # Use explicit display_name if provided, otherwise auto-generate from category_name
+                    display_name = category_data.get("display_name") or (
+                        category_data["category_name"].replace("_", " ").title()
                     )
 
                     available_categories.append(
