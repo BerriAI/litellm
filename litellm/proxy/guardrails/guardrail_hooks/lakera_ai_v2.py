@@ -392,10 +392,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 for idx, msg in enumerate(assistant_messages):
                     if idx < len(choice_indices):
                         choice_idx = choice_indices[idx]
-                        response_dict["choices"][choice_idx]["message"] = {
-                            "role": msg.get("role", "assistant"),
-                            "content": msg.get("content", ""),
-                        }
+                        response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
                 add_guardrail_to_applied_guardrails_header(
                     request_data=data, guardrail_name=self.guardrail_name
                 )
