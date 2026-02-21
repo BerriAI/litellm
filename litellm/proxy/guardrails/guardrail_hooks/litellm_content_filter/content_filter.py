@@ -79,6 +79,7 @@ class CategoryConfig:
         always_block_keywords: Optional[List[Dict[str, str]]] = None,
         inherit_from: Optional[str] = None,
         additional_block_words: Optional[List[str]] = None,
+        phrase_patterns: Optional[List[str]] = None,
     ):
         self.category_name = category_name
         self.description = description
@@ -96,6 +97,15 @@ class CategoryConfig:
             if additional_block_words
             else []
         )
+        # Phrase patterns: regex patterns for catching paraphrases
+        self.phrase_patterns: List[Tuple[str, Pattern]] = []
+        for p in phrase_patterns or []:
+            try:
+                self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))
+            except re.error:
+                verbose_proxy_logger.warning(
+                    f"Invalid phrase pattern in {category_name}: {p}"
+                )
 
 
 class ContentFilterGuardrail(CustomGuardrail):
@@ -558,6 +568,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             always_block_keywords=always_block,
             inherit_from=data.get("inherit_from"),
             additional_block_words=data.get("additional_block_words"),
+            phrase_patterns=data.get("phrase_patterns"),
         )
 
     def _load_category_file_json(self, file_path: str) -> CategoryConfig:
@@ -943,6 +954,57 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         return None
 
+    def _check_phrase_patterns(
+        self, text: str, exceptions: List[str]
+    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        """
+        Check text against phrase patterns from loaded categories.
+
+        Phrase patterns are regex patterns that catch paraphrased requests
+        (e.g., "put my money to make it grow" for financial advice).
+
+        Args:
+            text: Text to check
+            exceptions: List of exception phrases to ignore
+
+        Returns:
+            Tuple of (matched_pattern, category, severity, action) if match found, None otherwise
+        """
+        text_lower = text.lower()
+
+        for exception in exceptions:
+            if exception in text_lower:
+                return None
+
+        for category_name, config in self.loaded_categories.items():
+            if not config.phrase_patterns:
+                continue
+
+            # Check category-specific exceptions
+            for exception in config.exceptions:
+                if exception in text_lower:
+                    break
+            else:
+                # Determine action for this category
+                action = ContentFilterAction(config.default_action)
+                # Check if we have a configured action in conditional_categories
+                if category_name in self.conditional_categories:
+                    action = self.conditional_categories[category_name]["action"]
+
+                for pattern_str, pattern in config.phrase_patterns:
+                    if pattern.search(text):
+                        verbose_proxy_logger.warning(
+                            f"Phrase pattern match in {category_name}: '{pattern_str}'"
+                        )
+                        return (
+                            f"phrase: {pattern_str}",
+                            category_name,
+                            "high",
+                            action,
+                        )
+
+        return None
+
     def _check_category_keywords(
         self, text: str, exceptions: List[str]
     ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
@@ -1245,6 +1307,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         conditional_match = self._check_conditional_categories(text, all_exceptions)
         if conditional_match:
             matched_phrase, category_name, severity, action = conditional_match
+            self._handle_conditional_match(
+                matched_phrase, category_name, severity, action, detections
+            )
+
+        # Check phrase patterns (regex-based paraphrase detection)
+        phrase_match = self._check_phrase_patterns(text, all_exceptions)
+        if phrase_match:
+            matched_phrase, category_name, severity, action = phrase_match
             self._handle_conditional_match(
                 matched_phrase, category_name, severity, action, detections
             )

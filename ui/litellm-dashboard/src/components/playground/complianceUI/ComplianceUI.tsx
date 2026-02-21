@@ -581,11 +581,11 @@ export default function ComplianceUI({
           isMatch: false,
           triggeredBy: `Error: ${errorMessage}`,
           status: "complete" as const,
-        }))
-      );
-    } finally {
-      setIsRunning(false);
+        };
+      }
+      setTestResults([...updatedResults]);
     }
+    setIsRunning(false);
   }, [
     accessToken,
     selectedPromptIds,
