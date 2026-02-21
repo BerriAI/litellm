@@ -1643,3 +1643,27 @@ def test_logging_messages_isolated_tool_calls():
     # Reassign tool_calls on the original dict
     messages[0]["tool_calls"] = [{"id": "call_NEW", "type": "function", "function": {"name": "other", "arguments": "{}"}}]
     assert logging_obj.messages[0]["tool_calls"] == original_tool_calls
+
+
+def test_shallow_copy_nested_metadata_mutation_shared():
+    """Top-level key reassignment is isolated; nested dict mutation is shared (expected)."""
+    original_messages = [
+        {"role": "user", "content": "test", "metadata": {"key": "value"}}
+    ]
+    logging_obj = LitellmLogging(
+        model="gpt-4",
+        messages=original_messages,
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+
+    # Top-level key reassignment IS isolated by shallow copy
+    original_messages[0]["content"] = "CHANGED"
+    assert logging_obj.messages[0]["content"] == "test"
+
+    # Nested dict mutation is NOT isolated (shared reference) — expected
+    original_messages[0]["metadata"]["key"] = "modified"
+    assert logging_obj.messages[0]["metadata"]["key"] == "modified"
