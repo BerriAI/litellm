@@ -3014,8 +3014,11 @@ class BaseLLMHTTPHandler:
             raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
         # Store the upload URL in litellm_params for the transformation method
+        # Honour the URL already set by transform_create_file_request (e.g. Bedrock pre-signed S3 uploads),
+        # fall back to api_base for providers that do not set it.
         litellm_params_with_url = dict(litellm_params)
-        litellm_params_with_url["upload_url"] = api_base
+        if "upload_url" not in litellm_params:
+            litellm_params_with_url["upload_url"] = api_base
 
         return provider_config.transform_create_file_response(
             model=None,
