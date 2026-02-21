@@ -1639,6 +1639,13 @@ class Logging(LiteLLMLoggingBaseClass):
             logging_result, start_time, end_time
         )
 
+        if (
+            standard_logging_payload := self.model_call_details.get(
+                "standard_logging_object"
+            )
+        ) is not None:
+            emit_standard_logging_payload(standard_logging_payload)
+
     def _build_standard_logging_payload(
         self, init_response_obj: Any, start_time: Any, end_time: Any
     ) -> Any:
@@ -1752,6 +1759,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     ] = self._build_standard_logging_payload(
                         result, start_time, end_time
                     )
+                    if (
+                        standard_logging_payload := self.model_call_details.get(
+                            "standard_logging_object"
+                        )
+                    ) is not None:
+                        emit_standard_logging_payload(standard_logging_payload)
             elif standard_logging_object is not None:
                 self.model_call_details[
                     "standard_logging_object"
@@ -3228,6 +3241,8 @@ class Logging(LiteLLMLoggingBaseClass):
         is_async: bool,
         streaming_chunks: List[Any],
     ) -> Optional[Union[ModelResponse, TextCompletionResponse, ResponsesAPIResponse]]:
+        if self.stream is not True:
+            return None
         if isinstance(result, ModelResponse):
             return result
         elif isinstance(result, TextCompletionResponse):
