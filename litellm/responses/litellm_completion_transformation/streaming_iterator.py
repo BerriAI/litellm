@@ -1,6 +1,6 @@
 import time
 import uuid
-from typing import List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm.main import stream_chunk_builder
@@ -68,7 +68,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self.custom_llm_provider: Optional[str] = custom_llm_provider
         self.litellm_metadata: Optional[dict] = litellm_metadata or {}
-        self.collected_chat_completion_chunks: List[ModelResponseStream] = []
+        # Store lightweight dict snapshots for stream_chunk_builder to reduce
+        # repeated Pydantic attribute access in end-of-stream assembly.
+        self.collected_chat_completion_chunks: List[Dict[str, Any]] = []
         self.finished: bool = False
         self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
         self.sent_response_created_event: bool = False
@@ -102,6 +104,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_active = False
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
+        self._accumulated_reasoning_content_parts: List[str] = []
 
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
@@ -464,6 +467,22 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
 
+    @staticmethod
+    def _snapshot_chunk_for_stream_chunk_builder(
+        chunk: ModelResponseStream,
+    ) -> Dict[str, Any]:
+        """
+        Convert a streaming chunk into a plain dict for end-of-stream assembly.
+        Keep _hidden_params so downstream usage/header behavior is preserved.
+        """
+        chunk_dict = chunk.model_dump()
+        hidden_params = getattr(chunk, "_hidden_params", None)
+        if hidden_params is not None:
+            chunk_dict["_hidden_params"] = (
+                dict(hidden_params) if isinstance(hidden_params, dict) else hidden_params
+            )
+        return chunk_dict
+
     def create_reasoning_summary_text_done_event(
         self,
         reasoning_item_id: str,
@@ -810,19 +829,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         chunk = cast(ModelResponseStream, chunk)
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
-                        self.collected_chat_completion_chunks.append(chunk)
+                        self.collected_chat_completion_chunks.append(
+                            self._snapshot_chunk_for_stream_chunk_builder(chunk)
+                        )
                         if self._reasoning_active and not self._reasoning_done_emitted:
-                            # get raw ModelResponse
-                            text_reasoning = self.create_litellm_model_response()
-                            # reasoning_content only
+                            # Incrementally accumulate reasoning content instead of
+                            # calling stream_chunk_builder on every chunk (O(n²))
+                            delta = chunk.choices[0].delta if chunk.choices else None
+                            if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                                self._accumulated_reasoning_content_parts.append(delta.reasoning_content)
                             if self._is_reasoning_end(chunk):
-                                reasoning_content = ""
-                                # best effort to obtain reasoning_content from chat model response
-                                if text_reasoning and text_reasoning.choices:
-                                    choice = text_reasoning.choices[0]
-                                    # Check if it's a Choices object (has message) or StreamingChoices (has delta)
-                                    if hasattr(choice, "message"):
-                                        reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
+                                reasoning_content = "".join(self._accumulated_reasoning_content_parts)
                                 
                                 # Ensure we have a valid reasoning_item_id
                                 reasoning_item_id = self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
@@ -905,7 +922,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     # Emit any just-queued output_item event
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
-                    self.collected_chat_completion_chunks.append(chunk)
+                    self.collected_chat_completion_chunks.append(
+                        self._snapshot_chunk_for_stream_chunk_builder(
+                            cast(ModelResponseStream, chunk)
+                        )
+                    )
                     response_api_chunk = (
                         self._transform_chat_completion_chunk_to_response_api_chunk(
                             chunk
