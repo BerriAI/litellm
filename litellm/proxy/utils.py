@@ -14,6 +14,8 @@ from email.mime.text import MIMEText
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
+    Coroutine,
     Dict,
     List,
     Literal,
@@ -4009,6 +4011,19 @@ class PrismaClient:
             async with self._db_reconnect_lock:
                 return await _attempt_reconnect_inside_lock()
 
+        return await self._attempt_reconnect_with_lock_timeout(
+            _attempt_reconnect_inside_lock,
+            reason=reason,
+            lock_timeout_seconds=lock_timeout_seconds,
+        )
+
+    async def _attempt_reconnect_with_lock_timeout(
+        self,
+        reconnect_fn: Callable[[], Coroutine[Any, Any, bool]],
+        reason: str,
+        lock_timeout_seconds: float,
+    ) -> bool:
+        """Acquire the reconnect lock with a timeout, then run reconnect_fn."""
         lock_acquired_by_timeout_task = False
 
         async def _acquire_reconnect_lock() -> bool:
@@ -4056,7 +4071,7 @@ class PrismaClient:
             return False
 
         try:
-            return await _attempt_reconnect_inside_lock()
+            return await reconnect_fn()
         finally:
             self._db_reconnect_lock.release()
 
