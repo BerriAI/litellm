@@ -190,11 +190,15 @@ if TYPE_CHECKING:
         AutoRouter,
         PreRoutingHookResponse,
     )
+    from litellm.router_strategy.complexity_router.complexity_router import (
+        ComplexityRouter,
+    )
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     AutoRouter = Any
+    ComplexityRouter = Any
     PreRoutingHookResponse = Any
 
 
@@ -448,6 +452,7 @@ class Router:
             str, PatternMatchRouter
         ] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
+        self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -6250,10 +6255,13 @@ class Router:
 
     def _is_auto_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
-        Check if the deployment is an auto-router deployment.
+        Check if the deployment is an auto-router deployment (semantic router).
 
         Returns True if the litellm_params model starts with "auto_router/"
+        but NOT "auto_router/complexity_router" (which uses complexity routing).
         """
+        if litellm_params.model.startswith("auto_router/complexity_router"):
+            return False  # This is handled by complexity_router
         if litellm_params.model.startswith("auto_router/"):
             return True
         return False
@@ -6304,6 +6312,61 @@ class Router:
                 f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
         self.auto_routers[deployment.model_name] = autor_router
+
+    def _is_complexity_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """
+        Check if the deployment is a complexity-router deployment.
+
+        Returns True if the litellm_params model starts with "auto_router/complexity_router"
+        """
+        if litellm_params.model.startswith("auto_router/complexity_router"):
+            return True
+        return False
+
+    def init_complexity_router_deployment(self, deployment: Deployment):
+        """
+        Initialize the complexity-router deployment.
+
+        This will initialize the complexity-router and add it to the complexity-routers dictionary.
+        """
+        # Import here to avoid circular imports — ComplexityRouter is a CustomLogger
+        # subclass that imports litellm internals which depend on router.py.
+        # This matches the AutoRouter pattern in init_auto_router_deployment above.
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            ComplexityRouter,
+        )
+
+        complexity_router_config: Optional[
+            dict
+        ] = deployment.litellm_params.complexity_router_config
+
+        default_model: Optional[
+            str
+        ] = deployment.litellm_params.complexity_router_default_model
+
+        # If no default model specified, try to get from config tiers
+        if default_model is None and complexity_router_config:
+            tiers = complexity_router_config.get("tiers", {})
+            # Use MEDIUM tier as fallback default
+            default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
+        
+        if default_model is None:
+            raise ValueError(
+                "complexity_router_default_model is required for complexity-router deployments, "
+                "or configure tiers in complexity_router_config. Please set it in the litellm_params"
+            )
+
+        complexity_router: ComplexityRouter = ComplexityRouter(
+            model_name=deployment.model_name,
+            default_model=default_model,
+            litellm_router_instance=self,
+            complexity_router_config=complexity_router_config,
+        )
+        if deployment.model_name in self.complexity_routers:
+            raise ValueError(
+                f"Complexity-router deployment {deployment.model_name} already exists. Please use a different model name."
+            )
+        self.complexity_routers[deployment.model_name] = complexity_router
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
@@ -6514,6 +6577,12 @@ class Router:
         #########################################################
         if self._is_auto_router_deployment(litellm_params=deployment.litellm_params):
             self.init_auto_router_deployment(deployment=deployment)
+
+        #########################################################
+        # Check if this is a complexity-router deployment
+        #########################################################
+        if self._is_complexity_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_complexity_router_deployment(deployment=deployment)
 
         return deployment
 
@@ -8818,6 +8887,18 @@ class Router:
         #########################################################
         if model in self.auto_routers:
             return await self.auto_routers[model].async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+        #########################################################
+        # Check if any complexity-router should be used
+        #########################################################
+        if model in self.complexity_routers:
+            return await self.complexity_routers[model].async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,
