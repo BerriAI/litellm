@@ -2019,6 +2019,16 @@ class Router:
                     merged_tags.append(tag)
             kwargs[metadata_variable_name]["tags"] = merged_tags
 
+        ## CREDENTIAL NAME AS TAG
+        credential_name = deployment.get("litellm_params", {}).get(
+            "litellm_credential_name"
+        )
+        if credential_name:
+            existing_tags = kwargs[metadata_variable_name].get("tags") or []
+            if credential_name not in existing_tags:
+                existing_tags.append(credential_name)
+            kwargs[metadata_variable_name]["tags"] = existing_tags
+
         kwargs["model_info"] = model_info
 
         kwargs["timeout"] = self._get_timeout(
