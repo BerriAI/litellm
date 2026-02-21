@@ -388,10 +388,10 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
-from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.project_endpoints import (
     router as project_router,
 )
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -901,15 +901,6 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             await prisma_client.db.stop_token_refresh_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping token refresh task: {e}")
-
-    # Shutdown event - stop Prisma DB health watchdog task
-    if prisma_client is not None and hasattr(
-        prisma_client, "stop_db_health_watchdog_task"
-    ):
-        try:
-            await prisma_client.stop_db_health_watchdog_task()
-        except Exception as e:
-            verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -5838,9 +5829,6 @@ class ProxyStartupEvent:
                     is not True
                 ):
                     await prisma_client.health_check()
-
-                if hasattr(prisma_client, "start_db_health_watchdog_task"):
-                    await prisma_client.start_db_health_watchdog_task()
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
@@ -10706,22 +10694,12 @@ async def get_image():
     cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
     cache_path = os.path.join(cache_dir, "cached_logo.jpg")
 
-    logo_path = os.getenv("UI_LOGO_PATH", default_logo)
-    verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
-
-    # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
-    if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
-        if os.path.exists(logo_path):
-            return FileResponse(logo_path, media_type="image/jpeg")
-        # Custom path doesn't exist — fall back to default
-        verbose_proxy_logger.warning(
-            f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
-        )
-        logo_path = default_logo
-
-    # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
+    # [OPTIMIZATION] Check if the cached image exists first
     if os.path.exists(cache_path):
         return FileResponse(cache_path, media_type="image/jpeg")
+
+    logo_path = os.getenv("UI_LOGO_PATH", default_logo)
+    verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
@@ -11387,6 +11365,7 @@ async def get_config_list(
         "mcp_internal_ip_ranges": {"type": "List"},
         "mcp_trusted_proxy_ranges": {"type": "List"},
         "always_include_stream_usage": {"type": "Boolean"},
+        "forward_client_headers_to_llm_api": {"type": "Boolean"},
     }
 
     return_val = []
