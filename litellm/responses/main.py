@@ -491,37 +491,6 @@ async def aresponses(
                 custom_llm_provider=custom_llm_provider,
             )
 
-        # Shell execution loop for native Responses API providers with pending shell calls.
-        _in_shell_loop = kwargs.pop("_in_shell_loop", False)
-        if (
-            not _in_shell_loop
-            and isinstance(response, ResponsesAPIResponse)
-        ):
-            from litellm.responses.shell_tool_handler import (
-                _extract_shell_calls_from_responses_api,
-                responses_api_has_shell_tool,
-                run_shell_execution_loop_responses_api,
-            )
-
-            if responses_api_has_shell_tool(tools) and _extract_shell_calls_from_responses_api(response):
-                shell_loop_params = {
-                    k: v
-                    for k, v in {
-                        "custom_llm_provider": custom_llm_provider,
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "max_output_tokens": max_output_tokens,
-                        "instructions": instructions,
-                    }.items()
-                    if v is not None
-                }
-                response = await run_shell_execution_loop_responses_api(
-                    response=response,
-                    model=model,
-                    tools=tools,
-                    **shell_loop_params,
-                )
-
         if response is None:
             raise ValueError(
                 f"Got an unexpected None response from the Responses API: {response}"
@@ -787,35 +756,6 @@ def responses(
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
-
-        # Sync shell execution loop for native Responses API providers.
-        # Only applies to sync (non-async) calls; async is handled in aresponses().
-        _in_shell_loop = kwargs.pop("_in_shell_loop", False)
-        if not _is_async and not _in_shell_loop and isinstance(response, ResponsesAPIResponse):
-            from litellm.responses.shell_tool_handler import (
-                _extract_shell_calls_from_responses_api,
-                responses_api_has_shell_tool,
-                run_shell_execution_loop_responses_api_sync,
-            )
-
-            if responses_api_has_shell_tool(tools) and _extract_shell_calls_from_responses_api(response):
-                shell_loop_params = {
-                    k: v
-                    for k, v in {
-                        "custom_llm_provider": custom_llm_provider,
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "max_output_tokens": max_output_tokens,
-                        "instructions": instructions,
-                    }.items()
-                    if v is not None
-                }
-                response = run_shell_execution_loop_responses_api_sync(
-                    response=response,
-                    model=model,
-                    tools=tools,
-                    **shell_loop_params,
-                )
 
         return response
     except Exception as e:
