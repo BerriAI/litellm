@@ -57,17 +57,29 @@ class CacheSettingsManager:
         return normalized1 == normalized2
     
     @staticmethod
-    async def init_cache_settings_in_db(prisma_client, proxy_config):
+    async def init_cache_settings_in_db(
+        proxy_config, prisma_client=None, db_records=None
+    ):
         """
         Initialize cache settings from database into the router on startup.
         Only reinitializes if cache params have changed.
         """
         import json
-        
+
         try:
-            cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
-                where={"id": "cache_config"}
-            )
+            # Use pre-fetched records if available, otherwise query DB
+            if db_records is not None:
+                cache_config = None
+                for r in db_records:
+                    if getattr(r, "id", None) == "cache_config":
+                        cache_config = r
+                        break
+            elif prisma_client is not None:
+                cache_config = await prisma_client.db.litellm_cacheconfig.find_unique(
+                    where={"id": "cache_config"}
+                )
+            else:
+                return
             if cache_config is not None and cache_config.cache_settings:
                 # Parse cache settings JSON
                 cache_settings_json = cache_config.cache_settings

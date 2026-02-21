@@ -4121,6 +4121,15 @@ class ProxyConfig:
         global llm_router, llm_model_list, master_key, general_settings
 
         try:
+            # Batch-load all config + non-LLM objects in 2 queries instead of ~18.
+            from litellm.proxy.db.litellm_config_cache import (
+                batch_load_config,
+                batch_load_non_llm_objects,
+            )
+
+            config_map = await batch_load_config(prisma_client)
+            non_llm_objects = await batch_load_non_llm_objects(prisma_client)
+
             # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
             if self._should_load_db_object(object_type="models"):
                 new_models = await self._get_models_from_db(prisma_client=prisma_client)
@@ -4130,9 +4139,7 @@ class ProxyConfig:
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
 
-            db_general_settings = await prisma_client.db.litellm_config.find_first(
-                where={"param_name": "general_settings"}
-            )
+            db_general_settings = config_map.get("general_settings")
 
             # update general settings
             if db_general_settings is not None:
@@ -4141,7 +4148,11 @@ class ProxyConfig:
                 )
 
             # initialize vector stores, guardrails, etc. table in db
-            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+            await self._init_non_llm_objects_in_db(
+                prisma_client=prisma_client,
+                config_map=config_map,
+                non_llm_objects=non_llm_objects,
+            )
 
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -4150,62 +4161,130 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
+    async def _init_non_llm_objects_in_db(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+        non_llm_objects: Optional[Dict[str, List[Any]]] = None,
+    ):
         """
         Use this to read non-llm objects from the db and initialize them
 
         ex. Vector Stores, Guardrails, MCP tools, etc.
+
+        All DB reads are done upfront via batch_load_non_llm_objects (1 query).
+        Each sub-method receives pre-fetched records and does zero DB queries.
         """
+        import asyncio
+
+        from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+            CacheSettingsManager,
+        )
+
+        if config_map is None:
+            config_map = {}
+        if non_llm_objects is None:
+            non_llm_objects = {}
+
+        # All data is already fetched — sub-methods just process in-memory records.
+        # We still run them concurrently since some do non-DB I/O (e.g. MCP server init).
+        tasks = []
         if self._should_load_db_object(object_type="guardrails"):
-            await self._init_guardrails_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_guardrails_in_db(
+                    db_records=non_llm_objects.get("guardrails", [])
+                )
+            )
         if self._should_load_db_object(object_type="policies"):
-            await self._init_policies_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_policies_in_db(
+                    db_policies=non_llm_objects.get("policies", []),
+                    db_attachments=non_llm_objects.get("policy_attachments", []),
+                )
+            )
         if self._should_load_db_object(object_type="vector_stores"):
-            await self._init_vector_stores_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_vector_stores_in_db(
+                    db_records=non_llm_objects.get("vector_stores", [])
+                )
+            )
         if self._should_load_db_object(object_type="vector_store_indexes"):
-            await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_vector_store_indexes_in_db(
+                    db_records=non_llm_objects.get("vector_store_indexes", [])
+                )
+            )
         if self._should_load_db_object(object_type="mcp"):
-            await self._init_mcp_servers_in_db()
-
+            tasks.append(
+                self._init_mcp_servers_in_db(
+                    db_records=non_llm_objects.get("mcp_servers", [])
+                )
+            )
         if self._should_load_db_object(object_type="agents"):
-            await self._init_agents_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_agents_in_db(
+                    db_records=non_llm_objects.get("agents", [])
+                )
+            )
         if self._should_load_db_object(object_type="pass_through_endpoints"):
-            await self._init_pass_through_endpoints_in_db()
-
+            tasks.append(
+                self._init_pass_through_endpoints_in_db(config_map=config_map)
+            )
         if self._should_load_db_object(object_type="prompts"):
-            await self._init_prompts_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_prompts_in_db(
+                    db_records=non_llm_objects.get("prompts", [])
+                )
+            )
         if self._should_load_db_object(object_type="search_tools"):
-            await self._init_search_tools_in_db(prisma_client=prisma_client)
-
+            tasks.append(
+                self._init_search_tools_in_db(
+                    db_records=non_llm_objects.get("search_tools", [])
+                )
+            )
         if self._should_load_db_object(object_type="model_cost_map"):
-            await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
-        
+            tasks.append(
+                self._check_and_reload_model_cost_map(
+                    prisma_client=prisma_client, config_map=config_map
+                )
+            )
         if self._should_load_db_object(object_type="anthropic_beta_headers"):
-            await self._check_and_reload_anthropic_beta_headers(prisma_client=prisma_client)
-        
+            tasks.append(
+                self._check_and_reload_anthropic_beta_headers(
+                    prisma_client=prisma_client, config_map=config_map
+                )
+            )
         if self._should_load_db_object(object_type="sso_settings"):
-            await self._init_sso_settings_in_db(prisma_client=prisma_client)
+            tasks.append(
+                self._init_sso_settings_in_db(
+                    db_records=non_llm_objects.get("sso_config", [])
+                )
+            )
         if self._should_load_db_object(object_type="cache_settings"):
-            from litellm.proxy.management_endpoints.cache_settings_endpoints import (
-                CacheSettingsManager,
+            tasks.append(
+                CacheSettingsManager.init_cache_settings_in_db(
+                    db_records=non_llm_objects.get("cache_config", []),
+                    proxy_config=self,
+                )
             )
-
-            await CacheSettingsManager.init_cache_settings_in_db(
-                prisma_client=prisma_client, proxy_config=self
-            )
-
         if self._should_load_db_object(object_type="semantic_filter_settings"):
-            await self._init_semantic_filter_settings_in_db(
-                prisma_client=prisma_client
+            tasks.append(
+                self._init_semantic_filter_settings_in_db(
+                    prisma_client=prisma_client, config_map=config_map
+                )
             )
 
-    async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
+        # Run all init tasks concurrently. Each task handles its own errors
+        # internally, so we use return_exceptions=True to prevent one failure
+        # from cancelling others.
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _init_semantic_filter_settings_in_db(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+    ):
         """
         Initialize MCP semantic filter settings from database.
         Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
@@ -4216,10 +4295,10 @@ class ProxyConfig:
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         try:
-            # Load litellm_settings from DB
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "litellm_settings"}
-            )
+            # Use batch-loaded litellm_settings from config_map (1 query for all config)
+            if config_map is None:
+                config_map = {}
+            config_record = config_map.get("litellm_settings")
 
             if config_record is None or config_record.param_value is None:
                 return
@@ -4287,15 +4366,18 @@ class ProxyConfig:
                 f"Error initializing semantic filter settings from DB: {e}"
             )
 
-    async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
+    async def _init_sso_settings_in_db(self, db_records: List[Any]):
         """
-        Initialize SSO settings from database into the router on startup.
+        Initialize SSO settings from pre-fetched records into the router on startup.
         """
-
         try:
-            sso_settings = await prisma_client.db.litellm_ssoconfig.find_unique(
-                where={"id": "sso_config"}
-            )
+            # find_unique equivalent: look for id == "sso_config"
+            sso_settings = None
+            for r in db_records:
+                if getattr(r, "id", None) == "sso_config":
+                    sso_settings = r
+                    break
+
             if sso_settings is not None:
                 sso_settings.sso_settings.pop("role_mappings", None)
                 sso_settings.sso_settings.pop("team_mappings", None)
@@ -4314,16 +4396,20 @@ class ProxyConfig:
                 )
             )
 
-    async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
+    async def _check_and_reload_model_cost_map(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+    ):
         """
         Check if model cost map needs to be reloaded based on database configuration.
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
         try:
-            # Get model cost map reload configuration from database
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "model_cost_map_reload_config"}
-            )
+            # Use batch-loaded config_map (1 query for all config)
+            if config_map is None:
+                config_map = {}
+            config_record = config_map.get("model_cost_map_reload_config")
 
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
@@ -4417,16 +4503,20 @@ class ProxyConfig:
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
             )
 
-    async def _check_and_reload_anthropic_beta_headers(self, prisma_client: PrismaClient):
+    async def _check_and_reload_anthropic_beta_headers(
+        self,
+        prisma_client: PrismaClient,
+        config_map: Optional[Dict[str, Any]] = None,
+    ):
         """
         Check if anthropic beta headers config needs to be reloaded based on database configuration.
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
         try:
-            # Get anthropic beta headers reload configuration from database
-            config_record = await prisma_client.db.litellm_config.find_unique(
-                where={"param_name": "anthropic_beta_headers_reload_config"}
-            )
+            # Use batch-loaded config_map (1 query for all config)
+            if config_map is None:
+                config_map = {}
+            config_record = config_map.get("anthropic_beta_headers_reload_config")
 
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
@@ -4534,14 +4624,11 @@ class ProxyConfig:
 
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
-    async def _init_prompts_in_db(self, prisma_client: PrismaClient):
+    async def _init_prompts_in_db(self, db_records: List[Any]):
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
-        from litellm.types.prompts.init_prompts import PromptSpec
 
         try:
-            prompts_in_db = await prisma_client.db.litellm_prompttable.find_many()
-            for prompt in prompts_in_db:
-                # Convert DB object to dict and create versioned prompt_id
+            for prompt in db_records:
                 prompt_spec = self._get_prompt_spec_for_db_prompt(db_prompt=prompt)
                 IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt_spec)
         except Exception as e:
@@ -4551,23 +4638,18 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
+    async def _init_guardrails_in_db(self, db_records: List[Any]):
         from litellm.proxy.guardrails.guardrail_registry import (
             IN_MEMORY_GUARDRAIL_HANDLER,
             Guardrail,
-            GuardrailRegistry,
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
-            )
+            guardrails = [Guardrail(**vars(r)) for r in db_records]
             verbose_proxy_logger.debug(
-                "guardrails from the DB %s", str(guardrails_in_db)
+                "guardrails from the DB %s", str(guardrails)
             )
-            for guardrail in guardrails_in_db:
+            for guardrail in guardrails:
                 IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                     guardrail=cast(Guardrail, guardrail),
                 )
@@ -4578,9 +4660,11 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_policies_in_db(self, prisma_client: PrismaClient):
+    async def _init_policies_in_db(
+        self, db_policies: List[Any], db_attachments: List[Any]
+    ):
         """
-        Initialize policies and policy attachments from database into the in-memory registries.
+        Initialize policies and policy attachments from pre-fetched records into the in-memory registries.
         """
         from litellm.proxy.policy_engine.attachment_registry import (
             get_attachment_registry,
@@ -4588,16 +4672,12 @@ class ProxyConfig:
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         try:
-            # Get the global singleton instances
             policy_registry = get_policy_registry()
             attachment_registry = get_attachment_registry()
 
-            # Sync policies from DB to in-memory registry
-            await policy_registry.sync_policies_from_db(prisma_client=prisma_client)
-
-            # Sync attachments from DB to in-memory registry
+            await policy_registry.sync_policies_from_db(db_records=db_policies)
             await attachment_registry.sync_attachments_from_db(
-                prisma_client=prisma_client
+                db_records=db_attachments
             )
 
             verbose_proxy_logger.debug(
@@ -4610,14 +4690,14 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_vector_stores_in_db(self, prisma_client: PrismaClient):
+    async def _init_vector_stores_in_db(self, db_records: List[Any]):
+        from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
         from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
         try:
-            # read vector stores from db table
-            vector_stores = await VectorStoreRegistry._get_vector_stores_from_db(
-                prisma_client=prisma_client
-            )
+            vector_stores = [
+                LiteLLM_ManagedVectorStore(**vars(r)) for r in db_records
+            ]
             if len(vector_stores) <= 0:
                 return
 
@@ -4637,16 +4717,14 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_vector_store_indexes_in_db(self, prisma_client: PrismaClient):
+    async def _init_vector_store_indexes_in_db(self, db_records: List[Any]):
+        from litellm.types.vector_stores import LiteLLM_ManagedVectorStoreIndex
         from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
         try:
-            # read vector stores from db table
-            vector_store_indexes = (
-                await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
-                    prisma_client=prisma_client
-                )
-            )
+            vector_store_indexes = [
+                LiteLLM_ManagedVectorStoreIndex(**vars(r)) for r in db_records
+            ]
 
             if len(vector_store_indexes) <= 0:
                 return
@@ -4667,7 +4745,7 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_mcp_servers_in_db(self):
+    async def _init_mcp_servers_in_db(self, db_records: List[Any]):
         from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
 
         if not is_mcp_available():
@@ -4681,7 +4759,9 @@ class ProxyConfig:
         )
 
         try:
-            await global_mcp_server_manager.reload_servers_from_database()
+            await global_mcp_server_manager.reload_servers_from_records(
+                db_records=db_records
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
@@ -4689,15 +4769,13 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_agents_in_db(self, prisma_client: PrismaClient):
+    async def _init_agents_in_db(self, db_records: List[Any]):
         from litellm.proxy.agent_endpoints.agent_registry import (
             global_agent_registry as AGENT_REGISTRY,
         )
 
         try:
-            db_agents = await AGENT_REGISTRY.get_all_agents_from_db(
-                prisma_client=prisma_client
-            )
+            db_agents = [vars(r) for r in db_records]
             AGENT_REGISTRY.load_agents_from_db_and_config(
                 db_agents=db_agents, agent_config=config_agents
             )
@@ -4708,10 +4786,10 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_search_tools_in_db(self, prisma_client: PrismaClient):
+    async def _init_search_tools_in_db(self, db_records: List[Any]):
         """
-        Initialize search tools from database into the router on startup.
-        Only updates router if there are tools in the database, otherwise preserves config-loaded tools.
+        Initialize search tools from pre-fetched records into the router on startup.
+        Only updates router if there are tools, otherwise preserves config-loaded tools.
         """
         global llm_router
 
@@ -4719,21 +4797,20 @@ class ProxyConfig:
             SearchToolRegistry,
         )
         from litellm.router_utils.search_api_router import SearchAPIRouter
+        from litellm.types.search import SearchTool
 
         try:
-            search_tools = await SearchToolRegistry.get_all_search_tools_from_db(
-                prisma_client=prisma_client
-            )
+            search_tools = []
+            for r in db_records:
+                search_tool_dict = SearchToolRegistry._convert_prisma_to_dict(r)
+                search_tools.append(SearchTool(**search_tool_dict))  # type: ignore
 
             verbose_proxy_logger.info(
                 f"Loading {len(search_tools)} search tool(s) from database into router"
             )
 
-            # Only update router if there are tools in the database
-            # This prevents overwriting config-loaded tools with an empty list
             if len(search_tools) > 0:
                 if llm_router is not None:
-                    # Add search tools to the router
                     await SearchAPIRouter.update_router_search_tools(
                         router_instance=llm_router, search_tools=search_tools
                     )
@@ -4756,12 +4833,14 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_pass_through_endpoints_in_db(self):
+    async def _init_pass_through_endpoints_in_db(
+        self, config_map: Optional[Dict[str, Any]] = None
+    ):
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             initialize_pass_through_endpoints_in_db,
         )
 
-        await initialize_pass_through_endpoints_in_db()
+        await initialize_pass_through_endpoints_in_db(config_map=config_map)
 
     def decrypt_credentials(self, credential: Union[dict, BaseModel]) -> CredentialItem:
         if isinstance(credential, dict):

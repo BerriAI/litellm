@@ -447,16 +447,42 @@ class AttachmentRegistry:
 
     async def sync_attachments_from_db(
         self,
-        prisma_client: "PrismaClient",
+        prisma_client: "Optional[PrismaClient]" = None,
+        db_records: Optional[list] = None,
     ) -> None:
         """
         Sync policy attachments from the database to in-memory registry.
 
         Args:
-            prisma_client: The Prisma client instance
+            prisma_client: The Prisma client instance (used if db_records not provided)
+            db_records: Pre-fetched records from batch query (preferred)
         """
         try:
-            attachments = await self.get_all_attachments_from_db(prisma_client)
+            if db_records is not None:
+                from litellm.types.proxy.policy_engine.resolver_types import (
+                    PolicyAttachmentDBResponse,
+                )
+
+                attachments = [
+                    PolicyAttachmentDBResponse(
+                        attachment_id=a.attachment_id,
+                        policy_name=a.policy_name,
+                        scope=a.scope,
+                        teams=a.teams or [],
+                        keys=a.keys or [],
+                        models=a.models or [],
+                        tags=a.tags or [],
+                        created_at=a.created_at,
+                        updated_at=a.updated_at,
+                        created_by=a.created_by,
+                        updated_by=a.updated_by,
+                    )
+                    for a in db_records
+                ]
+            elif prisma_client is not None:
+                attachments = await self.get_all_attachments_from_db(prisma_client)
+            else:
+                return
 
             # Clear existing attachments and reload from DB
             self._attachments = []

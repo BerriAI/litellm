@@ -494,16 +494,43 @@ class PolicyRegistry:
 
     async def sync_policies_from_db(
         self,
-        prisma_client: "PrismaClient",
+        prisma_client: "Optional[PrismaClient]" = None,
+        db_records: Optional[list] = None,
     ) -> None:
         """
         Sync policies from the database to in-memory registry.
 
         Args:
-            prisma_client: The Prisma client instance
+            prisma_client: The Prisma client instance (used if db_records not provided)
+            db_records: Pre-fetched records from batch query (preferred)
         """
         try:
-            policies = await self.get_all_policies_from_db(prisma_client)
+            if db_records is not None:
+                from litellm.types.proxy.policy_engine.resolver_types import (
+                    PolicyDBResponse,
+                )
+
+                policies = [
+                    PolicyDBResponse(
+                        policy_id=p.policy_id,
+                        policy_name=p.policy_name,
+                        inherit=p.inherit,
+                        description=p.description,
+                        guardrails_add=p.guardrails_add or [],
+                        guardrails_remove=p.guardrails_remove or [],
+                        condition=p.condition,
+                        pipeline=p.pipeline,
+                        created_at=p.created_at,
+                        updated_at=p.updated_at,
+                        created_by=p.created_by,
+                        updated_by=p.updated_by,
+                    )
+                    for p in db_records
+                ]
+            elif prisma_client is not None:
+                policies = await self.get_all_policies_from_db(prisma_client)
+            else:
+                return
 
             for policy_response in policies:
                 policy = self._parse_policy(
