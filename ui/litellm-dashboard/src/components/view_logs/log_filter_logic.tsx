@@ -158,12 +158,20 @@ export function useLogFilterLogic({
     [filters],
   );
 
-  // Refetch when sort or page changes (backend filters use their own fetch, not the main query)
+  // Refetch when sort, page, or time range changes (backend filters use their own fetch, not the main query)
   useEffect(() => {
     if (hasBackendFilters && accessToken) {
+      // Cancel any pending debounced search to prevent it from overwriting this page's results
+      debouncedSearch.cancel();
       performSearch(filters, currentPage);
     }
-  }, [sortBy, sortOrder, currentPage]);
+    // Intentionally omitted from deps:
+    // - `filters` / `debouncedSearch` / `performSearch`: filter changes are handled by
+    //   handleFilterChange → debouncedSearch; adding them here would double-fetch on filter apply.
+    // - `hasBackendFilters` / `accessToken`: stable across sort/page/time changes; including them
+    //   would cause spurious re-runs when the filter state first becomes active.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortBy, sortOrder, currentPage, startTime, endTime, isCustomDate]);
 
   // Compute client-side filtered logs directly from incoming logs and filters
   const clientDerivedFilteredLogs: PaginatedResponse = useMemo(() => {
@@ -301,6 +309,7 @@ export function useLogFilterLogic({
   return {
     filters,
     filteredLogs,
+    hasBackendFilters,
     allKeyAliases,
     allTeams,
     handleFilterChange,
