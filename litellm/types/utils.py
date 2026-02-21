@@ -3150,6 +3150,7 @@ class LlmProviders(str, Enum):
     RECRAFT = "recraft"
     FAL_AI = "fal_ai"
     STABILITY = "stability"
+    MODELSLAB = "modelslab"
     HEROKU = "heroku"
     AIML = "aiml"
     COMETAPI = "cometapi"

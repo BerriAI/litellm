@@ -8614,6 +8614,12 @@ class ProviderConfigManager:
             )
 
             return get_stability_image_generation_config(model)
+        elif LlmProviders.MODELSLAB == provider:
+            from litellm.llms.modelslab.image_generation import (
+                get_modelslab_image_generation_config,
+            )
+
+            return get_modelslab_image_generation_config(model)
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.image_generation import (
                 get_runwayml_image_generation_config,
