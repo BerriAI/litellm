@@ -8113,6 +8113,8 @@ class ProviderConfigManager:
             )
 
             return SagemakerEmbeddingConfig.get_model_config(model)
+        elif litellm.LlmProviders.GDM == provider:
+            return litellm.GDMEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8231,6 +8233,12 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GDM == provider:
+            from litellm.llms.gdm.transcription.transformation import (
+                GDMTranscriptionConfig,
+            )
+
+            return GDMTranscriptionConfig()
         return None
 
     @staticmethod
