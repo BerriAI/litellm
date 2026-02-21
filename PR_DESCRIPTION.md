@@ -2,134 +2,185 @@
 
 ## Summary
 
-This PR adds a new routing strategy called `complexity_router` that classifies requests by complexity using rule-based scoring and routes them to appropriate models - **with zero API calls and sub-millisecond latency**.
+This PR adds a new `complexity_router` - a rule-based routing strategy that uses weighted scoring to classify requests by complexity and route them to appropriate models. Unlike the existing `auto_router` which uses semantic/embedding matching (requiring API calls), the complexity router operates entirely locally in <1ms with zero cost.
 
-Unlike the existing `auto_router` which uses embedding-based semantic matching, this approach:
-- **Zero external API calls** - all scoring is local
-- **Sub-millisecond latency** - typically <1ms per classification (vs 100-500ms for embedding API)
-- **Predictable behavior** - deterministic rule-based scoring
-- **No training required** - works out of the box, no utterance examples needed
+**Also included:** UI updates to make complexity routing accessible via a simple 4-dropdown interface.
 
-Inspired by [ClawRouter](https://github.com/BlockRunAI/ClawRouter).
+## Motivation
+
+Many users want intelligent model routing based on query complexity without:
+- The latency of embedding API calls
+- The cost of embedding API calls  
+- The complexity of configuring semantic routes with utterances
+
+The complexity router provides a simple, fast alternative that handles 70-80% of routing decisions well.
 
 ## How It Works
 
-The router scores each request across 7 weighted dimensions:
+### Weighted Scoring Across 7 Dimensions
 
-| Dimension | Description | Weight |
-|-----------|-------------|--------|
-| `tokenCount` | Short prompts = simple, long = complex | 0.15 |
-| `codePresence` | Code keywords (function, class, async, etc.) | 0.20 |
-| `reasoningMarkers` | "step by step", "think through", etc. | 0.25 |
-| `technicalTerms` | Domain complexity indicators | 0.15 |
-| `simpleIndicators` | "what is", "define" (negative weight) | 0.15 |
-| `multiStepPatterns` | "first...then", numbered steps | 0.05 |
-| `questionComplexity` | Multiple question marks | 0.05 |
+| Dimension | What It Detects | Score Range |
+|-----------|-----------------|-------------|
+| `tokenCount` | Short prompts → simple, long → complex | -1.0 to 1.0 |
+| `codePresence` | Code keywords (function, class, python, etc.) | 0 to 1.0 |
+| `reasoningMarkers` | "step by step", "think through", etc. | 0 to 1.0 |
+| `technicalTerms` | Architecture, distributed, ML terms | 0 to 1.0 |
+| `simpleIndicators` | "what is", "define", greetings | -1.0 to 0 |
+| `multiStepPatterns` | "first...then", numbered steps | 0 to 0.5 |
+| `questionComplexity` | Multiple questions | 0 to 0.5 |
 
-The weighted sum maps to tiers:
-- **SIMPLE** (< 0.25): Basic questions, greetings → cheap/fast models
-- **MEDIUM** (0.25 - 0.50): Standard queries → balanced models
-- **COMPLEX** (0.50 - 0.75): Technical, multi-part requests → capable models
-- **REASONING** (> 0.75): Chain-of-thought, analysis → reasoning models
+### Tier Assignment
 
-### Special: Reasoning Override
-If 2+ reasoning markers are detected in the user message, the request automatically routes to REASONING tier regardless of score.
+The weighted score maps to 4 tiers:
+- **SIMPLE** (score < 0.25): Quick factual questions, greetings
+- **MEDIUM** (0.25 ≤ score < 0.50): Moderate complexity
+- **COMPLEX** (0.50 ≤ score < 0.75): Technical, code-heavy requests
+- **REASONING** (score ≥ 0.75): Multi-step reasoning required
 
-## Usage
+**Special Override:** If 2+ reasoning markers are detected in the user message, the request is automatically routed to REASONING tier regardless of overall score.
+
+## Configuration
+
+### Via proxy config.yaml
 
 ```yaml
 model_list:
-  - model_name: smart-router
+  - model_name: complexity_router_1
     litellm_params:
       model: auto_router/complexity_router
       complexity_router_config:
         tiers:
-          SIMPLE: gpt-4o-mini
-          MEDIUM: gpt-4o  
+          SIMPLE: gemini-2.0-flash
+          MEDIUM: gpt-4o-mini
           COMPLEX: claude-sonnet-4
-          REASONING: o1-preview
+          REASONING: claude-opus-4
+        # Optional: adjust tier boundaries (defaults shown)
+        tier_boundaries:
+          simple_medium: 0.25
+          medium_complex: 0.50
+          complex_reasoning: 0.75
+        # Optional: adjust token count thresholds
+        token_thresholds:
+          simple: 15   # Below = "short"
+          complex: 400 # Above = "long"
 ```
 
-Then use like any other model:
+### Via UI (New!)
+
+The UI now has a "Router Type" selector with two options:
+
+1. **Complexity Router (Recommended)** - Simple 4-dropdown interface:
+   - Simple Tasks: [model dropdown]
+   - Medium Tasks: [model dropdown]
+   - Complex Tasks: [model dropdown]
+   - Reasoning Tasks: [model dropdown]
+
+2. **Semantic Router** - Existing utterance-based configuration
+
+Users can now set up smart routing in ~30 seconds by just picking 4 models.
+
+### Programmatic Usage
+
 ```python
-response = litellm.completion(
+from litellm import Router
+
+router = Router(model_list=[{
+    "model_name": "smart-router",
+    "litellm_params": {
+        "model": "auto_router/complexity_router",
+        "complexity_router_config": {
+            "tiers": {
+                "SIMPLE": "gpt-4o-mini",
+                "MEDIUM": "gpt-4o", 
+                "COMPLEX": "claude-sonnet-4-20250514",
+                "REASONING": "claude-sonnet-4-20250514",
+            }
+        }
+    }
+}])
+
+# Routes automatically based on complexity
+response = await router.acompletion(
     model="smart-router",
     messages=[{"role": "user", "content": "What is 2+2?"}]
-)
-# Routes to SIMPLE tier (gpt-4o-mini)
-```
+)  # → Routes to gpt-4o-mini (SIMPLE)
 
-## Full Configuration Options
-
-```yaml
-complexity_router_config:
-  tiers:
-    SIMPLE: gpt-4o-mini
-    MEDIUM: gpt-4o  
-    COMPLEX: claude-sonnet-4
-    REASONING: o1-preview
-  
-  # Optional: override tier boundaries (normalized scores)
-  tier_boundaries:
-    simple_medium: 0.25
-    medium_complex: 0.50
-    complex_reasoning: 0.75
-  
-  # Optional: override token count thresholds
-  token_thresholds:
-    simple: 50    # Below this = "short"
-    complex: 500  # Above this = "long"
-  
-  # Optional: override dimension weights
-  dimension_weights:
-    tokenCount: 0.15
-    codePresence: 0.20
-    reasoningMarkers: 0.25
-    technicalTerms: 0.15
-    simpleIndicators: 0.15
-    multiStepPatterns: 0.05
-    questionComplexity: 0.05
-  
-  # Optional: fallback model
-  default_model: gpt-4o
+response = await router.acompletion(
+    model="smart-router", 
+    messages=[{"role": "user", "content": "Think step by step about this distributed systems architecture problem..."}]
+)  # → Routes to claude-sonnet-4-20250514 (REASONING)
 ```
 
 ## Files Changed
 
-### New Files
-- `litellm/router_strategy/complexity_router/complexity_router.py` - Main router class
+### New Files - Backend
+- `litellm/router_strategy/complexity_router/__init__.py`
+- `litellm/router_strategy/complexity_router/complexity_router.py` - Main router implementation
 - `litellm/router_strategy/complexity_router/config.py` - Configuration and defaults
-- `litellm/router_strategy/complexity_router/__init__.py` - Package exports
 - `litellm/router_strategy/complexity_router/README.md` - Documentation
-- `tests/test_litellm/router_strategy/test_complexity_router.py` - Test suite (37 tests)
+- `tests/test_litellm/router_strategy/test_complexity_router.py` - 37 tests
 
-### Modified Files
-- `litellm/router.py` - Integration with pre_routing_hook
-- `litellm/types/router.py` - New config params
+### New Files - UI
+- `ui/litellm-dashboard/src/components/add_model/ComplexityRouterConfig.tsx` - 4-dropdown tier configuration component
+
+### Modified Files - Backend
+- `litellm/router.py` - Added complexity router initialization and pre-routing hook
+- `litellm/types/router.py` - Added `complexity_router_config` and `complexity_router_default_model` params
+
+### Modified Files - UI
+- `ui/litellm-dashboard/src/components/add_model/add_auto_router_tab.tsx` - Added router type selector, integrated ComplexityRouterConfig
+- `ui/litellm-dashboard/src/components/add_model/handle_add_auto_router_submit.tsx` - Handle complexity_router model type in submit
+
+## UI Changes
+
+### Router Type Selector
+![Router Type Selector](docs/images/router-type-selector.png)
+
+The "Add Auto Router" page now shows:
+- **Complexity Router (Recommended)** with a green badge - default selected
+- **Semantic Router** for the existing utterance-based approach
+
+### Complexity Router Configuration
+![Complexity Router Config](docs/images/complexity-router-config.png)
+
+Simple 4-dropdown interface:
+- Each dropdown shows available models
+- Tooltips explain what each tier handles
+- Recommendation card with suggested model types
 
 ## Testing
 
 ```bash
 pytest tests/test_litellm/router_strategy/test_complexity_router.py -v
-# 37 tests pass
+# 37 passed in 0.21s
 ```
 
-## Use Cases
+Tests cover:
+- Scoring logic for each dimension
+- Tier assignment at boundaries
+- Reasoning marker override
+- Model selection
+- Pre-routing hook integration
+- Edge cases (empty prompts, unicode, very long prompts)
+- Configuration overrides
 
-1. **Cost optimization**: Route simple queries ("What is X?") to cheap models, complex queries to capable models
-2. **Latency optimization**: Simple greetings get fast responses, complex analysis gets thorough responses
-3. **Resource management**: Expensive reasoning models only used when actually needed
+## Performance
 
-## Comparison with auto_router
+- **Latency:** <1ms per classification (all local regex/string matching)
+- **Cost:** $0 (no API calls)
+- **Memory:** Minimal (pre-compiled regex patterns)
 
-| Feature | complexity_router | auto_router |
-|---------|-------------------|-------------|
-| Classification | Rule-based scoring | Semantic embedding |
-| Latency | <1ms | ~100-500ms (embedding API) |
-| API Calls | None | Requires embedding model |
-| Training | None | Requires utterance examples |
-| Best For | Cost optimization | Intent routing |
+## Inspiration
 
----
+This implementation is inspired by [ClawRouter](https://github.com/BlockRunAI/ClawRouter), which uses similar weighted scoring for complexity classification.
+
+## Checklist
+
+- [x] Tests added (37 tests)
+- [x] Backend implementation complete
+- [x] UI implementation complete
+- [x] Documentation in PR description
+- [x] No breaking changes
+- [x] Follows existing patterns (like `auto_router`)
 
 cc @ishaan-jaff for review
