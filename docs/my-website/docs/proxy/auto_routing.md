@@ -230,7 +230,7 @@ The Complexity Router provides an alternative to semantic routing that uses **ru
 | Feature | Semantic Auto Router | Complexity Router |
 |---------|---------------------|-------------------|
 | Classification | Embedding-based matching | Rule-based scoring |
-| Latency | ~100-500ms (embedding API) | <1ms |
+| Latency | ~100-500ms (embedding API) | &lt;1ms |
 | API Calls | Requires embedding model | None |
 | Training | Requires utterance examples | Works out of the box |
 | Best For | Intent-based routing | Cost optimization |
@@ -395,7 +395,7 @@ The router scores each request across 7 dimensions:
 
 | Dimension | What It Detects | Effect |
 |-----------|-----------------|--------|
-| Token Count | Short (<15) or long (>400) prompts | Short = simple, long = complex |
+| Token Count | Short (&lt;15) or long (&gt;400) prompts | Short = simple, long = complex |
 | Code Presence | "function", "class", "api", "database", etc. | Increases complexity |
 | Reasoning Markers | "step by step", "think through", "analyze" | Triggers REASONING tier |
 | Technical Terms | "architecture", "distributed", "encryption" | Increases complexity |
