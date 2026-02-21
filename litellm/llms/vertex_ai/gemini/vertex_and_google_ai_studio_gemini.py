@@ -271,6 +271,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
+            "audio",
         ]
 
         # Add penalty parameters only for non-preview models
