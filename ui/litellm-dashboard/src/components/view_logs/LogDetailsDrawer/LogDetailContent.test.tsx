@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { LogDetailContent } from "./LogDetailContent";
@@ -341,6 +341,6 @@ describe("LogDetailContent", () => {
 
     const descriptions = screen.getByText("Provider").closest(".ant-descriptions-item");
     expect(descriptions).toBeInTheDocument();
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(within(descriptions as HTMLElement).getByText("-")).toBeInTheDocument();
   });
 });
