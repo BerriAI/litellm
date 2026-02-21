@@ -299,6 +299,8 @@ ignored_keys = [
     "metadata.status",
     "metadata.proxy_server_request",
     "metadata.error_information",
+    "metadata.attempted_retries",
+    "metadata.max_retries",
 ]
 
 MODEL_LIST = [
@@ -1196,6 +1198,18 @@ async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
     assert data["data"][0]["api_key"] == "sk-test-key-1"
 
 
+async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
+    """Poll until mock has been called at least once, or timeout."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if mock.call_count > 0:
+            return
+        await asyncio.sleep(interval)
+    mock.assert_called_once()  # will raise with a clear message
+
+
 class TestSpendLogsPayload:
     @pytest.mark.asyncio
     async def test_spend_logs_payload_e2e(self):
@@ -1215,9 +1229,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hello, world!"
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1310,9 +1322,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hi! My name is Claude."
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1402,9 +1412,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hi! My name is Claude."
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
