@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
+    UI_TEAM_ID,
     UserAPIKeyAuth,
 )
 
@@ -266,7 +267,7 @@ class AgentRequestHandler:
         except Exception as e:
             # litellm-dashboard is the default UI team and will never have agents;
             # skip noisy warnings for it.
-            if user_api_key_auth.team_id != UI_SESSION_TOKEN_TEAM_ID:
+            if user_api_key_auth.team_id != UI_TEAM_ID:
                 verbose_logger.warning(
                     f"Failed to get allowed agents for team: {str(e)}"
                 )
