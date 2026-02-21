@@ -75,6 +75,9 @@ async def test_get_guardrail_by_name_allows_duplicates():
         "duplicate-name", prisma_client
     )
 
-    table.find_first.assert_awaited_once_with(where={"guardrail_name": "duplicate-name"})
+    table.find_first.assert_awaited_once_with(
+        where={"guardrail_name": "duplicate-name"},
+        order_by={"created_at": "asc"},
+    )
     assert guardrail["guardrail_id"] == "id-1"
     assert guardrail["guardrail_name"] == "duplicate-name"

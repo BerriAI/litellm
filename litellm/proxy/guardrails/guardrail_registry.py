@@ -368,11 +368,12 @@ class GuardrailRegistry:
         """
         Get a guardrail by its name from the database.
 
-        Note: guardrail_name is not unique; this returns the first match.
+        Note: guardrail_name is not unique; this returns the oldest match.
         """
         try:
             guardrail = await prisma_client.db.litellm_guardrailstable.find_first(
-                where={"guardrail_name": guardrail_name}
+                where={"guardrail_name": guardrail_name},
+                order_by={"created_at": "asc"},
             )
 
             if not guardrail:

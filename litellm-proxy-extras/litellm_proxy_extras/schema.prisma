@@ -904,12 +904,14 @@ model LiteLLM_ManagedVectorStoresTable {
 // Guardrails table for storing guardrail configurations
 model LiteLLM_GuardrailsTable {
   guardrail_id String @id @default(uuid())
-  guardrail_name String @unique
+  guardrail_name String
   litellm_params Json
   guardrail_info Json?
   team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  @@index([guardrail_name])
 }
 
 // Prompt table for storing prompt configurations
