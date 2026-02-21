@@ -180,6 +180,7 @@ async def test_get_key_object_should_reconnect_once_on_db_connection_error():
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once_with(
         reason="auth_get_key_object_lookup_failure",
         timeout_seconds=2.0,
+        lock_timeout_seconds=0.1,
     )
 
 
@@ -205,6 +206,7 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once_with(
         reason="auth_get_key_object_lookup_failure",
         timeout_seconds=2.0,
+        lock_timeout_seconds=0.1,
     )
     assert mock_prisma_client.get_data.await_count == 1
 
