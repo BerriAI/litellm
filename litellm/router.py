@@ -6303,18 +6303,20 @@ class Router:
         """
         # Import here to match AutoRouter pattern and avoid circular imports
         # (ComplexityRouter is a CustomLogger subclass that imports litellm internals)
-        from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            ComplexityRouter,
+        )
 
         complexity_router_config: Optional[
             dict
-        ] = deployment.litellm_params.complexity_router_config or {}
+        ] = deployment.litellm_params.complexity_router_config
 
         default_model: Optional[
             str
         ] = deployment.litellm_params.complexity_router_default_model
-        
+
         # If no default model specified, try to get from config tiers
-        if default_model is None:
+        if default_model is None and complexity_router_config:
             tiers = complexity_router_config.get("tiers", {})
             # Use MEDIUM tier as fallback default
             default_model = tiers.get("MEDIUM") or tiers.get("SIMPLE")
