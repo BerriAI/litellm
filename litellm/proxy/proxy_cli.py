@@ -294,7 +294,7 @@ class ProxyInitializationHelpers:
         except Exception as e:
             print(f"""
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-            """)  # noqa  # noqa
+            """)  # noqa
 
     @staticmethod
     def _is_port_in_use(port):
