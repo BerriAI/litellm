@@ -1,8 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from litellm.anthropic_beta_headers_manager import (
-    update_headers_with_filtered_beta,
-)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -34,10 +31,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         Validate the environment for the request
         """
+        vertex_ai_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
+        vertex_ai_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
+        
+        project_id: Optional[str] = None
         if "Authorization" not in headers:
-            vertex_ai_project = VertexBase.get_vertex_ai_project(litellm_params)
-            vertex_credentials = VertexBase.get_vertex_ai_credentials(litellm_params)
-            vertex_ai_location = VertexBase.get_vertex_ai_location(litellm_params)
+            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
 
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
@@ -46,12 +45,17 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
 
             headers["Authorization"] = f"Bearer {access_token}"
+        else:
+            # Authorization already in headers, but we still need project_id
+            project_id = vertex_ai_project
 
+        # Always calculate api_base if not provided, regardless of Authorization header
+        if api_base is None:
             api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
                 vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
-                project_id=project_id,
+                project_id=project_id or "",
                 partner=VertexPartnerProvider.claude,
                 stream=optional_params.get("stream", False),
                 model=model,
@@ -68,6 +72,29 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         if existing_beta:
             beta_values.update(b.strip() for b in existing_beta.split(","))
 
+        # Check for context management
+        context_management_param = optional_params.get("context_management")
+        if context_management_param is not None:
+            # Check edits array for compact_20260112 type
+            edits = context_management_param.get("edits", [])
+            has_compact = False
+            has_other = False
+            
+            for edit in edits:
+                edit_type = edit.get("type", "")
+                if edit_type == "compact_20260112":
+                    has_compact = True
+                else:
+                    has_other = True
+            
+            # Add compact header if any compact edits exist
+            if has_compact:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+            
+            # Add context management header if any other edits exist
+            if has_other:
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
+
         # Check for web search tool
         for tool in tools:
             if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
@@ -81,12 +108,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)
-        
-        # Filter out unsupported beta headers for Vertex AI
-        headers = update_headers_with_filtered_beta(
-            headers=headers,
-            provider="vertex_ai",
-        )
         
         return headers, api_base
 

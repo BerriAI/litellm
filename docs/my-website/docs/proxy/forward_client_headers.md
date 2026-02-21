@@ -6,6 +6,52 @@ Control which model groups can forward client headers to the underlying LLM prov
 
 By default, LiteLLM does not forward client headers to LLM provider APIs for security reasons. However, you can selectively enable header forwarding for specific model groups using the `forward_client_headers_to_llm_api` setting.
 
+## How it Works
+
+LiteLLM does **not** forward all client headers to the LLM provider. Instead, it uses an **allowlist** approach — only headers matching specific rules are forwarded. This ensures sensitive headers (like your LiteLLM API key) are never accidentally sent to upstream providers.
+
+```mermaid
+sequenceDiagram
+    participant Client as Client (SDK / curl)
+    participant Proxy as LiteLLM Proxy
+    participant Filter as Header Filter (Allowlist)
+    participant LLM as LLM Provider (OpenAI, Anthropic, etc.)
+
+    Client->>Proxy: Request with all headers<br/>(Authorization, x-trace-id,<br/>x-custom-header, anthropic-beta, etc.)
+    
+    Proxy->>Filter: Check forward_client_headers_to_llm_api<br/>setting for this model group
+
+    Note over Filter: Allowlist rules:<br/>1. Headers starting with "x-" ✅<br/>2. "anthropic-beta" ✅<br/>3. "x-stainless-*" ❌ (blocked)<br/>4. All other headers ❌ (blocked)
+
+    Filter-->>Proxy: Return only allowed headers
+
+    Proxy->>LLM: Request with filtered headers<br/>(x-trace-id, x-custom-header,<br/>anthropic-beta)
+    
+    LLM-->>Proxy: Response
+    Proxy-->>Client: Response
+```
+
+### Header Allowlist Rules
+
+The following rules determine which headers are forwarded (see [`_get_forwardable_headers`](https://github.com/litellm/litellm/blob/main/litellm/proxy/litellm_pre_call_utils.py) in `litellm/proxy/litellm_pre_call_utils.py`):
+
+| Rule | Example | Forwarded? |
+|---|---|---|
+| Headers starting with `x-` | `x-trace-id`, `x-custom-header`, `x-request-source` | ✅ Yes |
+| `anthropic-beta` header | `anthropic-beta: prompt-caching-2024-07-31` | ✅ Yes |
+| Headers starting with `x-stainless-*` | `x-stainless-lang`, `x-stainless-arch` | ❌ No (causes OpenAI SDK issues) |
+| Standard HTTP headers | `Authorization`, `Content-Type`, `Host` | ❌ No |
+| Other provider headers | `Accept`, `User-Agent` | ❌ No |
+
+### Additional Header Mechanisms
+
+| Mechanism | Description | Reference |
+|---|---|---|
+| **`x-pass-` prefix** | Headers prefixed with `x-pass-` are always forwarded with the prefix stripped, regardless of settings. E.g., `x-pass-anthropic-beta: value` → `anthropic-beta: value`. Works for all pass-through endpoints. | [Source code](https://github.com/litellm/litellm/blob/main/litellm/passthrough/utils.py) |
+| **`openai-organization`** | Forwarded only when `forward_openai_org_id: true` is set in `general_settings`. | [Forward OpenAI Org ID](#enable-globally) |
+| **User information headers** | When `add_user_information_to_llm_headers: true`, LiteLLM adds `x-litellm-user-id`, `x-litellm-org-id`, etc. | [User Information Headers](#user-information-headers-optional) |
+| **Vertex AI pass-through** | Uses a separate, stricter allowlist: only `anthropic-beta` and `content-type`. | [Source code](https://github.com/litellm/litellm/blob/main/litellm/constants.py) |
+
 ## Configuration
 
 ## Enable Globally

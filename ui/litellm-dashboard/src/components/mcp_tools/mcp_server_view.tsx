@@ -43,9 +43,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     onBack();
   };
 
-  const { maskedUrl, hasToken } = getMaskedAndFullUrl(mcpServer.url);
+  const urlValue = mcpServer.url ?? "";
+  const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
 
-  const renderUrlWithToggle = (url: string, showFull: boolean) => {
+  const renderUrlWithToggle = (url: string | null | undefined, showFull: boolean) => {
+    if (!url) return "—";
     if (!hasToken) return url;
     return showFull ? url : maskedUrl;
   };

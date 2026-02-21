@@ -437,6 +437,27 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     else:
                         assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
+                ## HANDLE ASSISTANT IMAGES FIELD
+                # Process images field if present (for generated images from assistant)
+                assistant_images = assistant_msg.get("images")
+                if assistant_images is not None and isinstance(assistant_images, list):
+                    for image_item in assistant_images:
+                        if isinstance(image_item, dict):
+                            image_url_obj = image_item.get("image_url")
+                            if isinstance(image_url_obj, dict):
+                                assistant_image_url = image_url_obj.get("url")
+                                format = image_url_obj.get("format")
+                                detail = image_url_obj.get("detail")
+                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                                if assistant_image_url:
+                                    _part = _process_gemini_media(
+                                        image_url=assistant_image_url,
+                                        format=format,
+                                        media_resolution_enum=media_resolution_enum,
+                                        model=model,
+                                    )
+                                    assistant_content.append(_part)
+
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
                     assistant_msg.get("tool_calls", []) is not None
@@ -506,6 +527,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
         return contents
     except Exception as e:
         raise e
+
+
+def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
+    """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
+    extra_body: Optional[dict] = optional_params.pop("extra_body", None)
+    if extra_body is not None:
+        data_dict: dict = data  # type: ignore[assignment]
+        for k, v in extra_body.items():
+            if k in data_dict and isinstance(data_dict[k], dict) and isinstance(v, dict):
+                data_dict[k].update(v)
+            else:
+                data_dict[k] = v
 
 
 def _transform_request_body(
@@ -598,6 +631,7 @@ def _transform_request_body(
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
+        _pop_and_merge_extra_body(data, optional_params)
     except Exception as e:
         raise e
 

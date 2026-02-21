@@ -54,7 +54,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self.lakera_api_key = api_key or os.environ["LAKERA_API_KEY"]
+        self.lakera_api_key = api_key or os.environ.get("LAKERA_API_KEY") or ""
         self.project_id = project_id
         self.api_base = (
             api_base or get_secret_str("LAKERA_API_BASE") or "https://api.lakera.ai"

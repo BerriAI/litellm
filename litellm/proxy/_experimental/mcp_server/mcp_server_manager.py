@@ -14,6 +14,7 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -36,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
@@ -156,13 +158,13 @@ class MCPServerManager:
         [
             "server-1": {
                 "name": "zapier_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
                 "transport": "sse",
                 "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
             }
         ]
         """
@@ -340,7 +342,7 @@ class MCPServerManager:
                 verbose_logger.info(
                     f"Loading OpenAPI spec from {spec_path} for server {server_name}"
                 )
-                self._register_openapi_tools(
+                await self._register_openapi_tools(
                     spec_path=spec_path,
                     server=new_server,
                     base_url=server_config.get("url", ""),
@@ -352,7 +354,9 @@ class MCPServerManager:
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
 
-    def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
+    async def _register_openapi_tools(
+        self, spec_path: str, server: MCPServer, base_url: str
+    ):
         """
         Register tools from an OpenAPI specification for a given server.
 
@@ -374,20 +378,19 @@ class MCPServerManager:
             get_base_url as get_openapi_base_url,
         )
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-            load_openapi_spec,
+            load_openapi_spec_async,
         )
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
         )
 
         try:
-            # Load OpenAPI spec
-            spec = load_openapi_spec(spec_path)
+            # Load OpenAPI spec (async to avoid "called from within a running event loop")
+            spec = await load_openapi_spec_async(spec_path)
 
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
-                base_url = get_openapi_base_url(spec)
-
+                base_url = get_openapi_base_url(spec, spec_path)
             verbose_logger.info(
                 f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
             )
@@ -606,6 +609,7 @@ class MCPServerManager:
             alias=getattr(mcp_server, "alias", None),
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
+            spec_path=getattr(mcp_server, "spec_path", None),
             transport=cast(MCPTransportType, mcp_server.transport),
             auth_type=auth_type,
             authentication_token=auth_value,
@@ -636,11 +640,25 @@ class MCPServerManager:
         )
         return new_server
 
+    async def _maybe_register_openapi_tools(self, server: MCPServer):
+        """Register OpenAPI tools if the server has a spec_path configured."""
+        if server.spec_path:
+            verbose_logger.info(
+                f"Loading OpenAPI spec from {server.spec_path} for server {server.name}"
+            )
+            await self._register_openapi_tools(
+                spec_path=server.spec_path,
+                server=server,
+                base_url=server.url or "",
+            )
+            self.initialize_tool_name_to_mcp_server_name_mapping()
+
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -652,6 +670,7 @@ class MCPServerManager:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -670,24 +689,47 @@ class MCPServerManager:
         return [
             server.server_id
             for server in self.get_registry().values()
-            if server.allow_all_keys
+            if server.allow_all_keys is True
         ]
 
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
     ) -> List[str]:
         """
-        Get the allowed MCP Servers for the user
+        Get the allowed MCP Servers for the user.
+
+        Priority:
+        1. If object_permission.mcp_servers is explicitly set, use it (even for admins)
+        2. If admin and no object_permission, return all servers
+        3. Otherwise, use standard permission checks
         """
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-
-        # If admin, get all servers
-        if user_api_key_auth and _user_has_admin_view(user_api_key_auth):
-            return list(self.get_registry().keys())
 
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
 
         try:
+            # Check if object_permission.mcp_servers is explicitly set
+            has_explicit_object_permission = False
+            if user_api_key_auth and user_api_key_auth.object_permission:
+                # Check if mcp_servers is explicitly set (not None, empty list is valid)
+                if user_api_key_auth.object_permission.mcp_servers is not None:
+                    has_explicit_object_permission = True
+                    verbose_logger.debug(
+                        f"Object permission mcp_servers explicitly set: {user_api_key_auth.object_permission.mcp_servers}"
+                    )
+
+            # If admin but NO explicit object permission, get all servers
+            if (
+                user_api_key_auth
+                and _user_has_admin_view(user_api_key_auth)
+                and not has_explicit_object_permission
+            ):
+                verbose_logger.debug(
+                    "Admin user without explicit object_permission - returning all servers"
+                )
+                return list(self.get_registry().keys())
+
+            # Get allowed servers from object permissions (respects object_permission even for admins)
             allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
                 user_api_key_auth
             )
@@ -833,7 +875,7 @@ class MCPServerManager:
 
         return resolved_env
 
-    def _create_mcp_client(
+    async def _create_mcp_client(
         self,
         server: MCPServer,
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
@@ -843,19 +885,35 @@ class MCPServerManager:
         """
         Create an MCPClient instance for the given server.
 
+        Auth resolution (single place for all auth logic):
+        1. ``mcp_auth_header`` — per-request/per-user override
+        2. OAuth2 client_credentials token — auto-fetched and cached
+        3. ``server.authentication_token`` — static token from config/DB
+
         Args:
-            server (MCPServer): The server configuration
-            mcp_auth_header: MCP auth header to be passed to the MCP server. This is optional and will be used if provided.
+            server: The server configuration.
+            mcp_auth_header: Optional per-request auth override.
+            extra_headers: Additional headers to forward.
+            stdio_env: Environment variables for stdio transport.
 
         Returns:
-            MCPClient: Configured MCP client instance
+            Configured MCP client instance.
         """
+        auth_value = await resolve_mcp_auth(server, mcp_auth_header)
+
         transport = server.transport or MCPTransport.sse
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
-            # For stdio, we need to get the stdio config from the server
-            resolved_env = stdio_env if stdio_env is not None else server.env or {}
+            resolved_env = stdio_env if stdio_env is not None else dict(server.env or {})
+
+            # Ensure npm-based STDIO MCP servers have a writable cache dir.
+            # In containers the default (~/.npm or /app/.npm) may not exist
+            # or be read-only, causing npx to fail with ENOENT.
+            if "NPM_CONFIG_CACHE" not in resolved_env:
+                from litellm.constants import MCP_NPM_CACHE_DIR
+
+                resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -868,7 +926,7 @@ class MCPServerManager:
                 server_url="",  # Not used for stdio
                 transport_type=transport,
                 auth_type=server.auth_type,
-                auth_value=mcp_auth_header or server.authentication_token,
+                auth_value=auth_value,
                 timeout=60.0,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
@@ -880,7 +938,7 @@ class MCPServerManager:
                 server_url=server_url,
                 transport_type=transport,
                 auth_type=server.auth_type,
-                auth_value=mcp_auth_header or server.authentication_token,
+                auth_value=auth_value,
                 timeout=60.0,
                 extra_headers=extra_headers,
             )
@@ -920,7 +978,7 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            client = self._create_mcp_client(
+            client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
@@ -980,7 +1038,7 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            client = self._create_mcp_client(
+            client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
@@ -1024,7 +1082,7 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            client = self._create_mcp_client(
+            client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
@@ -1068,7 +1126,7 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            client = self._create_mcp_client(
+            client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
@@ -1109,7 +1167,7 @@ class MCPServerManager:
 
         stdio_env = self._build_stdio_env(server, raw_headers)
 
-        client = self._create_mcp_client(
+        client = await self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
@@ -1139,7 +1197,7 @@ class MCPServerManager:
 
         stdio_env = self._build_stdio_env(server, raw_headers)
 
-        client = self._create_mcp_client(
+        client = await self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
@@ -1404,6 +1462,9 @@ class MCPServerManager:
         """
         Fetch tools from MCP client with timeout and error handling.
 
+        Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
+        with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
@@ -1411,24 +1472,12 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
-
-        async def _list_tools_task():
-            try:
+        try:
+            with anyio.fail_after(30.0):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Client operation failed for {server_name}: {str(e)}"
-                )
-                return []
-
-        try:
-            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
         except asyncio.CancelledError:
@@ -1943,7 +1992,7 @@ class MCPServerManager:
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 
-        client = self._create_mcp_client(
+        client = await self._create_mcp_client(
             server=mcp_server,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
@@ -2119,8 +2168,8 @@ class MCPServerManager:
         Note: This now handles prefixed tool names
         """
         for server in self.get_registry().values():
-            if server.auth_type == MCPAuth.oauth2:
-                # Skip OAuth2 servers for now as they may require user-specific tokens
+            if server.needs_user_oauth_token:
+                # Skip OAuth2 servers that rely on user-provided tokens
                 continue
             tools = await self._get_tools_from_server(server)
             for tool in tools:
@@ -2210,9 +2259,9 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
-            new_registry[server.server_id] = await self.build_mcp_server_from_table(
-                server
-            )
+            new_server = await self.build_mcp_server_from_table(server)
+            new_registry[server.server_id] = new_server
+            await self._maybe_register_openapi_tools(new_server)
 
         self.registry = new_registry
 
@@ -2234,6 +2283,7 @@ class MCPServerManager:
             from litellm.proxy.proxy_server import (
                 general_settings as proxy_general_settings,
             )
+
             return proxy_general_settings
         except ImportError:
             # Fallback if proxy_server not available
@@ -2414,7 +2464,7 @@ class MCPServerManager:
         should_skip_health_check = False
 
         # Skip if auth_type is oauth2
-        if server.auth_type == MCPAuth.oauth2:
+        if server.needs_user_oauth_token:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
         elif (
@@ -2429,7 +2479,7 @@ class MCPServerManager:
             if server.static_headers:
                 extra_headers.update(server.static_headers)
 
-            client = self._create_mcp_client(
+            client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=None,
                 extra_headers=extra_headers,
@@ -2447,6 +2497,9 @@ class MCPServerManager:
             except asyncio.TimeoutError:
                 health_check_error = "Health check timed out after 10 seconds"
                 status = "unhealthy"
+            except asyncio.CancelledError:
+                health_check_error = "Health check was cancelled"
+                status = "unknown"
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
