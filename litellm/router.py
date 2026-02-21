@@ -6517,15 +6517,18 @@ class Router:
         # O(1) lookup in model_name index
         if model_group_name in self.model_name_to_deployment_indices:
             indices = self.model_name_to_deployment_indices[model_group_name]
-            if indices:
-                # Return first deployment for this model_name
-                model = self.model_list[indices[0]]
+            for idx in indices:
+                if idx >= len(self.model_list):
+                    continue
+                model = self.model_list[idx]
                 if isinstance(model, dict):
                     return Deployment(**model)
                 elif isinstance(model, Deployment):
                     return model
                 else:
-                    raise Exception("Model Name invalid - {}".format(type(model)))
+                    raise Exception(
+                        "Model Name invalid - {}".format(type(model))
+                    )
         return None
 
     def get_deployment_credentials_with_provider(
