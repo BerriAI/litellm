@@ -26,6 +26,10 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "scaleway": {
+    "base_url": "https://api.scaleway.ai/v1",
+    "api_key_env": "SCW_SECRET_KEY"
+  },
   "synthetic": {
     "base_url": "https://api.synthetic.new/openai/v1",
     "api_key_env": "SYNTHETIC_API_KEY",

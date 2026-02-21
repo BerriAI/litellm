@@ -20,16 +20,17 @@ vi.mock("./content_filter/ContentFilterManager", () => ({
       {isEditing && (
         <button onClick={() => {
           onUnsavedChanges(true);
-          onDataChange?.(["new_pattern"], ["new_word"]);
+          onDataChange?.(["new_pattern"], ["new_word"], []);
         }}>
           Simulate Change
         </button>
       )}
     </div>
   ),
-  formatContentFilterDataForAPI: (patterns: any[], blockedWords: any[]) => ({
+  formatContentFilterDataForAPI: (patterns: any[], blockedWords: any[], categories?: any[]) => ({
     patterns,
     blocked_words: blockedWords,
+    categories: categories ?? [],
   }),
 }));
 
@@ -63,7 +64,7 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
     const { getAllByText, getByText } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+      <GuardrailInfoView guardrailId="123" onClose={() => { }} accessToken="123" isAdmin={true} />,
     );
 
     // Wait for the loading to complete and data to be rendered
@@ -104,7 +105,7 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
     const { getByText, container } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+      <GuardrailInfoView guardrailId="123" onClose={() => { }} accessToken="123" isAdmin={true} />,
     );
 
     await waitFor(() => {
@@ -162,7 +163,7 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
     const { getByText } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
+      <GuardrailInfoView guardrailId="123" onClose={() => { }} accessToken="123" isAdmin={true} />,
     );
 
     await waitFor(() => {

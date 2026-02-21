@@ -104,6 +104,7 @@ export const shouldRenderContentFilterConfigSettings = (provider: string | null)
 const asset_logos_folder = "../ui/assets/logos/";
 
 export const guardrailLogoMap: Record<string, string> = {
+  "Zscaler AI Guard": `${asset_logos_folder}zscaler.svg`,
   "Presidio PII": `${asset_logos_folder}presidio.png`,
   "Bedrock Guardrail": `${asset_logos_folder}bedrock.svg`,
   Lakera: `${asset_logos_folder}lakeraai.jpeg`,

@@ -1,8 +1,12 @@
 name: LiteLLM Mock Tests (folder - tests/test_litellm)
 
+# DEPRECATED: This workflow is replaced by test-litellm-matrix.yml which runs
+# the same tests in parallel across 10 jobs for faster CI times.
+# Kept for manual debugging only.
 on:
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:  # Manual trigger only
+  # pull_request:
+  #   branches: [ main ]
 
 jobs:
   test:
@@ -38,9 +42,7 @@ jobs:
         poetry run pip install "openapi-core"
     - name: Setup litellm-enterprise as local package
       run: |
-        cd enterprise
-        poetry run pip install -e .
-        cd ..
+        poetry run pip install --force-reinstall --no-deps -e enterprise/
     - name: Run tests
       run: |
         poetry run pytest tests/test_litellm --tb=short -vv --maxfail=10 -n 4 --durations=50

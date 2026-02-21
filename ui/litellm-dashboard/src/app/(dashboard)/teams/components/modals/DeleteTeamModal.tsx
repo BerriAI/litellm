@@ -24,6 +24,7 @@ const DeleteTeamModal = ({ teams, teamToDelete, onCancel, onConfirm }: DeleteTea
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
             <h3 className="text-lg font-semibold text-gray-900">Delete Team</h3>
             <button
+              aria-label="Close"
               onClick={() => {
                 onCancel();
                 setDeleteConfirmInput("");

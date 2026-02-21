@@ -11,6 +11,7 @@ Run experiments or change the specific model (e.g. from gpt-4o to gpt4o-mini fin
 | Native LiteLLM GitOps (.prompt files) | [Get Started](native_litellm_prompt) |
 | Langfuse               | [Get Started](https://langfuse.com/docs/prompts/get-started) |
 | Humanloop              | [Get Started](../observability/humanloop) |
+| Generic Prompt Management API | [Get Started](../adding_provider/generic_prompt_management_api) |
 
 ## Onboarding Prompts via config.yaml
 
@@ -34,7 +35,7 @@ prompts:
   - prompt_id: "my_prompt_id"
     litellm_params:
       prompt_id: "my_prompt_id"
-      prompt_integration: "dotprompt"  # or langfuse, bitbucket, gitlab, custom
+      prompt_integration: "dotprompt"  # or langfuse, bitbucket, gitlab, generic_prompt_management, custom
       # integration-specific parameters below
 ```
 
@@ -46,6 +47,7 @@ The `prompt_integration` field determines where and how prompts are loaded:
 - **`langfuse`**: Fetch prompts from Langfuse prompt management
 - **`bitbucket`**: Load from BitBucket repository `.prompt` files (team-based access control)
 - **`gitlab`**: Load from GitLab repository `.prompt` files (team-based access control)
+- **`generic_prompt_management`**: Integrate any prompt management system via a simple API endpoint (no PR required)
 - **`custom`**: Use your own custom prompt management implementation
 
 Each integration has its own configuration parameters and access control mechanisms.
@@ -206,6 +208,57 @@ System: You are a helpful assistant.
 
 User: {{user_message}}
 ```
+
+</TabItem>
+
+<TabItem value="generic" label="Generic Prompt Management">
+
+```yaml
+prompts:
+  - prompt_id: "simple_prompt"
+    litellm_params:
+      prompt_integration: "generic_prompt_management"
+      provider_specific_query_params:
+        project_name: litellm
+        slug: hello-world-prompt-2bac
+      api_base: http://localhost:8080
+      api_key: os.environ/GENERIC_PROMPT_API_KEY
+      ignore_prompt_manager_model: true  # optional
+      ignore_prompt_manager_optional_params: true  # optional
+```
+
+**What you need to implement:**
+
+A GET endpoint at `/beta/litellm_prompt_management` that returns:
+
+```json
+{
+  "prompt_id": "simple_prompt",
+  "prompt_template": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "Help me with {task}"
+    }
+  ],
+  "prompt_template_model": "gpt-4",
+  "prompt_template_optional_params": {
+    "temperature": 0.7,
+    "max_tokens": 500
+  }
+}
+```
+
+**Benefits:**
+- No PR required - integrate any prompt management system
+- Full control over your prompt storage and versioning
+- Support for variable substitution with `{variable}` syntax
+- Custom query parameters for filtering and access control
+
+**Learn more:** [Generic Prompt Management API Documentation](../adding_provider/generic_prompt_management_api)
 
 </TabItem>
 </Tabs>

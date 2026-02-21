@@ -2018,6 +2018,235 @@ def anthropic_process_openai_file_message(
     )
 
 
+def _sanitize_empty_text_content(
+    message: AllMessageValues,
+) -> AllMessageValues:
+    """
+    Case C: Sanitize empty text content
+    - Replace empty or whitespace-only text content with a placeholder message.
+        
+    Returns:
+        The message with sanitized content if needed, otherwise the original message
+    """
+    if message.get("role") in ["user", "assistant"]:
+        content = message.get("content")
+        if isinstance(content, str):
+            if not content or not content.strip():
+                message = cast(AllMessageValues, dict(message))  # Make a copy
+                message["content"] = "[System: Empty message content sanitised to satisfy protocol]"
+                verbose_logger.debug(
+                    f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
+                )
+    return message
+
+
+def _add_missing_tool_results( # noqa: PLR0915
+    current_message: AllMessageValues,
+    messages: List[AllMessageValues],
+    current_index: int,
+) -> Tuple[List[AllMessageValues], int]:
+    """
+    Case A: Missing tool_result for tool_use (orphaned tool calls)
+    - If an assistant message has tool_calls but no corresponding tool result follows,
+      add a dummy tool result message indicating the user did not provide the result.
+
+    Returns:
+        A tuple of:
+        - List containing the assistant message, followed by existing tool results,
+          followed by any dummy tool results needed
+        - Number of original messages consumed (to adjust iteration index)
+    """
+    result_messages: List[AllMessageValues] = []
+    tool_calls = current_message.get("tool_calls")
+
+    if not tool_calls or len(cast(list, tool_calls)) == 0:
+        return ([current_message], 0)
+
+    # Collect all tool_call_ids from this assistant message
+    expected_tool_call_ids = set()
+    for tool_call in cast(list, tool_calls):
+        tool_call_id = None
+        if isinstance(tool_call, dict):
+            tool_call_id = tool_call.get("id")
+        else:
+            tool_call_id = getattr(tool_call, "id", None)
+        if tool_call_id:
+            expected_tool_call_ids.add(tool_call_id)
+    
+    # Collect actual tool result messages that follow this assistant message
+    found_tool_call_ids = set()
+    actual_tool_results: List[AllMessageValues] = []
+    j = current_index + 1
+    
+    while j < len(messages):
+        next_msg = messages[j]
+        next_role = next_msg.get("role")
+        
+        if next_role == "assistant":
+            break
+        
+        if next_role in ["tool", "function"]:
+            tool_call_id = next_msg.get("tool_call_id")
+            if tool_call_id and tool_call_id in expected_tool_call_ids:
+                found_tool_call_ids.add(tool_call_id)
+                actual_tool_results.append(next_msg)
+        
+        j += 1
+    
+    # Find missing tool results
+    missing_tool_call_ids = expected_tool_call_ids - found_tool_call_ids
+    
+    if missing_tool_call_ids:
+        verbose_logger.debug(
+            f"_add_missing_tool_results: Found {len(missing_tool_call_ids)} orphaned tool calls. Adding dummy tool results."
+        )
+        
+        result_messages.append(current_message)
+        
+        # Add existing tool results FIRST
+        result_messages.extend(actual_tool_results)
+        
+        # Then add dummy tool results for missing ones
+        for tool_call_id in missing_tool_call_ids:
+            tool_name = "unknown_tool"
+            for tool_call in cast(list, tool_calls):
+                tc_id = None
+                if isinstance(tool_call, dict):
+                    tc_id = tool_call.get("id")
+                else:
+                    tc_id = getattr(tool_call, "id", None)
+                
+                if tc_id == tool_call_id:
+                    if isinstance(tool_call, dict):
+                        function = tool_call.get("function", {})
+                        if isinstance(function, dict):
+                            tool_name = function.get("name", "unknown_tool")
+                        else:
+                            tool_name = getattr(function, "name", "unknown_tool")
+                    else:
+                        function = getattr(tool_call, "function", None)
+                        if function:
+                            tool_name = getattr(function, "name", "unknown_tool")
+                    break
+            
+            dummy_tool_result: ChatCompletionToolMessage = {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": f"[System: Tool execution skipped/interrupted by user. No result provided for tool '{tool_name}'.]",
+            }
+            result_messages.append(dummy_tool_result)
+        
+        # Return the messages and the number of original messages to skip
+        return (result_messages, len(actual_tool_results))
+    
+    return ([current_message], 0)
+
+
+def _is_orphaned_tool_result(
+    current_message: AllMessageValues,
+    sanitized_messages: List[AllMessageValues],
+) -> bool:
+    """
+    Case B: Orphaned tool_result (unexpected result)
+    - Check if a tool message references a tool_call_id that doesn't exist in the previous
+      assistant message.
+        
+    Returns:
+        True if this is an orphaned tool result that should be removed, False otherwise
+    """
+    if current_message.get("role") not in ["tool", "function"]:
+        return False
+    
+    tool_call_id = current_message.get("tool_call_id")
+    
+    if not tool_call_id:
+        return False
+    
+    # Look back to find the most recent assistant message with tool_calls
+    found_matching_tool_call = False
+    
+    for j in range(len(sanitized_messages) - 1, -1, -1):
+        prev_msg = sanitized_messages[j]
+        if prev_msg.get("role") == "assistant":
+            tool_calls = prev_msg.get("tool_calls")
+            if tool_calls:
+                for tool_call in cast(list, tool_calls):
+                    tc_id = None
+                    if isinstance(tool_call, dict):
+                        tc_id = tool_call.get("id")
+                    else:
+                        tc_id = getattr(tool_call, "id", None)
+                    
+                    if tc_id == tool_call_id:
+                        found_matching_tool_call = True
+                        break
+            
+            break
+    
+    if not found_matching_tool_call:
+        verbose_logger.debug(
+            "_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id"
+        )
+        return True
+    
+    return False
+
+
+def sanitize_messages_for_tool_calling(
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
+    """
+    Sanitize messages for tool calling to handle common issues when modify_params=True:
+    
+    Case A: Missing tool_result for tool_use (orphaned tool calls)
+    - If an assistant message has tool_calls but no corresponding tool result follows,
+      add a dummy tool result message indicating the user did not provide the result.
+    
+    Case B: Orphaned tool_result (unexpected result)
+    - If a tool message references a tool_call_id that doesn't exist in the previous
+      assistant message, remove that tool message.
+    
+    Case C: Empty text content
+    - Replace empty or whitespace-only text content with a placeholder message.
+    
+    This function operates on OpenAI format messages before they are converted to
+    provider-specific formats.
+    """
+    if not litellm.modify_params:
+        return messages
+    
+    sanitized_messages: List[AllMessageValues] = []
+    i = 0
+    
+    while i < len(messages):
+        current_message = messages[i]
+        
+        # Case C: Sanitize empty text content
+        current_message = _sanitize_empty_text_content(current_message)
+        
+        # Case A: Check if assistant message has tool_calls without following tool results
+        if current_message.get("role") == "assistant":
+            result_messages, messages_consumed = _add_missing_tool_results(current_message, messages, i)
+            
+            # If dummy tool results were added, extend sanitized_messages and skip consumed messages
+            if len(result_messages) > 1:
+                sanitized_messages.extend(result_messages)
+                # Skip the assistant message and any actual tool results that were included
+                i += 1 + messages_consumed
+                continue
+        
+        # Case B: Check for orphaned tool results
+        if _is_orphaned_tool_result(current_message, sanitized_messages):
+            i += 1
+            continue  # Skip this orphaned tool result
+        
+        # Add the message to sanitized list
+        sanitized_messages.append(current_message)
+        i += 1
+    
+    return sanitized_messages
+
+
 def anthropic_messages_pt(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
@@ -2037,6 +2266,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
     5. System messages are a separate param to the Messages API
     6. Ensure we only accept role, content. (message.name is not supported)
     """
+    # Sanitize messages for tool calling issues when modify_params=True
+    messages = sanitize_messages_for_tool_calling(messages)
+    
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.

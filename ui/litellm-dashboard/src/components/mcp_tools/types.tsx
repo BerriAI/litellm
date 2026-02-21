@@ -22,6 +22,7 @@ export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
   STDIO: "stdio",
+  OPENAPI: "openapi",
 };
 
 export const handleTransport = (transport?: string | null): string => {
@@ -143,6 +144,7 @@ export interface MCPServer {
    * For `stdio`, the backend can return null/undefined.
    */
   url?: string | null;
+  spec_path?: string | null;
   transport?: string | null;
   auth_type?: string | null;
   authorization_url?: string | null;
@@ -174,4 +176,24 @@ export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+}
+
+// Discoverable MCP server from the curated registry
+export interface DiscoverableMCPServer {
+  name: string;
+  title: string;
+  description: string;
+  icon_url?: string | null;
+  category: string;
+  registry_url?: string | null;
+  transport: string;
+  url?: string | null;
+  command?: string | null;
+  args?: string[] | null;
+  env_vars?: Array<{ name: string; description?: string; secret?: boolean }> | null;
+}
+
+export interface DiscoverMCPServersResponse {
+  servers: DiscoverableMCPServer[];
+  categories: string[];
 }

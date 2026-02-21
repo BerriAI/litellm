@@ -1,7 +1,6 @@
 # Create server parameters for stdio connection
 import os
 import sys
-from litellm.proxy.proxy_server import LiteLLM_ObjectPermissionTable
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
@@ -15,6 +14,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPTransport,
 )
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 from mcp.types import Tool as MCPTool, CallToolResult, ListToolsResult
 from mcp.types import TextContent
 
@@ -1053,6 +1053,7 @@ async def test_mcp_server_manager_access_groups_from_config():
         mcp_server_manager_mod.global_mcp_server_manager = original_manager
 
 
+@pytest.mark.asyncio
 async def test_mcp_server_manager_config_integration_with_database():
     """
     Test that config-based servers properly integrate with database servers,
@@ -1429,6 +1430,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    mock_mcp_server.spec_path = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1469,6 +1471,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    mock_mcp_server.spec_path = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
@@ -1509,6 +1512,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.command = None
     mock_mcp_server.args = []
     mock_mcp_server.env = None
+    mock_mcp_server.spec_path = None
     # OAuth fields - set explicitly to None to avoid MagicMock objects
     mock_mcp_server.client_id = None
     mock_mcp_server.client_secret = None
