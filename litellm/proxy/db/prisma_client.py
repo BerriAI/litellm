@@ -390,8 +390,11 @@ class PrismaManager:
                         ["prisma", "db", "push", "--accept-data-loss"],
                         timeout=60,
                         check=True,
+                        capture_output=True,
+                        text=True,
                     )
                     return True
+
             except subprocess.TimeoutExpired:
                 verbose_proxy_logger.warning(f"Attempt {attempt + 1} timed out")
                 time.sleep(random.randrange(5, 15))
@@ -402,9 +405,11 @@ class PrismaManager:
                     if attempts_left > 0
                     else ""
                 )
+                error_details = f"{e}. Stderr: {e.stderr}" if hasattr(e, 'stderr') and e.stderr else str(e)
                 verbose_proxy_logger.warning(
-                    f"The process failed to execute. Details: {e}.{retry_msg}"
+                    f"The process failed to execute. Details: {error_details}.{retry_msg}"
                 )
+
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)

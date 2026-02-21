@@ -799,11 +799,16 @@ def run_server(  # noqa: PLR0915
                     should_update_prisma_schema(
                         general_settings.get("disable_prisma_schema_update")
                     )
-                    is False
+                    is True
                 ):
-                    check_prisma_schema_diff(db_url=None)
-                else:
                     PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
+                else:
+                    from litellm._logging import verbose_proxy_logger
+
+                    verbose_proxy_logger.debug(
+                        "Prisma schema updates are disabled. Skipping setup_database and check_prisma_schema_diff."
+                    )
+
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
