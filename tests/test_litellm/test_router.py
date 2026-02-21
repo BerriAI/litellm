@@ -2186,3 +2186,80 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
 
     # Request tool_choice should be preserved (merged tools still applied)
     assert kwargs["tool_choice"] == "none"
+
+
+def test_credential_name_injected_as_tag():
+    """
+    Test that litellm_credential_name from deployment litellm_params
+    is injected as a tag into metadata during _update_kwargs_with_deployment.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "xai-model",
+                "litellm_params": {
+                    "model": "xai/grok-4-1-fast",
+                    "litellm_credential_name": "xAI",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="xai-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert "xAI" in kwargs["metadata"]["tags"]
+    assert "A.101" in kwargs["metadata"]["tags"]
+
+
+def test_credential_name_not_duplicated_in_tags():
+    """
+    Test that if the credential name already exists in the tags list,
+    it is not duplicated.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "xai-model",
+                "litellm_params": {
+                    "model": "xai/grok-4-1-fast",
+                    "litellm_credential_name": "xAI",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["xAI", "A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="xai-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["metadata"]["tags"].count("xAI") == 1
+
+
+def test_credential_name_not_injected_when_absent():
+    """
+    Test that when no litellm_credential_name is set, tags are unchanged.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["metadata"]["tags"] == ["A.101"]
