@@ -1231,9 +1231,12 @@ async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
 class TestSpendLogsPayload:
     def setup_method(self):
         self._original_callbacks = litellm.callbacks[:]
+        self._original_cache = litellm.cache
+        litellm.cache = None
 
     def teardown_method(self):
         litellm.callbacks = self._original_callbacks
+        litellm.cache = self._original_cache
 
     @pytest.mark.asyncio
     async def test_spend_logs_payload_e2e(self):

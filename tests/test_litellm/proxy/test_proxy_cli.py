@@ -586,9 +586,6 @@ class TestHealthAppFactory:
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
-    @patch.dict(
-        os.environ, {"DATABASE_URL": "postgresql://test:test@localhost:5432/test"}
-    )
     def test_use_prisma_db_push_flag_behavior(
         self,
         mock_should_update_schema,
@@ -616,7 +613,19 @@ class TestHealthAppFactory:
             save_worker_config=MagicMock(),
         )
 
+        # Strip DIRECT_URL and set DATABASE_URL to a test value so Click's
+        # CliRunner doesn't encounter real DB env vars (causes stream lifecycle
+        # issues with Click 8.3.x in CI environments).
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
         with patch.dict(
+            os.environ, clean_env, clear=True
+        ), patch.dict(
             "sys.modules",
             {
                 "proxy_server": mock_proxy_module,
