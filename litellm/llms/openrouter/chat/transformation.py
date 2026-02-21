@@ -211,6 +211,30 @@ class OpenrouterConfig(OpenAIGPTConfig):
             json_mode=json_mode,
         )
 
+        # Check for error embedded in response body (OpenRouter-specific behavior)
+        # OpenRouter can return errors in a 200 response when a downstream provider fails
+        try:
+            response_json = raw_response.json()
+            if "error" in response_json:
+                error_chunk = response_json["error"]
+                error_msg = OpenRouterErrorMessage(
+                    message="Message: {}, Metadata: {}".format(
+                        error_chunk.get("message", "Unknown error"),
+                        error_chunk.get("metadata", {}),
+                    ),
+                    code=error_chunk.get("code", 500),
+                    metadata=error_chunk.get("metadata", {}),
+                )
+                raise OpenRouterException(
+                    message=error_msg["message"],
+                    status_code=error_msg["code"],
+                    headers=error_msg["metadata"].get("headers", {}),
+                )
+        except OpenRouterException:
+            raise
+        except Exception:
+            pass
+
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
         try:
