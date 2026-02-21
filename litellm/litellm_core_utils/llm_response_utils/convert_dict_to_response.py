@@ -550,10 +550,13 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
-                    provider_specific_fields = {
-                        f: choice["message"][f]
-                        for f in choice["message"].keys() - _MESSAGE_FIELDS
-                    }
+                    # Preserve provider_specific_fields if already present
+                    # in the response (e.g. from proxy passthrough)
+                    provider_specific_fields = dict(
+                        choice["message"].get("provider_specific_fields", None) or {}
+                    )
+                    for f in choice["message"].keys() - _MESSAGE_FIELDS:
+                        provider_specific_fields[f] = choice["message"][f]
 
                     # Handle reasoning models that display `reasoning_content` within `content`
                     reasoning_content, content = _extract_reasoning_content(

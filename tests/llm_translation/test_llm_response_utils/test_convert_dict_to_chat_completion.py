@@ -864,7 +864,7 @@ def test_convert_to_model_response_object_with_thinking_content():
         "response_object": {
             "id": "chatcmpl-8cc87354-70f3-4a14-b71b-332e965d98d2",
             "created": 1741057687,
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-4-sonnet-20250514",
             "object": "chat.completion",
             "system_fingerprint": None,
             "choices": [
@@ -1035,6 +1035,193 @@ def test_convert_to_model_response_object_with_empty_dict_error():
 
     assert isinstance(result, ModelResponse)
     assert result.choices[0].message.content == "Hello!"
+
+
+def test_convert_to_model_response_object_preserves_provider_specific_fields_from_proxy():
+    """
+    Test that provider_specific_fields (e.g. Anthropic citations) are preserved
+    when the response already contains them (e.g. from a proxy passthrough).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21153
+    """
+    citations = [
+        [
+            {
+                "type": "web_search_result_location",
+                "cited_text": "The Sony WH-1000XM5 remains one of the best...",
+                "url": "https://example.com/headphones-review",
+                "title": "Best Headphones 2025",
+                "supported_text": "Based on current reviews...",
+            }
+        ],
+    ]
+    web_search_results = [
+        {
+            "url": "https://example.com/headphones-review",
+            "title": "Best Headphones 2025",
+            "snippet": "The Sony WH-1000XM5 remains one of the best...",
+        }
+    ]
+
+    response_object = {
+        "id": "chatcmpl-proxy-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "anthropic/claude-opus-4-5-20251101",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones.",
+                    "tool_calls": [
+                        {
+                            "id": "call_ws_123",
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": '{"query": "best headphones 2025"}',
+                            },
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "citations": citations,
+                        "web_search_results": web_search_results,
+                    },
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 20,
+            "total_tokens": 70,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "chatcmpl-proxy-123"
+
+    choice = result.choices[0]
+    assert choice.message.content == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
+    assert choice.message.provider_specific_fields is not None
+    assert "citations" in choice.message.provider_specific_fields
+    assert choice.message.provider_specific_fields["citations"] == citations
+    assert "web_search_results" in choice.message.provider_specific_fields
+    assert choice.message.provider_specific_fields["web_search_results"] == web_search_results
+
+
+def test_convert_to_model_response_object_provider_specific_fields_merges_extra_keys():
+    """
+    Test that provider_specific_fields from the response are merged with
+    any extra non-standard keys present in the message dict.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21153
+    """
+    response_object = {
+        "id": "chatcmpl-merge-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "some-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                    "provider_specific_fields": {
+                        "citations": [{"url": "https://example.com"}],
+                    },
+                    "custom_extra_field": "extra_value",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    psf = result.choices[0].message.provider_specific_fields
+    assert psf is not None
+    # Both the existing provider_specific_fields and the extra key should be present
+    assert "citations" in psf
+    assert psf["citations"] == [{"url": "https://example.com"}]
+    assert "custom_extra_field" in psf
+    assert psf["custom_extra_field"] == "extra_value"
+
+
+def test_convert_to_model_response_object_no_provider_specific_fields_still_works():
+    """
+    Test that responses without provider_specific_fields continue to work as before.
+
+    Ensures the fix for https://github.com/BerriAI/litellm/issues/21153
+    doesn't break normal responses.
+    """
+    response_object = {
+        "id": "chatcmpl-normal-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                    "refusal": None,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    psf = result.choices[0].message.provider_specific_fields
+    # refusal is not a Message model field, so it should be in provider_specific_fields
+    assert psf is not None
+    assert "refusal" in psf
 
 
 def test_convert_to_model_response_object_with_error_code_only():

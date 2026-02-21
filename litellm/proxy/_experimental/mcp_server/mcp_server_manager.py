@@ -15,7 +15,6 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Uni
 from urllib.parse import urlparse
 
 import anyio
-
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -72,7 +71,9 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import SEP_986_URL
+    from mcp.shared.tool_name_validation import (
+        SEP_986_URL,
+    )
 except ImportError:
     from pydantic import BaseModel
 
@@ -157,13 +158,13 @@ class MCPServerManager:
         [
             "server-1": {
                 "name": "zapier_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
                 "transport": "sse",
                 "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
             }
         ]
         """
@@ -389,8 +390,7 @@ class MCPServerManager:
 
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
-                base_url = get_openapi_base_url(spec)
-
+                base_url = get_openapi_base_url(spec, spec_path)
             verbose_logger.info(
                 f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
             )
@@ -609,6 +609,7 @@ class MCPServerManager:
             alias=getattr(mcp_server, "alias", None),
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
+            spec_path=getattr(mcp_server, "spec_path", None),
             transport=cast(MCPTransportType, mcp_server.transport),
             auth_type=auth_type,
             authentication_token=auth_value,
@@ -639,11 +640,25 @@ class MCPServerManager:
         )
         return new_server
 
+    async def _maybe_register_openapi_tools(self, server: MCPServer):
+        """Register OpenAPI tools if the server has a spec_path configured."""
+        if server.spec_path:
+            verbose_logger.info(
+                f"Loading OpenAPI spec from {server.spec_path} for server {server.name}"
+            )
+            await self._register_openapi_tools(
+                spec_path=server.spec_path,
+                server=server,
+                base_url=server.url or "",
+            )
+            self.initialize_tool_name_to_mcp_server_name_mapping()
+
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -655,6 +670,7 @@ class MCPServerManager:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -889,8 +905,15 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
-            # For stdio, we need to get the stdio config from the server
-            resolved_env = stdio_env if stdio_env is not None else server.env or {}
+            resolved_env = stdio_env if stdio_env is not None else dict(server.env or {})
+
+            # Ensure npm-based STDIO MCP servers have a writable cache dir.
+            # In containers the default (~/.npm or /app/.npm) may not exist
+            # or be read-only, causing npx to fail with ENOENT.
+            if "NPM_CONFIG_CACHE" not in resolved_env:
+                from litellm.constants import MCP_NPM_CACHE_DIR
+
+                resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -2236,9 +2259,9 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
-            new_registry[server.server_id] = await self.build_mcp_server_from_table(
-                server
-            )
+            new_server = await self.build_mcp_server_from_table(server)
+            new_registry[server.server_id] = new_server
+            await self._maybe_register_openapi_tools(new_server)
 
         self.registry = new_registry
 

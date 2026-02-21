@@ -9,16 +9,17 @@ This test suite ensures that:
 5. Path parameters are properly URL encoded
 """
 
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-    create_tool_function,
-    build_input_schema,
-    extract_parameters,
-)
+import pytest
 
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    build_input_schema,
+    create_tool_function,
+    extract_parameters,
+    get_base_url,
+)
 
 GET_ASYNC_CLIENT_TARGET = (
     "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
@@ -496,3 +497,169 @@ class TestPathSecurity:
             call_args = async_client.get.call_args
             url = call_args[0][0]
             assert url == "https://example.com/files/report%202024.json"
+
+
+class TestGetBaseUrl:
+    """Test base URL extraction and fallback logic."""
+
+    def test_openapi_3x_with_servers(self):
+        """Test extraction from OpenAPI 3.x servers field."""
+        spec = {
+            "openapi": "3.0.0",
+            "servers": [
+                {"url": "https://api.example.com/v1"},
+                {"url": "https://api-staging.example.com/v1"}
+            ],
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com/v1"
+
+    def test_openapi_2x_with_host(self):
+        """Test extraction from OpenAPI 2.x (Swagger) host field."""
+        spec = {
+            "swagger": "2.0",
+            "host": "api.example.com",
+            "basePath": "/v1",
+            "schemes": ["https"],
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com/v1"
+
+    def test_openapi_2x_without_basepath(self):
+        """Test extraction from OpenAPI 2.x without basePath."""
+        spec = {
+            "swagger": "2.0",
+            "host": "api.example.com",
+            "schemes": ["https"],
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com"
+
+    def test_openapi_2x_default_scheme(self):
+        """Test that https is used as default scheme when not specified."""
+        spec = {
+            "swagger": "2.0",
+            "host": "api.example.com",
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == "https://api.example.com"
+
+    def test_fallback_with_openapi_json_suffix(self):
+        """Test fallback: derive base URL from spec_path with /openapi.json suffix."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+            # No servers field
+        }
+        spec_path = "http://localhost:8001/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "http://localhost:8001"
+
+    def test_fallback_with_swagger_json_suffix(self):
+        """Test fallback: derive base URL from spec_path with /swagger.json suffix."""
+        spec = {
+            "swagger": "2.0",
+            "paths": {}
+            # No host field
+        }
+        spec_path = "https://api.example.com/api/swagger.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://api.example.com/api"
+
+    def test_fallback_with_openapi_yaml_suffix(self):
+        """Test fallback: derive base URL from spec_path with .yaml suffix."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "http://localhost:3000/docs/openapi.yaml"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "http://localhost:3000/docs"
+
+    def test_fallback_with_generic_json_file(self):
+        """Test fallback: remove last segment if it's a JSON file."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "https://example.com/v1/api-spec.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://example.com/v1"
+
+    def test_fallback_with_generic_yaml_file(self):
+        """Test fallback: remove last segment if it's a YAML file."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "https://example.com/docs/api.yml"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://example.com/docs"
+
+    def test_no_fallback_without_spec_path(self):
+        """Test that empty string is returned when no server info and no spec_path."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        
+        base_url = get_base_url(spec)
+        assert base_url == ""
+
+    def test_no_fallback_with_local_file_path(self):
+        """Test that fallback doesn't apply to local file paths."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "/Users/test/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == ""
+
+    def test_priority_servers_over_fallback(self):
+        """Test that servers field takes priority over spec_path fallback."""
+        spec = {
+            "openapi": "3.0.0",
+            "servers": [{"url": "https://production.example.com"}],
+            "paths": {}
+        }
+        spec_path = "http://localhost:8001/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://production.example.com"
+
+    def test_fallback_with_port_number(self):
+        """Test fallback handles URLs with port numbers correctly."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "http://localhost:8001/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "http://localhost:8001"
+
+    def test_fallback_with_nested_path(self):
+        """Test fallback with deeply nested spec path."""
+        spec = {
+            "openapi": "3.0.0",
+            "paths": {}
+        }
+        spec_path = "https://api.example.com/v2/docs/api/openapi.json"
+        
+        base_url = get_base_url(spec, spec_path)
+        assert base_url == "https://api.example.com/v2/docs/api"
