@@ -2211,13 +2211,13 @@ def test_credential_name_injected_as_tag():
     )
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
-    assert "xAI" in kwargs["metadata"]["tags"]
+    assert "Credential: xAI" in kwargs["metadata"]["tags"]
     assert "A.101" in kwargs["metadata"]["tags"]
 
 
 def test_credential_name_not_duplicated_in_tags():
     """
-    Test that if the credential name already exists in the tags list,
+    Test that if the credential tag already exists in the tags list,
     it is not duplicated.
     """
     router = litellm.Router(
@@ -2232,13 +2232,13 @@ def test_credential_name_not_duplicated_in_tags():
         ],
     )
 
-    kwargs: dict = {"metadata": {"tags": ["xAI", "A.101"]}}
+    kwargs: dict = {"metadata": {"tags": ["Credential: xAI", "A.101"]}}
     deployment = router.get_deployment_by_model_group_name(
         model_group_name="xai-model"
     )
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
-    assert kwargs["metadata"]["tags"].count("xAI") == 1
+    assert kwargs["metadata"]["tags"].count("Credential: xAI") == 1
 
 
 def test_credential_name_not_injected_when_absent():

@@ -2024,9 +2024,10 @@ class Router:
             "litellm_credential_name"
         )
         if credential_name:
+            credential_tag = f"Credential: {credential_name}"
             existing_tags = kwargs[metadata_variable_name].get("tags") or []
-            if credential_name not in existing_tags:
-                existing_tags.append(credential_name)
+            if credential_tag not in existing_tags:
+                existing_tags.append(credential_tag)
             kwargs[metadata_variable_name]["tags"] = existing_tags
 
         kwargs["model_info"] = model_info
