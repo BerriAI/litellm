@@ -12,7 +12,7 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
     if (values.model_type === "complexity_router") {
       // Complexity Router configuration
       console.log("Creating complexity router configuration");
-      
+
       autoRouterConfig = {
         model_name: values.auto_router_name,
         litellm_params: {
@@ -27,11 +27,10 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
       };
 
       console.log("Complexity router config:", values.complexity_router_config);
-      
     } else {
       // Semantic Router configuration (existing behavior)
       console.log("Creating semantic router configuration");
-      
+
       autoRouterConfig = {
         model_name: values.auto_router_name,
         litellm_params: {
@@ -71,7 +70,7 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
 
     // Show success notification
     const routerTypeName = values.model_type === "complexity_router" ? "Complexity Router" : "Semantic Router";
-    NotificationManager.fromBackend(`Successfully created ${routerTypeName}: ${values.auto_router_name}`, "success");
+    NotificationManager.fromBackend(`Successfully created ${routerTypeName}: ${values.auto_router_name}`);
 
     // Reset the form
     form.resetFields();
