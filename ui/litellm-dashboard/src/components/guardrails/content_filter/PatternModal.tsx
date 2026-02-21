@@ -1,6 +1,5 @@
 import React from "react";
-import { Typography, Select, Modal, Space } from "antd";
-import { Button } from "@tremor/react";
+import { Typography, Select, Modal, Space, Button } from "antd";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -97,10 +96,10 @@ const PatternModal: React.FC<PatternModalProps> = ({
       </Space>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button variant="secondary" onClick={onCancel}>
+        <Button onClick={onCancel}>
           Cancel
         </Button>
-        <Button onClick={onAdd}>
+        <Button type="primary" onClick={onAdd}>
           Add
         </Button>
       </div>

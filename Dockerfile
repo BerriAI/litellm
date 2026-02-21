@@ -49,7 +49,22 @@ USER root
 
 # Install runtime dependencies (libsndfile needed for audio processing on ARM64)
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
-    npm install -g npm@latest tar@latest
+    npm install -g npm@latest tar@7.5.7 glob@11.1.0 @isaacs/brace-expansion@5.0.1 && \
+    # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
+    # levels inside its dependency tree. `npm install -g <pkg>` only creates a
+    # SEPARATE global package, it does NOT replace npm's internal copies.
+    # We must find and replace EVERY copy inside npm's directory.
+    GLOBAL="$(npm root -g)" && \
+    find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    npm cache clean --force
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -70,6 +85,20 @@ RUN NODEJS_WHEEL_NODE=$(find /usr/lib -path "*/nodejs_wheel/bin/node" 2>/dev/nul
 # Remove test files and keys from dependencies
 RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
     find /usr/lib -type d -path "*/tornado/test" -delete
+
+# SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
+# npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
+# Patch every copy of tar, glob, and brace-expansion inside that tree.
+RUN GLOBAL="$(npm root -g)" && \
+    find /usr/lib -path "*/nodejs_wheel/*/node_modules/tar" -type d | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find /usr/lib -path "*/nodejs_wheel/*/node_modules/glob" -type d | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find /usr/lib -path "*/nodejs_wheel/*/node_modules/@isaacs/brace-expansion" -type d | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done
 
 # Install semantic_router and aurelio-sdk using script
 # Convert Windows line endings to Unix and make executable

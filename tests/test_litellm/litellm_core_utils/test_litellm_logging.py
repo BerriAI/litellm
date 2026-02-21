@@ -14,7 +14,7 @@ import time
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
 @pytest.fixture
@@ -264,7 +264,7 @@ async def test_logging_result_for_bridge_calls(logging_obj):
             mock_response="Hello, world!",
         )
         await asyncio.sleep(1)
-        assert mock_should_run_logging.call_count == 2  # called twice per call
+        assert mock_should_run_logging.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -1279,117 +1279,6 @@ async def test_async_success_handler_sets_standard_logging_object_for_streaming_
     assert logging_obj.model_call_details["standard_logging_object"] is not None, (
         "standard_logging_object should not be None for streaming pass-through endpoints"
     )
-class TestShouldRunCallbackEnterpriseGuard:
-    """
-    Tests for the early-out guard in should_run_callback() that skips
-    EnterpriseCallbackControls.is_callback_disabled_dynamically() when
-    no dynamic callback disabling is configured.
-    """
-
-    @pytest.fixture
-    def logging_obj_for_callback(self):
-        return LitellmLogging(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Hey"}],
-            stream=False,
-            call_type="acompletion",
-            start_time=time.time(),
-            litellm_call_id="test-callback-guard",
-            function_id="test-fn",
-        )
-
-    def test_skips_enterprise_call_when_no_disabling_configured(self, logging_obj_for_callback):
-        """
-        When neither litellm_disabled_callbacks nor x-litellm-disable-callbacks header
-        is set, the enterprise function should NOT be called at all.
-        """
-        litellm_params = {"proxy_server_request": {"headers": {}}}
-
-        with patch(
-            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
-        ) as mock_enterprise:
-            mock_enterprise.__bool__ = lambda self: True
-            result = logging_obj_for_callback.should_run_callback(
-                callback="langfuse",
-                litellm_params=litellm_params,
-                event_hook="success_handler",
-            )
-            assert result is True
-            mock_enterprise.is_callback_disabled_dynamically.assert_not_called()
-
-    def test_calls_enterprise_when_header_is_set(self, logging_obj_for_callback):
-        """
-        When x-litellm-disable-callbacks header is present, the enterprise
-        function SHOULD be called to check if the callback is disabled.
-        """
-        litellm_params = {
-            "proxy_server_request": {
-                "headers": {"x-litellm-disable-callbacks": "langfuse"}
-            }
-        }
-
-        with patch(
-            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
-        ) as mock_enterprise:
-            mock_enterprise.__bool__ = lambda self: True
-            mock_enterprise.is_callback_disabled_dynamically.return_value = True
-            result = logging_obj_for_callback.should_run_callback(
-                callback="langfuse",
-                litellm_params=litellm_params,
-                event_hook="success_handler",
-            )
-            assert result is False
-            mock_enterprise.is_callback_disabled_dynamically.assert_called_once()
-
-    def test_calls_enterprise_when_dynamic_params_set(self, logging_obj_for_callback):
-        """
-        When litellm_disabled_callbacks is set in standard_callback_dynamic_params,
-        the enterprise function SHOULD be called.
-        """
-        from litellm.types.utils import StandardCallbackDynamicParams
-
-        logging_obj_for_callback.standard_callback_dynamic_params = StandardCallbackDynamicParams(
-            litellm_disabled_callbacks=["langfuse"]
-        )
-        litellm_params = {"proxy_server_request": {"headers": {}}}
-
-        with patch(
-            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
-        ) as mock_enterprise:
-            mock_enterprise.__bool__ = lambda self: True
-            mock_enterprise.is_callback_disabled_dynamically.return_value = True
-            result = logging_obj_for_callback.should_run_callback(
-                callback="langfuse",
-                litellm_params=litellm_params,
-                event_hook="success_handler",
-            )
-            assert result is False
-            mock_enterprise.is_callback_disabled_dynamically.assert_called_once()
-
-    def test_returns_true_when_enterprise_says_not_disabled(self, logging_obj_for_callback):
-        """
-        When the header is set but the enterprise function says the callback
-        is NOT disabled, should_run_callback should return True.
-        """
-        litellm_params = {
-            "proxy_server_request": {
-                "headers": {"x-litellm-disable-callbacks": "datadog"}
-            }
-        }
-
-        with patch(
-            "litellm.litellm_core_utils.litellm_logging.EnterpriseCallbackControls"
-        ) as mock_enterprise:
-            mock_enterprise.__bool__ = lambda self: True
-            mock_enterprise.is_callback_disabled_dynamically.return_value = False
-            result = logging_obj_for_callback.should_run_callback(
-                callback="langfuse",
-                litellm_params=litellm_params,
-                event_hook="success_handler",
-            )
-            assert result is True
-
-
 def test_get_error_information_error_code_priority():
     """
     Test get_error_information prioritizes 'code' attribute over 'status_code' attribute
@@ -1466,3 +1355,118 @@ def test_get_error_information_error_code_priority():
     result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
     assert result["error_code"] == ""
     assert result["error_class"] == "NoCodeException"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for _get_assembled_streaming_response non-streaming early return
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _make_logging_obj(stream: bool) -> LitellmLogging:
+    return LitellmLogging(
+        model="openai/codex-mini-latest",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=stream,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="test-123",
+        function_id="test-fn",
+    )
+
+
+def test_get_assembled_streaming_response_returns_none_for_non_streaming():
+    """Non-streaming requests should return None so the streaming block is skipped."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=False)
+    result = ModelResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is None
+
+
+def test_get_assembled_streaming_response_returns_result_for_streaming():
+    """Streaming requests should return the ModelResponse for further processing."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=True)
+    result = ModelResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is result
+
+
+def test_get_assembled_streaming_response_returns_none_for_non_streaming_text_completion():
+    """Non-streaming TextCompletionResponse should also return None."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=False)
+    result = TextCompletionResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is None
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_computes_standard_logging_object_once():
+    """
+    Non-streaming acompletion should call get_standard_logging_object_payload
+    exactly once, not twice.
+    """
+    import asyncio
+
+    import litellm
+
+    with patch.object(
+        litellm.litellm_core_utils.litellm_logging,
+        "get_standard_logging_object_payload",
+    ) as mock_payload:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        assert mock_payload.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_emit_standard_logging_payload_called_for_non_streaming():
+    """
+    emit_standard_logging_payload should still be called for non-streaming
+    requests (moved from the streaming block to _process_hidden_params_and_response_cost).
+    """
+    import asyncio
+
+    import litellm
+
+    with patch.object(
+        litellm.litellm_core_utils.litellm_logging,
+        "emit_standard_logging_payload",
+    ) as mock_emit:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        assert mock_emit.call_count >= 1
+
+

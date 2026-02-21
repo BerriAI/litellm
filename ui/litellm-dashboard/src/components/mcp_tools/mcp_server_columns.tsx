@@ -36,7 +36,11 @@ export const mcpServerColumns = (
     id: "url",
     header: "URL",
     cell: ({ row }) => {
-      const { maskedUrl } = getMaskedAndFullUrl(row.original.url);
+      const url = row.original.url;
+      if (!url) {
+        return <span className="text-gray-400">—</span>;
+      }
+      const { maskedUrl } = getMaskedAndFullUrl(url);
       return <span className="font-mono text-sm">{maskedUrl}</span>;
     },
   },

@@ -46,6 +46,7 @@ mcp_servers:
     transport: "http"
     url: "https://mcp.deepwiki.com/mcp"
 
+
 # General Settings
 general_settings:
   master_key: sk-1234

@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import json
 import secrets
@@ -68,6 +67,7 @@ def _get_spend_logs_metadata(
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
+            user_api_key_project_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -86,6 +86,8 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            attempted_retries=None,
+            max_retries=None,
             cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
@@ -96,9 +98,8 @@ def _get_spend_logs_metadata(
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
-            key: metadata[key]
+            key: metadata.get(key)
             for key in SpendLogsMetadata.__annotations__.keys()
-            if key in metadata
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
@@ -353,6 +354,8 @@ def get_logging_payload(  # noqa: PLR0915
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
+            else metadata.get("standard_logging_guardrail_information", None)
+            if metadata is not None
             else None
         ),
         cold_storage_object_key=(
@@ -642,6 +645,68 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
+def _convert_to_json_serializable_dict(
+    obj: Any, visited: Optional[set] = None, max_depth: int = 20
+) -> Any:
+    """
+    Convert object to JSON-serializable dict, handling Pydantic models safely.
+
+    This avoids pickle-based deepcopy which fails on Pydantic v2 models
+    containing _thread.RLock objects.
+
+    Args:
+        obj: Object to convert (dict, list, Pydantic model, or primitive)
+        visited: Set of object IDs to track circular references
+        max_depth: Maximum recursion depth to prevent infinite recursion
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    if max_depth <= 0:
+        # Return a placeholder if max depth is exceeded
+        return "<max_depth_exceeded>"
+    
+    if visited is None:
+        visited = set()
+    
+    # Get the object's memory address to track visited objects
+    obj_id = id(obj)
+    if obj_id in visited:
+        # Circular reference detected, return placeholder
+        return "<circular_reference>"
+    
+    # Only track mutable objects (dict, list, objects with __dict__)
+    if isinstance(obj, (dict, list)) or hasattr(obj, "__dict__"):
+        visited.add(obj_id)
+    
+    try:
+        if isinstance(obj, BaseModel):
+            # Use Pydantic's model_dump() instead of pickle
+            result = obj.model_dump()
+            # Recursively process the dumped dict
+            return _convert_to_json_serializable_dict(result, visited, max_depth - 1)
+        elif isinstance(obj, dict):
+            return {
+                k: _convert_to_json_serializable_dict(v, visited, max_depth - 1)
+                for k, v in obj.items()
+            }
+        elif isinstance(obj, list):
+            return [
+                _convert_to_json_serializable_dict(item, visited, max_depth - 1)
+                for item in obj
+            ]
+        elif hasattr(obj, "__dict__"):
+            # Handle objects with __dict__ attribute
+            return _convert_to_json_serializable_dict(obj.__dict__, visited, max_depth - 1)
+        else:
+            # Primitives (str, int, float, bool, None) pass through
+            return obj
+    finally:
+        # Remove from visited set when done processing this object
+        if obj_id in visited:
+            visited.remove(obj_id)
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
@@ -649,7 +714,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
-    
+
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
@@ -674,9 +739,9 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     ),
                 }
                 
-                # If redaction is enabled, deep copy request body before redacting
+                # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = copy.deepcopy(_request_body)
+                    _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
             
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
@@ -736,9 +801,9 @@ def _get_response_for_spend_logs_payload(
                 ),
             }
             
-            # If redaction is enabled, deep copy response before redacting
+            # If redaction is enabled, convert to serializable dict before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
-                response_obj = copy.deepcopy(response_obj)
+                response_obj = _convert_to_json_serializable_dict(response_obj)
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(

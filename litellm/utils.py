@@ -380,6 +380,7 @@ if TYPE_CHECKING:
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
@@ -1406,7 +1407,7 @@ def client(original_function):  # noqa: PLR0915
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
                 # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = kwargs.get("metadata", {}).get(
+                previous_models = (kwargs.get("metadata") or {}).get(
                     "previous_models", None
                 )
                 if previous_models is not None:
@@ -1483,7 +1484,7 @@ def client(original_function):  # noqa: PLR0915
             # [OPTIONAL] CHECK MAX RETRIES / REQUEST
             if litellm.num_retries_per_request is not None:
                 # check if previous_models passed in as ['litellm_params']['metadata]['previous_models']
-                previous_models = kwargs.get("metadata", {}).get(
+                previous_models = (kwargs.get("metadata") or {}).get(
                     "previous_models", None
                 )
                 if previous_models is not None:
@@ -1678,8 +1679,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1724,8 +1725,8 @@ def client(original_function):  # noqa: PLR0915
                     None  # set retries to None to prevent infinite loops
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1974,8 +1975,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -2008,8 +2009,8 @@ def client(original_function):  # noqa: PLR0915
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
             elif call_type == CallTypes.aresponses.value:
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -2177,6 +2178,10 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
         enc = tokenizer_json["tokenizer"].encode(text)
+    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
+    # extract .ids so the return type is always List[int].
+    if hasattr(enc, "ids"):
+        return enc.ids
     return enc
 
 
@@ -2408,6 +2413,7 @@ def supports_response_schema(
         litellm.LlmProviders.FIREWORKS_AI,
         litellm.LlmProviders.LM_STUDIO,
         litellm.LlmProviders.NEBIUS,
+        litellm.LlmProviders.DATABRICKS,
     ]
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
@@ -2506,6 +2512,16 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         if model_info.get(key, False) is True:
             return True
         elif model_info.get(key) is None:  # don't check if 'False' explicitly set
+            # Fallback: when the provider-prefixed entry (e.g.
+            # "deepseek/deepseek-chat") exists but is missing a capability
+            # field, check the bare model-name entry (e.g. "deepseek-chat")
+            # which may carry the complete metadata.  See #20885.
+            bare_model_key = _get_model_cost_key(model)
+            if bare_model_key is not None:
+                bare_entry = litellm.model_cost.get(bare_model_key) or {}
+                if bare_entry.get(key, False) is True:
+                    return True
+
             supported_by_provider = _supports_provider_info_factory(
                 model, custom_llm_provider, key
             )
@@ -5278,6 +5294,9 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost
             # tracking the cost is better than attributing 0 cost to it.
             return True
+        elif custom_llm_provider == "github":
+            # Allow github/<model> aliases to reuse existing provider metadata.
+            return True
         else:
             return False
 
@@ -6140,6 +6159,13 @@ def validate_environment(  # noqa: PLR0915
             if (
                 "AWS_ACCESS_KEY_ID" in os.environ
                 and "AWS_SECRET_ACCESS_KEY" in os.environ
+            ) or (
+                # IAM role, profile, or web identity auth don't require access keys
+                "AWS_ROLE_ARN" in os.environ
+                or "AWS_PROFILE" in os.environ
+                or "AWS_WEB_IDENTITY_TOKEN_FILE" in os.environ
+                or "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI" in os.environ  # ECS task role
+                or "AWS_CONTAINER_CREDENTIALS_FULL_URI" in os.environ  # ECS/Fargate full URI credential delivery
             ):
                 keys_in_environment = True
             else:
@@ -7320,7 +7346,7 @@ def _get_base_model_from_metadata(model_call_details=None):
         _base_model = litellm_params.get("base_model", None)
         if _base_model is not None:
             return _base_model
-        metadata = litellm_params.get("metadata", {})
+        metadata = litellm_params.get("metadata") or {}
 
         _get_base_model_from_litellm_call_metadata = getattr(
             sys.modules[__name__], "_get_base_model_from_litellm_call_metadata"
@@ -8128,6 +8154,8 @@ class ProviderConfigManager:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageRerankConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            return litellm.IBMWatsonXRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -8243,6 +8271,13 @@ class ProviderConfigManager:
             return litellm.VolcEngineResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
+        elif litellm.LlmProviders.PERPLEXITY == provider:
+            return litellm.PerplexityResponsesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            # Databricks Responses API is only compatible with OpenAI GPT models
+            if model and "gpt" in model.lower():
+                return litellm.DatabricksResponsesAPIConfig()
+            return None
         return None
 
     @staticmethod
@@ -8260,6 +8295,25 @@ class ProviderConfigManager:
         """
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicSkillsConfig()
+        return None
+
+    @staticmethod
+    def get_provider_evals_api_config(
+        provider: LlmProviders,
+    ) -> Optional["BaseEvalsAPIConfig"]:
+        """
+        Get provider-specific Evals API configuration
+
+        Args:
+            provider: The LLM provider
+
+        Returns:
+            Provider-specific Evals API config or None
+        """
+        if litellm.LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+
+            return OpenAIEvalsConfig()
         return None
 
     @staticmethod
@@ -8727,6 +8781,7 @@ class ProviderConfigManager:
         """
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
@@ -8749,6 +8804,7 @@ class ProviderConfigManager:
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
+            SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
