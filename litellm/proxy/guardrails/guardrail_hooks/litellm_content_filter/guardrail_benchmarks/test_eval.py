@@ -227,6 +227,25 @@ def _content_filter(category: str):
     return _ContentFilterChecker(guardrail)
 
 
+class TestInsultsContentFilter:
+    """Insults eval with production ContentFilterGuardrail + denied_insults.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("denied_insults")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_insults.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Insults — ContentFilter (denied_insults.yaml)",
+        )
+
+
 class TestInvestmentContentFilter:
     """Investment eval with production ContentFilterGuardrail + denied_financial_advice.yaml."""
 
