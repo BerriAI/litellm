@@ -14,6 +14,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm import Router
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
     DimensionScore,
@@ -670,3 +671,68 @@ class TestEdgeCases:
         tier, score, signals = complexity_router.classify(prompt)
         # The "step N" pattern should be detected
         assert any("multi-step" in s.lower() for s in signals), f"Expected multi-step signal, got {signals}"
+
+
+class TestRouterComplexityDeploymentMethods:
+    """Tests for Router._is_complexity_router_deployment and Router.init_complexity_router_deployment."""
+
+    def test_is_complexity_router_deployment_true(self):
+        """_is_complexity_router_deployment returns True for complexity router models."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+        from litellm.types.router import LiteLLM_Params
+
+        params = LiteLLM_Params(model="auto_router/complexity_router/my-router")
+        assert router._is_complexity_router_deployment(params) is True
+
+    def test_is_complexity_router_deployment_false(self):
+        """_is_complexity_router_deployment returns False for regular models."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+        from litellm.types.router import LiteLLM_Params
+
+        params = LiteLLM_Params(model="openai/gpt-4o-mini")
+        assert router._is_complexity_router_deployment(params) is False
+
+    def test_init_complexity_router_deployment(self):
+        """init_complexity_router_deployment registers a ComplexityRouter."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        deployment = Deployment(
+            model_name="auto_router/complexity_router/test-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router/test-router",
+                complexity_router_default_model="gpt-4o-mini",
+                complexity_router_config={
+                    "tiers": {
+                        "SIMPLE": "gpt-4o-mini",
+                        "MEDIUM": "gpt-4o",
+                        "COMPLEX": "claude-sonnet-4-20250514",
+                        "REASONING": "o1-preview",
+                    }
+                },
+            ),
+            model_info={"id": "test-id"},
+        )
+        router.init_complexity_router_deployment(deployment)
+        assert "auto_router/complexity_router/test-router" in router.complexity_routers
