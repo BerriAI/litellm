@@ -375,3 +375,39 @@ def test_delta_dynamic_attributes_in_model_dump():
     delta_no_role = Delta(content=None, role=None)
     dump_no_role = delta_no_role.model_dump(exclude_none=True)
     assert "role" not in dump_no_role
+
+
+def test_preserve_fields_param_backward_compat():
+    """preserve_fields parameter is accepted (deprecated) without error."""
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": "{}"},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+    result_default = model_dump_with_preserved_fields(response, exclude_unset=True)
+    result_explicit = model_dump_with_preserved_fields(
+        response,
+        preserve_fields=[
+            "choices.*.message.content",
+            "choices.*.message.role",
+            "choices.*.delta.content",
+        ],
+        exclude_unset=True,
+    )
+    assert result_default == result_explicit
+    assert result_default["choices"][0]["message"]["content"] is None
+    assert result_default["choices"][0]["message"]["role"] == "assistant"
