@@ -47,6 +47,7 @@ import {
   TEAM_INFO_TAB_KEYS,
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
+import TeamKeysComponent from "./TeamKeysTab";
 import TeamMembersComponent from "./TeamMemberTab";
 
 export interface TeamMembership {
@@ -737,6 +738,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 setSelectedEditMember={setSelectedEditMember}
                 setIsEditMemberModalVisible={setIsEditMemberModalVisible}
                 setIsAddMemberModalVisible={setIsAddMemberModalVisible}
+              />
+            ),
+          },
+          {
+            key: TEAM_INFO_TAB_KEYS.KEYS,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.KEYS],
+            children: (
+              <TeamKeysComponent
+                teamData={teamData}
+                accessToken={accessToken}
+                onKeyDataUpdate={fetchTeamInfo}
               />
             ),
           },

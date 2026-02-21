@@ -6,6 +6,7 @@
 export const TEAM_INFO_TAB_KEYS = {
   OVERVIEW: "overview",
   MEMBERS: "members",
+  KEYS: "keys",
   MEMBER_PERMISSIONS: "member-permissions",
   SETTINGS: "settings",
 } as const;
@@ -13,6 +14,7 @@ export const TEAM_INFO_TAB_KEYS = {
 export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
   [TEAM_INFO_TAB_KEYS.OVERVIEW]: "Overview",
   [TEAM_INFO_TAB_KEYS.MEMBERS]: "Members",
+  [TEAM_INFO_TAB_KEYS.KEYS]: "Keys",
   [TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]: "Member Permissions",
   [TEAM_INFO_TAB_KEYS.SETTINGS]: "Settings",
 };
@@ -28,6 +30,7 @@ export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] 
     return [
       ...baseTabs,
       TEAM_INFO_TAB_KEYS.MEMBERS,
+      TEAM_INFO_TAB_KEYS.KEYS,
       TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
       TEAM_INFO_TAB_KEYS.SETTINGS,
     ];

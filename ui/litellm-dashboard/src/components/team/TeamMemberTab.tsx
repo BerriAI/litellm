@@ -211,8 +211,15 @@ export default function TeamMemberTab({
     },
   ];
 
+  const membersCount = teamData.team_info.members_with_roles?.length ?? 0;
+
   return (
     <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <span className="text-sm text-gray-700">
+          {membersCount} {membersCount === 1 ? "Member" : "Members"}
+        </span>
+      </div>
       <Table
         columns={columns}
         dataSource={teamData.team_info.members_with_roles}

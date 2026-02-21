@@ -1,5 +1,6 @@
 import { screen, waitFor, fireEvent } from "@testing-library/react";
-import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -67,7 +68,7 @@ vi.mock("@/app/(dashboard)/networking", async (importOriginal) => {
   };
 });
 
-const mockKey: KeyResponse = {
+const mockKey = {
   token: "sk-1234567890abcdef",
   token_id: "key-1",
   key_name: "test-key",
@@ -127,7 +128,7 @@ const mockKey: KeyResponse = {
     user_email: "user@example.com",
     user_id: "user-1",
   },
-};
+} as KeyResponse;
 
 const mockTeam: Team = {
   team_id: "team-1",
@@ -141,6 +142,7 @@ const mockTeam: Team = {
   created_at: "2024-10-01T10:00:00Z",
   keys: [],
   members_with_roles: [],
+  spend: 0,
 };
 
 const mockOrganization: Organization = {
@@ -699,5 +701,193 @@ it("should display 'Unknown' for last_active when value is null", async () => {
 
   await waitFor(() => {
     expect(screen.getByText("Unknown")).toBeInTheDocument();
+  });
+});
+
+describe("VirtualKeysTable pagination and filters", () => {
+  it("should display pagination info and controls", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    const mockProps = {
+      teams: [mockTeam],
+      organizations: [mockOrganization],
+      onSortChange: vi.fn(),
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Showing.*1.*results/)).toBeInTheDocument();
+      expect(screen.getByText(/Page 1 of 1/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /previous/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument();
+    });
+  });
+
+  it("should render FilterComponent with filter options", async () => {
+    const mockProps = {
+      teams: [mockTeam],
+      organizations: [mockOrganization],
+      onSortChange: vi.fn(),
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+    });
+
+    // FilterComponent renders filter options - Team ID and Key Alias are filter options
+    expect(screen.getByText("Team ID")).toBeInTheDocument();
+    expect(screen.getByText("Key Alias")).toBeInTheDocument();
+  });
+});
+
+describe("VirtualKeysTable sorting", () => {
+  it("should call onSortChange when sortable column header is clicked", async () => {
+    const onSortChange = vi.fn();
+    const mockProps = {
+      teams: [mockTeam],
+      organizations: [mockOrganization],
+      onSortChange,
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+    });
+
+    const keyAliasHeader = screen.getByText("Key Alias");
+    fireEvent.click(keyAliasHeader);
+
+    await waitFor(() => {
+      expect(onSortChange).toHaveBeenCalled();
+    });
+  });
+});
+
+describe("VirtualKeysTable with edge cases", () => {
+  it("should render without crashing when teams is null", () => {
+    const mockProps = {
+      teams: null,
+      organizations: [mockOrganization],
+      onSortChange: vi.fn(),
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    const { container } = renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    expect(container).toBeInTheDocument();
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+
+  it("should render without crashing when organizations is null", () => {
+    const mockProps = {
+      teams: [mockTeam],
+      organizations: null,
+      onSortChange: vi.fn(),
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    const { container } = renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    expect(container).toBeInTheDocument();
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+
+  it("should display Unlimited for max_budget when null", async () => {
+    const keyWithNoBudget = { ...mockKey, max_budget: null } as unknown as KeyResponse;
+    mockUseFilterLogic.mockReturnValue({
+      filters: {
+        "Team ID": "",
+        "Organization ID": "",
+        "Key Alias": "",
+        "User ID": "",
+        "Sort By": "created_at",
+        "Sort Order": "desc",
+      },
+      filteredKeys: [keyWithNoBudget],
+      allKeyAliases: [],
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    const mockProps = {
+      teams: [mockTeam],
+      organizations: [mockOrganization],
+      onSortChange: vi.fn(),
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Unlimited")).toBeInTheDocument();
+    });
+  });
+
+  it("should display Secret Key (key_name) in table", async () => {
+    const mockProps = {
+      teams: [mockTeam],
+      organizations: [mockOrganization],
+      onSortChange: vi.fn(),
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("test-key")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("VirtualKeysTable KeyInfoView", () => {
+  it("should return to table view when Back to Keys is clicked", async () => {
+    const user = userEvent.setup();
+    const mockProps = {
+      teams: [mockTeam],
+      organizations: [mockOrganization],
+      onSortChange: vi.fn(),
+      currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+    };
+
+    renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+    });
+
+    const keyIdButton = screen.getByText("sk-1234567890abcdef");
+    await user.click(keyIdButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Back to Keys")).toBeInTheDocument();
+    });
+
+    const backButton = screen.getByText("Back to Keys");
+    await user.click(backButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Showing.*results/)).toBeInTheDocument();
+      expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+      expect(screen.queryByText("Back to Keys")).not.toBeInTheDocument();
+    });
   });
 });

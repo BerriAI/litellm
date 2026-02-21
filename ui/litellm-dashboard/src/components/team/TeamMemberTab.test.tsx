@@ -126,6 +126,51 @@ describe("TeamMembersComponent", () => {
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
+  it("should display Members count header with correct count", () => {
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.getByText("2 Members")).toBeInTheDocument();
+  });
+
+  it("should display singular Member when only one member", () => {
+    const baseTeamData = createMockTeamData();
+    const teamDataWithOneMember: TeamData = {
+      ...baseTeamData,
+      team_info: {
+        ...baseTeamData.team_info,
+        members_with_roles: [
+          {
+            user_id: "user1@test.com",
+            user_email: "user1@test.com",
+            role: "member",
+          },
+        ],
+      },
+    };
+
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamDataWithOneMember}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.getByText("1 Member")).toBeInTheDocument();
+  });
+
   it("should render team members table with headers", () => {
     renderWithProviders(
       <TeamMembersComponent

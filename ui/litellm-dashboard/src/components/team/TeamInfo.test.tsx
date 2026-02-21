@@ -48,6 +48,10 @@ vi.mock("@/components/team/TeamMemberTab", () => ({
   )),
 }));
 
+vi.mock("@/components/team/TeamKeysTab", () => ({
+  default: vi.fn(() => <div data-testid="team-keys-tab">Team Keys Tab</div>),
+}));
+
 vi.mock("@/components/common_components/user_search_modal", () => ({
   default: vi.fn(({ isVisible, onCancel, onSubmit }) =>
     isVisible ? (
@@ -305,6 +309,48 @@ describe("TeamInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Settings" })).toBeInTheDocument();
+    });
+  });
+
+  it("should show Keys tab when user can edit team", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Keys" })).toBeInTheDocument();
+    });
+  });
+
+  it("should not show Keys tab when user cannot edit team", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={false} is_proxy_admin={false} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByRole("tab", { name: "Keys" })).not.toBeInTheDocument();
+  });
+
+  it("should display TeamKeysTab content when Keys tab is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Keys" })).toBeInTheDocument();
+    });
+
+    const keysTab = screen.getByRole("tab", { name: "Keys" });
+    await user.click(keysTab);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("team-keys-tab")).toBeInTheDocument();
+      expect(screen.getByText("Team Keys Tab")).toBeInTheDocument();
     });
   });
 
