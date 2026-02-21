@@ -91,6 +91,11 @@ export default function SpendLogsTable({
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
+  // Tracks whether any filter that uses performSearch (backend) is active.
+  // Used to disable the main query so it doesn't fire redundant unfiltered requests
+  // when time range / sort / page changes while a backend filter is in effect.
+  const [isMainQueryEnabled, setIsMainQueryEnabled] = useState(true);
+
   const queryClient = useQueryClient();
 
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
@@ -212,7 +217,7 @@ export default function SpendLogsTable({
 
       return response;
     },
-    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs" && isMainQueryEnabled,
     refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
     placeholderData: keepPreviousData,
     refetchIntervalInBackground: true,
@@ -235,6 +240,7 @@ export default function SpendLogsTable({
   const {
     filters,
     filteredLogs,
+    hasBackendFilters,
     allTeams: hookAllTeams,
     allKeyAliases,
     handleFilterChange,
@@ -254,25 +260,6 @@ export default function SpendLogsTable({
     currentPage,
   });
 
-  const fetchKeyHashForAlias = useCallback(
-    async (keyAlias: string) => {
-      if (!accessToken) return;
-
-      try {
-        const response = await keyListCall(accessToken, null, null, keyAlias, null, null, currentPage, pageSize);
-
-        const selectedKey = response.keys.find((key: any) => key.key_alias === keyAlias);
-
-        if (selectedKey) {
-          setSelectedKeyHash(selectedKey.token);
-        }
-      } catch (error) {
-        console.error("Error fetching key hash for alias:", error);
-      }
-    },
-    [accessToken, currentPage, pageSize],
-  );
-
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
     // Reset custom time range to default (last 24 hours)
@@ -283,7 +270,13 @@ export default function SpendLogsTable({
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
-  // Add this effect to update selected filters when filter changes
+  // Disable the main query whenever backend filters are active so it doesn't fire
+  // redundant unfiltered requests when time range / sort / page changes.
+  useEffect(() => {
+    setIsMainQueryEnabled(!hasBackendFilters);
+  }, [hasBackendFilters]);
+
+  // Sync filter state into the individual selectedX state variables used by the main query
   useEffect(() => {
     if (!accessToken) return;
 
@@ -296,14 +289,11 @@ export default function SpendLogsTable({
     setSelectedModelId(filters["Model"] || "");
     setSelectedEndUser(filters["End User"] || "");
 
-    if (filters["Key Hash"]) {
-      setSelectedKeyHash(filters["Key Hash"]);
-    } else if (filters["Key Alias"]) {
-      fetchKeyHashForAlias(filters["Key Alias"]);
-    } else {
-      setSelectedKeyHash("");
-    }
-  }, [filters, accessToken, fetchKeyHashForAlias]);
+    // Key Alias filtering is handled server-side by performSearch via the key_alias param.
+    // We intentionally do not translate the alias to a hash here to avoid firing a
+    // redundant main-query request (api_key=hash) alongside performSearch's key_alias request.
+    setSelectedKeyHash(filters["Key Hash"] || "");
+  }, [filters, accessToken]);
 
   if (!accessToken || !token || !userRole || !userID) {
     return null;
@@ -592,6 +582,7 @@ export default function SpendLogsTable({
                                       className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
                                         }`}
                                       onClick={() => {
+                                        setCurrentPage(1);
                                         setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
                                         setStartTime(
                                           moment()
@@ -694,7 +685,7 @@ export default function SpendLogsTable({
                       </div>
                     </div>
                   </div>
-                  {isLiveTail && currentPage === 1 && (
+                  {isLiveTail && currentPage === 1 && isMainQueryEnabled && (
                     <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
