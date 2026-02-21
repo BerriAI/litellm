@@ -59,7 +59,7 @@ def _run(checker, text: str) -> dict:
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 403:
-            detail: dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
+            detail: Dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
                 "score": detail.get("score", 1.0),
