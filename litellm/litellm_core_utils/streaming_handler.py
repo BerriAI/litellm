@@ -1051,6 +1051,11 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     if "provider_specific_fields" not in chunk:
+                        # Skip empty, non-terminal chunks (e.g. SSE separator
+                        # lines) so that usage-only chunks sent after the
+                        # finish_reason chunk can still be processed.
+                        if not chunk.get("is_finished") and not chunk.get("text"):
+                            return
                         raise StopIteration
                 anthropic_response_obj: GChunk = cast(GChunk, chunk)
                 completion_obj["content"] = anthropic_response_obj["text"]
@@ -1469,6 +1474,15 @@ class CustomStreamWrapper:
                         and self.stream_options["include_usage"] is True
                     ):
                         return model_response
+                    # Some providers (e.g., OpenRouter) send usage in a
+                    # separate chunk after finish_reason with empty choices.
+                    # Append it to self.chunks so stream_chunk_builder and
+                    # calculate_total_usage can use provider-reported values.
+                    if (
+                        hasattr(model_response, "usage")
+                        and model_response.usage is not None
+                    ):
+                        self.chunks.append(model_response)
                     return
             ## CHECK FOR TOOL USE
 
