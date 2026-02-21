@@ -532,55 +532,59 @@ export default function ComplianceUI({
       status: "pending",
     }));
     setTestResults(pendingResults);
-    try {
-      const { inputs, guardrail_errors } = await testPoliciesAndGuardrails(
-        accessToken,
-        {
-          policy_names:
-            selectedPolicies.length > 0 ? selectedPolicies : undefined,
-          guardrail_names:
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-          inputs: { texts: allTexts },
-          request_data: {},
-          input_type: "request",
-        }
-      );
-      const actualResult: "blocked" | "allowed" =
-        guardrail_errors.length > 0 ? "blocked" : "allowed";
-      const triggeredBy =
-        guardrail_errors.length > 0
-          ? guardrail_errors
-              .map((e) => `${e.guardrail_name}: ${e.message}`)
-              .join("; ")
-          : undefined;
-      const returnedTexts: (string | undefined)[] =
-        Array.isArray(inputs?.texts) ? inputs.texts : [];
-      setTestResults(
-        pendingResults.map((row, index) => ({
-          ...row,
+    // Send each text individually to get per-text blocked/allowed results.
+    // Sending all texts in a single batch doesn't work because the guardrail
+    // raises an HTTPException on the first blocked text, skipping the rest.
+    const updatedResults = [...pendingResults];
+    for (let i = 0; i < allTexts.length; i++) {
+      try {
+        const { inputs, guardrail_errors } = await testPoliciesAndGuardrails(
+          accessToken,
+          {
+            policy_names:
+              selectedPolicies.length > 0 ? selectedPolicies : undefined,
+            guardrail_names:
+              selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            inputs: { texts: [allTexts[i]] },
+            request_data: {},
+            input_type: "request",
+          }
+        );
+        const actualResult: "blocked" | "allowed" =
+          guardrail_errors.length > 0 ? "blocked" : "allowed";
+        const triggeredBy =
+          guardrail_errors.length > 0
+            ? guardrail_errors
+                .map((e) => `${e.guardrail_name}: ${e.message}`)
+                .join("; ")
+            : undefined;
+        const returnedText =
+          Array.isArray(inputs?.texts) && inputs.texts.length > 0
+            ? inputs.texts[0]
+            : undefined;
+        updatedResults[i] = {
+          ...updatedResults[i],
           actualResult,
           isMatch:
-            (row.expectedResult === "fail" && actualResult === "blocked") ||
-            (row.expectedResult === "pass" && actualResult === "allowed"),
+            (updatedResults[i].expectedResult === "fail" && actualResult === "blocked") ||
+            (updatedResults[i].expectedResult === "pass" && actualResult === "allowed"),
           triggeredBy,
-          returnedText: returnedTexts[index],
+          returnedText,
           status: "complete" as const,
-        }))
-      );
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setTestResults(
-        pendingResults.map((row) => ({
-          ...row,
+        };
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        updatedResults[i] = {
+          ...updatedResults[i],
           actualResult: "blocked" as const,
           isMatch: false,
           triggeredBy: `Error: ${errorMessage}`,
           status: "complete" as const,
-        }))
-      );
-    } finally {
-      setIsRunning(false);
+        };
+      }
+      setTestResults([...updatedResults]);
     }
+    setIsRunning(false);
   }, [
     accessToken,
     selectedPromptIds,
