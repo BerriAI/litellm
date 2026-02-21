@@ -271,7 +271,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             messages=(self._get_response_messages(
                 standard_logging_payload=standard_logging_payload,
                 call_type=standard_logging_payload.get("call_type"),
-            )            ) if not self.turn_off_message_logging else [{"role": "assistant", "content": "redacted-by-litellm"}])
+                    ) if not self.turn_off_message_logging else [{"role": "assistant", "content": "redacted-by-litellm"}])
         )
 
         error_info = self._assemble_error_info(standard_logging_payload)
