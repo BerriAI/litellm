@@ -1,3 +1,4 @@
+import anyio
 import asyncio
 import copy
 import enum
@@ -5168,6 +5169,20 @@ async def async_data_generator(
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
+    finally:
+        # Close the response stream to release the underlying HTTP connection
+        # back to the connection pool. This prevents pool exhaustion when
+        # clients disconnect mid-stream.
+        # Shield from cancellation so the close awaits can complete.
+        with anyio.CancelScope(shield=True):
+            if hasattr(response, "aclose"):
+                try:
+                    await response.aclose()
+                except BaseException as e:
+                    verbose_proxy_logger.debug(
+                        "async_data_generator: error closing response stream: %s",
+                        e,
+                    )
 
 
 def select_data_generator(
