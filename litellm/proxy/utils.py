@@ -3651,16 +3651,49 @@ class PrismaClient:
             async with self._db_reconnect_lock:
                 return await _attempt_reconnect_inside_lock()
 
-        try:
-            await asyncio.wait_for(
-                self._db_reconnect_lock.acquire(),
-                timeout=lock_timeout_seconds,
-            )
-        except asyncio.TimeoutError:
+        lock_acquired_by_timeout_task = False
+
+        async def _acquire_reconnect_lock() -> bool:
+            nonlocal lock_acquired_by_timeout_task
+            await self._db_reconnect_lock.acquire()
+            lock_acquired_by_timeout_task = True
+            return True
+
+        acquire_task = asyncio.create_task(_acquire_reconnect_lock())
+        done, _pending = await asyncio.wait(
+            {acquire_task},
+            timeout=lock_timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if acquire_task not in done:
+            acquire_task.cancel()
+            try:
+                await acquire_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
+            # Defensive cleanup for timeout/cancel race on Python 3.9-3.11.
+            if lock_acquired_by_timeout_task:
+                try:
+                    self._db_reconnect_lock.release()
+                except RuntimeError:
+                    pass
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
                 reason,
                 lock_timeout_seconds,
+            )
+            return False
+
+        try:
+            acquire_task.result()
+        except Exception as lock_acquire_err:
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt due to lock acquisition error. reason=%s error=%s",
+                reason,
+                lock_acquire_err,
             )
             return False
 
