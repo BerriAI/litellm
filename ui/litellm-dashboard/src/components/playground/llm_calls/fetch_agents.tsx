@@ -1,6 +1,6 @@
 // fetch_agents.tsx
 
-import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "../../networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, modelInfoCall } from "../../networking";
 
 export interface Agent {
   agent_id: string;
@@ -11,6 +11,17 @@ export interface Agent {
     description?: string;
     url?: string;
   };
+}
+
+/** Agent model from /model/info where litellm_params.model starts with "litellm_agent/" */
+export interface AgentModel {
+  model_name: string;
+  litellm_params: {
+    model: string;
+    litellm_system_prompt?: string;
+    [key: string]: unknown;
+  };
+  model_info?: Record<string, unknown> | null;
 }
 
 /**
@@ -50,6 +61,46 @@ export const fetchAvailableAgents = async (
     return agents;
   } catch (error) {
     console.error("Error fetching agents:", error);
+    throw error;
+  }
+};
+
+/**
+ * Fetches available litellm_agent models from /v2/model/info.
+ * Filters for models where litellm_params.model starts with "litellm_agent/".
+ */
+export const fetchAvailableAgentModels = async (
+  accessToken: string,
+  userID: string,
+  userRole: string,
+  customBaseUrl?: string,
+): Promise<AgentModel[]> => {
+  try {
+    const size = 200;
+    const response = await modelInfoCall(accessToken, userID, userRole, 1, size);
+    const data = response?.data ?? [];
+    const list = Array.isArray(data) ? data : [];
+
+    const agentModels: AgentModel[] = list
+      .filter(
+        (m: { litellm_params?: { model?: string } }) =>
+          typeof m?.litellm_params?.model === "string" &&
+          m.litellm_params.model.startsWith("litellm_agent/"),
+      )
+      .map((m: any) => ({
+        model_name: m.model_name ?? m.model_group ?? "",
+        litellm_params: {
+          ...m.litellm_params,
+          model: m.litellm_params.model,
+          litellm_system_prompt: m.litellm_params?.litellm_system_prompt,
+        },
+        model_info: m.model_info ?? null,
+      }));
+
+    agentModels.sort((a, b) => a.model_name.localeCompare(b.model_name));
+    return agentModels;
+  } catch (error) {
+    console.error("Error fetching agent models:", error);
     throw error;
   }
 };
