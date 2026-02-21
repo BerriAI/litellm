@@ -16,6 +16,15 @@ from litellm.types.utils import (
 )
 from litellm.utils import get_model_info
 
+# Pre-resolved CallTypes enum values for fast membership checks
+_IMAGE_RESPONSE_CALL_TYPES = frozenset({
+    CallTypes.image_generation.value,
+    CallTypes.aimage_generation.value,
+    PassthroughCallTypes.passthrough_image_generation.value,
+    CallTypes.image_edit.value,
+    CallTypes.aimage_edit.value,
+})
+
 
 def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
@@ -718,18 +727,7 @@ class CostCalculatorUtils:
         - Image Edit
         - Passthrough Image Generation
         """
-        if call_type in [
-            # image generation
-            CallTypes.image_generation.value,
-            CallTypes.aimage_generation.value,
-            # passthrough image generation
-            PassthroughCallTypes.passthrough_image_generation.value,
-            # image edit
-            CallTypes.image_edit.value,
-            CallTypes.aimage_edit.value,
-        ]:
-            return True
-        return False
+        return call_type in _IMAGE_RESPONSE_CALL_TYPES
 
     @staticmethod
     def route_image_generation_cost_calculator(
