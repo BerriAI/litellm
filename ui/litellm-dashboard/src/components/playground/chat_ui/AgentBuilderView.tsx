@@ -2,21 +2,26 @@
 
 import { CommentOutlined, ExperimentOutlined, PlusOutlined, RobotOutlined, SaveOutlined } from "@ant-design/icons";
 import { Button, Input, Select, Spin, Tabs } from "antd";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { modelCreateCall } from "../../networking";
-import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import { AgentModel, fetchAvailableAgentModels } from "../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
-import { createDisplayMessage } from "./ResponsesImageUtils";
-import { MessageType } from "./types";
+import ComplianceUI from "../complianceUI/ComplianceUI";
+import ChatUI from "./ChatUI";
 
 const { TextArea } = Input;
 
 export interface AgentBuilderViewProps {
   accessToken: string | null;
+  token: string | null;
   userID: string | null;
   userRole: string | null;
+  disabledPersonalKeyCreation?: boolean;
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
   apiKey?: string;
   customProxyBaseUrl?: string;
 }
@@ -25,8 +30,11 @@ const NEW_AGENT_ID = "__new__";
 
 export default function AgentBuilderView({
   accessToken,
+  token,
   userID,
   userRole,
+  disabledPersonalKeyCreation = false,
+  proxySettings,
   apiKey,
   customProxyBaseUrl,
 }: AgentBuilderViewProps) {
@@ -43,12 +51,7 @@ export default function AgentBuilderView({
   const [draftTemperature, setDraftTemperature] = useState(0.7);
   const [draftMaxTokens, setDraftMaxTokens] = useState(4096);
 
-  // Chat state (for Chat tab)
-  const [chatHistory, setChatHistory] = useState<MessageType[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
   const effectiveApiKey = apiKey || accessToken || "";
   const selectedAgent = selectedId === NEW_AGENT_ID ? null : agentModels.find((a) => a.model_name === selectedId) ?? null;
@@ -130,65 +133,6 @@ export default function AgentBuilderView({
     }
   };
 
-  const updateTextUI = useCallback((role: string, chunk: string, model?: string) => {
-    setChatHistory((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.role === role && !last.isImage && !last.isAudio) {
-        return [
-          ...prev.slice(0, -1),
-          { ...last, content: (last.content as string) + chunk, model: last.model ?? model },
-        ];
-      }
-      return [...prev, { role, content: chunk, model } as MessageType];
-    });
-  }, []);
-
-  const handleSendMessage = async () => {
-    const text = chatInput.trim();
-    if (!text || !selectedAgent || !effectiveApiKey) return;
-    const displayMessage = createDisplayMessage(text, false);
-    setChatHistory((prev) => [...prev, displayMessage]);
-    setChatInput("");
-    setChatLoading(true);
-    abortControllerRef.current = new AbortController();
-    const apiHistory = [
-      ...chatHistory
-        .filter((m) => !m.isImage && !m.isAudio)
-        .map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" })),
-      { role: "user" as const, content: text },
-    ];
-    try {
-      await makeOpenAIChatCompletionRequest(
-        apiHistory,
-        (chunk, model) => updateTextUI("assistant", chunk, model),
-        selectedAgent.model_name,
-        effectiveApiKey,
-        undefined,
-        abortControllerRef.current.signal,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        0.7,
-        4096,
-        undefined,
-        customProxyBaseUrl,
-      );
-    } catch (e) {
-      NotificationsManager.fromBackend("Chat request failed");
-      updateTextUI("assistant", "Error: request failed.");
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
   if (!accessToken || !userID || !userRole) {
     return (
       <div className="flex h-full items-center justify-center p-8 text-gray-500">
@@ -199,8 +143,9 @@ export default function AgentBuilderView({
 
   return (
     <div className="flex h-full flex-col bg-white text-gray-900">
-      <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-gray-200 px-4">
-        <span className="text-sm font-medium text-gray-900">Agent Builder</span>
+      <div className="flex flex-shrink-0 flex-col border-b border-gray-200">
+        <div className="flex h-12 items-center justify-between px-4">
+          <span className="text-sm font-medium text-gray-900">Agent Builder</span>
         {isNewAgent ? (
           <Button
             type="primary"
@@ -212,8 +157,15 @@ export default function AgentBuilderView({
             Save Agent
           </Button>
         ) : (
-          <span className="text-xs text-gray-500">Select an agent or add new</span>
+          <span className="text-xs text-gray-500">Build Agents that pass your compliance requirements.</span>
         )}
+        </div>
+        <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+          <ExperimentOutlined className="flex-shrink-0 text-amber-600" />
+          <span>
+            Agent Builder is experimental and may change or be removed without notice.
+          </span>
+        </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -234,10 +186,7 @@ export default function AgentBuilderView({
                   <button
                     key={agent.model_name}
                     type="button"
-                    onClick={() => {
-                      setSelectedId(agent.model_name);
-                      setChatHistory([]);
-                    }}
+                    onClick={() => setSelectedId(agent.model_name)}
                     className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
                       selectedId === agent.model_name
                         ? "border-blue-500 bg-blue-50 text-blue-800"
@@ -272,7 +221,7 @@ export default function AgentBuilderView({
               <Tabs
                 activeKey={activeTab}
                 onChange={(k) => setActiveTab(k as "configure" | "chat" | "test")}
-                className="flex-1 overflow-hidden [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
+                className="flex-1 overflow-hidden [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-nav]:pl-4"
                 items={[
                   {
                     key: "configure",
@@ -372,54 +321,19 @@ export default function AgentBuilderView({
                     ),
                     disabled: isNewAgent,
                     children: (
-                      <div className="flex h-full flex-col">
+                      <div className="flex h-full flex-col min-h-0">
                         {selectedAgent ? (
-                          <>
-                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                              {chatHistory.map((msg, i) => (
-                                <div
-                                  key={i}
-                                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                                >
-                                  <div
-                                    className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
-                                      msg.role === "user"
-                                        ? "bg-blue-600 text-white rounded-br-none"
-                                        : "bg-gray-100 text-gray-800 rounded-bl-none"
-                                    }`}
-                                  >
-                                    <div className="whitespace-pre-wrap">{String(msg.content)}</div>
-                                  </div>
-                                </div>
-                              ))}
-                              {chatLoading && (
-                                <div className="flex justify-start">
-                                  <div className="rounded-2xl rounded-bl-none bg-gray-100 px-4 py-2 text-sm text-gray-500">
-                                    ...
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex-shrink-0 border-t border-gray-200 p-4">
-                              <div className="flex gap-2">
-                                <Input
-                                  value={chatInput}
-                                  onChange={(e) => setChatInput(e.target.value)}
-                                  onPressEnter={(e) => {
-                                    if (!e.shiftKey) {
-                                      e.preventDefault();
-                                      handleSendMessage();
-                                    }
-                                  }}
-                                  placeholder="Type a message..."
-                                  disabled={chatLoading}
-                                />
-                                <Button type="primary" onClick={handleSendMessage} loading={chatLoading} disabled={!chatInput.trim()}>
-                                  Send
-                                </Button>
-                              </div>
-                            </div>
-                          </>
+                          <ChatUI
+                            key={selectedAgent.model_name}
+                            simplified
+                            fixedModel={selectedAgent.model_name}
+                            accessToken={accessToken}
+                            token={token}
+                            userRole={userRole}
+                            userID={userID}
+                            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                            proxySettings={proxySettings}
+                          />
                         ) : (
                           <div className="flex flex-1 items-center justify-center text-gray-500">
                             Save an agent first to test in Chat.
@@ -435,9 +349,22 @@ export default function AgentBuilderView({
                         <ExperimentOutlined className="mr-1" /> Batch Test
                       </span>
                     ),
+                    disabled: isNewAgent,
                     children: (
-                      <div className="flex flex-1 items-center justify-center p-8 text-gray-500">
-                        Batch Test placeholder. Select an agent and use Chat to test.
+                      <div className="flex h-full flex-col min-h-0">
+                        {selectedAgent ? (
+                          <ComplianceUI
+                            accessToken={accessToken}
+                            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+                            backendMode="chat_completions"
+                            fixedModel={selectedAgent.model_name}
+                            proxySettings={proxySettings}
+                          />
+                        ) : (
+                          <div className="flex flex-1 items-center justify-center text-gray-500">
+                            Select an agent to run batch tests.
+                          </div>
+                        )}
                       </div>
                     ),
                   },

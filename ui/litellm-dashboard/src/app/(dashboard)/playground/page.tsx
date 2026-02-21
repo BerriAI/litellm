@@ -40,7 +40,7 @@ export default function PlaygroundPage() {
         <Tab>Chat</Tab>
         <Tab>Compare</Tab>
         <Tab>Compliance</Tab>
-        <Tab>Agent Builder</Tab>
+        <Tab>Agent Builder (Experimental)</Tab>
       </TabList>
       <TabPanels className="h-full">
         <TabPanel className="h-full">
@@ -62,8 +62,11 @@ export default function PlaygroundPage() {
         <TabPanel className="h-full">
           <AgentBuilderView
             accessToken={accessToken}
+            token={token}
             userID={userId}
             userRole={userRole}
+            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+            proxySettings={proxySettings}
             customProxyBaseUrl={proxySettings?.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings?.PROXY_BASE_URL}
           />
         </TabPanel>

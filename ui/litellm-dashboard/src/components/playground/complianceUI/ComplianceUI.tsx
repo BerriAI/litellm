@@ -11,6 +11,7 @@ import {
   getPoliciesList,
   testPoliciesAndGuardrails,
 } from "@/components/networking";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import {
   AlertTriangle,
   BarChart3,
@@ -110,11 +111,23 @@ interface GuardrailOption {
 interface ComplianceUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation?: boolean;
+  /** When "chat_completions", use /chat/completions with fixedModel instead of test_policies_and_guardrails. */
+  backendMode?: "policies" | "chat_completions";
+  /** Required when backendMode is "chat_completions"; model name for chat completions (e.g. selected agent). */
+  fixedModel?: string;
+  /** Used when backendMode is "chat_completions" for the request base URL. */
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
 export default function ComplianceUI({
   accessToken,
   disabledPersonalKeyCreation,
+  backendMode = "policies",
+  fixedModel,
+  proxySettings,
 }: ComplianceUIProps) {
   const frameworks = getFrameworks();
 
@@ -432,6 +445,9 @@ export default function ComplianceUI({
     if (csvInputRef.current) csvInputRef.current.value = "";
   };
 
+  const requestProxyBaseUrl =
+    proxySettings?.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings?.PROXY_BASE_URL ?? undefined;
+
   const runQuickTest = useCallback(async () => {
     if (!quickTestInput.trim() || !accessToken) return;
     const text = quickTestInput.trim();
@@ -445,44 +461,82 @@ export default function ComplianceUI({
     setQuickTestInput("");
     setIsQuickTesting(true);
     try {
-      const { inputs, guardrail_errors = [] } = await testPoliciesAndGuardrails(
-        accessToken,
-        {
-          policy_names:
-            selectedPolicies.length > 0 ? selectedPolicies : undefined,
-          guardrail_names:
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-          inputs: { texts: [text] },
-          request_data: {},
-          input_type: "request",
-        }
-      );
-      const result: "blocked" | "allowed" =
-        guardrail_errors.length > 0 ? "blocked" : "allowed";
-      const triggeredBy =
-        guardrail_errors.length > 0
-          ? guardrail_errors
-              .map((e) => `${e.guardrail_name}: ${e.message}`)
-              .join("; ")
-          : undefined;
-      const returnedText =
-        Array.isArray(inputs?.texts) && inputs.texts.length > 0
-          ? inputs.texts[0]
-          : undefined;
-      const displayText =
-        result === "blocked"
-          ? `Blocked — ${triggeredBy ?? "content filter"}`
-          : "Allowed — no policy or guardrail violations detected.";
-      const sysMsg: QuickTestMessage = {
-        id: `msg-${Date.now()}-sys`,
-        type: "system",
-        text: displayText,
-        result,
-        triggeredBy,
-        returnedText,
-        timestamp: new Date(),
-      };
-      setQuickTestMessages((prev) => [...prev, sysMsg]);
+      if (backendMode === "chat_completions" && fixedModel) {
+        let fullResponse = "";
+        await makeOpenAIChatCompletionRequest(
+          [{ role: "user", content: text }],
+          (chunk: string) => {
+            fullResponse += chunk;
+          },
+          fixedModel,
+          accessToken,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined, // vector_store_ids (param 11)
+          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          selectedPolicies.length > 0 ? selectedPolicies : undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          requestProxyBaseUrl,
+          undefined
+        );
+        const sysMsg: QuickTestMessage = {
+          id: `msg-${Date.now()}-sys`,
+          type: "system",
+          text: "Allowed — model response received.",
+          result: "allowed",
+          returnedText: fullResponse,
+          timestamp: new Date(),
+        };
+        setQuickTestMessages((prev) => [...prev, sysMsg]);
+      } else {
+        const { inputs, guardrail_errors = [] } = await testPoliciesAndGuardrails(
+          accessToken,
+          {
+            policy_names:
+              selectedPolicies.length > 0 ? selectedPolicies : undefined,
+            guardrail_names:
+              selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            inputs: { texts: [text] },
+            request_data: {},
+            input_type: "request",
+          }
+        );
+        const result: "blocked" | "allowed" =
+          guardrail_errors.length > 0 ? "blocked" : "allowed";
+        const triggeredBy =
+          guardrail_errors.length > 0
+            ? guardrail_errors
+                .map((e) => `${e.guardrail_name}: ${e.message}`)
+                .join("; ")
+            : undefined;
+        const returnedText =
+          Array.isArray(inputs?.texts) && inputs.texts.length > 0
+            ? inputs.texts[0]
+            : undefined;
+        const displayText =
+          result === "blocked"
+            ? `Blocked — ${triggeredBy ?? "content filter"}`
+            : "Allowed — no policy or guardrail violations detected.";
+        const sysMsg: QuickTestMessage = {
+          id: `msg-${Date.now()}-sys`,
+          type: "system",
+          text: displayText,
+          result,
+          triggeredBy,
+          returnedText,
+          timestamp: new Date(),
+        };
+        setQuickTestMessages((prev) => [...prev, sysMsg]);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const sysMsg: QuickTestMessage = {
@@ -502,6 +556,9 @@ export default function ComplianceUI({
     quickTestInput,
     selectedPolicies,
     selectedGuardrails,
+    backendMode,
+    fixedModel,
+    requestProxyBaseUrl,
   ]);
 
   const handleQuickTestKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -533,45 +590,99 @@ export default function ComplianceUI({
     }));
     setTestResults(pendingResults);
     try {
-      const inputsList = allTexts.map((text) => ({ texts: [text] }));
-      const response = await testPoliciesAndGuardrails(accessToken, {
-        policy_names:
-          selectedPolicies.length > 0 ? selectedPolicies : undefined,
-        guardrail_names:
+      if (backendMode === "chat_completions" && fixedModel) {
+        const newResults = [...pendingResults];
+        for (let index = 0; index < selected.length; index++) {
+          const row = pendingResults[index];
+          const prompt = allTexts[index];
+          let responseText = "";
+          try {
+            await makeOpenAIChatCompletionRequest(
+              [{ role: "user", content: prompt }],
+              (chunk: string) => {
+                responseText += chunk;
+              },
+          fixedModel,
+          accessToken,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
           selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-        inputs_list: inputsList,
-        request_data: {},
-        input_type: "request",
-      });
-      const results = response.results ?? [];
-      setTestResults(
-        pendingResults.map((row, index) => {
-          const item = results[index];
-          const guardrail_errors = item?.guardrail_errors ?? [];
-          const actualResult: "blocked" | "allowed" =
-            guardrail_errors.length > 0 ? "blocked" : "allowed";
-          const triggeredBy =
-            guardrail_errors.length > 0
-              ? guardrail_errors
-                  .map((e) => `${e.guardrail_name}: ${e.message}`)
-                  .join("; ")
-              : undefined;
-          const returnedText =
-            Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0
-              ? item.inputs.texts[0]
-              : undefined;
-          return {
-            ...row,
-            actualResult,
-            isMatch:
-              (row.expectedResult === "fail" && actualResult === "blocked") ||
-              (row.expectedResult === "pass" && actualResult === "allowed"),
-            triggeredBy,
-            returnedText,
-            status: "complete" as const,
-          };
-        })
-      );
+              selectedPolicies.length > 0 ? selectedPolicies : undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              requestProxyBaseUrl,
+              undefined
+            );
+            const actualResult: "blocked" | "allowed" = "allowed";
+            newResults[index] = {
+              ...row,
+              actualResult,
+              returnedText: responseText,
+              isMatch: row.expectedResult === "pass",
+              status: "complete" as const,
+            };
+          } catch (err) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            newResults[index] = {
+              ...row,
+              actualResult: "blocked" as const,
+              isMatch: false,
+              triggeredBy: errorMessage,
+              status: "complete" as const,
+            };
+          }
+          setTestResults([...newResults]);
+        }
+      } else {
+        const inputsList = allTexts.map((text) => ({ texts: [text] }));
+        const response = await testPoliciesAndGuardrails(accessToken, {
+          policy_names:
+            selectedPolicies.length > 0 ? selectedPolicies : undefined,
+          guardrail_names:
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          inputs_list: inputsList,
+          request_data: {},
+          input_type: "request",
+        });
+        const results = response.results ?? [];
+        setTestResults(
+          pendingResults.map((row, index) => {
+            const item = results[index];
+            const guardrail_errors = item?.guardrail_errors ?? [];
+            const actualResult: "blocked" | "allowed" =
+              guardrail_errors.length > 0 ? "blocked" : "allowed";
+            const triggeredBy =
+              guardrail_errors.length > 0
+                ? guardrail_errors
+                    .map((e) => `${e.guardrail_name}: ${e.message}`)
+                    .join("; ")
+                : undefined;
+            const returnedText =
+              Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0
+                ? item.inputs.texts[0]
+                : undefined;
+            return {
+              ...row,
+              actualResult,
+              isMatch:
+                (row.expectedResult === "fail" && actualResult === "blocked") ||
+                (row.expectedResult === "pass" && actualResult === "allowed"),
+              triggeredBy,
+              returnedText,
+              status: "complete" as const,
+            };
+          })
+        );
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setTestResults(
@@ -591,6 +702,9 @@ export default function ComplianceUI({
     selectedPolicies,
     selectedGuardrails,
     allFrameworks,
+    backendMode,
+    fixedModel,
+    requestProxyBaseUrl,
   ]);
 
   const completedResults = testResults.filter((r) => r.status === "complete");
