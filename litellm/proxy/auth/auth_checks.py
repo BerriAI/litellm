@@ -2000,7 +2000,7 @@ async def _fetch_key_object_from_db_with_reconnect(
             proxy_logging_obj=proxy_logging_obj,
         )
     except Exception as e:
-        if PrismaDBExceptionHandler.is_database_connection_error(e):
+        if PrismaDBExceptionHandler.is_database_transport_error(e):
             did_reconnect = False
             if hasattr(prisma_client, "attempt_db_reconnect"):
                 auth_reconnect_timeout = getattr(
