@@ -6,7 +6,7 @@ import hashlib
 import inspect
 import json
 import ssl
-from typing import Any, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 import openai
@@ -25,7 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
 
 def _get_client_init_params(cls: type) -> Tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
-    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")
+    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")  # type: ignore[misc]
 
 
 _OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
