@@ -6301,6 +6301,8 @@ class Router:
 
         This will initialize the complexity-router and add it to the complexity-routers dictionary.
         """
+        # Import here to match AutoRouter pattern and avoid circular imports
+        # (ComplexityRouter is a CustomLogger subclass that imports litellm internals)
         from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
 
         complexity_router_config: Optional[

@@ -17,22 +17,22 @@ The router scores each request across 7 dimensions:
 
 | Dimension | Description | Weight |
 |-----------|-------------|--------|
-| `tokenCount` | Short prompts = simple, long = complex | 0.15 |
-| `codePresence` | Code keywords (function, class, etc.) | 0.20 |
+| `tokenCount` | Short prompts = simple, long = complex | 0.10 |
+| `codePresence` | Code keywords (function, class, etc.) | 0.30 |
 | `reasoningMarkers` | "step by step", "think through", etc. | 0.25 |
-| `technicalTerms` | Domain complexity indicators | 0.15 |
-| `simpleIndicators` | "what is", "define" (negative weight) | 0.15 |
-| `multiStepPatterns` | "first...then", numbered steps | 0.05 |
-| `questionComplexity` | Multiple question marks | 0.05 |
+| `technicalTerms` | Domain complexity indicators | 0.25 |
+| `simpleIndicators` | "what is", "define" (negative weight) | 0.05 |
+| `multiStepPatterns` | "first...then", numbered steps | 0.03 |
+| `questionComplexity` | Multiple question marks | 0.02 |
 
 The weighted sum is mapped to tiers using configurable boundaries:
 
 | Tier | Score Range | Typical Use |
 |------|-------------|-------------|
-| SIMPLE | < 0.25 | Basic questions, greetings |
-| MEDIUM | 0.25 - 0.50 | Standard queries |
-| COMPLEX | 0.50 - 0.75 | Technical, multi-part requests |
-| REASONING | > 0.75 | Chain-of-thought, analysis |
+| SIMPLE | < 0.15 | Basic questions, greetings |
+| MEDIUM | 0.15 - 0.35 | Standard queries |
+| COMPLEX | 0.35 - 0.60 | Technical, multi-part requests |
+| REASONING | > 0.60 | Chain-of-thought, analysis |
 
 ## Configuration
 
@@ -68,9 +68,9 @@ model_list:
         
         # Tier boundaries (normalized scores)
         tier_boundaries:
-          simple_medium: 0.25
-          medium_complex: 0.50
-          complex_reasoning: 0.75
+          simple_medium: 0.15
+          medium_complex: 0.35
+          complex_reasoning: 0.60
         
         # Token count thresholds
         token_thresholds:
@@ -79,13 +79,13 @@ model_list:
         
         # Dimension weights (must sum to ~1.0)
         dimension_weights:
-          tokenCount: 0.15
-          codePresence: 0.20
+          tokenCount: 0.10
+          codePresence: 0.30
           reasoningMarkers: 0.25
-          technicalTerms: 0.15
-          simpleIndicators: 0.15
-          multiStepPatterns: 0.05
-          questionComplexity: 0.05
+          technicalTerms: 0.25
+          simpleIndicators: 0.05
+          multiStepPatterns: 0.03
+          questionComplexity: 0.02
         
         # Override default keyword lists
         code_keywords:

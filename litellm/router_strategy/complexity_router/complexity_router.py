@@ -93,8 +93,9 @@ class ComplexityRouter(CustomLogger):
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
         
         # Pre-compile regex patterns for efficiency
+        # Use non-greedy .*? to prevent ReDoS on pathological inputs
         self._multi_step_patterns = [
-            re.compile(r"first.*then", re.IGNORECASE),
+            re.compile(r"first.*?then", re.IGNORECASE),
             re.compile(r"step\s*\d", re.IGNORECASE),
             re.compile(r"\d+\.\s"),
             re.compile(r"[a-z]\)\s", re.IGNORECASE),
@@ -359,19 +360,19 @@ class ComplexityRouter(CustomLogger):
             return None
         
         # Extract the last user message and the last system prompt
-        user_message = ""
-        system_prompt = None
+        user_message: Optional[str] = None
+        system_prompt: Optional[str] = None
         
         for msg in reversed(messages):
             role = msg.get("role", "")
             content = msg.get("content", "")
             if isinstance(content, str):
-                if role == "user" and not user_message:
+                if role == "user" and user_message is None:
                     user_message = content
                 elif role == "system" and system_prompt is None:
                     system_prompt = content
         
-        if not user_message:
+        if user_message is None:
             verbose_router_logger.debug(
                 "ComplexityRouter: No user message found, skipping routing"
             )
