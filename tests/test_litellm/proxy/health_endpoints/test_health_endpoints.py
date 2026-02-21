@@ -12,6 +12,7 @@ sys.path.insert(
 import pytest
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
+import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     db_health_cache,
@@ -31,7 +32,7 @@ from tests.test_litellm.proxy.conftest import create_proxy_test_client
 @pytest.mark.parametrize(
     "prisma_error",
     [
-        PrismaError(),
+        PrismaError("Can't reach database server"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
@@ -46,9 +47,9 @@ async def test_db_health_readiness_check_with_prisma_error(prisma_error):
     mock_prisma_client = MagicMock()
     mock_prisma_client.health_check.side_effect = prisma_error
 
-    # Reset the health cache to a known state
-    global db_health_cache
-    db_health_cache = {
+    # Reset the health cache in the source module so _db_health_readiness_check
+    # sees the updated value (assigning to a test-module global doesn't work).
+    _health_endpoints_module.db_health_cache = {
         "status": "unknown",
         "last_updated": datetime.now() - timedelta(minutes=5),
     }
@@ -73,7 +74,7 @@ async def test_db_health_readiness_check_with_prisma_error(prisma_error):
 @pytest.mark.parametrize(
     "prisma_error",
     [
-        PrismaError(),
+        PrismaError("Can't reach database server"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
@@ -87,9 +88,8 @@ async def test_db_health_readiness_check_with_error_and_flag_off(prisma_error):
     mock_prisma_client = MagicMock()
     mock_prisma_client.health_check.side_effect = prisma_error
 
-    # Reset the health cache
-    global db_health_cache
-    db_health_cache = {
+    # Reset the health cache in the source module
+    _health_endpoints_module.db_health_cache = {
         "status": "unknown",
         "last_updated": datetime.now() - timedelta(minutes=5),
     }
@@ -491,7 +491,7 @@ def test_get_callback_identifier_string_and_object_with_callback_name():
     - Object with empty/None callback_name (should fall through to other checks)
     """
     from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
-    
+
     # Test 1: String callback should be returned as-is
     assert get_callback_identifier("datadog") == "datadog"
     assert get_callback_identifier("langfuse") == "langfuse"
@@ -522,9 +522,9 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     - Object with callback_name that matches registry entry
     - Fallback to callback_name() helper function
     """
-    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
-    
+    from litellm.proxy.health_endpoints._health_endpoints import get_callback_identifier
+
     # Test 1: Object registered in CustomLoggerRegistry (without callback_name attribute)
     # Mock a class that's registered in the registry
     class MockRegisteredLogger:

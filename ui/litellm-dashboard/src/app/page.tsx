@@ -35,6 +35,7 @@ import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
+import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
@@ -542,6 +543,8 @@ function CreateKeyPageContent() {
                     <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "claude-code-plugins" ? (
                     <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
+                  ) : page == "access-groups" ? (
+                    <AccessGroupsPage />
                   ) : page == "vector-stores" ? (
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "new_usage" ? (

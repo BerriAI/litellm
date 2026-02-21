@@ -70,6 +70,11 @@ class ExceptionCheckers:
         Check if an error string indicates a context window exceeded error.
         """
         _error_str_lowercase = error_str.lower()
+        # Exclude param validation errors (e.g. OpenAI "user" param max 64 chars)
+        if "string_above_max_length" in _error_str_lowercase:
+            return False
+        if "invalid 'user'" in _error_str_lowercase and "string too long" in _error_str_lowercase:
+            return False
         known_exception_substrings = [
             "exceed context limit",
             "this model's maximum context length is",

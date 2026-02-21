@@ -83,6 +83,12 @@ def test_guardrail_apply_decorator():
         if python_file.name == "bedrock_guardrails.py":
             continue
 
+        # Skip content_filter.py - it implements its own detailed logging via
+        # _log_guardrail_information with detections, masked_entity_count, etc.
+        # Using the decorator would cause duplicate entries.
+        if python_file.name == "content_filter.py":
+            continue
+
         results = find_apply_guardrail_methods(python_file)
 
         for class_name, line_num, has_decorator in results:
