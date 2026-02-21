@@ -102,6 +102,7 @@ from litellm.proxy.db.create_views import (
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
@@ -2278,6 +2279,13 @@ class PrismaClient:
         self._db_health_watchdog_enabled: bool = (
             str_to_bool(os.getenv("PRISMA_HEALTH_WATCHDOG_ENABLED", "true")) is True
         )
+        self._db_health_watchdog_probe_timeout_seconds: float = max(
+            0.5,
+            float(os.getenv("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", "5.0")),
+        )
+        self._db_watchdog_reconnect_timeout_seconds: float = max(
+            1.0, float(os.getenv("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", "30.0"))
+        )
         self._db_auth_reconnect_timeout_seconds: float = max(
             0.5, float(os.getenv("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", "2.0"))
         )
@@ -3552,9 +3560,8 @@ class PrismaClient:
         self, timeout_seconds: Optional[float] = None
     ) -> None:
         """
-        Run a reconnect cycle. When timeout_seconds is set, use direct db operations
-        with a single overall timeout budget to avoid long retries on hot paths
-        (e.g. auth).
+        Run a reconnect cycle with direct db operations and a single overall timeout
+        budget to avoid long retries on hot paths (e.g. auth).
         """
         async def _do_direct_reconnect() -> None:
             try:
@@ -3568,11 +3575,12 @@ class PrismaClient:
             await self.db.connect()
             await self.db.query_raw("SELECT 1")
 
-        if timeout_seconds is None:
-            await _do_direct_reconnect()
-            return
-
-        await asyncio.wait_for(_do_direct_reconnect(), timeout=timeout_seconds)
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else self._db_watchdog_reconnect_timeout_seconds
+        )
+        await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
 
     async def attempt_db_reconnect(
         self,
@@ -3649,9 +3657,11 @@ class PrismaClient:
             self._db_health_watchdog_loop()
         )
         verbose_proxy_logger.info(
-            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss)",
+            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss)",
             self._db_health_watchdog_interval_seconds,
             self._db_reconnect_cooldown_seconds,
+            self._db_health_watchdog_probe_timeout_seconds,
+            self._db_watchdog_reconnect_timeout_seconds,
         )
 
     async def stop_db_health_watchdog_task(self) -> None:
@@ -3669,18 +3679,22 @@ class PrismaClient:
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
 
     async def _db_health_watchdog_loop(self) -> None:
-        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-
         while True:
             try:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
-                await self.health_check()
+                await asyncio.wait_for(
+                    self.db.query_raw("SELECT 1"),
+                    timeout=self._db_health_watchdog_probe_timeout_seconds,
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if PrismaDBExceptionHandler.is_database_connection_error(e):
+                if isinstance(
+                    e, asyncio.TimeoutError
+                ) or PrismaDBExceptionHandler.is_database_connection_error(e):
                     await self.attempt_db_reconnect(
-                        reason="db_health_watchdog_connection_error"
+                        reason="db_health_watchdog_connection_error",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
                 else:
                     verbose_proxy_logger.debug(
