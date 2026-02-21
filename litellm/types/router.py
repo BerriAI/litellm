@@ -803,6 +803,7 @@ OptionalPreCallChecks = List[
         "router_budget_limiting",
         "responses_api_deployment_check",
         "deployment_affinity",
+        "session_affinity",
         "forward_client_headers_by_model_group",
         "enforce_model_rate_limits",
     ]
