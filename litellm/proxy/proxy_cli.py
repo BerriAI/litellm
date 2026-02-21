@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.secret_managers.main import get_secret_bool
+from litellm._logging import verbose_proxy_logger
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -38,14 +39,14 @@ class LiteLLMDatabaseConnectionPool(Enum):
 
 
 def append_query_params(url: Optional[str], params: dict) -> str:
-    from litellm._logging import verbose_proxy_logger
-
     verbose_proxy_logger.debug(f"url: {url}")
     verbose_proxy_logger.debug(f"params: {params}")
     if not isinstance(url, str) or url == "":
         # Preserve previous startup behavior when DATABASE_URL is absent.
         # Returning an empty string avoids urlparse type errors in test/dev flows.
-        verbose_proxy_logger.warning("append_query_params received empty or non-string URL, returning empty string")
+        verbose_proxy_logger.warning(
+            "append_query_params received empty or non-string URL, returning empty string"
+        )
         return ""
     parsed_url = urlparse.urlparse(url)
     parsed_query = urlparse.parse_qs(parsed_url.query)
@@ -212,9 +213,7 @@ class ProxyInitializationHelpers:
                 _endpoint_str = (
                     f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
                 )
-                curl_command = (
-                    _endpoint_str
-                    + """
+                curl_command = _endpoint_str + """
                 --header 'Content-Type: application/json' \\
                 --data ' {
                 "model": "gpt-3.5-turbo",
@@ -227,7 +226,6 @@ class ProxyInitializationHelpers:
                 }'
                 \n
                 """
-                )
                 print()  # noqa
                 print(  # noqa
                     '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
@@ -294,11 +292,9 @@ class ProxyInitializationHelpers:
             with open(os.devnull, "w") as devnull:
                 subprocess.Popen(command, stdout=devnull, stderr=devnull)
         except Exception as e:
-            print(  # noqa
-                f"""
+            print(f"""
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-            """
-            )  # noqa
+            """)  # noqa
 
     @staticmethod
     def _is_port_in_use(port):
@@ -789,7 +785,6 @@ def run_server(  # noqa: PLR0915
                 is_prisma_runnable = False
 
             if is_prisma_runnable:
-                from litellm.proxy.db.check_migration import check_prisma_schema_diff
                 from litellm.proxy.db.prisma_client import (
                     PrismaManager,
                     should_update_prisma_schema,
@@ -799,11 +794,14 @@ def run_server(  # noqa: PLR0915
                     should_update_prisma_schema(
                         general_settings.get("disable_prisma_schema_update")
                     )
-                    is False
+                    is True
                 ):
-                    check_prisma_schema_diff(db_url=None)
-                else:
                     PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
+                else:
+                    verbose_proxy_logger.debug(
+                        "Prisma schema updates are disabled. Skipping setup_database and check_prisma_schema_diff."
+                    )
+
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
