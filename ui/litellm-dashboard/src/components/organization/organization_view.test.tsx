@@ -1,6 +1,5 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { vi, test, expect } from "vitest";
 import OrganizationInfoView from "./organization_view";
 
