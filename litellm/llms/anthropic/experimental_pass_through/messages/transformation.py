@@ -46,6 +46,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "inference_geo",
             "speed",
             "output_config",
+            "cache_control",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
