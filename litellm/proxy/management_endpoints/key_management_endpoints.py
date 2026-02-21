@@ -20,7 +20,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
-import prisma
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
@@ -3153,6 +3152,8 @@ async def _rotate_master_key( # noqa: PLR0915
     3. Encrypt the values with the new master key
     4. Update the values in the DB
     """
+    import prisma
+
     from litellm.proxy.proxy_server import proxy_config
 
     try:
