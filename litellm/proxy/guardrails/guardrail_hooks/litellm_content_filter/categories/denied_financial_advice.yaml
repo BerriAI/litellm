@@ -9,7 +9,7 @@
 #
 # Eval results (207-case investment eval set — block_investment.jsonl):
 #   Precision: 100%, Recall: 100%, F1: 100%, Latency: <0.1ms
-#   Run: pytest tests/.../topic_blocker/test_eval.py -k InvestmentContentFilter -v -s
+#   Run: pytest litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/test_eval.py -k InvestmentContentFilter -v -s
 category_name: "denied_financial_advice"
 display_name: "Denied Financial / Investment Advice"
 description: "Detects requests for personalized financial advice, investment recommendations, or financial planning that should be provided by licensed financial advisors"
