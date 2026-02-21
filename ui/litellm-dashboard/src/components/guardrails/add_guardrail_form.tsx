@@ -860,6 +860,27 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     );
   };
 
+  const getStepConfigs = () => {
+    if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "Default Categories", optional: false },
+        { title: "Patterns", optional: false },
+        { title: "Keywords", optional: false },
+      ];
+    }
+    if (shouldRenderPIIConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "PII Configuration", optional: false },
+      ];
+    }
+    return [
+      { title: "Basic Info", optional: false },
+      { title: "Provider Configuration", optional: false },
+    ];
+  };
+
   const stepConfigs = getStepConfigs();
 
   return (
