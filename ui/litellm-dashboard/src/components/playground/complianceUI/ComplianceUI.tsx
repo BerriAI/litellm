@@ -445,7 +445,7 @@ export default function ComplianceUI({
     setQuickTestInput("");
     setIsQuickTesting(true);
     try {
-      const { inputs, guardrail_errors } = await testPoliciesAndGuardrails(
+      const { inputs, guardrail_errors = [] } = await testPoliciesAndGuardrails(
         accessToken,
         {
           policy_names:
@@ -532,50 +532,51 @@ export default function ComplianceUI({
       status: "pending",
     }));
     setTestResults(pendingResults);
-    // Send each text individually to get per-text blocked/allowed results.
-    // Sending all texts in a single batch doesn't work because the guardrail
-    // raises an HTTPException on the first blocked text, skipping the rest.
-    const updatedResults = [...pendingResults];
-    for (let i = 0; i < allTexts.length; i++) {
-      try {
-        const { inputs, guardrail_errors } = await testPoliciesAndGuardrails(
-          accessToken,
-          {
-            policy_names:
-              selectedPolicies.length > 0 ? selectedPolicies : undefined,
-            guardrail_names:
-              selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            inputs: { texts: [allTexts[i]] },
-            request_data: {},
-            input_type: "request",
-          }
-        );
-        const actualResult: "blocked" | "allowed" =
-          guardrail_errors.length > 0 ? "blocked" : "allowed";
-        const triggeredBy =
-          guardrail_errors.length > 0
-            ? guardrail_errors
-                .map((e) => `${e.guardrail_name}: ${e.message}`)
-                .join("; ")
-            : undefined;
-        const returnedText =
-          Array.isArray(inputs?.texts) && inputs.texts.length > 0
-            ? inputs.texts[0]
-            : undefined;
-        updatedResults[i] = {
-          ...updatedResults[i],
-          actualResult,
-          isMatch:
-            (updatedResults[i].expectedResult === "fail" && actualResult === "blocked") ||
-            (updatedResults[i].expectedResult === "pass" && actualResult === "allowed"),
-          triggeredBy,
-          returnedText,
-          status: "complete" as const,
-        };
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        updatedResults[i] = {
-          ...updatedResults[i],
+    try {
+      const inputsList = allTexts.map((text) => ({ texts: [text] }));
+      const response = await testPoliciesAndGuardrails(accessToken, {
+        policy_names:
+          selectedPolicies.length > 0 ? selectedPolicies : undefined,
+        guardrail_names:
+          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+        inputs_list: inputsList,
+        request_data: {},
+        input_type: "request",
+      });
+      const results = response.results ?? [];
+      setTestResults(
+        pendingResults.map((row, index) => {
+          const item = results[index];
+          const guardrail_errors = item?.guardrail_errors ?? [];
+          const actualResult: "blocked" | "allowed" =
+            guardrail_errors.length > 0 ? "blocked" : "allowed";
+          const triggeredBy =
+            guardrail_errors.length > 0
+              ? guardrail_errors
+                  .map((e) => `${e.guardrail_name}: ${e.message}`)
+                  .join("; ")
+              : undefined;
+          const returnedText =
+            Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0
+              ? item.inputs.texts[0]
+              : undefined;
+          return {
+            ...row,
+            actualResult,
+            isMatch:
+              (row.expectedResult === "fail" && actualResult === "blocked") ||
+              (row.expectedResult === "pass" && actualResult === "allowed"),
+            triggeredBy,
+            returnedText,
+            status: "complete" as const,
+          };
+        })
+      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setTestResults(
+        pendingResults.map((row) => ({
+          ...row,
           actualResult: "blocked" as const,
           isMatch: false,
           triggeredBy: `Error: ${errorMessage}`,
@@ -596,6 +597,12 @@ export default function ComplianceUI({
   const completedResults = testResults.filter((r) => r.status === "complete");
   const matchCount = completedResults.filter((r) => r.isMatch).length;
   const mismatchCount = completedResults.filter((r) => !r.isMatch).length;
+  const falsePositiveCount = completedResults.filter(
+    (r) => r.expectedResult === "pass" && r.actualResult === "blocked"
+  ).length;
+  const falseNegativeCount = completedResults.filter(
+    (r) => r.expectedResult === "fail" && r.actualResult === "allowed"
+  ).length;
   const pendingCount = testResults.filter((r) => r.status !== "complete").length;
   const filteredResults = testResults.filter((r) => {
     if (resultFilter === "matches") return r.status === "complete" && r.isMatch;
@@ -603,6 +610,31 @@ export default function ComplianceUI({
     if (resultFilter === "pending") return r.status !== "complete";
     return true;
   });
+
+  const exportBatchResults = () => {
+    if (filteredResults.length === 0) return;
+    const rows = filteredResults.map((r) => ({
+      prompt_id: r.promptId,
+      prompt: r.prompt,
+      category: r.category,
+      expected_result: r.expectedResult,
+      actual_result: r.actualResult,
+      is_match: r.isMatch ? "yes" : "no",
+      status: r.status,
+      triggered_by: r.triggeredBy ?? "",
+      returned_text: r.returnedText ?? "",
+    }));
+    const csv = Papa.unparse(rows);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `compliance_batch_results_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  };
 
   const filteredFrameworks = allFrameworks
     .map((fw) => ({
@@ -1365,14 +1397,33 @@ export default function ComplianceUI({
                 <div className="flex items-center justify-between mb-2">
                   <h2 className="text-sm font-semibold text-gray-900">Results</h2>
                   {testResults.length > 0 && (
-                    <div className="flex items-center gap-2.5 text-[11px]">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={exportBatchResults}
+                        disabled={filteredResults.length === 0}
+                        className="flex items-center gap-1 text-[11px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 px-2 py-1 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      >
+                        <Download className="w-3 h-3" /> Export CSV
+                      </button>
+                      <div className="flex items-center gap-2.5 text-[11px]">
                       <span className="flex items-center gap-1 text-green-600">
                         <CheckCircle2 className="w-3 h-3" />
                         {matchCount}
                       </span>
-                      <span className="flex items-center gap-1 text-red-600">
+                      <span
+                        className="flex items-center gap-1 text-amber-600"
+                        title="Allowed content that should have been blocked"
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        {falseNegativeCount} FN
+                      </span>
+                      <span
+                        className="flex items-center gap-1 text-red-600"
+                        title="Blocked content that should have been allowed"
+                      >
                         <X className="w-3 h-3" />
-                        {mismatchCount}
+                        {falsePositiveCount} FP
                       </span>
                       {pendingCount > 0 && (
                         <span className="flex items-center gap-1 text-gray-500">
@@ -1380,6 +1431,7 @@ export default function ComplianceUI({
                           {pendingCount}
                         </span>
                       )}
+                    </div>
                     </div>
                   )}
                 </div>
@@ -1443,11 +1495,18 @@ export default function ComplianceUI({
                             <span className="text-gray-500">correct</span>
                           </span>
                           <div className="w-px h-4 bg-gray-200" />
-                          <span>
-                            <span className="font-semibold text-red-700">
-                              {mismatchCount}
+                          <span title="Allowed content that should have been blocked">
+                            <span className="font-semibold text-amber-700">
+                              {falseNegativeCount}
                             </span>{" "}
-                            <span className="text-gray-500">gaps</span>
+                            <span className="text-gray-500">false negative</span>
+                          </span>
+                          <div className="w-px h-4 bg-gray-200" />
+                          <span title="Blocked content that should have been allowed">
+                            <span className="font-semibold text-red-700">
+                              {falsePositiveCount}
+                            </span>{" "}
+                            <span className="text-gray-500">false positive</span>
                           </span>
                         </div>
                         <div
