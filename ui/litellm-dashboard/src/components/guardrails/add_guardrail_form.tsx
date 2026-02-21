@@ -900,27 +900,24 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   };
 
   const getStepConfigs = () => {
-    const isContentFilter = shouldRenderContentFilterConfigSettings(selectedProvider);
-    const isPII = shouldRenderPIIConfigSettings(selectedProvider);
-
-    const steps = [
-      { title: "Guardrail details", optional: false },
-      {
-        title: isPII
-          ? "PII Configuration"
-          : isContentFilter
-            ? "Denied topics"
-            : "Provider Configuration",
-        optional: true,
-      },
-    ];
-
-    if (isContentFilter) {
-      steps.push({ title: "Patterns", optional: true });
-      steps.push({ title: "Word filters", optional: true });
+    if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "Default Categories", optional: false },
+        { title: "Patterns", optional: false },
+        { title: "Keywords", optional: false },
+      ];
     }
-
-    return steps;
+    if (shouldRenderPIIConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "PII Configuration", optional: false },
+      ];
+    }
+    return [
+      { title: "Basic Info", optional: false },
+      { title: "Provider Configuration", optional: false },
+    ];
   };
 
   const stepConfigs = getStepConfigs();
