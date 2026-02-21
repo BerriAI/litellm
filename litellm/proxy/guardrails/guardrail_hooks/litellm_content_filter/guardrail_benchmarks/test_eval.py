@@ -20,7 +20,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any, Dict, List
 
 import pytest
 from fastapi import HTTPException
