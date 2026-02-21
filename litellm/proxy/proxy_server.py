@@ -10742,6 +10742,81 @@ async def get_image():
         return FileResponse(logo_path, media_type="image/jpeg")
 
 
+@app.get("/get_favicon", include_in_schema=False)
+async def get_favicon():
+    """Get custom favicon for the admin UI."""
+    from fastapi.responses import Response
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    default_favicon = os.path.join(
+        current_dir, "_experimental", "out", "favicon.ico"
+    )
+
+    favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
+
+    if not favicon_url:
+        if os.path.exists(default_favicon):
+            return FileResponse(default_favicon, media_type="image/x-icon")
+        raise HTTPException(
+            status_code=404, detail="Default favicon not found"
+        )
+
+    if favicon_url.startswith(("http://", "https://")):
+        try:
+            from litellm.llms.custom_httpx.http_handler import (
+                get_async_httpx_client,
+            )
+            from litellm.types.llms.custom_http import httpxSpecialProvider
+
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
+            response = await async_client.get(favicon_url)
+            if response.status_code == 200:
+                content_type = response.headers.get(
+                    "content-type", "image/x-icon"
+                )
+                return Response(
+                    content=response.content,
+                    media_type=content_type,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "Failed to fetch favicon from %s: status %s",
+                    favicon_url,
+                    response.status_code,
+                )
+                if os.path.exists(default_favicon):
+                    return FileResponse(
+                        default_favicon, media_type="image/x-icon"
+                    )
+                raise HTTPException(
+                    status_code=404, detail="Favicon not found"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Error downloading favicon from %s: %s", favicon_url, e
+            )
+            if os.path.exists(default_favicon):
+                return FileResponse(
+                    default_favicon, media_type="image/x-icon"
+                )
+            raise HTTPException(
+                status_code=404, detail="Favicon not found"
+            )
+    else:
+        if os.path.exists(favicon_url):
+            return FileResponse(favicon_url, media_type="image/x-icon")
+        if os.path.exists(default_favicon):
+            return FileResponse(default_favicon, media_type="image/x-icon")
+        raise HTTPException(
+            status_code=404, detail="Favicon not found"
+        )
+
+
 #### INVITATION MANAGEMENT ####
 
 
