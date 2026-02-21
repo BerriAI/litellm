@@ -13,12 +13,23 @@ export interface Agent {
   };
 }
 
+/** MCP tool entry in the same format as chat completions API (litellm_params.tools) */
+export interface MCPToolEntry {
+  type: "mcp";
+  server_label?: string;
+  server_url: string;
+  require_approval?: string;
+  allowed_tools?: string[];
+}
+
 /** Agent model from /model/info where litellm_params.model starts with "litellm_agent/" */
 export interface AgentModel {
   model_name: string;
   litellm_params: {
     model: string;
     litellm_system_prompt?: string;
+    /** Saved MCP tools array (same shape as chat completions API tools) */
+    tools?: MCPToolEntry[];
     [key: string]: unknown;
   };
   model_info?: Record<string, unknown> | null;
@@ -93,6 +104,7 @@ export const fetchAvailableAgentModels = async (
           ...m.litellm_params,
           model: m.litellm_params.model,
           litellm_system_prompt: m.litellm_params?.litellm_system_prompt,
+          tools: Array.isArray(m.litellm_params?.tools) ? m.litellm_params.tools : undefined,
         },
         model_info: m.model_info ?? null,
       }));
