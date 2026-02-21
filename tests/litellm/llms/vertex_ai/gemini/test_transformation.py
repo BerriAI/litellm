@@ -1,4 +1,4 @@
-from litellm.llms.vertex_ai.gemini.transformation import VertexGeminiConfig
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 def test_vertex_ai_audio_supported_params():
     config = VertexGeminiConfig()
