@@ -93,25 +93,23 @@ def test_prisma_manager_setup_database_error_logging():
         "time.sleep"
     ):
 
-        # Simulating failure to load proxy extras to reach the base logic
-        with patch.dict("sys.modules", {"litellm_proxy_extras.utils": None}):
-            # Mock a subprocess error with stderr
-            mock_run.side_effect = subprocess.CalledProcessError(
-                returncode=1,
-                cmd=["prisma", "db", "push"],
-                stderr="P1001: Connection failed",
-            )
+        # Mock a subprocess error with stderr
+        mock_run.side_effect = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["prisma", "db", "push"],
+            stderr="P1001: Connection failed",
+        )
 
-            # Call setup_database (it will retry and eventually log)
-            try:
-                # use_migrate=False to hit the 'else' path where we added capture_output=True
-                PrismaManager.setup_database(use_migrate=False)
-            except Exception:
-                pass
+        # Call setup_database (it will retry and eventually log)
+        try:
+            # use_migrate=False to hit the 'else' path where we added capture_output=True
+            PrismaManager.setup_database(use_migrate=False)
+        except Exception:
+            pass
 
-            # Check if any log warning contains the stderr
-            any_call_has_details = any(
-                "P1001: Connection failed" in str(call)
-                for call in mock_logger.warning.call_args_list
-            )
-            assert any_call_has_details is True
+        # Check if any log warning contains the stderr
+        any_call_has_details = any(
+            "P1001: Connection failed" in str(call)
+            for call in mock_logger.warning.call_args_list
+        )
+        assert any_call_has_details is True
