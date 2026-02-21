@@ -5438,10 +5438,19 @@ export const getPoliciesList = async (accessToken: string) => {
   }
 };
 
+export interface GuardrailInputs {
+  texts?: string[];
+  images?: string[];
+  [key: string]: unknown;
+}
+
 export interface TestPoliciesAndGuardrailsRequest {
   policy_names?: string[] | null;
   guardrail_names?: string[] | null;
-  inputs: { texts?: string[]; images?: string[]; [key: string]: unknown };
+  /** Single input (legacy). Use inputs_list for per-input batch processing. */
+  inputs?: GuardrailInputs | null;
+  /** List of inputs; each processed separately for batch compliance testing. */
+  inputs_list?: GuardrailInputs[] | null;
   request_data?: Record<string, unknown>;
   input_type?: "request" | "response";
 }
@@ -5452,8 +5461,10 @@ export interface GuardrailErrorEntry {
 }
 
 export interface TestPoliciesAndGuardrailsResponse {
-  inputs: Record<string, unknown>;
-  guardrail_errors: GuardrailErrorEntry[];
+  inputs?: Record<string, unknown>;
+  guardrail_errors?: GuardrailErrorEntry[];
+  /** Present when inputs_list was used; one result per input. */
+  results?: Array<{ inputs: Record<string, unknown>; guardrail_errors: GuardrailErrorEntry[] }>;
 }
 
 export const testPoliciesAndGuardrails = async (
@@ -5473,7 +5484,8 @@ export const testPoliciesAndGuardrails = async (
       body: JSON.stringify({
         policy_names: body.policy_names ?? null,
         guardrail_names: body.guardrail_names ?? null,
-        inputs: body.inputs,
+        inputs: body.inputs ?? null,
+        inputs_list: body.inputs_list ?? null,
         request_data: body.request_data ?? {},
         input_type: body.input_type ?? "request",
       }),
@@ -7801,6 +7813,38 @@ export const getCategoryYaml = async (accessToken: string, categoryName: string)
     return data;
   } catch (error) {
     console.error("Failed to get category YAML:", error);
+    throw error;
+  }
+};
+
+export const getMajorAirlines = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/ui/major_airlines`
+      : `/guardrails/ui/major_airlines`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(
+        `Failed to get major airlines. Status: ${response.status}, Error:`,
+        errorData
+      );
+      handleError(errorData);
+      throw new Error(`Failed to get major airlines: ${response.status} ${errorData}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get major airlines:", error);
     throw error;
   }
 };
