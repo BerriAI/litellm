@@ -581,9 +581,8 @@ export default function ComplianceUI({
           isMatch: false,
           triggeredBy: `Error: ${errorMessage}`,
           status: "complete" as const,
-        };
-      }
-      setTestResults([...updatedResults]);
+        }))
+      );
     }
     setIsRunning(false);
   }, [
