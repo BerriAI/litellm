@@ -1402,6 +1402,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
+            if hidden_params.get("cache_hit") is True:
+                return 0.0
             if (
                 "response_cost" in hidden_params
                 and hidden_params["response_cost"] is not None
