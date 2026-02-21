@@ -357,9 +357,9 @@ complexity_router_config:
     COMPLEX: claude-sonnet
     REASONING: o1-preview
   tier_boundaries:
-    simple_medium: 0.25    # Below 0.25 → SIMPLE
-    medium_complex: 0.50   # 0.25-0.50 → MEDIUM
-    complex_reasoning: 0.75  # 0.50-0.75 → COMPLEX, above → REASONING
+    simple_medium: 0.15    # Below 0.15 → SIMPLE
+    medium_complex: 0.35   # 0.15-0.35 → MEDIUM
+    complex_reasoning: 0.60  # 0.35-0.60 → COMPLEX, above → REASONING
 ```
 
 #### Token Thresholds
@@ -381,12 +381,12 @@ Customize how much each signal contributes to the complexity score:
 complexity_router_config:
   dimension_weights:
     tokenCount: 0.10        # Prompt length
-    codePresence: 0.25      # Code-related keywords
+    codePresence: 0.30      # Code-related keywords
     reasoningMarkers: 0.25  # "step by step", "think through", etc.
-    technicalTerms: 0.20    # Domain-specific complexity
-    simpleIndicators: 0.10  # "what is", "define", greetings
-    multiStepPatterns: 0.05 # "first...then", numbered steps
-    questionComplexity: 0.05 # Multiple questions
+    technicalTerms: 0.25    # Domain-specific complexity
+    simpleIndicators: 0.05  # "what is", "define", greetings
+    multiStepPatterns: 0.03 # "first...then", numbered steps
+    questionComplexity: 0.02 # Multiple questions
 ```
 
 ### How Complexity Routing Works
