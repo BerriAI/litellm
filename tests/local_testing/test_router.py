@@ -622,10 +622,10 @@ def test_router_azure_acompletion():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-turbo",
-                    "api_key": os.getenv("AZURE_FRANCE_API_KEY"),
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": "https://openai-france-1234.openai.azure.com",
+                    "api_base": os.getenv("AZURE_API_BASE"),
                 },
                 "rpm": 1800,
             },
