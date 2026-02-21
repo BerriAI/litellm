@@ -15,12 +15,12 @@ from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 from .config import (
-    ComplexityRouterConfig,
-    ComplexityTier,
     DEFAULT_CODE_KEYWORDS,
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
+    ComplexityRouterConfig,
+    ComplexityTier,
 )
 
 if TYPE_CHECKING:
@@ -366,7 +366,7 @@ class ComplexityRouter(CustomLogger):
         for msg in reversed(messages):
             role = msg.get("role", "")
             content = msg.get("content", "")
-            if isinstance(content, str):
+            if isinstance(content, str) and content:
                 if role == "user" and user_message is None:
                     user_message = content
                 elif role == "system" and system_prompt is None:
