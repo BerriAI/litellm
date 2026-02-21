@@ -21,6 +21,11 @@ class LLMClientCache(InMemoryCache):
                     asyncio.get_running_loop().create_task(close_fn())
                 except RuntimeError:
                     pass
+            elif close_fn and callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
 
     def update_cache_key_with_event_loop(self, key):
         """
