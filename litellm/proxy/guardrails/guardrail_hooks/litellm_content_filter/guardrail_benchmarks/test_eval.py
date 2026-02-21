@@ -1,12 +1,11 @@
 """
-Unified eval runner for content filter guardrail benchmarks.
+Eval runner for content filter guardrail benchmarks.
 
-Runs every eval JSONL against every blocker implementation and prints
-a confusion matrix for each combination.
+Runs eval JSONL against the ContentFilterGuardrail (production) and
+optionally against LLM-as-judge baselines, printing a confusion matrix.
 
 Structure:
-  evals/engine.jsonl           — tests the matching engine (synthetic policy)
-  evals/block_investment.jsonl — tests "Block investment questions" topic
+  evals/block_investment.jsonl — 207-case "Block investment questions" eval set
   results/                     — eval results saved here (JSON)
 
 Run all evals:
@@ -14,7 +13,6 @@ Run all evals:
 
 Run a specific eval:
   pytest ... -k "InvestmentContentFilter"
-  pytest ... -k "InvestmentKeyword"
   pytest ... -k "LlmJudgeGpt4oMini"
 """
 
@@ -26,11 +24,6 @@ from typing import List
 
 import pytest
 from fastapi import HTTPException
-
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.topic_blocker.keyword_blocker import (
-    DeniedTopic,
-    TopicBlocker,
-)
 
 EVAL_DIR = os.path.join(os.path.dirname(__file__), "evals")
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), "results")
@@ -60,15 +53,10 @@ def _load_jsonl(filename: str) -> List[dict]:
 
 
 def _run(checker, text: str) -> dict:
-    """Run a blocker's check method, return result with confidence score."""
+    """Run a checker's check method, return result dict."""
     try:
         checker.check(text)
-        # Get confidence score for ALLOW decisions too
-        score = 0.0
-        matched_topic = None
-        if hasattr(checker, "is_blocked") and text and text.strip():
-            _, matched_topic, score = checker.is_blocked(text)
-        return {"decision": "ALLOW", "score": score, "matched_topic": matched_topic}
+        return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 403:
             detail = e.detail if isinstance(e.detail, dict) else {}
@@ -86,7 +74,6 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     tp = fp = tn = fn = 0
     wrong = []
     rows = []
-
     latencies = []
 
     for case in cases:
@@ -138,6 +125,12 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     )
     accuracy = (tp + tn) / total if total > 0 else 0
 
+    # Latency stats
+    sorted_lat = sorted(latencies)
+    p50 = sorted_lat[len(sorted_lat) // 2] if sorted_lat else 0
+    p95 = sorted_lat[int(len(sorted_lat) * 0.95)] if sorted_lat else 0
+    avg_lat = sum(latencies) / len(latencies) if latencies else 0
+
     # Print confusion matrix (noqa: T201 — intentional eval output)
     print("\n")  # noqa: T201
     print("=" * 70)  # noqa: T201
@@ -152,12 +145,6 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     print(f"  FP (wrongly blocked):    {fp}")  # noqa: T201
     print(f"  FN (wrongly allowed):    {fn}")  # noqa: T201
     print()  # noqa: T201
-    # Latency stats
-    sorted_lat = sorted(latencies)
-    p50 = sorted_lat[len(sorted_lat) // 2] if sorted_lat else 0
-    p95 = sorted_lat[int(len(sorted_lat) * 0.95)] if sorted_lat else 0
-    avg_lat = sum(latencies) / len(latencies) if latencies else 0
-
     print(f"  Precision:  {precision:.1%}")  # noqa: T201
     print(f"  Recall:     {recall:.1%}")  # noqa: T201
     print(f"  F1:         {f1:.1%}")  # noqa: T201
@@ -203,199 +190,7 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     return result
 
 
-# ── Blocker factories ─────────────────────────────────────────────
-
-
-def _keyword_blocker_engine():
-    """Keyword blocker configured for the synthetic engine eval."""
-    return TopicBlocker(
-        denied_topics=[
-            DeniedTopic(
-                topic_name="test_engine",
-                identifier_words=["alpha", "bravo"],
-                block_words=["red", "blue"],
-                always_block_phrases=["block this phrase", "also block this"],
-                exception_phrases=["alpha safe context", "bravo safe context"],
-            ),
-        ]
-    )
-
-
-def _keyword_blocker_investment():
-    """Keyword blocker configured for 'Block investment questions'."""
-    return TopicBlocker(
-        denied_topics=[
-            DeniedTopic(
-                topic_name="investment_questions",
-                identifier_words=[
-                    # Stocks & equities
-                    "stock", "stocks", "equity", "equities", "shares", "ticker",
-                    "nasdaq", "dow jones", "s&p 500", "nyse",
-                    "ftse", "nikkei", "dax", "sensex",
-                    "blue chip", "penny stocks",
-                    "securities",
-                    # Bonds & fixed income
-                    "bond", "bonds", "treasury", "fixed income",
-                    # Funds
-                    "mutual fund", "etf", "index fund", "hedge fund",
-                    # Crypto
-                    "crypto", "cryptocurrency", "bitcoin", "ethereum", "blockchain",
-                    # Portfolio & accounts
-                    "portfolio", "portfolios", "brokerage",
-                    "trading", "forex", "day trading",
-                    "options trading", "futures trading", "commodities",
-                    "short selling", "derivatives",
-                    # Financial metrics
-                    "dividend", "capital gains", "ipo", "reit",
-                    "market cap", "market capitalization",
-                    # Retirement accounts
-                    "401k", "ira", "roth", "pension", "annuity",
-                    # Advisors & brokerages
-                    "financial advisor", "financial planner",
-                    "wealth management", "robo-advisor",
-                    "vanguard", "fidelity", "schwab", "robinhood",
-                    # Investment variants (stemming)
-                    "invest", "investing", "investment", "investments", "investors",
-                    # Funds (generic)
-                    "funds",
-                    # Commodities
-                    "gold", "silver", "commodity",
-                    # Savings & wealth (financial context)
-                    "savings account", "money market",
-                    "compound interest",
-                    # Other financial
-                    "capital markets", "passive income",
-                ],
-                block_words=[
-                    "buy", "sell", "purchase", "price", "value", "worth",
-                    "return", "returns", "profit", "loss", "gain",
-                    "performance", "performing", "recommend", "advice",
-                    "should i", "should", "tell me",
-                    "best", "top", "good", "how to", "how do", "how does",
-                    "strategy", "explain", "what are", "what is",
-                    "forecast", "prediction", "outlook", "analysis",
-                    "compare", "comparing", "risk", "grow", "allocate", "diversify",
-                    "yield", "ratio", "this year", "right now",
-                    "good time", "safe", "safest", "start", "open", "work",
-                    "enter", "follow", "suggested", "thinking",
-                    "looking", "look like", "latest", "trends", "crash",
-                    "read", "chart", "today", "difference",
-                    "apps", "app", "better", "vs",
-                    "protect", "inflation",
-                    "opportunity", "opportunities",
-                    "tips", "rate", "current",
-                ],
-                always_block_phrases=[
-                    "should i invest", "investment advice", "financial advice",
-                    "how to invest", "how to trade", "stock tips", "trading tips",
-                    "best stocks to buy", "best crypto to buy",
-                    "best etf", "best mutual fund", "best index fund",
-                    "market prediction", "stock market forecast",
-                    "retirement planning", "grow my wealth", "build wealth",
-                    "is bitcoin a good investment", "is gold a safe investment",
-                    "is real estate a good investment", "emerging markets",
-                    "pe ratio",
-                    # Market-specific phrases (avoids FP on "farmer's market")
-                    "market trends", "enter the market", "market going to",
-                    "market crash", "market cap",
-                    # Retirement & savings placement
-                    "retirement savings", "compound interest",
-                    # Wealth & income
-                    "passive income", "protect my wealth",
-                    # Specific financial products
-                    "dollar cost averaging", "crypto wallet",
-                    "money market",
-                ],
-                phrase_patterns=[
-                    # --- Paraphrase patterns (catch rewording of investment intent) ---
-                    # "put/park/place/stash money/cash/savings" patterns
-                    r"\b(?:put|park|place|keep|stash)\b.{0,30}\b(?:money|cash|savings)\b",
-                    # "grow/build/increase/protect wealth/nest egg/money"
-                    r"\b(?:grow|build|increase|protect)\b.{0,20}\b(?:wealth|nest egg)\b",
-                    # "make money/savings grow/work harder"
-                    r"\b(?:make|get)\b.{0,20}\b(?:money|savings|cash)\b.{0,20}\b(?:grow|work|harder)\b",
-                    # "what/best/smartest to do with money/cash/$X"
-                    r"\b(?:what|smartest|best)\b.{0,30}\b(?:do with|thing to do)\b.{0,20}(?:\b(?:money|cash)\b|\$\d)",
-                    # "what to do with spare/extra cash/money"
-                    r"\b(?:spare|extra)\b.{0,10}\b(?:cash|money)\b",
-                    # "savings rate for retirement" / "good savings for retirement"
-                    r"\bsavings\b.{0,15}\b(?:rate|for retirement)\b",
-                    # "how to make passive income"
-                    r"\bpassive\s+income\b",
-                    # "best way to grow my [wealth/money/savings]"
-                    r"\bbest way to\b.{0,15}\b(?:grow|invest|build)\b",
-                    # "good/safe/safest place for my [savings/money/retirement]"
-                    r"\b(?:good|safe|safest|best)\s+place\b.{0,25}\b(?:savings|money|retirement)\b",
-                ],
-                exception_phrases=[
-                    "in stock", "stock up", "stock room", "stock inventory",
-                    "invest time", "invest effort", "invest energy",
-                    "invested in learning", "invested in a good",
-                    "return policy", "return this item", "return the item",
-                    "return trip",
-                    "share the document", "share with me", "share your",
-                    "options menu", "options are available",
-                    "bond with", "bonding",
-                    "gold standard", "golden rule",
-                    "gain access", "gained access",
-                    "loss of data", "loss prevention",
-                    "trading card", "not interested in investing",
-                    "portfolio of work", "token-based",
-                    "yield sign", "yield fare", "returns on my serve",
-                    "futures schedule",
-                    "save my booking",
-                    "travel insurance",
-                    "diversify my skill",
-                    "grow my career", "grow my travel",
-                    "build my itinerary",
-                    "spend my layover",
-                    "earn more skywards", "earn miles",
-                    "gold standard", "gold medal",
-                    "the market end", "market was busy",
-                    "award tickets",
-                ],
-            ),
-        ]
-    )
-
-
-# ── Engine eval — keyword blocker ─────────────────────────────────
-
-
-class TestEngineKeyword:
-    """Engine eval with the keyword blocker."""
-
-    @pytest.fixture(scope="class")
-    def blocker(self):
-        return _keyword_blocker_engine()
-
-    @pytest.fixture(scope="class")
-    def cases(self):
-        return _load_jsonl("engine.jsonl")
-
-    def test_confusion_matrix(self, blocker, cases):
-        _confusion_matrix(blocker, cases, "Engine — Keyword Blocker")
-
-
-# ── Investment eval — keyword blocker ─────────────────────────────
-
-
-class TestInvestmentKeyword:
-    """Investment eval with the keyword blocker."""
-
-    @pytest.fixture(scope="class")
-    def blocker(self):
-        return _keyword_blocker_investment()
-
-    @pytest.fixture(scope="class")
-    def cases(self):
-        return _load_jsonl("block_investment.jsonl")
-
-    def test_confusion_matrix(self, blocker, cases):
-        _confusion_matrix(blocker, cases, "Block Investment — Keyword Blocker")
-
-
-# ── Investment eval — Content Filter Guardrail (production YAML) ──
+# ── Content Filter Guardrail (production) ─────────────────────────
 
 
 class _ContentFilterChecker:
@@ -408,29 +203,22 @@ class _ContentFilterChecker:
         self._guardrail = guardrail
 
     def check(self, text: str) -> str:
-        """Delegates to the content filter's _filter_single_text.
-
-        Raises HTTPException(403) on BLOCK, returns text on ALLOW.
-        """
         if not text or not text.strip():
             return text
         return self._guardrail._filter_single_text(text)
 
 
-def _content_filter_investment():
-    """
-    Instantiate ContentFilterGuardrail with the denied_financial_advice
-    category loaded, and wrap it for the eval harness.
-    """
+def _content_filter(category: str):
+    """Instantiate ContentFilterGuardrail with a given category."""
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
         ContentFilterGuardrail,
     )
 
     guardrail = ContentFilterGuardrail(
-        guardrail_name="investment_eval",
+        guardrail_name=f"{category}_eval",
         categories=[  # type: ignore[arg-type]
             {
-                "category": "denied_financial_advice",
+                "category": category,
                 "enabled": True,
                 "action": "BLOCK",
             }
@@ -444,7 +232,7 @@ class TestInvestmentContentFilter:
 
     @pytest.fixture(scope="class")
     def blocker(self):
-        return _content_filter_investment()
+        return _content_filter("denied_financial_advice")
 
     @pytest.fixture(scope="class")
     def cases(self):
@@ -458,7 +246,7 @@ class TestInvestmentContentFilter:
         )
 
 
-# ── Investment eval — LLM-as-judge ───────────────────────────────
+# ── LLM-as-judge baselines ───────────────────────────────────────
 
 LLM_JUDGE_SYSTEM_PROMPT = """\
 You are a content moderation classifier for an airline customer service chatbot.
@@ -516,10 +304,7 @@ class _LlmJudgeChecker:
 
 
 def _llm_judge(model: str = "gpt-4o-mini"):
-    """LLM-as-judge blocker using litellm.completion().
-
-    Requires the relevant API key env var (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.).
-    """
+    """LLM-as-judge using litellm.completion(). Requires API key env var."""
     return _LlmJudgeChecker(model=model)
 
 

@@ -1,4 +1,4 @@
-# Topic Blocker Benchmarks
+# Content Filter Benchmarks
 
 ## Investment Questions Eval (207 cases)
 
@@ -10,7 +10,6 @@ Eval set: `evals/block_investment.jsonl` — Emirates airline chatbot, "Block in
 | Approach | Precision | Recall | F1 | Latency p50 | Deps | Cost/req |
 |----------|-----------|--------|----|-------------|------|----------|
 | **ContentFilter (denied_financial_advice.yaml)** | **100.0%** | **100.0%** | **100.0%** | **<0.1ms** | None | $0 |
-| Keyword Blocker (standalone) | **100.0%** | **100.0%** | **100.0%** | <0.1ms | None | $0 |
 | LLM Judge (gpt-4o-mini) | — | — | — | ~200ms | API key | ~$0.0001 |
 | LLM Judge (claude-haiku-4.5) | — | — | — | ~300ms | API key | ~$0.0001 |
 
@@ -22,7 +21,6 @@ Eval set: `evals/block_investment.jsonl` — Emirates airline chatbot, "Block in
 | Approach | Precision | Recall | F1 | FP | FN | Latency p50 | Extra Deps |
 |----------|-----------|--------|----|----|----|-------------|------------|
 | ContentFilter YAML | **100.0%** | **100.0%** | **100.0%** | 0 | 0 | <0.1ms | None |
-| Keyword Blocker | **100.0%** | **100.0%** | **100.0%** | 0 | 0 | <0.1ms | None |
 | ONNX MiniLM | 95.3% | 96.5% | 95.9% | 4 | 3 | 2.4ms | onnxruntime (~15MB) |
 | Embedding MiniLM (80MB) | 98.4% | 74.1% | 84.6% | 1 | 22 | ~3ms | sentence-transformers, torch |
 | NLI DeBERTa-xsmall | 82.7% | 100.0% | 90.5% | 18 | 0 | ~20ms | transformers, torch |
@@ -41,25 +39,14 @@ The `denied_financial_advice.yaml` category uses three layers of matching:
 
 4. **Exceptions** — phrases that override matches in their sentence (e.g., "emirates flight", "return policy", "gold medal", "trading card").
 
-## Engine Eval (34 cases)
-
-Eval set: `evals/engine.jsonl` — synthetic policy (alpha/bravo + red/blue) testing the matching engine itself.
-
-| Approach | Precision | Recall | F1 | Accuracy | TP | FP | FN | TN |
-|----------|-----------|--------|----|----------|----|----|----|----|
-| Keyword Blocker | **100.0%** | **95.2%** | **97.6%** | **97.1%** | 20 | 0 | 1 | 13 |
-
-The engine works well — the single miss is a unicode evasion case (Greek alpha lookalike).
-
 ## Running evals
 
 ```bash
-# Run all evals (keyword + content filter):
+# Run content filter eval:
 pytest litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/test_eval.py -v -s
 
 # Run specific eval:
 pytest ... -k "InvestmentContentFilter" -v -s
-pytest ... -k "InvestmentKeyword" -v -s
 
 # Run LLM judge evals (requires API keys):
 OPENAI_API_KEY=sk-... pytest ... -k "LlmJudgeGpt4oMini" -v -s
