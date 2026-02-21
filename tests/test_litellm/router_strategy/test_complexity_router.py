@@ -19,9 +19,9 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     DimensionScore,
 )
 from litellm.router_strategy.complexity_router.config import (
+    DEFAULT_COMPLEXITY_CONFIG,
     ComplexityRouterConfig,
     ComplexityTier,
-    DEFAULT_COMPLEXITY_CONFIG,
 )
 
 
@@ -543,8 +543,10 @@ class TestSingletonMutation:
 
     def test_default_config_not_mutated(self, mock_router_instance):
         """Test that creating routers without config doesn't mutate defaults."""
-        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
-        
+        from litellm.router_strategy.complexity_router.config import (
+            ComplexityRouterConfig,
+        )
+
         # Get original default
         original_default = ComplexityRouterConfig().default_model
         
@@ -598,6 +600,24 @@ class TestKeywordFalsePositives:
         # 'entry' contains 'try' but should not trigger code detection
         # Note: 'application' might trigger something, but 'try' should not
         pass  # Just ensure no crash; false positive check is the main goal
+
+    def test_error_not_in_terrorism(self, complexity_router):
+        """'error' should not match in 'terrorism'."""
+        prompt = "The country is dealing with terrorism"
+        tier, score, signals = complexity_router.classify(prompt)
+        assert not any("code" in s.lower() for s in signals), f"False positive: got code signal from 'terrorism'"
+
+    def test_class_not_in_classical(self, complexity_router):
+        """'class' should not match in 'classical'."""
+        prompt = "I enjoy listening to classical music"
+        tier, score, signals = complexity_router.classify(prompt)
+        assert not any("code" in s.lower() for s in signals), f"False positive: got code signal from 'classical'"
+
+    def test_merge_not_in_emerged(self, complexity_router):
+        """'merge' should not match in 'emerged'."""
+        prompt = "A new leader emerged from the crowd"
+        tier, score, signals = complexity_router.classify(prompt)
+        assert not any("code" in s.lower() for s in signals), f"False positive: got code signal from 'emerged'"
 
     def test_actual_api_keyword_detected(self, complexity_router):
         """Actual 'api' usage should be detected."""
