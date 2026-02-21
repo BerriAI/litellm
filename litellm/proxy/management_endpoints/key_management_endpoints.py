@@ -445,6 +445,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
     team_table: Optional[LiteLLM_TeamTableCachedObj],
+    is_service_account: bool = False,
 ) -> GenerateKeyResponse:
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
@@ -491,8 +492,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
     # check if user set upperbound key/generate params on config.yaml
-    # Use type-specific upperbound (user vs service account) with fallback to global
-    is_service_account = data.user_id is None and data.team_id is not None
+    # Use type-specific upperbound (user vs service account) with fallback to global.
+    # is_service_account is passed explicitly by the caller to avoid inferring from
+    # data fields that may have been mutated by default_key_generate_params above.
     upperbound_params = None
     if is_service_account and getattr(
         litellm, "upperbound_service_account_key_generate_params", None
@@ -1227,6 +1229,7 @@ async def generate_key_fn(
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
+            is_service_account=False,
         )
 
     except Exception as e:
@@ -1380,6 +1383,7 @@ async def generate_service_account_key_fn(
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=litellm_changed_by,
         team_table=team_table,
+        is_service_account=True,
     )
 
 

@@ -2753,6 +2753,30 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
+                elif key == "upperbound_user_key_generate_params":
+                    if value is not None and isinstance(value, dict):
+                        for _k, _v in value.items():
+                            if isinstance(_v, str) and _v.startswith("os.environ/"):
+                                value[_k] = get_secret(_v)
+                        litellm.upperbound_user_key_generate_params = (
+                            LiteLLM_UpperboundKeyGenerateParams(**value)
+                        )
+                    else:
+                        raise Exception(
+                            f"Invalid value set for upperbound_user_key_generate_params - value={value}"
+                        )
+                elif key == "upperbound_service_account_key_generate_params":
+                    if value is not None and isinstance(value, dict):
+                        for _k, _v in value.items():
+                            if isinstance(_v, str) and _v.startswith("os.environ/"):
+                                value[_k] = get_secret(_v)
+                        litellm.upperbound_service_account_key_generate_params = (
+                            LiteLLM_UpperboundKeyGenerateParams(**value)
+                        )
+                    else:
+                        raise Exception(
+                            f"Invalid value set for upperbound_service_account_key_generate_params - value={value}"
+                        )
                 elif key == "json_logs" and value is True:
                     litellm.json_logs = True
                     litellm._turn_on_json()

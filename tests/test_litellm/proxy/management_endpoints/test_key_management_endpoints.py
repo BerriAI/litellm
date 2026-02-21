@@ -395,6 +395,10 @@ async def test_key_expiration_exact_duration_hours(monkeypatch):
 
     from datetime import datetime, timedelta, timezone
 
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -542,6 +546,10 @@ async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
 
     mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
 
     await generate_key_helper_fn(
         request_type="key",
