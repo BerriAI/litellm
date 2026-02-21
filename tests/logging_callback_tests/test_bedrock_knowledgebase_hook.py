@@ -19,6 +19,8 @@ import pytest
 
 import litellm
 from litellm import completion
+
+DEFAULT_ANTHROPIC_MODEL = os.getenv("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 from litellm._logging import verbose_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
@@ -177,47 +179,31 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(s
     Test that the Bedrock Knowledge Base Hook works with streaming and returns search_results in chunks.
     """
 
-    # Init client
-    # litellm._turn_on_debug()
-    async_client = AsyncHTTPHandler()
+    async def fake_vector_store_search(*args, **kwargs):
+        return VectorStoreSearchResponse(
+            object="vector_store.search_results.page",
+            search_query="what is litellm?",
+            data=[
+                VectorStoreSearchResult(
+                    score=0.9,
+                    content=[VectorStoreResultContent(text="LiteLLM is a library", type="text")],
+                )
+            ],
+        )
 
-    async def mock_anthropic_aiter_lines():
-        lines = [
-            'event: message_start',
-            'data: {"type":"message_start","message":{"id":"msg_01ABC","type":"message","role":"assistant","content":[],"model":"claude-3-5-haiku-latest","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}',
-            '',
-            'event: content_block_start',
-            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-            '',
-            'event: content_block_delta',
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"LiteLLM is a library."}}',
-            '',
-            'event: content_block_stop',
-            'data: {"type":"content_block_stop","index":0}',
-            '',
-            'event: message_delta',
-            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}',
-            '',
-            'event: message_stop',
-            'data: {"type":"message_stop"}',
-        ]
-        for line in lines:
-            yield line
-
-    mock_streaming_response = Mock()
-    mock_streaming_response.status_code = 200
-    mock_streaming_response.headers = {}
-    mock_streaming_response.aiter_lines = mock_anthropic_aiter_lines
-
-    with patch.object(async_client, "post", new=AsyncMock(return_value=mock_streaming_response)):
+    with patch.object(
+        litellm.vector_stores.main.base_llm_http_handler,
+        "async_vector_store_search_handler",
+        new=AsyncMock(side_effect=fake_vector_store_search),
+    ):
         response = await litellm.acompletion(
-            model="anthropic/claude-3-5-haiku-latest",
+            model=f"anthropic/{DEFAULT_ANTHROPIC_MODEL}",
             messages=[{"role": "user", "content": "what is litellm?"}],
-            vector_store_ids = [
+            vector_store_ids=[
                 "T37J8R4WTM"
             ],
             stream=True,
-            client=async_client
+            mock_response="LiteLLM is a library.",
         )
     
     # Collect chunks
@@ -259,39 +245,19 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(
     Test that the Bedrock Knowledge Base Hook works when making a real llm api call
     """
 
-    # Init client
     litellm._turn_on_debug()
-    async_client = AsyncHTTPHandler()
-
-    mock_llm_response = Mock()
-    mock_llm_response.status_code = 200
-    mock_llm_response.headers = {"content-type": "application/json"}
-    mock_llm_response_json = {
-        "id": "msg_01ABC123",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "LiteLLM is a library."}],
-        "model": "claude-3-5-haiku-latest",
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {"input_tokens": 10, "output_tokens": 5},
-    }
-    mock_llm_response.text = json.dumps(mock_llm_response_json)
-    mock_llm_response.json = Mock(return_value=mock_llm_response_json)
-
-    with patch.object(async_client, "post", new=AsyncMock(return_value=mock_llm_response)):
-        response = await litellm.acompletion(
-            model="anthropic/claude-3-5-haiku-latest",
-            messages=[{"role": "user", "content": "what is litellm?"}],
-            max_tokens=10,
-            tools=[
-                {
-                    "type": "file_search",
-                    "vector_store_ids": ["T37J8R4WTM"]
-                }
-            ],
-            client=async_client,
-        )
+    response = await litellm.acompletion(
+        model=f"anthropic/{DEFAULT_ANTHROPIC_MODEL}",
+        messages=[{"role": "user", "content": "what is litellm?"}],
+        max_tokens=10,
+        tools=[
+            {
+                "type": "file_search",
+                "vector_store_ids": ["T37J8R4WTM"]
+            }
+        ],
+        mock_response="LiteLLM is a library.",
+    )
     assert response is not None
 
 @pytest.mark.asyncio
@@ -303,42 +269,23 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools_
     In this case we filter for a non-existent user_id, which should return no results.
     """
     litellm._turn_on_debug()
-    async_client = AsyncHTTPHandler()
-
-    mock_llm_response = Mock()
-    mock_llm_response.status_code = 200
-    mock_llm_response.headers = {"content-type": "application/json"}
-    mock_llm_response_json = {
-        "id": "msg_01ABC123",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "LiteLLM is a library."}],
-        "model": "claude-3-5-haiku-latest",
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {"input_tokens": 10, "output_tokens": 5},
-    }
-    mock_llm_response.text = json.dumps(mock_llm_response_json)
-    mock_llm_response.json = Mock(return_value=mock_llm_response_json)
-
-    with patch.object(async_client, "post", new=AsyncMock(return_value=mock_llm_response)):
-        response = await litellm.acompletion(
-            model="anthropic/claude-3-5-haiku-latest",
-            messages=[{"role": "user", "content": "what is litellm?"}],
-            max_tokens=10,
-            tools=[
-                {
-                    "type": "file_search",
-                    "vector_store_ids": ["T37J8R4WTM"],
-                    "filters": {
-                        "key": "user_id",
-                        "value": "fake-user-id",
-                        "operator": "eq"
-                    }
+    response = await litellm.acompletion(
+        model=f"anthropic/{DEFAULT_ANTHROPIC_MODEL}",
+        messages=[{"role": "user", "content": "what is litellm?"}],
+        max_tokens=10,
+        tools=[
+            {
+                "type": "file_search",
+                "vector_store_ids": ["T37J8R4WTM"],
+                "filters": {
+                    "key": "user_id",
+                    "value": "fake-user-id",
+                    "operator": "eq"
                 }
-            ],
-            client=async_client,
-        )
+            }
+        ],
+        mock_response="LiteLLM is a library.",
+    )
 
     # Verify response is not None
     assert response is not None
@@ -413,30 +360,13 @@ async def test_bedrock_kb_request_body_has_transformed_filters(setup_vector_stor
             ],
         )
 
-    async_client = AsyncHTTPHandler()
-    mock_llm_response = Mock()
-    mock_llm_response.status_code = 200
-    mock_llm_response.headers = {"content-type": "application/json"}
-    mock_llm_response_json = {
-        "id": "msg_01ABC123",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "LiteLLM is a library."}],
-        "model": "claude-3-5-haiku-latest",
-        "stop_reason": "end_turn",
-        "stop_sequence": None,
-        "usage": {"input_tokens": 10, "output_tokens": 5},
-    }
-    mock_llm_response.text = json.dumps(mock_llm_response_json)
-    mock_llm_response.json = Mock(return_value=mock_llm_response_json)
-
     with patch.object(
         litellm.vector_stores.main.base_llm_http_handler,
         "async_vector_store_search_handler",
         new=AsyncMock(side_effect=fake_async_vector_store_search_handler),
-    ), patch.object(async_client, "post", new=AsyncMock(return_value=mock_llm_response)):
+    ):
         response = await litellm.acompletion(
-            model="anthropic/claude-3-5-haiku-latest",
+            model=f"anthropic/{DEFAULT_ANTHROPIC_MODEL}",
             messages=[{"role": "user", "content": "what is litellm?"}],
             max_tokens=10,
             tools=[
@@ -450,7 +380,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(setup_vector_stor
                     },
                 }
             ],
-            client=async_client,
+            mock_response="LiteLLM is a library.",
         )
 
     assert response is not None
