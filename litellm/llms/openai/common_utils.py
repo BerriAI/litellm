@@ -3,9 +3,10 @@ Common helpers / utils across al OpenAI endpoints
 """
 
 import hashlib
+import inspect
 import json
 import ssl
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING, Union
 
 import httpx
 import openai
@@ -13,8 +14,6 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
-
-import inspect
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -24,13 +23,13 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
 )
 
-def _get_client_init_params(cls: type) -> List[str]:
+def _get_client_init_params(cls: type) -> Tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
-    return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")
 
 
-_OPENAI_INIT_PARAMS: List[str] = _get_client_init_params(OpenAI)
-_AZURE_OPENAI_INIT_PARAMS: List[str] = _get_client_init_params(AzureOpenAI)
+_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
+_AZURE_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(AzureOpenAI)
 
 
 class OpenAIError(BaseLLMException):
@@ -191,8 +190,8 @@ class BaseOpenAILLM:
     @staticmethod
     def get_openai_client_initialization_param_fields(
         client_type: Literal["openai", "azure"]
-    ) -> List[str]:
-        """Returns a list of fields that are used to initialize the OpenAI client"""
+    ) -> Tuple[str, ...]:
+        """Returns a tuple of fields that are used to initialize the OpenAI client"""
         if client_type == "openai":
             return _OPENAI_INIT_PARAMS
         else:
