@@ -525,6 +525,7 @@ LITELLM_CHAT_PROVIDERS = [
     "hosted_vllm",
     "llamafile",
     "lm_studio",
+    "openclaw",
     "galadriel",
     "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
@@ -735,6 +736,7 @@ openai_compatible_providers: List = [
     "hosted_vllm",
     "llamafile",
     "lm_studio",
+    "openclaw",
     "galadriel",
     "github_copilot",  # GitHub Copilot Chat API
     "chatgpt",  # ChatGPT subscription API
