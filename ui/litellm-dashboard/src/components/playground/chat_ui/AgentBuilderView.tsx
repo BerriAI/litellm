@@ -1,10 +1,10 @@
 "use client";
 
-import { CommentOutlined, ExperimentOutlined, PlusOutlined, RobotOutlined, SaveOutlined } from "@ant-design/icons";
-import { Button, Input, Select, Spin, Tabs } from "antd";
+import { CommentOutlined, DeleteOutlined, ExperimentOutlined, PlusOutlined, RobotOutlined, SaveOutlined } from "@ant-design/icons";
+import { Button, Input, Modal, Select, Spin, Tabs } from "antd";
 import React, { useCallback, useEffect, useState } from "react";
 import NotificationsManager from "../../molecules/notifications_manager";
-import { modelCreateCall } from "../../networking";
+import { modelCreateCall, modelDeleteCall, modelPatchUpdateCall } from "../../networking";
 import { AgentModel, fetchAvailableAgentModels } from "../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import ComplianceUI from "../complianceUI/ComplianceUI";
@@ -27,6 +27,16 @@ export interface AgentBuilderViewProps {
 }
 
 const NEW_AGENT_ID = "__new__";
+
+function getAgentModelId(agent: AgentModel): string | null {
+  const info = agent.model_info as { id?: string } | null | undefined;
+  return info?.id ?? null;
+}
+
+function parseUnderlyingModel(litellmModel: string | undefined): string | undefined {
+  if (!litellmModel || !litellmModel.startsWith("litellm_agent/")) return undefined;
+  return litellmModel.slice("litellm_agent/".length) || undefined;
+}
 
 export default function AgentBuilderView({
   accessToken,
@@ -52,10 +62,12 @@ export default function AgentBuilderView({
   const [draftMaxTokens, setDraftMaxTokens] = useState(4096);
 
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const effectiveApiKey = apiKey || accessToken || "";
   const selectedAgent = selectedId === NEW_AGENT_ID ? null : agentModels.find((a) => a.model_name === selectedId) ?? null;
   const isNewAgent = selectedId === NEW_AGENT_ID;
+  const selectedAgentModelId = selectedAgent ? getAgentModelId(selectedAgent) : null;
 
   const loadAgents = useCallback(async () => {
     if (!accessToken || !userID || !userRole) return;
@@ -95,6 +107,19 @@ export default function AgentBuilderView({
     loadModels();
   }, [loadModels]);
 
+  // Sync draft fields when selecting an existing agent
+  useEffect(() => {
+    if (selectedAgent && !isNewAgent) {
+      setDraftName(selectedAgent.model_name);
+      setDraftSystemPrompt(selectedAgent.litellm_params?.litellm_system_prompt ?? "");
+      const underlying = parseUnderlyingModel(selectedAgent.litellm_params?.model);
+      setDraftUnderlyingModel(underlying ?? modelGroups[0]?.model_group);
+      const p = selectedAgent.litellm_params as { temperature?: number; max_tokens?: number } | undefined;
+      setDraftTemperature(typeof p?.temperature === "number" ? p.temperature : 0.7);
+      setDraftMaxTokens(typeof p?.max_tokens === "number" ? p.max_tokens : 4096);
+    }
+  }, [selectedId, isNewAgent, selectedAgent?.model_name]);
+
   const handleAddAgent = () => {
     setSelectedId(NEW_AGENT_ID);
     setDraftName("");
@@ -131,6 +156,62 @@ export default function AgentBuilderView({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleUpdateAgent = async () => {
+    if (!accessToken || !selectedAgent || !selectedAgentModelId || !draftName?.trim() || !draftUnderlyingModel) {
+      NotificationsManager.fromBackend("Name and underlying model are required");
+      return;
+    }
+    setSaving(true);
+    try {
+      await modelPatchUpdateCall(
+        accessToken,
+        {
+          model_name: draftName.trim(),
+          litellm_params: {
+            model: `litellm_agent/${draftUnderlyingModel}`,
+            litellm_system_prompt: draftSystemPrompt.trim() || undefined,
+            temperature: draftTemperature,
+            max_tokens: draftMaxTokens,
+          },
+          model_info: selectedAgent.model_info ?? {},
+        },
+        selectedAgentModelId,
+      );
+      NotificationsManager.success("Agent updated successfully");
+      await loadAgents();
+      setSelectedId(draftName.trim());
+    } catch (e) {
+      NotificationsManager.fromBackend("Failed to update agent");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteAgent = () => {
+    if (!selectedAgent || !selectedAgentModelId || !accessToken) return;
+    Modal.confirm({
+      title: "Delete agent",
+      content: `Are you sure you want to delete "${selectedAgent.model_name}"? This cannot be undone.`,
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        setDeleting(true);
+        try {
+          await modelDeleteCall(accessToken, selectedAgentModelId);
+          NotificationsManager.success("Agent deleted");
+          await loadAgents();
+          const remaining = agentModels.filter((a) => a.model_name !== selectedAgent.model_name);
+          setSelectedId(remaining.length > 0 ? remaining[0].model_name : null);
+        } catch (e) {
+          NotificationsManager.fromBackend("Failed to delete agent");
+        } finally {
+          setDeleting(false);
+        }
+      },
+    });
   };
 
   if (!accessToken || !userID || !userRole) {
@@ -232,8 +313,13 @@ export default function AgentBuilderView({
                     ),
                     children: (
                       <div className="h-full overflow-y-auto p-6">
-                        {isNewAgent ? (
+                        {(isNewAgent || selectedAgent) ? (
                           <div className="mx-auto max-w-xl space-y-4">
+                            {!selectedAgentModelId && selectedAgent && (
+                              <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                This agent cannot be updated or deleted here (missing model id). Manage it from Models &amp; Endpoints.
+                              </div>
+                            )}
                             <div>
                               <label className="mb-1 block text-sm font-medium text-gray-700">Agent name</label>
                               <Input
@@ -283,30 +369,35 @@ export default function AgentBuilderView({
                                 />
                               </div>
                             </div>
-                          </div>
-                        ) : selectedAgent ? (
-                          <div className="mx-auto max-w-xl space-y-4">
-                            <div>
-                              <label className="mb-1 block text-sm font-medium text-gray-700">Name</label>
-                              <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
-                                {selectedAgent.model_name}
+                            {selectedAgent && (
+                              <div className="flex flex-wrap items-center gap-2 pt-2">
+                                {selectedAgentModelId && (
+                                  <>
+                                    <Button
+                                      type="primary"
+                                      icon={<SaveOutlined />}
+                                      onClick={handleUpdateAgent}
+                                      loading={saving}
+                                      disabled={!draftName?.trim() || !draftUnderlyingModel}
+                                    >
+                                      Update Agent
+                                    </Button>
+                                    <Button
+                                      type="default"
+                                      danger
+                                      icon={<DeleteOutlined />}
+                                      onClick={handleDeleteAgent}
+                                      loading={deleting}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </>
+                                )}
+                                <Button type="primary" icon={<CommentOutlined />} onClick={() => setActiveTab("chat")}>
+                                  Test in Chat
+                                </Button>
                               </div>
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-sm font-medium text-gray-700">System prompt</label>
-                              <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm whitespace-pre-wrap">
-                                {selectedAgent.litellm_params?.litellm_system_prompt || "(none)"}
-                              </div>
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-sm font-medium text-gray-700">Underlying model</label>
-                              <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-mono">
-                                {selectedAgent.litellm_params?.model ?? ""}
-                              </div>
-                            </div>
-                            <Button type="primary" icon={<CommentOutlined />} onClick={() => setActiveTab("chat")}>
-                              Test in Chat
-                            </Button>
+                            )}
                           </div>
                         ) : null}
                       </div>
