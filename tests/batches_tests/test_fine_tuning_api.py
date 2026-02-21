@@ -230,11 +230,17 @@ async def test_create_vertex_fine_tune_jobs_mocked():
                 vertex_location=location,
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {"training_dataset_uri": training_file},
                 "tunedModelDisplayName": None,
@@ -322,11 +328,17 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
                 },
             )
 
-            # Verify the request
-            mock_post.assert_called_once()
+            # Verify the request - filter to only Vertex AI calls (Datadog batch logger
+            # may flush in the background and make additional POST calls)
+            vertex_calls = [
+                c
+                for c in mock_post.call_args_list
+                if "aiplatform.googleapis.com" in str(c.kwargs.get("url", ""))
+            ]
+            assert len(vertex_calls) == 1
 
             # Validate the request
-            assert mock_post.call_args.kwargs["json"] == {
+            assert vertex_calls[0].kwargs["json"] == {
                 "baseModel": base_model,
                 "supervisedTuningSpec": {
                     "training_dataset_uri": training_file,
