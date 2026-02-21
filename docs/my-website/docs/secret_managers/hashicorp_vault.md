@@ -49,6 +49,8 @@ HCP_VAULT_TOKEN="hvs.CAESIG52gL6ljBSdmq*****"
 HCP_VAULT_REFRESH_INTERVAL="86400" # defaults to 86400, frequency of cache refresh for Hashicorp Vault
 HCP_VAULT_MOUNT_NAME="secret" # OPTIONAL. defaults to "secret", set this if your KV engine is mounted elsewhere
 HCP_VAULT_PATH_PREFIX="litellm" # OPTIONAL. defaults to None, set this if your secrets live under a custom prefix like secret/data/litellm/OPENAI_API_KEY
+HCP_VAULT_LOGIN_NAMESPACE="admin" # OPTIONAL. defaults to HCP_VAULT_NAMESPACE, namespace used for AppRole/TLS authentication
+HCP_VAULT_SECRET_NAMESPACE="teams" # OPTIONAL. defaults to HCP_VAULT_NAMESPACE, namespace used for reading/writing secrets
 ```
 
 **Step 2.** Add to proxy config.yaml
