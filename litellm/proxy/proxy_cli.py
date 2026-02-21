@@ -147,7 +147,7 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
-        return uvicorn_args
+        # Respect LITELLM_LOG environment variable for uvicorn log level         litellm_log_level = os.environ.get("LITELLM_LOG", "").upper()         if litellm_log_level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:             uvicorn_args["log_level"] = litellm_log_level.lower()         return uvicorn_args
 
     @staticmethod
     def _init_hypercorn_server(
