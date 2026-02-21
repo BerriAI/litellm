@@ -164,6 +164,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 # Remove system parameter if all content was filtered out
                 anthropic_messages_optional_request_params.pop("system", None)
 
+        # Transform context_management from OpenAI format to Anthropic format if needed
+        context_management_param = anthropic_messages_optional_request_params.get("context_management")
+        if context_management_param is not None:
+            from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+            
+            transformed_context_management = AnthropicConfig.map_openai_context_management_to_anthropic(
+                context_management_param
+            )
+            if transformed_context_management is not None:
+                anthropic_messages_optional_request_params["context_management"] = transformed_context_management
+
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(

@@ -26,10 +26,15 @@ from litellm.types.utils import (
     CallTypes,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
+    GuardrailTracingDetail,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
-from fastapi.exceptions import HTTPException
+
+try:
+    from fastapi.exceptions import HTTPException
+except ImportError:
+    HTTPException = None  # type: ignore
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -516,9 +521,15 @@ class CustomGuardrail(CustomLogger):
         masked_entity_count: Optional[Dict[str, int]] = None,
         guardrail_provider: Optional[str] = None,
         event_type: Optional[GuardrailEventHooks] = None,
+        tracing_detail: Optional[GuardrailTracingDetail] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
+
+        Args:
+            tracing_detail: Optional typed dict with provider-specific tracing fields
+                (guardrail_id, policy_template, detection_method, confidence_score,
+                classification, match_details, patterns_checked, alert_recipients).
         """
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
@@ -555,6 +566,7 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
+            **(tracing_detail or {}),
         )
 
         def _append_guardrail_info(container: dict) -> None:
@@ -664,7 +676,11 @@ class CustomGuardrail(CustomLogger):
 
         if isinstance(e, ModifyResponseException):
             return True
-        if isinstance(e, HTTPException) and e.status_code == 400:
+        if (
+            HTTPException is not None
+            and isinstance(e, HTTPException)
+            and e.status_code == 400
+        ):
             return True
         return False
 
@@ -806,8 +822,8 @@ def log_guardrail_information(func):
         - during_call
         - post_call
     """
-    import asyncio
     import functools
+    import inspect
 
     def _infer_event_type_from_function_name(
         func_name: str,
@@ -888,7 +904,7 @@ def log_guardrail_information(func):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 

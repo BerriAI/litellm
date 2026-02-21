@@ -380,6 +380,7 @@ if TYPE_CHECKING:
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
+from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
@@ -826,7 +827,7 @@ def function_setup(  # noqa: PLR0915
             )
             get_set_callbacks = getattr(sys.modules[__name__], "get_set_callbacks")
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
-        ## ASYNC CALLBACKS
+        ## ASYNC CALLBACKS - safety net for callbacks added via direct append
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
@@ -2177,6 +2178,10 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
         enc = tokenizer_json["tokenizer"].encode(text)
+    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
+    # extract .ids so the return type is always List[int].
+    if hasattr(enc, "ids"):
+        return enc.ids
     return enc
 
 
@@ -2408,6 +2413,7 @@ def supports_response_schema(
         litellm.LlmProviders.FIREWORKS_AI,
         litellm.LlmProviders.LM_STUDIO,
         litellm.LlmProviders.NEBIUS,
+        litellm.LlmProviders.DATABRICKS,
     ]
 
     if custom_llm_provider in PROVIDERS_GLOBALLY_SUPPORT_RESPONSE_SCHEMA:
@@ -5288,6 +5294,9 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost
             # tracking the cost is better than attributing 0 cost to it.
             return True
+        elif custom_llm_provider == "github":
+            # Allow github/<model> aliases to reuse existing provider metadata.
+            return True
         else:
             return False
 
@@ -8145,6 +8154,8 @@ class ProviderConfigManager:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageRerankConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            return litellm.IBMWatsonXRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -8262,6 +8273,11 @@ class ProviderConfigManager:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            # Databricks Responses API is only compatible with OpenAI GPT models
+            if model and "gpt" in model.lower():
+                return litellm.DatabricksResponsesAPIConfig()
+            return None
         return None
 
     @staticmethod
@@ -8279,6 +8295,25 @@ class ProviderConfigManager:
         """
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicSkillsConfig()
+        return None
+
+    @staticmethod
+    def get_provider_evals_api_config(
+        provider: LlmProviders,
+    ) -> Optional["BaseEvalsAPIConfig"]:
+        """
+        Get provider-specific Evals API configuration
+
+        Args:
+            provider: The LLM provider
+
+        Returns:
+            Provider-specific Evals API config or None
+        """
+        if litellm.LlmProviders.OPENAI == provider:
+            from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+
+            return OpenAIEvalsConfig()
         return None
 
     @staticmethod
@@ -8746,6 +8781,7 @@ class ProviderConfigManager:
         """
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
@@ -8768,6 +8804,7 @@ class ProviderConfigManager:
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
+            SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

@@ -185,7 +185,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 model_list:
   - model_name: claude-opus-4-6
     litellm_params:
-      model: bedrock/anthropic.claude-opus-4-6-v1:0
+      model: bedrock/anthropic.claude-opus-4-6-v1
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: us-east-1

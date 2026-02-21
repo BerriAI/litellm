@@ -124,6 +124,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                data["tools"] = guardrailed_tools
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(
@@ -194,7 +197,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             openai_tools = self.adapter.translate_anthropic_tools_to_openai(
                 tools=cast(List[AllAnthropicToolsValues], tools)
             )
-            tools_to_check.extend(openai_tools)
+            tools_to_check.extend(openai_tools) # type: ignore
 
     async def _apply_guardrail_responses_to_input(
         self,

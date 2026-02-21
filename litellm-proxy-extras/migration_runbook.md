@@ -2,7 +2,35 @@
 
 This is a runbook for creating and running database migrations for the LiteLLM proxy. For use for litellm engineers only.
 
-## Quick Start
+## Step 0: Sync All `schema.prisma` Files
+
+Before doing anything else, make sure all `schema.prisma` files in the repo are in sync. There are multiple copies that must match:
+
+| File | Purpose |
+|------|---------|
+| `schema.prisma` (repo root) | Source of truth |
+| `litellm/proxy/schema.prisma` | Used by the proxy server |
+| `litellm-proxy-extras/litellm_proxy_extras/schema.prisma` | Used for migration generation |
+
+**Sync process:**
+
+```bash
+# 1. Diff all schema files against the root source of truth
+diff schema.prisma litellm/proxy/schema.prisma
+diff schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma
+
+# 2. If there are differences, copy the root schema to all locations
+cp schema.prisma litellm/proxy/schema.prisma
+cp schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma
+
+# 3. Verify all files are now identical
+diff schema.prisma litellm/proxy/schema.prisma && echo "proxy schema in sync" || echo "MISMATCH"
+diff schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma && echo "extras schema in sync" || echo "MISMATCH"
+```
+
+> **Do NOT proceed to migration generation until all schema files are identical.**
+
+## Step 1: Quick Start — Generate Migration
 
 ```bash
 # Install deps (one time)
@@ -43,8 +71,13 @@ rm -rf litellm-proxy-extras/litellm_proxy_extras/migrations/[empty_dir]
 
 ## Rules
 
-- Update `schema.prisma` first
+- Sync all `schema.prisma` files first (Step 0)
+- Update `schema.prisma` at the repo root first, then sync copies
 - Review generated SQL before committing
 - Use descriptive migration names
 - Never edit existing migration files
 - Commit schema + migration together
+
+---
+
+**Done with migration?** See [build_and_publish.md](./build_and_publish.md) to publish a new `litellm-proxy-extras` package.

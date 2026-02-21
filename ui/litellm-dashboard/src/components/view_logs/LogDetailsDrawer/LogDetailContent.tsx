@@ -4,6 +4,7 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
+import CompliancePanel from "../GuardrailViewer/CompliancePanel";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -40,6 +41,7 @@ export interface LogDetailContentProps {
   onOpenSettings?: () => void;
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
+  accessToken?: string | null;
 }
 
 /**
@@ -50,7 +52,7 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -135,7 +137,13 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       <MetricsSection logEntry={logEntry} metadata={metadata} />
 
       {/* Cost Breakdown */}
-      <CostBreakdownViewer costBreakdown={metadata?.cost_breakdown} totalSpend={logEntry.spend || 0} />
+      <CostBreakdownViewer
+        costBreakdown={metadata?.cost_breakdown}
+        totalSpend={logEntry.spend ?? 0}
+        promptTokens={logEntry.prompt_tokens}
+        completionTokens={logEntry.completion_tokens}
+        cacheHit={logEntry.cache_hit}
+      />
 
       {/* Tools */}
       <ToolsSection log={logEntry} />
@@ -164,7 +172,21 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       )}
 
       {/* Guardrail Data */}
-      {hasGuardrailData && <GuardrailViewer data={guardrailInfo} />}
+      {hasGuardrailData && (
+        <div id="guardrail-section">
+          <GuardrailViewer
+            data={guardrailInfo}
+            accessToken={accessToken ?? null}
+            logEntry={{
+              request_id: logEntry.request_id,
+              user: logEntry.user,
+              model: logEntry.model,
+              startTime: logEntry.startTime,
+              metadata: logEntry.metadata,
+            }}
+          />
+        </div>
+      )}
 
       {/* Vector Store Data */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
@@ -219,9 +241,14 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
 }
 
 function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: number }) {
+  const handleClick = () => {
+    const el = document.getElementById("guardrail-section");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
     <Space size={SPACING_MEDIUM}>
-      <span>{label}</span>
+      <a onClick={handleClick} style={{ cursor: "pointer" }}>{label}</a>
       {maskedCount > 0 && (
         <Tag color="blue">
           {maskedCount} masked
@@ -237,9 +264,17 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
     (metadata?.additional_usage_values?.cache_read_input_tokens &&
       metadata.additional_usage_values.cache_read_input_tokens > 0);
 
+  const cacheHitValue = String(logEntry.cache_hit ?? "None");
+  const cacheHitColor =
+    cacheHitValue.toLowerCase() === "true"
+      ? "green"
+      : cacheHitValue.toLowerCase() === "false"
+        ? "red"
+        : "default";
+
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Card title="Metrics" size="small" bordered={false} style={{ marginBottom: 0 }}>
+      <Card title="Metrics" size="small" style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
           <Descriptions.Item label="Tokens">
             <TokenFlow
@@ -254,7 +289,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
           {hasCacheActivity && (
             <>
               <Descriptions.Item label="Cache Hit">
-                <Tag color={logEntry.cache_hit ? "green" : "default"}>{logEntry.cache_hit || "None"}</Tag>
+                <Tag color={cacheHitColor}>{cacheHitValue}</Tag>
               </Descriptions.Item>
               {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
                 <Descriptions.Item label="Cache Read Tokens">
@@ -274,6 +309,14 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
               {metadata.litellm_overhead_time_ms.toFixed(2)} ms
             </Descriptions.Item>
           )}
+
+          <Descriptions.Item label="Retries">
+            {metadata?.attempted_retries !== undefined && metadata?.attempted_retries !== null
+              ? metadata.attempted_retries > 0
+                ? <>{metadata.attempted_retries}{metadata.max_retries !== undefined && metadata.max_retries !== null ? ` / ${metadata.max_retries}` : ''}</>
+                : <Tag color="green">None</Tag>
+              : "-"}
+          </Descriptions.Item>
 
           <Descriptions.Item label="Start Time">
             {moment(logEntry.startTime).format("YYYY-MM-DDTHH:mm:ss.SSS[Z]")}
@@ -310,12 +353,24 @@ function RequestResponseSection({
     return JSON.stringify(data, null, 2);
   };
 
-  const totalSpend = logEntry.spend || 0;
+  const totalSpend = logEntry.spend ?? 0;
   const promptTokens = logEntry.prompt_tokens || 0;
   const completionTokens = logEntry.completion_tokens || 0;
   const totalTokens = promptTokens + completionTokens;
-  const inputCost = totalTokens > 0 ? (totalSpend * promptTokens) / totalTokens : 0;
-  const outputCost = totalTokens > 0 ? (totalSpend * completionTokens) / totalTokens : 0;
+  const costBreakdown = logEntry.metadata?.cost_breakdown;
+  const useCostBreakdown =
+    costBreakdown?.input_cost !== undefined &&
+    costBreakdown?.output_cost !== undefined;
+  const inputCost = useCostBreakdown
+    ? (costBreakdown!.input_cost ?? 0)
+    : totalTokens > 0
+      ? (totalSpend * promptTokens) / totalTokens
+      : 0;
+  const outputCost = useCostBreakdown
+    ? (costBreakdown!.output_cost ?? 0)
+    : totalTokens > 0
+      ? (totalSpend * completionTokens) / totalTokens
+      : 0;
 
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
@@ -405,6 +460,42 @@ function RequestResponseSection({
           },
         ]}
       />
+    </div>
+  );
+}
+
+export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
+  const allPassed = guardrailEntries.every((e) => {
+    const status = e?.guardrail_status || e?.status;
+    return status === "pass" || status === "passed" || status === "success";
+  });
+
+  const handleClick = () => {
+    const el = document.getElementById("guardrail-section");
+    if (el) el.scrollIntoView({ behavior: "smooth" });
+  };
+
+  return (
+    <div style={{ textAlign: "left", marginBottom: 12 }}>
+      <div
+        onClick={handleClick}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 12px",
+          borderRadius: 16,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 500,
+          backgroundColor: allPassed ? "#f0fdf4" : "#fef2f2",
+          color: allPassed ? "#15803d" : "#b91c1c",
+          border: `1px solid ${allPassed ? "#bbf7d0" : "#fecaca"}`,
+        }}
+      >
+        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+        <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
+      </div>
     </div>
   );
 }
