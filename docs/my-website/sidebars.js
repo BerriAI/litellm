@@ -1130,6 +1130,7 @@ const sidebars = {
             "troubleshoot/prisma_migrations",
           ],
         },
+        "troubleshoot/rollback",
         "troubleshoot",
       ],
     },
