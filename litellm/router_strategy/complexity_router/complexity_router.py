@@ -18,9 +18,6 @@ from .config import (
     ComplexityRouterConfig,
     ComplexityTier,
     DEFAULT_CODE_KEYWORDS,
-    DEFAULT_COMPLEXITY_CONFIG,
-    DEFAULT_CREATIVE_KEYWORDS,
-    DEFAULT_MULTI_STEP_PATTERNS,
     DEFAULT_REASONING_KEYWORDS,
     DEFAULT_SIMPLE_KEYWORDS,
     DEFAULT_TECHNICAL_KEYWORDS,
@@ -79,11 +76,11 @@ class ComplexityRouter(CustomLogger):
         self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
         
-        # Parse config
+        # Parse config - always create a new instance to avoid singleton mutation
         if complexity_router_config:
             self.config = ComplexityRouterConfig(**complexity_router_config)
         else:
-            self.config = DEFAULT_COMPLEXITY_CONFIG
+            self.config = ComplexityRouterConfig()
         
         # Override default_model if provided
         if default_model:
@@ -342,26 +339,18 @@ class ComplexityRouter(CustomLogger):
             )
             return None
         
-        # Extract user message and optional system prompt
+        # Extract the last user message and the last system prompt
         user_message = ""
         system_prompt = None
         
-        for msg in messages:
+        for msg in reversed(messages):
             role = msg.get("role", "")
             content = msg.get("content", "")
             if isinstance(content, str):
-                if role == "user":
+                if role == "user" and not user_message:
                     user_message = content
-                elif role == "system":
+                elif role == "system" and system_prompt is None:
                     system_prompt = content
-        
-        # Use the last user message if there are multiple
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    user_message = content
-                    break
         
         if not user_message:
             verbose_router_logger.debug(

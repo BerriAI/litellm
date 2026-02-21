@@ -99,7 +99,9 @@ class TestComplexityRouterInit:
             litellm_router_instance=mock_router_instance,
         )
         assert router.model_name == "test-router"
-        assert router.config == DEFAULT_COMPLEXITY_CONFIG
+        # Should have equivalent default values but NOT be the same instance
+        assert router.config.tiers == DEFAULT_COMPLEXITY_CONFIG.tiers
+        assert router.config is not DEFAULT_COMPLEXITY_CONFIG  # Not a singleton
 
     def test_init_with_default_model(self, mock_router_instance, basic_config):
         """Test initialization with default_model override."""
@@ -439,6 +441,133 @@ class TestConfigOverrides:
         tier, score, signals = router.classify(long_prompt)
         # Should get token length signal indicating "long"
         assert any("long" in s.lower() if s else False for s in signals), f"Expected 'long' signal, got {signals}"
+
+
+class TestAsyncPreRoutingHookEdgeCases:
+    """Test edge cases for async_pre_routing_hook method."""
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_multi_turn_conversation(self, complexity_router):
+        """Test pre-routing hook with multi-turn conversation uses last user message."""
+        messages = [
+            {"role": "user", "content": "What is Python?"},
+            {"role": "assistant", "content": "Python is a programming language."},
+            {"role": "user", "content": "Hello!"},  # Last user message - simple
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"  # SIMPLE tier based on last message
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_list_content_skipped(self, complexity_router):
+        """Test pre-routing hook handles list content (skips non-string)."""
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "What is this?"}]},
+            {"role": "user", "content": "Hello!"},
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert result is not None
+        # Should use the string content "Hello!"
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_no_user_message(self, complexity_router):
+        """Test pre-routing hook returns None when no user message found."""
+        messages = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_only_list_content(self, complexity_router):
+        """Test pre-routing hook returns None when all user content is list type."""
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        # Should return None since we can't extract string content
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_preserves_messages(self, complexity_router):
+        """Test pre-routing hook preserves original messages in response."""
+        messages = [
+            {"role": "system", "content": "Be helpful"},
+            {"role": "user", "content": "Hello!"},
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert result is not None
+        assert result.messages == messages
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_empty_string_content(self, complexity_router):
+        """Test pre-routing hook handles empty string content."""
+        messages = [
+            {"role": "user", "content": ""},
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        # Empty content should still route (to SIMPLE tier)
+        assert result is not None
+
+
+class TestSingletonMutation:
+    """Test that the config singleton is not mutated."""
+
+    def test_default_config_not_mutated(self, mock_router_instance):
+        """Test that creating routers without config doesn't mutate defaults."""
+        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+        
+        # Get original default
+        original_default = ComplexityRouterConfig().default_model
+        
+        # Create router with empty config and custom default_model
+        router1 = ComplexityRouter(
+            model_name="test-router-1",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=None,
+            default_model="custom-fallback",
+        )
+        
+        # Create another router without config
+        router2 = ComplexityRouter(
+            model_name="test-router-2",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=None,
+        )
+        
+        # Router2 should have fresh defaults, not router1's custom default_model
+        # Create a fresh config to check
+        fresh_config = ComplexityRouterConfig()
+        assert fresh_config.default_model == original_default
+        assert router1.config.default_model == "custom-fallback"
+        # Router2's config should be independent
+        assert router2.config is not router1.config
 
 
 class TestEdgeCases:

@@ -23,13 +23,13 @@ class ComplexityTier(str, Enum):
 DEFAULT_CODE_KEYWORDS: List[str] = [
     "function", "class", "def ", "const ", "let ", "var ",
     "import ", "export ", "return ", "async ", "await ",
-    "try", "catch", "exception", "error", "debug",
-    "api", "endpoint", "request", "response",
-    "database", "sql", "query", "schema",
+    " try ", "catch", "exception", " error ", "debug",
+    " api ", "endpoint", "request", "response",
+    "database", " sql ", "query ", "schema",
     "algorithm", "implement", "refactor", "optimize",
-    "python", "javascript", "typescript", "java", "rust", "golang",
-    "react", "vue", "angular", "node", "docker", "kubernetes",
-    "git", "commit", "merge", "branch", "pull request",
+    "python", "javascript", "typescript", " java ", "rust", "golang",
+    "react", " vue ", "angular", " node ", "docker", "kubernetes",
+    " git ", "commit", "merge", "branch", "pull request",
 ]
 
 DEFAULT_REASONING_KEYWORDS: List[str] = [
@@ -60,7 +60,7 @@ DEFAULT_SIMPLE_KEYWORDS: List[str] = [
     "yes or no", "true or false",
     "simple", "brief", "short", "quick",
     "hello", "hi ", "hey ", "thanks", "thank you",
-    "goodbye", "bye", "ok", "okay",
+    "goodbye", "bye ", " ok ", "okay",
 ]
 
 DEFAULT_MULTI_STEP_PATTERNS: List[str] = [
