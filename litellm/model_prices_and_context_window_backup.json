@@ -26016,6 +26016,23 @@
         "supports_prompt_caching": false,
         "supports_computer_use": false
     },
+    "openrouter/minimax/minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.1e-06,
+        "cache_read_input_token_cost": 1.5e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://openrouter.ai/minimax/minimax-m2.5",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_prompt_caching": true,
+        "supports_computer_use": false
+    },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
         "input_cost_per_token": 6.7e-07,
         "litellm_provider": "ovhcloud",
