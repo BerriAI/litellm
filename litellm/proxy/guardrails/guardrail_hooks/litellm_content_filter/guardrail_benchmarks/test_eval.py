@@ -20,7 +20,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, List
 
 import pytest
 from fastapi import HTTPException
@@ -59,7 +59,7 @@ def _run(checker, text: str) -> dict:
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 403:
-            detail = e.detail if isinstance(e.detail, dict) else {}
+            detail: dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
                 "score": detail.get("score", 1.0),
@@ -216,7 +216,7 @@ def _content_filter(category: str):
 
     guardrail = ContentFilterGuardrail(
         guardrail_name=f"{category}_eval",
-        categories=[  # type: ignore[arg-type]
+        categories=[  # type: ignore[arg-type,list-item]
             {
                 "category": category,
                 "enabled": True,
