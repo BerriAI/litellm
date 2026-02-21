@@ -14,8 +14,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (
-    BaseCompetitorIntentChecker, _compile_marker, _count_signals,
-    _word_boundary_match)
+    BaseCompetitorIntentChecker,
+    _compile_marker,
+    _count_signals,
+    _word_boundary_match,
+)
 
 # Location/travel context: prepositions, travel verbs, booking nouns, entry/geo nouns.
 # No place-name list; these patterns detect "destination context" generically.
@@ -132,7 +135,7 @@ def _load_competitors_excluding_brand(brand_self: List[str]) -> List[str]:
             continue
         match_str = entry.get("match") or ""
         variants = [v.strip().lower() for v in match_str.split("|") if v.strip()]
-        words_in_match = set()
+        words_in_match: set[str] = set()
         for v in variants:
             words_in_match.update(v.split())
         if brand_set & words_in_match or any(v in brand_set for v in variants):
