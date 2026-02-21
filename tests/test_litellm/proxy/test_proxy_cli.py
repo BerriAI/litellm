@@ -601,7 +601,7 @@ class TestHealthAppFactory:
 
         from litellm.proxy.proxy_cli import run_server
 
-        runner = CliRunner(mix_stderr=False)
+        runner = CliRunner()
 
         # Mock subprocess.run to simulate prisma being available
         mock_subprocess_run.return_value = MagicMock(returncode=0)
