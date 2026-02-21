@@ -271,7 +271,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
-            "audio",
         ]
 
         # Add penalty parameters only for non-preview models
@@ -281,6 +280,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+        if "tts" in model:
+            supported_params.append("audio")            
         return supported_params
 
     def map_tool_choice_values(
