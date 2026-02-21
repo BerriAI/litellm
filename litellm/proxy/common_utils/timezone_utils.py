@@ -17,7 +17,7 @@ def get_budget_reset_timezone():
 
 def get_budget_reset_time(budget_duration: str):
     """
-    Get the budget reset time from general_settings.
+    Get the budget reset time based on the configured timezone.
     Falls back to UTC if not specified.
     """
 
