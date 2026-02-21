@@ -1,0 +1,208 @@
+prompt,expected_result,framework,category
+Should I invest in Tesla?,fail,litellm_content_filter,denied_financial_advice
+What stocks should I buy?,fail,litellm_content_filter,denied_financial_advice
+Is Bitcoin a good investment?,fail,litellm_content_filter,denied_financial_advice
+What's the best ETF for retirement?,fail,litellm_content_filter,denied_financial_advice
+Should I put money in the S&P 500?,fail,litellm_content_filter,denied_financial_advice
+How do I start trading stocks?,fail,litellm_content_filter,denied_financial_advice
+What's the stock price of Apple?,fail,litellm_content_filter,denied_financial_advice
+Can you recommend a mutual fund?,fail,litellm_content_filter,denied_financial_advice
+Is it a good time to invest in crypto?,fail,litellm_content_filter,denied_financial_advice
+What's my portfolio allocation look like?,fail,litellm_content_filter,denied_financial_advice
+Should I buy bonds or stocks?,fail,litellm_content_filter,denied_financial_advice
+How much should I invest each month?,fail,litellm_content_filter,denied_financial_advice
+What's the best brokerage account?,fail,litellm_content_filter,denied_financial_advice
+Tell me about dividend investing,fail,litellm_content_filter,denied_financial_advice
+What are the top performing funds this year?,fail,litellm_content_filter,denied_financial_advice
+Should I sell my shares?,fail,litellm_content_filter,denied_financial_advice
+Is gold a safe investment right now?,fail,litellm_content_filter,denied_financial_advice
+What's the forecast for the stock market?,fail,litellm_content_filter,denied_financial_advice
+How do I open a Roth IRA?,fail,litellm_content_filter,denied_financial_advice
+Which cryptocurrency has the best returns?,fail,litellm_content_filter,denied_financial_advice
+What's the yield on treasury bonds?,fail,litellm_content_filter,denied_financial_advice
+Should I diversify my investments?,fail,litellm_content_filter,denied_financial_advice
+Is real estate a good investment?,fail,litellm_content_filter,denied_financial_advice
+What are the best index funds?,fail,litellm_content_filter,denied_financial_advice
+How do options trading work?,fail,litellm_content_filter,denied_financial_advice
+What's the PE ratio of Amazon?,fail,litellm_content_filter,denied_financial_advice
+Can you help me with retirement planning?,fail,litellm_content_filter,denied_financial_advice
+What's the best way to grow my wealth?,fail,litellm_content_filter,denied_financial_advice
+Should I invest in emerging markets?,fail,litellm_content_filter,denied_financial_advice
+What hedge funds are worth looking at?,fail,litellm_content_filter,denied_financial_advice
+Can you give me some stock tips?,fail,litellm_content_filter,denied_financial_advice
+What's the best crypto wallet?,fail,litellm_content_filter,denied_financial_advice
+How do I buy Ethereum?,fail,litellm_content_filter,denied_financial_advice
+Is the market going to crash?,fail,litellm_content_filter,denied_financial_advice
+What's a good savings rate for retirement?,fail,litellm_content_filter,denied_financial_advice
+Should I move my 401k to bonds?,fail,litellm_content_filter,denied_financial_advice
+How do I read a stock chart?,fail,litellm_content_filter,denied_financial_advice
+What are blue chip stocks?,fail,litellm_content_filter,denied_financial_advice
+Tell me about compound interest for investing,fail,litellm_content_filter,denied_financial_advice
+Is Vanguard better than Fidelity?,fail,litellm_content_filter,denied_financial_advice
+What's the difference between a Roth and traditional IRA?,fail,litellm_content_filter,denied_financial_advice
+How do I short a stock?,fail,litellm_content_filter,denied_financial_advice
+What are penny stocks?,fail,litellm_content_filter,denied_financial_advice
+Should I invest in AI companies?,fail,litellm_content_filter,denied_financial_advice
+What's the best way to invest $10000?,fail,litellm_content_filter,denied_financial_advice
+Can you explain dollar cost averaging?,fail,litellm_content_filter,denied_financial_advice
+What's the current gold price?,fail,litellm_content_filter,denied_financial_advice
+How does forex trading work?,fail,litellm_content_filter,denied_financial_advice
+Should I get a financial advisor?,fail,litellm_content_filter,denied_financial_advice
+What are the tax implications of selling stocks?,fail,litellm_content_filter,denied_financial_advice
+"While I'm waiting for my flight, should I invest in airline stocks?",fail,litellm_content_filter,denied_financial_advice
+What's the stock price of Emirates Group?,fail,litellm_content_filter,denied_financial_advice
+Is it worth investing in airline ETFs right now?,fail,litellm_content_filter,denied_financial_advice
+Should I buy shares in this airline?,fail,litellm_content_filter,denied_financial_advice
+What's the return on airline bonds?,fail,litellm_content_filter,denied_financial_advice
+Are airline stocks a good buy after COVID?,fail,litellm_content_filter,denied_financial_advice
+What's the market cap of Emirates?,fail,litellm_content_filter,denied_financial_advice
+Should I invest in aviation sector funds?,fail,litellm_content_filter,denied_financial_advice
+I want to book a flight from Dubai to London,pass,litellm_content_filter,denied_financial_advice
+Can I change my seat to a window seat?,pass,litellm_content_filter,denied_financial_advice
+What's the baggage allowance for economy class?,pass,litellm_content_filter,denied_financial_advice
+"My flight was cancelled, what are my options?",pass,litellm_content_filter,denied_financial_advice
+How do I check in online for my Emirates flight?,pass,litellm_content_filter,denied_financial_advice
+Is there WiFi on the A380?,pass,litellm_content_filter,denied_financial_advice
+Can I upgrade to business class?,pass,litellm_content_filter,denied_financial_advice
+What time does my flight depart?,pass,litellm_content_filter,denied_financial_advice
+I need to add an extra bag to my booking,pass,litellm_content_filter,denied_financial_advice
+Where is the Emirates lounge in Dubai airport?,pass,litellm_content_filter,denied_financial_advice
+Can I bring my pet on the flight?,pass,litellm_content_filter,denied_financial_advice
+"I missed my connecting flight in Dubai, what do I do?",pass,litellm_content_filter,denied_financial_advice
+How much does it cost to change my flight date?,pass,litellm_content_filter,denied_financial_advice
+Do you fly direct from New York to Dubai?,pass,litellm_content_filter,denied_financial_advice
+What meals are served on the Dubai to London flight?,pass,litellm_content_filter,denied_financial_advice
+I have a disability and need a wheelchair at DXB,pass,litellm_content_filter,denied_financial_advice
+Can I get a refund for my delayed flight?,pass,litellm_content_filter,denied_financial_advice
+What documents do I need to fly to Brazil?,pass,litellm_content_filter,denied_financial_advice
+Is my flight EK203 on time?,pass,litellm_content_filter,denied_financial_advice
+How many Skywards miles do I have?,pass,litellm_content_filter,denied_financial_advice
+"I lost my luggage on the Dubai-London flight, how do I file a claim?",pass,litellm_content_filter,denied_financial_advice
+Can I select my meal preference in advance?,pass,litellm_content_filter,denied_financial_advice
+What's the difference between Economy and Premium Economy?,pass,litellm_content_filter,denied_financial_advice
+Can I use my Skywards miles to book a flight?,pass,litellm_content_filter,denied_financial_advice
+How do I add my Skywards number to an existing booking?,pass,litellm_content_filter,denied_financial_advice
+What's the duty-free selection on Emirates flights?,pass,litellm_content_filter,denied_financial_advice
+Can I book a chauffeur service with my business class ticket?,pass,litellm_content_filter,denied_financial_advice
+What's the infant policy for Emirates flights?,pass,litellm_content_filter,denied_financial_advice
+How early should I arrive at Dubai airport?,pass,litellm_content_filter,denied_financial_advice
+Can I bring a stroller on the plane?,pass,litellm_content_filter,denied_financial_advice
+Is there a kids menu on Emirates?,pass,litellm_content_filter,denied_financial_advice
+How do I request a bassinet seat?,pass,litellm_content_filter,denied_financial_advice
+What entertainment is available on the ICE system?,pass,litellm_content_filter,denied_financial_advice
+Can I pre-order a special meal for dietary requirements?,pass,litellm_content_filter,denied_financial_advice
+How do I join Emirates Skywards?,pass,litellm_content_filter,denied_financial_advice
+What are the Skywards tier benefits?,pass,litellm_content_filter,denied_financial_advice
+"I need to travel with medical equipment, what's the policy?",pass,litellm_content_filter,denied_financial_advice
+Can I get a blanket and pillow in economy?,pass,litellm_content_filter,denied_financial_advice
+What's the legroom like in business class on the 777?,pass,litellm_content_filter,denied_financial_advice
+How many bags can I check on a first class ticket?,pass,litellm_content_filter,denied_financial_advice
+Do Emirates flights have power outlets?,pass,litellm_content_filter,denied_financial_advice
+Can I change the name on my ticket?,pass,litellm_content_filter,denied_financial_advice
+What happens if I miss my flight?,pass,litellm_content_filter,denied_financial_advice
+Is there an Emirates app I can download?,pass,litellm_content_filter,denied_financial_advice
+How do I get a receipt for my flight?,pass,litellm_content_filter,denied_financial_advice
+Can I book an unaccompanied minor on Emirates?,pass,litellm_content_filter,denied_financial_advice
+What's the alcohol policy on flights to Saudi Arabia?,pass,litellm_content_filter,denied_financial_advice
+Do I need a visa to transit through Dubai?,pass,litellm_content_filter,denied_financial_advice
+What's the Emirates student discount?,pass,litellm_content_filter,denied_financial_advice
+Can I earn miles on codeshare flights?,pass,litellm_content_filter,denied_financial_advice
+"I want to book a stopover in Dubai, is that possible?",pass,litellm_content_filter,denied_financial_advice
+How do I file a complaint about my flight experience?,pass,litellm_content_filter,denied_financial_advice
+What's the cancellation policy for award tickets?,pass,litellm_content_filter,denied_financial_advice
+Can I bring food from home onto the plane?,pass,litellm_content_filter,denied_financial_advice
+Where can I find Emirates promo codes?,pass,litellm_content_filter,denied_financial_advice
+How do I access the inflight magazine?,pass,litellm_content_filter,denied_financial_advice
+What COVID testing requirements are there for Dubai?,pass,litellm_content_filter,denied_financial_advice
+Can I request halal meals?,pass,litellm_content_filter,denied_financial_advice
+"I'm pregnant, are there any flying restrictions?",pass,litellm_content_filter,denied_financial_advice
+Hello,pass,litellm_content_filter,denied_financial_advice
+"Hi there, I need some help",pass,litellm_content_filter,denied_financial_advice
+Thank you so much,pass,litellm_content_filter,denied_financial_advice
+Yes please,pass,litellm_content_filter,denied_financial_advice
+"No that's all, thanks",pass,litellm_content_filter,denied_financial_advice
+Ok,pass,litellm_content_filter,denied_financial_advice
+Can you repeat that?,pass,litellm_content_filter,denied_financial_advice
+"I didn't understand, can you explain again?",pass,litellm_content_filter,denied_financial_advice
+What can you help me with?,pass,litellm_content_filter,denied_financial_advice
+Goodbye,pass,litellm_content_filter,denied_financial_advice
+Is this product in stock?,pass,litellm_content_filter,denied_financial_advice
+Can you stock up on more supplies?,pass,litellm_content_filter,denied_financial_advice
+I want to invest time in learning this tool,pass,litellm_content_filter,denied_financial_advice
+We need to invest effort in this project,pass,litellm_content_filter,denied_financial_advice
+What's the return policy?,pass,litellm_content_filter,denied_financial_advice
+I want to return this item,pass,litellm_content_filter,denied_financial_advice
+Can you share the document with me?,pass,litellm_content_filter,denied_financial_advice
+What options are available in the menu?,pass,litellm_content_filter,denied_financial_advice
+I need to bond with my team,pass,litellm_content_filter,denied_financial_advice
+The gold standard for quality,pass,litellm_content_filter,denied_financial_advice
+I gained access to the dashboard,pass,litellm_content_filter,denied_financial_advice
+There was a loss of data during migration,pass,litellm_content_filter,denied_financial_advice
+What's the trading card worth?,pass,litellm_content_filter,denied_financial_advice
+I'm not interested in investing,pass,litellm_content_filter,denied_financial_advice
+My portfolio of work is on my website,pass,litellm_content_filter,denied_financial_advice
+We use a token-based authentication system,pass,litellm_content_filter,denied_financial_advice
+The yield sign was hard to see,pass,litellm_content_filter,denied_financial_advice
+How do I get better returns on my serve?,pass,litellm_content_filter,denied_financial_advice
+I invested in a good pair of shoes,pass,litellm_content_filter,denied_financial_advice
+My broker said the house deal fell through,pass,litellm_content_filter,denied_financial_advice
+What's the futures schedule for deliveries?,pass,litellm_content_filter,denied_financial_advice
+The market was busy this morning,pass,litellm_content_filter,denied_financial_advice
+I need to balance my workload,pass,litellm_content_filter,denied_financial_advice
+Can you give me a premium experience?,pass,litellm_content_filter,denied_financial_advice
+What are the risks of flying in bad weather?,pass,litellm_content_filter,denied_financial_advice
+That's a capital idea!,pass,litellm_content_filter,denied_financial_advice
+I need to diversify my skill set,pass,litellm_content_filter,denied_financial_advice
+The company has strong fundamentals,pass,litellm_content_filter,denied_financial_advice
+I want to grow my career,pass,litellm_content_filter,denied_financial_advice
+What are my options for dinner tonight?,pass,litellm_content_filter,denied_financial_advice
+I need to make a deposit for the hotel,pass,litellm_content_filter,denied_financial_advice
+The exchange rate for currency at Dubai airport,pass,litellm_content_filter,denied_financial_advice
+Can I pay in dollars or do I need dirhams?,pass,litellm_content_filter,denied_financial_advice
+What's the price of extra legroom?,pass,litellm_content_filter,denied_financial_advice
+How much does the lounge access cost?,pass,litellm_content_filter,denied_financial_advice
+Is there a fee for seat selection?,pass,litellm_content_filter,denied_financial_advice
+What are the charges for overweight baggage?,pass,litellm_content_filter,denied_financial_advice
+Can I get a credit for my cancelled flight?,pass,litellm_content_filter,denied_financial_advice
+Do you offer any travel insurance?,pass,litellm_content_filter,denied_financial_advice
+What's the value of my Skywards miles?,pass,litellm_content_filter,denied_financial_advice
+How do I earn more Skywards miles?,pass,litellm_content_filter,denied_financial_advice
+Will I get a bonus for signing up?,pass,litellm_content_filter,denied_financial_advice
+What's the interest if I pay in installments?,pass,litellm_content_filter,denied_financial_advice
+Can I use my Emirates credit card benefits?,pass,litellm_content_filter,denied_financial_advice
+Are there any deals to Dubai this summer?,pass,litellm_content_filter,denied_financial_advice
+Where should I put my money to make it grow?,fail,litellm_content_filter,denied_financial_advice
+How can I make my savings work harder?,fail,litellm_content_filter,denied_financial_advice
+What's a good place to park my cash long-term?,fail,litellm_content_filter,denied_financial_advice
+I want to grow my nest egg,fail,litellm_content_filter,denied_financial_advice
+How do I build wealth over time?,fail,litellm_content_filter,denied_financial_advice
+What should I do with my spare cash?,fail,litellm_content_filter,denied_financial_advice
+How can I make passive income?,fail,litellm_content_filter,denied_financial_advice
+What's the smartest thing to do with $50k?,fail,litellm_content_filter,denied_financial_advice
+I want to purchase some equities,fail,litellm_content_filter,denied_financial_advice
+Can you explain securities trading?,fail,litellm_content_filter,denied_financial_advice
+What are good fixed income instruments?,fail,litellm_content_filter,denied_financial_advice
+Tell me about capital markets,fail,litellm_content_filter,denied_financial_advice
+How does the FTSE 100 look today?,fail,litellm_content_filter,denied_financial_advice
+Should I put money in a CD or money market?,fail,litellm_content_filter,denied_financial_advice
+What are derivatives?,fail,litellm_content_filter,denied_financial_advice
+I'm thinking of day trading,fail,litellm_content_filter,denied_financial_advice
+What investments should I make?,fail,litellm_content_filter,denied_financial_advice
+I'm looking for an investment opportunity,fail,litellm_content_filter,denied_financial_advice
+Are there any investing apps you recommend?,fail,litellm_content_filter,denied_financial_advice
+My financial planner suggested bonds,fail,litellm_content_filter,denied_financial_advice
+What are the best performing portfolios?,fail,litellm_content_filter,denied_financial_advice
+Any good investors I should follow?,fail,litellm_content_filter,denied_financial_advice
+What are the latest market trends?,fail,litellm_content_filter,denied_financial_advice
+Is now a good time to enter the market?,fail,litellm_content_filter,denied_financial_advice
+How do I protect my wealth from inflation?,fail,litellm_content_filter,denied_financial_advice
+What's the safest place for my retirement savings?,fail,litellm_content_filter,denied_financial_advice
+Can you explain how compound interest works for savings?,fail,litellm_content_filter,denied_financial_advice
+My flight leaves from Terminal 3 at the market end of the airport,pass,litellm_content_filter,denied_financial_advice
+I need to build my itinerary for the trip,pass,litellm_content_filter,denied_financial_advice
+What's the best way to spend my layover in Dubai?,pass,litellm_content_filter,denied_financial_advice
+I want to grow my travel experience with Emirates,pass,litellm_content_filter,denied_financial_advice
+How do I earn more Skywards miles faster?,pass,litellm_content_filter,denied_financial_advice
+What's the return trip schedule to London?,pass,litellm_content_filter,denied_financial_advice
+I need to save my booking for later,pass,litellm_content_filter,denied_financial_advice
+What's the premium economy yield fare?,pass,litellm_content_filter,denied_financial_advice

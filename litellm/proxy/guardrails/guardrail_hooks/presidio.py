@@ -385,6 +385,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                         continue
                 return final_results
+        except GuardrailRaisedException:
+            # Re-raise GuardrailRaisedException without wrapping
+            raise
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
             # contain API keys or other secrets) in error responses.

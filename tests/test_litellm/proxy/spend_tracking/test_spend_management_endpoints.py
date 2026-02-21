@@ -15,7 +15,6 @@ sys.path.insert(
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-
 import litellm.proxy.proxy_server as ps
 
 
@@ -288,6 +287,20 @@ ignored_keys = [
     "metadata.additional_usage_values.speed",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.user_api_key",
+    "metadata.user_api_key_alias",
+    "metadata.user_api_key_team_id",
+    "metadata.user_api_key_project_id",
+    "metadata.user_api_key_org_id",
+    "metadata.user_api_key_user_id",
+    "metadata.user_api_key_team_alias",
+    "metadata.spend_logs_metadata",
+    "metadata.requester_ip_address",
+    "metadata.status",
+    "metadata.proxy_server_request",
+    "metadata.error_information",
+    "metadata.attempted_retries",
+    "metadata.max_retries",
 ]
 
 MODEL_LIST = [
@@ -1185,7 +1198,25 @@ async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
     assert data["data"][0]["api_key"] == "sk-test-key-1"
 
 
+async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
+    """Poll until mock has been called at least once, or timeout."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if mock.call_count > 0:
+            return
+        await asyncio.sleep(interval)
+    mock.assert_called_once()  # will raise with a clear message
+
+
 class TestSpendLogsPayload:
+    def setup_method(self):
+        self._original_callbacks = litellm.callbacks[:]
+
+    def teardown_method(self):
+        litellm.callbacks = self._original_callbacks
+
     @pytest.mark.asyncio
     async def test_spend_logs_payload_e2e(self):
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
@@ -1204,9 +1235,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hello, world!"
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1264,7 +1293,7 @@ class TestSpendLogsPayload:
         mock_response.json.return_value = {
             "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
             "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-4-sonnet-20250514",
             "role": "assistant",
             "stop_reason": "end_turn",
             "stop_sequence": None,
@@ -1291,7 +1320,7 @@ class TestSpendLogsPayload:
             client, "post", side_effect=self.mock_anthropic_response
         ):
             response = await litellm.acompletion(
-                model="claude-3-7-sonnet-20250219",
+                model="claude-4-sonnet-20250514",
                 messages=[{"role": "user", "content": "Hello, world!"}],
                 metadata={"user_api_key_end_user_id": "test_user_1"},
                 client=client,
@@ -1299,9 +1328,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hi! My name is Claude."
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1320,10 +1347,10 @@ class TestSpendLogsPayload:
                     "completionStartTime": datetime.datetime(
                         2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
                     ),
-                    "model": "claude-3-7-sonnet-20250219",
+                    "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1365,7 +1392,7 @@ class TestSpendLogsPayload:
                 {
                     "model_name": "my-anthropic-model-group",
                     "litellm_params": {
-                        "model": "claude-3-7-sonnet-20250219",
+                        "model": "claude-4-sonnet-20250514",
                     },
                     "model_info": {
                         "id": "my-unique-model-id",
@@ -1391,9 +1418,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hi! My name is Claude."
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1412,10 +1437,10 @@ class TestSpendLogsPayload:
                     "completionStartTime": datetime.datetime(
                         2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
                     ),
-                    "model": "claude-3-7-sonnet-20250219",
+                    "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -2150,3 +2175,58 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
         assert metadata["user_api_key_alias"] == "test-key-1"
         assert "error_information" in metadata
         assert metadata["error_information"]["error_code"] == "500"
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_dict_rows_session_counts():
+    """
+    Regression test: _build_ui_spend_logs_response must enrich session_total_count
+    even when rows are plain dicts (as returned by query_raw) rather than Prisma
+    model instances.  Previously getattr(dict, "session_id", None) silently
+    returned None, so every row got session_total_count=1 and the UI never
+    grouped session rows.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-abc-123"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion"},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "mcp_tool_call"},
+        {"request_id": "req-3", "session_id": None, "call_type": "completion"},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[
+            {"session_id": session_id, "_count": {"session_id": 2}},
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert len(rows) == 3
+
+    # Rows with the shared session_id should have session_total_count=2
+    assert rows[0]["session_total_count"] == 2
+    assert rows[1]["session_total_count"] == 2
+
+    # Row without a session_id defaults to 1
+    assert rows[2]["session_total_count"] == 1
+
+    # group_by should have been called with the session_id
+    mock_prisma.db.litellm_spendlogs.group_by.assert_called_once_with(
+        by=["session_id"],
+        where={"session_id": {"in": [session_id]}},
+        count={"session_id": True},
+    )

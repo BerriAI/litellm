@@ -21,6 +21,10 @@ def test_init_pyroscope_returns_cleanly_when_disabled():
     with patch(
         "litellm.proxy.proxy_server.get_secret_bool",
         return_value=False,
+    ), patch.dict(
+        os.environ,
+        {"LITELLM_ENABLE_PYROSCOPE": "false"},
+        clear=False,
     ):
         ProxyStartupEvent._init_pyroscope()
 
@@ -37,6 +41,7 @@ def test_init_pyroscope_raises_when_enabled_but_missing_app_name():
     ), patch.dict(
         os.environ,
         {
+            "LITELLM_ENABLE_PYROSCOPE": "true",
             "PYROSCOPE_APP_NAME": "",
             "PYROSCOPE_SERVER_ADDRESS": "http://localhost:4040",
         },
@@ -58,6 +63,7 @@ def test_init_pyroscope_raises_when_enabled_but_missing_server_address():
     ), patch.dict(
         os.environ,
         {
+            "LITELLM_ENABLE_PYROSCOPE": "true",
             "PYROSCOPE_APP_NAME": "myapp",
             "PYROSCOPE_SERVER_ADDRESS": "",
         },
@@ -79,6 +85,7 @@ def test_init_pyroscope_raises_when_sample_rate_invalid():
     ), patch.dict(
         os.environ,
         {
+            "LITELLM_ENABLE_PYROSCOPE": "true",
             "PYROSCOPE_APP_NAME": "myapp",
             "PYROSCOPE_SERVER_ADDRESS": "http://localhost:4040",
             "PYROSCOPE_SAMPLE_RATE": "not-a-number",
@@ -101,6 +108,7 @@ def test_init_pyroscope_accepts_integer_sample_rate():
     ), patch.dict(
         os.environ,
         {
+            "LITELLM_ENABLE_PYROSCOPE": "true",
             "PYROSCOPE_APP_NAME": "myapp",
             "PYROSCOPE_SERVER_ADDRESS": "http://localhost:4040",
             "PYROSCOPE_SAMPLE_RATE": "100",
@@ -127,6 +135,7 @@ def test_init_pyroscope_accepts_float_sample_rate_parsed_as_int():
     ), patch.dict(
         os.environ,
         {
+            "LITELLM_ENABLE_PYROSCOPE": "true",
             "PYROSCOPE_APP_NAME": "myapp",
             "PYROSCOPE_SERVER_ADDRESS": "http://localhost:4040",
             "PYROSCOPE_SAMPLE_RATE": "100.7",
