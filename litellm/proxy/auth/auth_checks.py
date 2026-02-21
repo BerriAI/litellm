@@ -2008,9 +2008,15 @@ async def _fetch_key_object_from_db_with_reconnect(
                 )
                 if not isinstance(auth_reconnect_timeout, (int, float)):
                     auth_reconnect_timeout = 2.0
+                auth_reconnect_lock_timeout = getattr(
+                    prisma_client, "_db_auth_reconnect_lock_timeout_seconds", 0.1
+                )
+                if not isinstance(auth_reconnect_lock_timeout, (int, float)):
+                    auth_reconnect_lock_timeout = 0.1
                 did_reconnect = await prisma_client.attempt_db_reconnect(
                     reason="auth_get_key_object_lookup_failure",
                     timeout_seconds=auth_reconnect_timeout,
+                    lock_timeout_seconds=auth_reconnect_lock_timeout,
                 )
             if did_reconnect:
                 return await prisma_client.get_data(
