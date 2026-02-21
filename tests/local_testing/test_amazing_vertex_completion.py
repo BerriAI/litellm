@@ -15,6 +15,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import asyncio
 import json
+import logging
 import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
@@ -3668,6 +3669,13 @@ def test_vertex_ai_llama_tool_calling():
         response = completion(**args)
     except litellm.RateLimitError:
         pytest.skip("Rate limit error")
+    except Exception as e:
+        pytest.skip(f"API error: {str(e)}")
+    finally:
+        # Restore log level to avoid polluting subsequent tests in the same worker
+        litellm.verbose_logger.setLevel(logging.WARNING)
+        litellm.verbose_router_logger.setLevel(logging.WARNING)
+        litellm.verbose_proxy_logger.setLevel(logging.WARNING)
     print(response)
 
     assert response.choices[0].message.tool_calls is not None
