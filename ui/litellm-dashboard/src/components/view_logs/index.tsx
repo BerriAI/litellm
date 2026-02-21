@@ -91,6 +91,11 @@ export default function SpendLogsTable({
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
+  // Tracks whether any filter that uses performSearch (backend) is active.
+  // Used to disable the main query so it doesn't fire redundant unfiltered requests
+  // when time range / sort / page changes while a backend filter is in effect.
+  const [isMainQueryEnabled, setIsMainQueryEnabled] = useState(true);
+
   const queryClient = useQueryClient();
 
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
@@ -212,7 +217,7 @@ export default function SpendLogsTable({
 
       return response;
     },
-    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs" && isMainQueryEnabled,
     refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
     placeholderData: keepPreviousData,
     refetchIntervalInBackground: true,
@@ -235,6 +240,7 @@ export default function SpendLogsTable({
   const {
     filters,
     filteredLogs,
+    hasBackendFilters,
     allTeams: hookAllTeams,
     allKeyAliases,
     handleFilterChange,
@@ -263,6 +269,12 @@ export default function SpendLogsTable({
     setSelectedTimeInterval({ value: 24, unit: "hours" });
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
+
+  // Disable the main query whenever backend filters are active so it doesn't fire
+  // redundant unfiltered requests when time range / sort / page changes.
+  useEffect(() => {
+    setIsMainQueryEnabled(!hasBackendFilters);
+  }, [hasBackendFilters]);
 
   // Sync filter state into the individual selectedX state variables used by the main query
   useEffect(() => {
@@ -673,7 +685,7 @@ export default function SpendLogsTable({
                       </div>
                     </div>
                   </div>
-                  {isLiveTail && currentPage === 1 && (
+                  {isLiveTail && currentPage === 1 && isMainQueryEnabled && (
                     <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>

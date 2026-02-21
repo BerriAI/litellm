@@ -309,6 +309,7 @@ export function useLogFilterLogic({
   return {
     filters,
     filteredLogs,
+    hasBackendFilters,
     allKeyAliases,
     allTeams,
     handleFilterChange,
