@@ -737,17 +737,17 @@ def test_anthropic_beta_header_merging_with_output_format():
     """
     Test that anthropic-beta headers from extra_headers are merged with
     output_format beta headers instead of being overridden.
-    
+
     This is a regression test for: https://github.com/BerriAI/litellm/issues/...
     When using response_format with a Pydantic model AND extra_headers with
     anthropic-beta (e.g., for context-1m extension), both beta headers should
     be present in the final request.
     """
     config = AnthropicConfig()
-    
+
     # Simulate headers that already have the context-1m beta header from extra_headers
     headers = {"anthropic-beta": "context-1m-2025-08-07"}
-    
+
     # Simulate output_format being set (happens when using response_format with Sonnet 4.5)
     optional_params = {
         "output_format": {
@@ -755,11 +755,11 @@ def test_anthropic_beta_header_merging_with_output_format():
             "schema": {"type": "object", "properties": {}}
         }
     }
-    
+
     result_headers = config.update_headers_with_optional_anthropic_beta(
         headers, optional_params
     )
-    
+
     # Both beta headers should be present
     beta_value = result_headers["anthropic-beta"]
     assert "context-1m-2025-08-07" in beta_value, \
@@ -773,10 +773,10 @@ def test_anthropic_beta_header_merging_with_multiple_features():
     Test that multiple beta headers can be merged when using multiple features.
     """
     config = AnthropicConfig()
-    
+
     # Start with a user-provided beta header
     headers = {"anthropic-beta": "context-1m-2025-08-07"}
-    
+
     # Use multiple features that require beta headers
     optional_params = {
         "output_format": {
@@ -786,13 +786,13 @@ def test_anthropic_beta_header_merging_with_multiple_features():
         "context_management": _sample_context_management_payload(),
         "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]
     }
-    
+
     result_headers = config.update_headers_with_optional_anthropic_beta(
         headers, optional_params
     )
-    
+
     beta_value = result_headers["anthropic-beta"]
-    
+
     # All beta headers should be present
     assert "context-1m-2025-08-07" in beta_value
     assert "structured-outputs-2025-11-13" in beta_value
@@ -946,9 +946,9 @@ def test_non_structured_output_model_uses_tool_workaround():
 def test_tool_search_regex_detection():
     """Test that tool search regex tools are properly detected"""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    
+
     config = AnthropicModelInfo()
-    
+
     # Test with tool search regex tool
     tools = [
         {
@@ -957,7 +957,7 @@ def test_tool_search_regex_detection():
         }
     ]
     assert config.is_tool_search_used(tools) is True
-    
+
     # Test without tool search
     tools = [
         {
@@ -971,9 +971,9 @@ def test_tool_search_regex_detection():
 def test_tool_search_bm25_detection():
     """Test that tool search BM25 tools are properly detected"""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    
+
     config = AnthropicModelInfo()
-    
+
     # Test with tool search BM25 tool
     tools = [
         {
@@ -987,14 +987,14 @@ def test_tool_search_bm25_detection():
 def test_tool_search_beta_header():
     """Test that tool search beta header is automatically added"""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    
+
     config = AnthropicModelInfo()
-    
+
     headers = config.get_anthropic_headers(
         api_key="test-key",
         tool_search_used=True,
     )
-    
+
     assert "anthropic-beta" in headers
     assert "advanced-tool-use-2025-11-20" in headers["anthropic-beta"]
 
@@ -1002,14 +1002,14 @@ def test_tool_search_beta_header():
 def test_tool_search_regex_mapping():
     """Test that tool search regex tools are properly mapped"""
     config = AnthropicConfig()
-    
+
     tool = {
         "type": "tool_search_tool_regex_20251119",
         "name": "tool_search_tool_regex"
     }
-    
+
     mapped_tool, mcp_server = config._map_tool_helper(tool)
-    
+
     assert mapped_tool is not None
     assert mapped_tool["type"] == "tool_search_tool_regex_20251119"
     assert mapped_tool["name"] == "tool_search_tool_regex"
@@ -1019,14 +1019,14 @@ def test_tool_search_regex_mapping():
 def test_tool_search_bm25_mapping():
     """Test that tool search BM25 tools are properly mapped"""
     config = AnthropicConfig()
-    
+
     tool = {
         "type": "tool_search_tool_bm25_20251119",
         "name": "tool_search_tool_bm25"
     }
-    
+
     mapped_tool, mcp_server = config._map_tool_helper(tool)
-    
+
     assert mapped_tool is not None
     assert mapped_tool["type"] == "tool_search_tool_bm25_20251119"
     assert mapped_tool["name"] == "tool_search_tool_bm25"
@@ -1036,7 +1036,7 @@ def test_tool_search_bm25_mapping():
 def test_deferred_tools_separation():
     """Test that deferred and non-deferred tools are properly separated"""
     config = AnthropicConfig()
-    
+
     tools = [
         {
             "type": "tool_search_tool_regex_20251119",
@@ -1053,9 +1053,9 @@ def test_deferred_tools_separation():
             "defer_loading": False
         }
     ]
-    
+
     non_deferred, deferred = config._separate_deferred_tools(tools)
-    
+
     assert len(non_deferred) == 2  # tool_search and search_files
     assert len(deferred) == 1  # get_weather
 
@@ -1063,7 +1063,7 @@ def test_deferred_tools_separation():
 def test_server_tool_use_in_response():
     """Test that server_tool_use blocks are parsed correctly"""
     config = AnthropicConfig()
-    
+
     completion_response = {
         "content": [
             {
@@ -1074,7 +1074,7 @@ def test_server_tool_use_in_response():
             }
         ]
     }
-    
+
     text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
@@ -1088,7 +1088,7 @@ def test_server_tool_use_in_response():
 def test_tool_search_usage_tracking():
     """Test that tool_search_requests are tracked in usage"""
     config = AnthropicConfig()
-    
+
     usage_object = {
         "input_tokens": 100,
         "output_tokens": 50,
@@ -1096,9 +1096,9 @@ def test_tool_search_usage_tracking():
             "tool_search_requests": 2
         }
     }
-    
+
     usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
-    
+
     assert usage.server_tool_use is not None
     assert usage.server_tool_use.tool_search_requests == 2
 
@@ -1106,7 +1106,7 @@ def test_tool_search_usage_tracking():
 def test_tool_reference_expansion():
     """Test that tool_reference blocks are expanded correctly"""
     config = AnthropicConfig()
-    
+
     deferred_tools = [
         {
             "type": "function",
@@ -1116,14 +1116,14 @@ def test_tool_reference_expansion():
             }
         }
     ]
-    
+
     content = [
         {"type": "text", "text": "I'll search for tools"},
         {"type": "tool_reference", "tool_name": "get_weather"}
     ]
-    
+
     expanded = config._expand_tool_references(content, deferred_tools)
-    
+
     assert len(expanded) == 2
     assert expanded[0]["type"] == "text"
     assert expanded[1]["type"] == "function"
@@ -1133,7 +1133,7 @@ def test_tool_reference_expansion():
 def test_defer_loading_preserved_in_transformation():
     """Test that defer_loading parameter is preserved when transforming tools"""
     config = AnthropicConfig()
-    
+
     tool = {
         "type": "function",
         "function": {
@@ -1149,9 +1149,9 @@ def test_defer_loading_preserved_in_transformation():
         },
         "defer_loading": True
     }
-    
+
     mapped_tool, mcp_server = config._map_tool_helper(tool)
-    
+
     assert mapped_tool is not None
     assert mapped_tool.get("defer_loading") is True
     assert mapped_tool["name"] == "get_weather"
@@ -1161,7 +1161,7 @@ def test_defer_loading_preserved_in_transformation():
 def test_tool_search_complete_response_parsing():
     """Test parsing a complete tool search response with server_tool_use and tool_search_tool_result blocks"""
     config = AnthropicConfig()
-    
+
     # Simulating actual Anthropic API response with tool search
     completion_response = {
         "content": [
@@ -1201,7 +1201,7 @@ def test_tool_search_complete_response_parsing():
             "server_tool_use": {"web_search_requests": 0}
         }
     }
-    
+
     # Extract content
     text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
@@ -1218,14 +1218,14 @@ def test_tool_search_complete_response_parsing():
 
     # Verify web_search_results is None (this response has tool_search, not web_search)
     assert web_search_results is None
-    
+
     # Verify usage calculation counts tool_search_requests from content
     usage = config.calculate_usage(
         usage_object=completion_response["usage"],
         reasoning_content=None,
         completion_response=completion_response
     )
-    
+
     assert usage.server_tool_use is not None
     assert usage.server_tool_use.web_search_requests == 0
     assert usage.server_tool_use.tool_search_requests == 1  # Counted from server_tool_use blocks
@@ -1234,7 +1234,7 @@ def test_tool_search_complete_response_parsing():
 def test_allowed_callers_field_preservation():
     """Test that allowed_callers field is preserved during tool transformation."""
     config = AnthropicConfig()
-    
+
     # Test with top-level allowed_callers
     tool_with_allowed_callers = {
         "type": "function",
@@ -1251,7 +1251,7 @@ def test_allowed_callers_field_preservation():
         },
         "allowed_callers": ["code_execution_20250825"]
     }
-    
+
     transformed_tool, _ = config._map_tool_helper(tool_with_allowed_callers)
     assert transformed_tool is not None
     assert "allowed_callers" in transformed_tool
@@ -1261,9 +1261,9 @@ def test_allowed_callers_field_preservation():
 def test_programmatic_tool_calling_beta_header():
     """Test that beta header is automatically added when programmatic tool calling is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    
+
     model_info = AnthropicModelInfo()
-    
+
     # Test detection with allowed_callers
     tools = [
         {
@@ -1280,16 +1280,16 @@ def test_programmatic_tool_calling_beta_header():
             "allowed_callers": ["code_execution_20250825"]
         }
     ]
-    
+
     is_programmatic = model_info.is_programmatic_tool_calling_used(tools)
     assert is_programmatic is True
-    
+
     # Test header generation
     headers = model_info.get_anthropic_headers(
         api_key="test-key",
         programmatic_tool_calling_used=True
     )
-    
+
     assert "anthropic-beta" in headers
     assert "advanced-tool-use-2025-11-20" in headers["anthropic-beta"]
 
@@ -1297,7 +1297,7 @@ def test_programmatic_tool_calling_beta_header():
 def test_caller_field_in_response():
     """Test that caller field is correctly parsed from tool_use blocks."""
     config = AnthropicConfig()
-    
+
     # Mock response with programmatic tool call
     completion_response = {
         "id": "msg_test",
@@ -1322,7 +1322,7 @@ def test_caller_field_in_response():
         "stop_reason": "tool_use",
         "usage": {"input_tokens": 100, "output_tokens": 50}
     }
-    
+
     text, citations, thinking, reasoning, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(completion_response)
 
     assert len(tool_calls) == 1
@@ -1337,12 +1337,12 @@ def test_caller_field_in_response():
 def test_code_execution_20250825_tool_type():
     """Test that code_execution_20250825 tool type is handled correctly."""
     config = AnthropicConfig()
-    
+
     tool = {
         "type": "code_execution_20250825",
         "name": "code_execution"
     }
-    
+
     transformed_tool, _ = config._map_tool_helper(tool)
     assert transformed_tool is not None
     assert transformed_tool["type"] == "code_execution_20250825"
@@ -1352,7 +1352,7 @@ def test_code_execution_20250825_tool_type():
 def test_allowed_callers_in_function_field():
     """Test that allowed_callers in function field is also preserved."""
     config = AnthropicConfig()
-    
+
     # Test with function.allowed_callers
     tool = {
         "type": "function",
@@ -1369,7 +1369,7 @@ def test_allowed_callers_in_function_field():
             "allowed_callers": ["code_execution_20250825"]
         }
     }
-    
+
     transformed_tool, _ = config._map_tool_helper(tool)
     assert transformed_tool is not None
     assert "allowed_callers" in transformed_tool
@@ -1379,7 +1379,7 @@ def test_allowed_callers_in_function_field():
 def test_input_examples_field_preservation():
     """Test that input_examples field is preserved during tool transformation."""
     config = AnthropicConfig()
-    
+
     # Test with top-level input_examples
     tool_with_examples = {
         "type": "function",
@@ -1400,7 +1400,7 @@ def test_input_examples_field_preservation():
             {"location": "Tokyo, Japan", "unit": "celsius"}
         ]
     }
-    
+
     transformed_tool, _ = config._map_tool_helper(tool_with_examples)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
@@ -1411,9 +1411,9 @@ def test_input_examples_field_preservation():
 def test_input_examples_beta_header():
     """Test that beta header is automatically added when input_examples is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    
+
     model_info = AnthropicModelInfo()
-    
+
     # Test detection with input_examples
     tools = [
         {
@@ -1428,16 +1428,16 @@ def test_input_examples_beta_header():
             ]
         }
     ]
-    
+
     is_examples_used = model_info.is_input_examples_used(tools)
     assert is_examples_used is True
-    
+
     # Test header generation
     headers = model_info.get_anthropic_headers(
         api_key="test-key",
         input_examples_used=True
     )
-    
+
     assert "anthropic-beta" in headers
     assert "advanced-tool-use-2025-11-20" in headers["anthropic-beta"]
 
@@ -1445,7 +1445,7 @@ def test_input_examples_beta_header():
 def test_input_examples_in_function_field():
     """Test that input_examples in function field is also preserved."""
     config = AnthropicConfig()
-    
+
     # Test with function.input_examples
     tool = {
         "type": "function",
@@ -1465,7 +1465,7 @@ def test_input_examples_in_function_field():
             ]
         }
     }
-    
+
     transformed_tool, _ = config._map_tool_helper(tool)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
@@ -1475,7 +1475,7 @@ def test_input_examples_in_function_field():
 def test_input_examples_with_other_features():
     """Test that input_examples works alongside other tool features."""
     config = AnthropicConfig()
-    
+
     # Tool with input_examples, defer_loading, and allowed_callers
     tool = {
         "type": "function",
@@ -1496,7 +1496,7 @@ def test_input_examples_with_other_features():
         "defer_loading": True,
         "allowed_callers": ["code_execution_20250825"]
     }
-    
+
     transformed_tool, _ = config._map_tool_helper(tool)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
@@ -1509,7 +1509,7 @@ def test_input_examples_with_other_features():
 def test_input_examples_empty_list_not_added():
     """Test that empty input_examples list is not added to transformed tool."""
     config = AnthropicConfig()
-    
+
     # Tool with empty input_examples
     tool = {
         "type": "function",
@@ -1526,7 +1526,7 @@ def test_input_examples_empty_list_not_added():
         },
         "input_examples": []
     }
-    
+
     transformed_tool, _ = config._map_tool_helper(tool)
     assert transformed_tool is not None
     # Empty list should not be added
@@ -1539,14 +1539,14 @@ def test_input_examples_empty_list_not_added():
 def test_effort_output_config_preservation():
     """Test that output_config with effort is preserved in transformation."""
     config = AnthropicConfig()
-    
+
     messages = [{"role": "user", "content": "Analyze this code"}]
     optional_params = {
         "output_config": {
             "effort": "medium"
         }
     }
-    
+
     result = config.transform_request(
         model="claude-opus-4-5-20251101",
         messages=messages,
@@ -1554,7 +1554,7 @@ def test_effort_output_config_preservation():
         litellm_params={},
         headers={}
     )
-    
+
     assert "output_config" in result
     assert result["output_config"]["effort"] == "medium"
 
@@ -1562,24 +1562,24 @@ def test_effort_output_config_preservation():
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    
+
     model_info = AnthropicModelInfo()
-    
+
     # Test with effort parameter
     optional_params = {
         "output_config": {
             "effort": "low"
         }
     }
-    
+
     effort_used = model_info.is_effort_used(optional_params=optional_params)
     assert effort_used is True
-    
+
     headers = model_info.get_anthropic_headers(
         api_key="test-key",
         effort_used=effort_used
     )
-    
+
     assert "anthropic-beta" in headers
     assert "effort-2025-11-24" in headers["anthropic-beta"]
 
@@ -1587,9 +1587,9 @@ def test_effort_beta_header_injection():
 def test_effort_validation():
     """Test that only valid effort values are accepted."""
     config = AnthropicConfig()
-    
+
     messages = [{"role": "user", "content": "Test"}]
-    
+
     # Valid values should work
     for effort in ["high", "medium", "low"]:
         optional_params = {"output_config": {"effort": effort}}
@@ -1601,7 +1601,7 @@ def test_effort_validation():
             headers={}
         )
         assert result["output_config"]["effort"] == effort
-    
+
     # Invalid value should raise error
     with pytest.raises(ValueError, match="Invalid effort value"):
         optional_params = {"output_config": {"effort": "invalid"}}
@@ -1617,14 +1617,14 @@ def test_effort_validation():
 def test_effort_with_claude_opus_45():
     """Test effort parameter works with Claude Opus 4.5 model."""
     config = AnthropicConfig()
-    
+
     messages = [{"role": "user", "content": "Complex analysis task"}]
     optional_params = {
         "output_config": {
             "effort": "high"
         }
     }
-    
+
     result = config.transform_request(
         model="claude-opus-4-5-20251101",
         messages=messages,
@@ -1632,16 +1632,51 @@ def test_effort_with_claude_opus_45():
         litellm_params={},
         headers={}
     )
-    
+
     assert "output_config" in result
     assert result["output_config"]["effort"] == "high"
     assert result["model"] == "claude-opus-4-5-20251101"
 
 
+def test_effort_validation_with_opus_46():
+    """Test that all four effort levels are accepted for Claude Opus 4.6."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    for effort in ["high", "medium", "low", "max"]:
+        optional_params = {"output_config": {"effort": effort}}
+        result = config.transform_request(
+            model="claude-opus-4-6-20260205",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+        assert result["output_config"]["effort"] == effort
+
+
+def test_max_effort_rejected_for_opus_45():
+    """Test that effort='max' is rejected when using Claude Opus 4.5."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
+        optional_params = {"output_config": {"effort": "max"}}
+        config.transform_request(
+            model="claude-opus-4-5-20251101",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+
+
 def test_effort_with_other_features():
     """Test effort works alongside other features (thinking, tools)."""
     config = AnthropicConfig()
-    
+
     messages = [{"role": "user", "content": "Use tools efficiently"}]
     tools = [
         {
@@ -1669,7 +1704,7 @@ def test_effort_with_other_features():
             "budget_tokens": 1000
         }
     }
-    
+
     result = config.transform_request(
         model="claude-opus-4-5-20251101",
         messages=messages,
@@ -1704,6 +1739,8 @@ def test_translate_system_message_skips_empty_string_content():
 
     # Empty system message should produce no anthropic content blocks
     assert len(result) == 0
+    # System message must be removed from messages so it doesn't reach anthropic_messages_pt
+    assert all(m["role"] != "system" for m in messages)
 
 
 def test_translate_system_message_skips_empty_list_content():
@@ -1912,7 +1949,7 @@ def test_calculate_usage_completion_tokens_details_always_populated():
     """
     Test that completion_tokens_details is always populated in Usage object,
     not just when there's reasoning_content.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/18772
     Bug: completion_tokens_details was None for regular Claude responses without reasoning
     """
@@ -1924,7 +1961,7 @@ def test_calculate_usage_completion_tokens_details_always_populated():
         "output_tokens": 248,
     }
     usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
-    
+
     # completion_tokens_details should NOT be None
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens is 0
@@ -1938,7 +1975,7 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
     """
     Test that completion_tokens_details correctly splits text_tokens and reasoning_tokens
     when reasoning_content is present.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/18772
     """
     config = AnthropicConfig()
@@ -1950,12 +1987,12 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
     }
     # Simulating reasoning content that would count as ~50 tokens
     reasoning_content = "Let me think about this step by step. " * 10  # Roughly 50 tokens
-    
+
     usage = config.calculate_usage(
-        usage_object=usage_object, 
+        usage_object=usage_object,
         reasoning_content=reasoning_content
     )
-    
+
     # completion_tokens_details should be populated with both reasoning and text tokens
     assert usage.completion_tokens_details is not None
     assert usage.completion_tokens_details.reasoning_tokens is not None
@@ -1969,45 +2006,92 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
 # ============ Reasoning Effort Tests ============
 
 
-def test_reasoning_effort_maps_to_adaptive_thinking_for_opus_4_6():
+def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
     """
-    Test that reasoning_effort maps to adaptive thinking type for Claude Opus 4.6.
-    
-    For Claude Opus 4.6, reasoning_effort should map to {"type": "adaptive"} 
+    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models.
+
+    For Claude Opus 4.6 and Claude Sonnet 4.6, reasoning_effort should map to {"type": "adaptive"}
     regardless of the effort level specified.
     """
     config = AnthropicConfig()
-    
+
     # Test with different reasoning_effort values - all should map to adaptive
-    for effort in ["low", "medium", "high", "minimal"]:
-        non_default_params = {"reasoning_effort": effort}
-        optional_params = {}
-        
-        result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model="claude-opus-4-6-20250514",
-            drop_params=False
-        )
-        
-        # Should map to adaptive thinking type
-        assert "thinking" in result
-        assert result["thinking"]["type"] == "adaptive"
-        # Should not have budget_tokens for adaptive type
-        assert "budget_tokens" not in result["thinking"]
-        # reasoning_effort should not be in the result (it's transformed to thinking)
-        assert "reasoning_effort" not in result
+    for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
+        for effort in ["low", "medium", "high", "minimal"]:
+            non_default_params = {"reasoning_effort": effort}
+            optional_params = {}
+
+            result = config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=False
+            )
+
+            # Should map to adaptive thinking type
+            assert "thinking" in result
+            assert result["thinking"]["type"] == "adaptive"
+            # Should not have budget_tokens for adaptive type
+            assert "budget_tokens" not in result["thinking"]
+            # reasoning_effort should not be in the result (it's transformed to thinking)
+            assert "reasoning_effort" not in result
+
+
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
+    """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+    config = AnthropicConfig()
+
+    params = config.get_supported_openai_params(model="claude-sonnet-4-6-20260219")
+
+    assert "thinking" in params
+    assert "reasoning_effort" in params
+
+
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
+    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+    config = AnthropicConfig()
+
+    params = config.get_supported_openai_params(model="claude-sonnet-4.6")
+
+    assert "thinking" in params
+    assert "reasoning_effort" in params
+
+
+def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
+    """
+    Sonnet 4.6 should convert reasoning_effort to adaptive thinking in final request payload.
+    """
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Think through this carefully."}]
+
+    mapped_optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+    result = config.transform_request(
+        model="claude-sonnet-4-6-20260219",
+        messages=messages,
+        optional_params=mapped_optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "thinking" in result
+    assert result["thinking"]["type"] == "adaptive"
+    assert "budget_tokens" not in result["thinking"]
 
 
 def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
     """
     Test that reasoning_effort maps to budget-based thinking config for non-Opus 4.6 models.
-    
-    For models other than Claude Opus 4.6, reasoning_effort should map to 
+
+    For models other than Claude Opus 4.6, reasoning_effort should map to
     thinking config with budget_tokens based on the effort level.
     """
     config = AnthropicConfig()
-    
+
     # Test with Claude Sonnet 4.5 (non-Opus 4.6 model)
     test_cases = [
         ("low", 1024),      # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
@@ -2015,18 +2099,18 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         ("high", 4096),     # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
         ("minimal", 128),   # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
     ]
-    
+
     for effort, expected_budget in test_cases:
         non_default_params = {"reasoning_effort": effort}
         optional_params = {}
-        
+
         result = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="claude-sonnet-4-5-20250929",
             drop_params=False
         )
-        
+
         # Should map to enabled thinking type with budget_tokens
         assert "thinking" in result
         assert result["thinking"]["type"] == "enabled"
@@ -2037,18 +2121,18 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
 
 def test_code_execution_tool_results_extraction():
     """
-    Test that code execution tool results (bash_code_execution_tool_result, 
-    text_editor_code_execution_tool_result) are properly extracted and exposed 
+    Test that code execution tool results (bash_code_execution_tool_result,
+    text_editor_code_execution_tool_result) are properly extracted and exposed
     in provider_specific_fields.
-    
+
     Related to: https://github.com/BerriAI/litellm/issues/xxxxx
     """
     import httpx
 
     from litellm.types.utils import ModelResponse
-    
+
     config = AnthropicConfig()
-    
+
     # Mock Anthropic response with code execution tool results
     mock_anthropic_response = {
         "id": "msg_01XYZ",
@@ -2108,15 +2192,15 @@ def test_code_execution_tool_results_extraction():
             "output_tokens": 50
         }
     }
-    
+
     # Create mock HTTP response
     mock_raw_response = MagicMock(spec=httpx.Response)
     mock_raw_response.json.return_value = mock_anthropic_response
     mock_raw_response.status_code = 200
     mock_raw_response.headers = {}
-    
+
     model_response = ModelResponse()
-    
+
     transformed_response = config.transform_parsed_response(
         completion_response=mock_anthropic_response,
         raw_response=mock_raw_response,
@@ -2124,39 +2208,39 @@ def test_code_execution_tool_results_extraction():
         json_mode=False,
         prefix_prompt=None,
     )
-    
+
     # Verify tool calls are present
     assert transformed_response.choices[0].message.tool_calls is not None
     assert len(transformed_response.choices[0].message.tool_calls) == 2
-    
+
     # Verify first tool call
     assert transformed_response.choices[0].message.tool_calls[0].id == "srvtoolu_01ABC"
     assert transformed_response.choices[0].message.tool_calls[0].function.name == "bash_code_execution"
-    
+
     # Verify second tool call
     assert transformed_response.choices[0].message.tool_calls[1].id == "srvtoolu_01DEF"
     assert transformed_response.choices[0].message.tool_calls[1].function.name == "text_editor_code_execution"
-    
+
     # Verify tool results are in provider_specific_fields
     provider_fields = transformed_response.choices[0].message.provider_specific_fields
     assert provider_fields is not None
     assert "tool_results" in provider_fields
     assert provider_fields["tool_results"] is not None
     assert len(provider_fields["tool_results"]) == 2
-    
+
     # Verify bash_code_execution_tool_result
     bash_result = provider_fields["tool_results"][0]
     assert bash_result["type"] == "bash_code_execution_tool_result"
     assert bash_result["tool_use_id"] == "srvtoolu_01ABC"
     assert bash_result["content"]["stdout"] == "4\n"
     assert bash_result["content"]["return_code"] == 0
-    
+
     # Verify text_editor_code_execution_tool_result
     editor_result = provider_fields["tool_results"][1]
     assert editor_result["type"] == "text_editor_code_execution_tool_result"
     assert editor_result["tool_use_id"] == "srvtoolu_01DEF"
     assert editor_result["content"]["is_file_update"] is False
-    
+
     # Verify text content is properly concatenated
     assert "I'll calculate that for you." in transformed_response.choices[0].message.content
     assert "Done!" in transformed_response.choices[0].message.content
@@ -2170,9 +2254,9 @@ def test_tool_search_tool_result_not_in_tool_results():
     import httpx
 
     from litellm.types.utils import ModelResponse
-    
+
     config = AnthropicConfig()
-    
+
     mock_anthropic_response = {
         "id": "msg_01XYZ",
         "type": "message",
@@ -2195,14 +2279,14 @@ def test_tool_search_tool_result_not_in_tool_results():
             "output_tokens": 50
         }
     }
-    
+
     mock_raw_response = MagicMock(spec=httpx.Response)
     mock_raw_response.json.return_value = mock_anthropic_response
     mock_raw_response.status_code = 200
     mock_raw_response.headers = {}
-    
+
     model_response = ModelResponse()
-    
+
     transformed_response = config.transform_parsed_response(
         completion_response=mock_anthropic_response,
         raw_response=mock_raw_response,
@@ -2210,7 +2294,7 @@ def test_tool_search_tool_result_not_in_tool_results():
         json_mode=False,
         prefix_prompt=None,
     )
-    
+
     # Verify tool_search_tool_result is NOT in tool_results
     provider_fields = transformed_response.choices[0].message.provider_specific_fields
     assert provider_fields.get("tool_results") is None
@@ -2224,9 +2308,9 @@ def test_web_search_tool_result_backwards_compatibility():
     import httpx
 
     from litellm.types.utils import ModelResponse
-    
+
     config = AnthropicConfig()
-    
+
     mock_anthropic_response = {
         "id": "msg_01XYZ",
         "type": "message",
@@ -2250,14 +2334,14 @@ def test_web_search_tool_result_backwards_compatibility():
             "output_tokens": 50
         }
     }
-    
+
     mock_raw_response = MagicMock(spec=httpx.Response)
     mock_raw_response.json.return_value = mock_anthropic_response
     mock_raw_response.status_code = 200
     mock_raw_response.headers = {}
-    
+
     model_response = ModelResponse()
-    
+
     transformed_response = config.transform_parsed_response(
         completion_response=mock_anthropic_response,
         raw_response=mock_raw_response,
@@ -2265,14 +2349,14 @@ def test_web_search_tool_result_backwards_compatibility():
         json_mode=False,
         prefix_prompt=None,
     )
-    
+
     # Verify web_search_tool_result is in web_search_results (not tool_results)
     provider_fields = transformed_response.choices[0].message.provider_specific_fields
     assert "web_search_results" in provider_fields
     assert provider_fields["web_search_results"] is not None
     assert len(provider_fields["web_search_results"]) == 1
     assert provider_fields["web_search_results"][0]["type"] == "web_search_tool_result"
-    
+
     # Should NOT be in tool_results
     assert provider_fields.get("tool_results") is None
 
@@ -2285,7 +2369,7 @@ def test_compaction_block_extraction():
     Test that compaction blocks are correctly extracted from Anthropic response.
     """
     config = AnthropicConfig()
-    
+
     completion_response = {
         "id": "msg_compaction_test",
         "type": "message",
@@ -2308,17 +2392,17 @@ def test_compaction_block_extraction():
             "output_tokens": 100
         }
     }
-    
+
     text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
-    
+
     # Verify compaction blocks are extracted
     assert compaction_blocks is not None
     assert len(compaction_blocks) == 1
     assert compaction_blocks[0]["type"] == "compaction"
     assert "Summary of the conversation" in compaction_blocks[0]["content"]
-    
+
     # Verify text content is extracted
     assert "I don't have access to real-time data" in text
 
@@ -2330,9 +2414,9 @@ def test_compaction_block_in_provider_specific_fields():
     import httpx
 
     from litellm.types.utils import ModelResponse
-    
+
     config = AnthropicConfig()
-    
+
     completion_response = {
         "id": "msg_compaction_provider_fields",
         "type": "message",
@@ -2354,10 +2438,10 @@ def test_compaction_block_in_provider_specific_fields():
             "output_tokens": 25
         }
     }
-    
+
     raw_response = httpx.Response(status_code=200, headers={})
     model_response = ModelResponse()
-    
+
     result = config.transform_parsed_response(
         completion_response=completion_response,
         raw_response=raw_response,
@@ -2365,7 +2449,7 @@ def test_compaction_block_in_provider_specific_fields():
         json_mode=False,
         prefix_prompt=None,
     )
-    
+
     # Verify compaction_blocks is in provider_specific_fields
     provider_fields = result.choices[0].message.provider_specific_fields
     assert provider_fields is not None
@@ -2380,7 +2464,7 @@ def test_multiple_compaction_blocks():
     Test that multiple compaction blocks are all extracted.
     """
     config = AnthropicConfig()
-    
+
     completion_response = {
         "content": [
             {
@@ -2397,11 +2481,11 @@ def test_multiple_compaction_blocks():
             }
         ]
     }
-    
+
     text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
-    
+
     # Verify both compaction blocks are extracted
     assert compaction_blocks is not None
     assert len(compaction_blocks) == 2
@@ -2417,7 +2501,7 @@ def test_compaction_block_request_transformation():
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
-    
+
     messages = [
         {
             "role": "user",
@@ -2445,28 +2529,28 @@ def test_compaction_block_request_transformation():
             "content": "What about New York?"
         }
     ]
-    
+
     result = anthropic_messages_pt(
         messages=messages,
         model="claude-opus-4-6",
         llm_provider="anthropic"
     )
-    
+
     # Find the assistant message
     assistant_message = None
     for msg in result:
         if msg["role"] == "assistant":
             assistant_message = msg
             break
-    
+
     assert assistant_message is not None
     assert "content" in assistant_message
     assert isinstance(assistant_message["content"], list)
-    
+
     # Verify compaction block is at the beginning
     assert assistant_message["content"][0]["type"] == "compaction"
     assert "Summary of the conversation" in assistant_message["content"][0]["content"]
-    
+
     # Verify text content follows
     text_blocks = [c for c in assistant_message["content"] if c.get("type") == "text"]
     assert len(text_blocks) > 0
@@ -2478,7 +2562,7 @@ def test_compaction_with_context_management():
     Test that compaction works with context_management parameter.
     """
     config = AnthropicConfig()
-    
+
     messages = [{"role": "user", "content": "Hello"}]
     optional_params = {
         "context_management": {
@@ -2490,7 +2574,7 @@ def test_compaction_with_context_management():
         },
         "max_tokens": 100
     }
-    
+
     result = config.transform_request(
         model="claude-opus-4-6",
         messages=messages,
@@ -2498,7 +2582,7 @@ def test_compaction_with_context_management():
         litellm_params={},
         headers={}
     )
-    
+
     # Verify context_management is included
     assert "context_management" in result
     assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
@@ -2509,7 +2593,7 @@ def test_compaction_block_with_other_content_types():
     Test that compaction blocks work alongside other content types like thinking blocks and tool calls.
     """
     config = AnthropicConfig()
-    
+
     completion_response = {
         "content": [
             {
@@ -2532,11 +2616,11 @@ def test_compaction_block_with_other_content_types():
             }
         ]
     }
-    
+
     text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results, compaction_blocks = config.extract_response_content(
         completion_response
     )
-    
+
     # Verify all content types are extracted
     assert compaction_blocks is not None
     assert len(compaction_blocks) == 1
@@ -2547,6 +2631,94 @@ def test_compaction_block_with_other_content_types():
     assert tool_calls[0]["function"]["name"] == "get_weather"
 
 
+def test_map_openai_context_management_to_anthropic():
+    """
+    Test mapping OpenAI Responses API context_management format to Anthropic format.
+    """
+    config = AnthropicConfig()
+    
+    # Test OpenAI list format with compaction
+    openai_format = [{"type": "compaction", "compact_threshold": 200000}]
+    result = config.map_openai_context_management_to_anthropic(openai_format)
+    
+    assert result is not None
+    assert "edits" in result
+    assert len(result["edits"]) == 1
+    assert result["edits"][0]["type"] == "compact_20260112"
+    assert result["edits"][0]["trigger"]["type"] == "input_tokens"
+    assert result["edits"][0]["trigger"]["value"] == 200000
+
+    # Test OpenAI format with instructions
+    openai_format_with_instructions = [{
+        "type": "compaction",
+        "compact_threshold": 150000,
+        "instructions": "Focus on preserving code snippets"
+    }]
+    result = config.map_openai_context_management_to_anthropic(openai_format_with_instructions)
+    
+    assert result is not None
+    assert result["edits"][0]["trigger"]["value"] == 150000
+    assert result["edits"][0]["instructions"] == "Focus on preserving code snippets"
+    
+    # Test Anthropic format (should pass through)
+    anthropic_format = {
+        "edits": [{
+            "type": "compact_20260112",
+            "trigger": {"type": "input_tokens", "value": 150000}
+        }]
+    }
+    result = config.map_openai_context_management_to_anthropic(anthropic_format)
+    
+    assert result == anthropic_format
+
+
+def test_map_openai_params_with_context_management():
+    """
+    Test that map_openai_params correctly transforms context_management from OpenAI to Anthropic format.
+    """
+    config = AnthropicConfig()
+    
+    # Test with OpenAI list format
+    non_default_params = {
+        "context_management": [{"type": "compaction", "compact_threshold": 200000}]
+    }
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-opus-4-6",
+        drop_params=False
+    )
+    
+    assert "context_management" in result
+    assert "edits" in result["context_management"]
+    assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
+    assert result["context_management"]["edits"][0]["trigger"]["value"] == 200000
+    
+    # Test with Anthropic dict format (should pass through)
+    non_default_params_anthropic = {
+        "context_management": {
+            "edits": [{
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 150000},
+                "instructions": "Focus on preserving code"
+            }]
+        }
+    }
+    optional_params = {}
+    
+    result = config.map_openai_params(
+        non_default_params=non_default_params_anthropic,
+        optional_params=optional_params,
+        model="claude-opus-4-6",
+        drop_params=False
+    )
+    
+    assert "context_management" in result
+    assert result["context_management"] == non_default_params_anthropic["context_management"]
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
@@ -2554,9 +2726,9 @@ def test_compaction_block_empty_list_not_added():
     import httpx
 
     from litellm.types.utils import ModelResponse
-    
+
     config = AnthropicConfig()
-    
+
     # Response without compaction blocks
     completion_response = {
         "id": "msg_no_compaction",
@@ -2575,10 +2747,10 @@ def test_compaction_block_empty_list_not_added():
             "output_tokens": 5
         }
     }
-    
+
     raw_response = httpx.Response(status_code=200, headers={})
     model_response = ModelResponse()
-    
+
     result = config.transform_parsed_response(
         completion_response=completion_response,
         raw_response=raw_response,
@@ -2586,7 +2758,7 @@ def test_compaction_block_empty_list_not_added():
         json_mode=False,
         prefix_prompt=None,
     )
-    
+
     # Verify compaction_blocks is not in provider_specific_fields when there are none
     provider_fields = result.choices[0].message.provider_specific_fields
     if provider_fields:
@@ -2598,15 +2770,15 @@ def test_fast_mode_beta_header():
     Test that fast mode correctly adds the fast-mode-2026-02-01 beta header.
     """
     config = AnthropicConfig()
-    
+
     headers = {}
     optional_params = {"speed": "fast"}
-    
+
     result_headers = config.update_headers_with_optional_anthropic_beta(
         headers=headers,
         optional_params=optional_params
     )
-    
+
     assert "anthropic-beta" in result_headers
     assert "fast-mode-2026-02-01" in result_headers["anthropic-beta"]
 
@@ -2616,18 +2788,18 @@ def test_fast_mode_with_other_beta_headers():
     Test that fast mode beta header is combined with other beta headers.
     """
     config = AnthropicConfig()
-    
+
     headers = {}
     optional_params = {
         "speed": "fast",
         "output_format": {"type": "json_object"}
     }
-    
+
     result_headers = config.update_headers_with_optional_anthropic_beta(
         headers=headers,
         optional_params=optional_params
     )
-    
+
     assert "anthropic-beta" in result_headers
     assert "fast-mode-2026-02-01" in result_headers["anthropic-beta"]
     assert "structured-outputs-2025-11-13" in result_headers["anthropic-beta"]
@@ -2638,18 +2810,18 @@ def test_fast_mode_usage_calculation():
     Test that fast mode speed parameter is passed through to usage object.
     """
     config = AnthropicConfig()
-    
+
     usage_object = {
         "input_tokens": 1000,
         "output_tokens": 500,
     }
-    
+
     usage = config.calculate_usage(
         usage_object=usage_object,
         reasoning_content=None,
         speed="fast"
     )
-    
+
     assert usage.prompt_tokens == 1000
     assert usage.completion_tokens == 500
     assert hasattr(usage, "speed")
@@ -2668,19 +2840,19 @@ def test_fast_mode_cost_calculation():
     # Mock the generic_cost_per_token to verify correct model name is passed
     with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
         mock_cost.return_value = (0.03, 0.15)  # $30 and $150 per MTok
-        
+
         # Test fast mode
         usage_fast = Usage(
             prompt_tokens=1000,
             completion_tokens=1000,
             speed="fast"
         )
-        
+
         prompt_cost, completion_cost = cost_per_token(
             model="claude-opus-4-6",
             usage=usage_fast
         )
-        
+
         # Verify that generic_cost_per_token was called with "fast/claude-opus-4-6"
         mock_cost.assert_called_once()
         call_args = mock_cost.call_args
@@ -2701,7 +2873,7 @@ def test_fast_mode_with_inference_geo():
     # Mock the generic_cost_per_token to verify correct model name is passed
     with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
         mock_cost.return_value = (0.03, 0.15)
-        
+
         # Test with both speed and inference_geo
         usage = Usage(
             prompt_tokens=1000,
@@ -2709,13 +2881,13 @@ def test_fast_mode_with_inference_geo():
             speed="fast",
             inference_geo="us"
         )
-        
+
         # This should look up "fast/us/claude-opus-4-6" in pricing
         prompt_cost, completion_cost = cost_per_token(
             model="claude-opus-4-6",
             usage=usage
         )
-        
+
         # Verify that generic_cost_per_token was called with "fast/us/claude-opus-4-6"
         mock_cost.assert_called_once()
         call_args = mock_cost.call_args
@@ -2728,9 +2900,9 @@ def test_fast_mode_parameter_in_supported_params():
     Test that 'speed' is in the list of supported OpenAI params.
     """
     config = AnthropicConfig()
-    
+
     supported_params = config.get_supported_openai_params(model="claude-opus-4-6")
-    
+
     assert "speed" in supported_params
 
 
@@ -2739,16 +2911,16 @@ def test_fast_mode_parameter_mapping():
     Test that speed parameter is correctly mapped in map_openai_params.
     """
     config = AnthropicConfig()
-    
+
     non_default_params = {"speed": "fast"}
     optional_params = {}
-    
+
     result = config.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,
         model="claude-opus-4-6",
         drop_params=False
     )
-    
+
     assert "speed" in result
     assert result["speed"] == "fast"

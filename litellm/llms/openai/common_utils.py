@@ -3,9 +3,10 @@ Common helpers / utils across al OpenAI endpoints
 """
 
 import hashlib
+import inspect
 import json
 import ssl
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 import openai
@@ -13,8 +14,6 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
-
-import inspect
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -25,13 +24,13 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 
-def _get_client_init_params(cls: type) -> List[str]:
+def _get_client_init_params(cls: type) -> Tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
-    return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+    return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")  # type: ignore[misc]
 
 
-_OPENAI_INIT_PARAMS: List[str] = _get_client_init_params(OpenAI)
-_AZURE_OPENAI_INIT_PARAMS: List[str] = _get_client_init_params(AzureOpenAI)
+_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
+_AZURE_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(AzureOpenAI)
 
 # Ordered params included in the cache key (excluding api_key which is hashed separately).
 # get_openai_client_cache_key iterates this tuple; safety-net tests use it to detect drift.
@@ -182,8 +181,8 @@ class BaseOpenAILLM:
     @staticmethod
     def get_openai_client_initialization_param_fields(
         client_type: Literal["openai", "azure"]
-    ) -> List[str]:
-        """Returns a list of fields that are used to initialize the OpenAI client"""
+    ) -> Tuple[str, ...]:
+        """Returns a tuple of fields that are used to initialize the OpenAI client"""
         if client_type == "openai":
             return _OPENAI_INIT_PARAMS
         else:
@@ -223,3 +222,5 @@ class BaseOpenAILLM:
             verify=ssl_config,
             follow_redirects=True,
         )
+
+
