@@ -218,24 +218,42 @@ class TestProxyInitializationHelpers:
             assert "connection_limit=10" in modified_url
             assert "pool_timeout=60" in modified_url
 
+    def test_append_query_params_handles_missing_url(self):
+        from litellm.proxy.proxy_cli import append_query_params
+
+        modified_url = append_query_params(None, {"connection_limit": 10})
+        assert modified_url == ""
+
     @patch("uvicorn.run")
-    @patch("atexit.register")  # 🔥 critical
-    def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):
+    @patch("atexit.register")  # critical
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_skip_server_startup(self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
 
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        # Remove DATABASE_URL/DIRECT_URL so the CLI doesn't attempt
+        # real prisma operations when these are set in CI.
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
             "sys.modules",
             {
-                "proxy_server": MagicMock(
-                    app=MagicMock(),
-                    ProxyConfig=MagicMock(),
-                    KeyManagementSettings=MagicMock(),
-                    save_worker_config=MagicMock(),
-                )
+                "proxy_server": mock_proxy_module,
+                # Prevent real import of proxy_server inside Click's
+                # isolation context (heavy side effects cause stream
+                # lifecycle issues with Click 8.2+)
+                "litellm.proxy.proxy_server": mock_proxy_module,
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
@@ -249,7 +267,7 @@ class TestProxyInitializationHelpers:
             # --- skip startup ---
             result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
 
@@ -258,7 +276,7 @@ class TestProxyInitializationHelpers:
 
             result = runner.invoke(run_server, ["--local"])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
 
     @patch("uvicorn.run")
@@ -440,8 +458,24 @@ class TestProxyInitializationHelpers:
         mock_proxy_config_instance.get_config = mock_get_config
         mock_proxy_config.return_value = mock_proxy_config_instance
 
-        # Ensure DATABASE_URL is not set in the environment
-        with patch.dict(os.environ, {"DATABASE_URL": ""}, clear=True):
+        mock_proxy_server_module = MagicMock(app=mock_app)
+
+        # Only remove DATABASE_URL and DIRECT_URL to prevent the database setup
+        # code path from running. Do NOT use clear=True as it removes PATH, HOME,
+        # etc., which causes imports inside run_server to break in CI (the real
+        # litellm.proxy.proxy_server import at line 820 of proxy_cli.py has heavy
+        # side effects that fail without a proper environment).
+        env_overrides = {
+            "DATABASE_URL": "",
+            "DIRECT_URL": "",
+            "IAM_TOKEN_DB_AUTH": "",
+            "USE_AWS_KMS": "",
+        }
+        with patch.dict(os.environ, env_overrides):
+            # Remove DATABASE_URL entirely so the DB setup block is skipped
+            os.environ.pop("DATABASE_URL", None)
+            os.environ.pop("DIRECT_URL", None)
+
             with patch.dict(
                 "sys.modules",
                 {
@@ -450,7 +484,11 @@ class TestProxyInitializationHelpers:
                         ProxyConfig=mock_proxy_config,
                         KeyManagementSettings=mock_key_mgmt,
                         save_worker_config=mock_save_worker_config,
-                    )
+                    ),
+                    # Also mock litellm.proxy.proxy_server to prevent the real
+                    # import at line 820 of proxy_cli.py which has heavy side
+                    # effects (FastAPI app init, logging setup, etc.)
+                    "litellm.proxy.proxy_server": mock_proxy_server_module,
                 },
             ), patch(
                 "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
@@ -464,7 +502,10 @@ class TestProxyInitializationHelpers:
                 # Test with no config parameter (config=None)
                 result = runner.invoke(run_server, ["--local"])
 
-                assert result.exit_code == 0
+                assert result.exit_code == 0, (
+                    f"run_server failed with exit_code={result.exit_code}, "
+                    f"output={result.output}, exception={result.exception}"
+                )
 
                 # Verify that uvicorn.run was called
                 mock_uvicorn_run.assert_called_once()
@@ -475,7 +516,10 @@ class TestProxyInitializationHelpers:
                 # Test with explicit --config None (should behave the same)
                 result = runner.invoke(run_server, ["--local", "--config", "None"])
 
-                assert result.exit_code == 0
+                assert result.exit_code == 0, (
+                    f"run_server failed with exit_code={result.exit_code}, "
+                    f"output={result.output}, exception={result.exception}"
+                )
 
                 # Verify that uvicorn.run was called again
                 mock_uvicorn_run.assert_called_once()
@@ -565,20 +609,18 @@ class TestHealthAppFactory:
         # Mock should_update_prisma_schema to return True (so setup_database gets called)
         mock_should_update_schema.return_value = True
 
-        mock_app = MagicMock()
-        mock_proxy_config = MagicMock()
-        mock_key_mgmt = MagicMock()
-        mock_save_worker_config = MagicMock()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
 
         with patch.dict(
             "sys.modules",
             {
-                "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
-                )
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"

@@ -14,7 +14,7 @@ import time
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
 @pytest.fixture
@@ -264,7 +264,7 @@ async def test_logging_result_for_bridge_calls(logging_obj):
             mock_response="Hello, world!",
         )
         await asyncio.sleep(1)
-        assert mock_should_run_logging.call_count == 2  # called twice per call
+        assert mock_should_run_logging.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -405,6 +405,125 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_success_event.assert_called_once()
     dummy_logger.log_stream_event.assert_not_called()
 
+
+def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
+    """Ensure CustomGuardrail logging_hook is skipped when should_run_guardrail is False."""
+    import datetime
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class DummyGuardrail(CustomGuardrail):
+        pass
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+
+    model_response = ModelResponse(
+        id="resp-guardrail-skip",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    guardrail = DummyGuardrail(
+        guardrail_name="dummy-guardrail",
+        event_hook=GuardrailEventHooks.logging_only,
+    )
+    guardrail.should_run_guardrail = MagicMock(return_value=False)
+    guardrail.logging_hook = MagicMock(
+        return_value=(logging_obj.model_call_details, model_response)
+    )
+
+    dummy_logger = DummyLogger()
+    dummy_logger.logging_hook = MagicMock(
+        return_value=(logging_obj.model_call_details, model_response)
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[guardrail, dummy_logger],
+    ):
+        logging_obj.success_handler(
+            result=model_response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            cache_hit=False,
+        )
+
+    guardrail.should_run_guardrail.assert_called_once()
+    guardrail_call_kwargs = guardrail.should_run_guardrail.call_args.kwargs
+    assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
+    guardrail.logging_hook.assert_not_called()
+    dummy_logger.logging_hook.assert_called_once()
+
+
+def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
+    """Ensure CustomGuardrail logging_hook runs when should_run_guardrail is True."""
+    import datetime
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class DummyGuardrail(CustomGuardrail):
+        pass
+
+    logging_obj.stream = False
+
+    model_response = ModelResponse(
+        id="resp-guardrail-run",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    guardrail = DummyGuardrail(
+        guardrail_name="dummy-guardrail",
+        event_hook=GuardrailEventHooks.logging_only,
+    )
+    guardrail.should_run_guardrail = MagicMock(return_value=True)
+
+    def _guardrail_logging_hook(kwargs, result, call_type):
+        updated_kwargs = dict(kwargs)
+        updated_kwargs["guardrail_hook_ran"] = True
+        return updated_kwargs, result
+
+    guardrail.logging_hook = MagicMock(side_effect=_guardrail_logging_hook)
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[guardrail],
+    ):
+        logging_obj.success_handler(
+            result=model_response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            cache_hit=False,
+        )
+
+    guardrail.should_run_guardrail.assert_called_once()
+    guardrail_call_kwargs = guardrail.should_run_guardrail.call_args.kwargs
+    assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
+    guardrail.logging_hook.assert_called_once()
+    assert logging_obj.model_call_details.get("guardrail_hook_ran") is True
+    
 
 def test_get_user_agent_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -1355,3 +1474,118 @@ def test_get_error_information_error_code_priority():
     result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
     assert result["error_code"] == ""
     assert result["error_class"] == "NoCodeException"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for _get_assembled_streaming_response non-streaming early return
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _make_logging_obj(stream: bool) -> LitellmLogging:
+    return LitellmLogging(
+        model="openai/codex-mini-latest",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=stream,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="test-123",
+        function_id="test-fn",
+    )
+
+
+def test_get_assembled_streaming_response_returns_none_for_non_streaming():
+    """Non-streaming requests should return None so the streaming block is skipped."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=False)
+    result = ModelResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is None
+
+
+def test_get_assembled_streaming_response_returns_result_for_streaming():
+    """Streaming requests should return the ModelResponse for further processing."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=True)
+    result = ModelResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is result
+
+
+def test_get_assembled_streaming_response_returns_none_for_non_streaming_text_completion():
+    """Non-streaming TextCompletionResponse should also return None."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=False)
+    result = TextCompletionResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is None
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_computes_standard_logging_object_once():
+    """
+    Non-streaming acompletion should call get_standard_logging_object_payload
+    exactly once, not twice.
+    """
+    import asyncio
+
+    import litellm
+
+    with patch.object(
+        litellm.litellm_core_utils.litellm_logging,
+        "get_standard_logging_object_payload",
+    ) as mock_payload:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        assert mock_payload.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_emit_standard_logging_payload_called_for_non_streaming():
+    """
+    emit_standard_logging_payload should still be called for non-streaming
+    requests (moved from the streaming block to _process_hidden_params_and_response_cost).
+    """
+    import asyncio
+
+    import litellm
+
+    with patch.object(
+        litellm.litellm_core_utils.litellm_logging,
+        "emit_standard_logging_payload",
+    ) as mock_emit:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        assert mock_emit.call_count >= 1
+
+

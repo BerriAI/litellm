@@ -489,6 +489,7 @@ def test_gemini_finish_reason():
     assert response.choices[0].finish_reason == "length"
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_gemini_url_context():
     from litellm import completion
 

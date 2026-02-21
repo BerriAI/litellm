@@ -399,11 +399,100 @@
       "description": "Detects IBANs (2 letter country code + 2 check digits + 4 char bank code + 7 digit base + optional 0-16 alphanumeric)"
     },
     {
+      "name": "fr_nir",
+      "display_name": "NIR/INSEE (French Social Security Number)",
+      "pattern": "\\b[12][0-9]{2}(0[1-9]|1[0-2])[0-9]{2}[0-9]{3}[0-9]{3}[0-9]{2}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects French National Identification Number (Numéro d'Inscription au Répertoire) - 15 digits with specific format: sex + year + month + department + commune + order + key"
+    },
+    {
+      "name": "eu_iban_enhanced",
+      "display_name": "IBAN (Enhanced EU Format)",
+      "pattern": "\\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}[A-Z0-9]{0,16}\\b",
+      "category": "EU PII Patterns",
+      "description": "Enhanced IBAN detection with more specific format validation (2 letter country + 2 check digits + 4 char bank code + 7 digit account base + optional 0-16 alphanumeric)"
+    },
+    {
+      "name": "fr_phone",
+      "display_name": "Phone Number (France)",
+      "pattern": "(?<!\\d)(?:\\+33|0033|0)[1-9][0-9]{8}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects French phone numbers in various formats (+33, 0033, or 0 prefix followed by 9 digits starting with 1-9)"
+    },
+    {
+      "name": "eu_vat",
+      "display_name": "VAT Number (EU)",
+      "pattern": "\\b(AT|BE|BG|CY|CZ|DE|DK|EE|EL|ES|FI|FR|HR|HU|IE|IT|LT|LU|LV|MT|NL|PL|PT|RO|SE|SI|SK)[0-9A-Z]{8,12}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects EU VAT identification numbers (2-letter country code + 8-12 alphanumeric characters covering all EU member states)",
+      "keyword_pattern": "\\b(?:VAT|V\\.A\\.T\\.|TVA|IVA|BTW|MWST|value\\s*added\\s*tax|tax\\s*number|tax\\s*id|fiscal\\s*number|fiscal\\s*code)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "eu_passport_generic",
+      "display_name": "Passport Number (EU Generic)",
+      "pattern": "\\b[0-9]{2}[A-Z]{2}[0-9]{5}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects generic EU passport format (2 digits + 2 letters + 5 digits) - covers France and similar EU formats",
+      "keyword_pattern": "\\b(?:passport|passeport|travel\\s*document|document\\s*number|reisepass|paspoort|paszport)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "fr_postal_code",
+      "display_name": "Postal Code (France)",
+      "pattern": "\\b[0-9]{5}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects French postal codes (5 digits)",
+      "keyword_pattern": "\\b(?:code\\s*postal|postal\\s*code|CP|zip\\s*code|postcode)\\b",
+      "allow_word_numbers": false
+    },
+    {
       "name": "street_address",
       "display_name": "Street Address",
       "pattern": "\\b\\d{1,6}\\s+[A-Za-z0-9][A-Za-z0-9\\s.'-]*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\\b",
       "category": "PII Patterns",
       "description": "Detects street addresses (number + street name + street type)"
+    },
+    {
+      "name": "airline_pnr",
+      "display_name": "Airline PNR / Booking Reference",
+      "pattern": "\\b[A-Z]{6}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects airline PNR / booking references (6 uppercase alpha characters) when near booking context",
+      "keyword_pattern": "\\b(?:PNR|booking\\s*(?:reference|ref|code|number|confirmation)|reservation\\s*(?:code|number|ref)|record\\s*locator|confirmation\\s*(?:code|number)|itinerary\\s*(?:number|ref))\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "skywards_number",
+      "display_name": "Emirates Skywards / Frequent Flyer Number",
+      "pattern": "\\b(?:EK\\s?)?\\d{9,10}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects Emirates Skywards frequent flyer numbers (9-10 digits, optional EK prefix) when near loyalty/frequent flyer context",
+      "keyword_pattern": "\\b(?:[Ss]kywards|frequent\\s*flyer|FF\\s*(?:number|no|#)|loyalty\\s*(?:number|id|member)|member\\s*(?:number|id|#)|miles\\s*(?:account|number)|tier\\s*(?:number|status))\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uae_emirates_id",
+      "display_name": "UAE Emirates ID",
+      "pattern": "\\b784-?\\d{4}-?\\d{7}-?\\d\\b",
+      "category": "UAE PII Patterns",
+      "description": "Detects UAE Emirates ID numbers (784-YYYY-NNNNNNN-C format, 15 digits starting with 784)"
+    },
+    {
+      "name": "uae_phone",
+      "display_name": "Phone Number (UAE)",
+      "pattern": "(?<!\\d)(?:\\+971|00971|0)\\s?(?:2|3|4|6|7|9|50|52|54|55|56|58)\\s?\\d{3}\\s?\\d{4}\\b",
+      "category": "UAE PII Patterns",
+      "description": "Detects UAE phone numbers (+971/00971/0 prefix, landline and mobile)"
+    },
+    {
+      "name": "flight_number",
+      "display_name": "Airline Flight Number",
+      "pattern": "\\b(?:EK|QF|BA|AA|LH|AF|SQ|CX|QR|EY|FZ|WY|GF|KU|SV|MS|RJ|ME|PK|AI|UL|WS|9W|6E)\\s?\\d{1,4}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects airline flight numbers (major IATA 2-letter codes + 1-4 digit flight number) when near flight context",
+      "keyword_pattern": "\\b(?:flight|departure|arrival|gate|boarding|schedule|operate|route|aircraft|plane|outbound|inbound|leg|sector|flying)\\b",
+      "allow_word_numbers": false
     }
   ]
 }

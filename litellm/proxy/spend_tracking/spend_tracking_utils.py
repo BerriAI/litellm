@@ -67,6 +67,7 @@ def _get_spend_logs_metadata(
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
+            user_api_key_project_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -85,6 +86,8 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            attempted_retries=None,
+            max_retries=None,
             cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
@@ -95,9 +98,8 @@ def _get_spend_logs_metadata(
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
-            key: metadata[key]
+            key: metadata.get(key)
             for key in SpendLogsMetadata.__annotations__.keys()
-            if key in metadata
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
@@ -352,6 +354,8 @@ def get_logging_payload(  # noqa: PLR0915
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
+            else metadata.get("standard_logging_guardrail_information", None)
+            if metadata is not None
             else None
         ),
         cold_storage_object_key=(

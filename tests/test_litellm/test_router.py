@@ -925,6 +925,132 @@ def test_router_get_model_access_groups_team_only_models():
     assert list(access_groups.keys()) == ["default-models"]
 
 
+def test_get_model_access_groups_caching():
+    """
+    Test that get_model_access_groups caches the no-args result
+    and invalidates on deployment changes.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"access_groups": ["premium"]},
+            },
+        ]
+    )
+
+    # First call computes and populates cache
+    result1 = router.get_model_access_groups()
+    assert "premium" in result1
+
+    # All subsequent calls should return the same cached object (including first)
+    result2 = router.get_model_access_groups()
+    assert result1 is result2
+
+    # Calls with args should bypass cache
+    result_with_args = router.get_model_access_groups(model_name="gpt-4")
+    assert result_with_args is not result2
+
+    # Add a deployment — cache should be invalidated
+    router.add_deployment(
+        Deployment(
+            model_name="gpt-3.5",
+            litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
+            model_info={"access_groups": ["default"]},
+        )
+    )
+    result3 = router.get_model_access_groups()
+    assert result3 is not result2
+    assert "premium" in result3
+    assert "default" in result3
+
+    # Delete the deployment — cache should be invalidated again
+    deployment_id = None
+    for m in router.model_list:
+        if m.get("model_name") == "gpt-3.5":
+            deployment_id = m.get("model_info", {}).get("id")
+            break
+    assert deployment_id is not None
+    router.delete_deployment(id=deployment_id)
+    result4 = router.get_model_access_groups()
+    assert result4 is not result3
+    assert "default" not in result4
+    assert "premium" in result4
+
+
+def test_get_model_access_groups_cache_invalidation_set_model_list():
+    """
+    Test that set_model_list invalidates the access groups cache.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"access_groups": ["premium"]},
+            },
+        ]
+    )
+
+    # Populate cache
+    result1 = router.get_model_access_groups()
+    assert "premium" in result1
+
+    # set_model_list should invalidate cache
+    router.set_model_list(
+        [
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3-opus-20240229"},
+                "model_info": {"access_groups": ["research"]},
+            },
+        ]
+    )
+    result2 = router.get_model_access_groups()
+    assert result2 is not result1
+    assert "research" in result2
+    assert "premium" not in result2
+
+
+def test_get_model_access_groups_cache_invalidation_upsert_deployment():
+    """
+    Test that upsert_deployment invalidates the access groups cache.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"access_groups": ["premium"]},
+            },
+        ]
+    )
+
+    # Populate cache
+    result1 = router.get_model_access_groups()
+    assert "premium" in result1
+
+    # Get the existing deployment's ID
+    existing_id = router.model_list[0]["model_info"]["id"]
+
+    # Upsert with the same ID but different params — triggers pop + re-add
+    router.upsert_deployment(
+        Deployment(
+            model_name="gpt-4-updated",
+            litellm_params=LiteLLM_Params(model="gpt-4-turbo"),
+            model_info={"id": existing_id, "access_groups": ["updated-group"]},
+        )
+    )
+    result2 = router.get_model_access_groups()
+    assert result2 is not result1
+    assert "updated-group" in result2
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator():
     """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
@@ -1726,6 +1852,54 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["custom_llm_provider"] == "bedrock"
 
 
+def test_get_deployment_credentials_with_provider_resolves_credential_name():
+    """
+    Test that get_deployment_credentials_with_provider correctly resolves
+    litellm_credential_name to actual credential values (for UI-created models).
+    """
+    from litellm.types.utils import CredentialItem
+    
+    # Setup credential list with a test credential
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="test-azure-cred",
+            credential_info={"custom_llm_provider": "azure"},
+            credential_values={
+                "api_key": "resolved-api-key",
+                "api_base": "https://resolved.openai.azure.com",
+                "api_version": "2024-02-01"
+            }
+        )
+    ]
+    
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "litellm_credential_name": "test-azure-cred",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="azure-gpt-4"
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "resolved-api-key"
+    assert credentials["api_base"] == "https://resolved.openai.azure.com"
+    assert credentials["api_version"] == "2024-02-01"
+    assert credentials["custom_llm_provider"] == "azure"
+    # Ensure credential name is removed after resolution
+    assert "litellm_credential_name" not in credentials
+    
+    # Cleanup
+    litellm.credential_list = []
+
+
 def test_get_available_guardrail_single_deployment():
     """
     Test get_available_guardrail returns the single guardrail when only one exists.
@@ -1877,19 +2051,20 @@ async def test_anthropic_messages_call_type_is_cached():
     in PromptCachingDeploymentCheck.async_log_success_event.
     """
     import asyncio
+
+    from litellm.caching.dual_cache import DualCache
     from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
         PromptCachingDeploymentCheck,
     )
     from litellm.router_utils.prompt_caching_cache import PromptCachingCache
-    from litellm.caching.dual_cache import DualCache
-    from litellm.types.utils import CallTypes
     from litellm.types.utils import (
-        StandardLoggingPayload,
-        StandardLoggingModelInformation,
-        StandardLoggingMetadata,
+        CallTypes,
         StandardLoggingHiddenParams,
+        StandardLoggingMetadata,
+        StandardLoggingModelInformation,
+        StandardLoggingPayload,
     )
-    
+
     # Create mock standard logging payload inline
     def create_standard_logging_payload() -> StandardLoggingPayload:
         return StandardLoggingPayload(
@@ -2081,3 +2256,184 @@ def test_update_kwargs_with_deployment_no_tags():
 
     # No tags key should be added if deployment has no tags
     assert "tags" not in kwargs["metadata"]
+
+
+def test_update_kwargs_with_deployment_merges_tools():
+    """
+    Test that when both deployment litellm_params and request have tools,
+    they are merged (deployment tools first, then request tools).
+
+    Supports proxy-configured tools (e.g. for o3 deep research) merged with
+    client-provided tools.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    "tool_choice": "auto",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {
+        "metadata": {},
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "description": "Get weather"},
+            },
+        ],
+    }
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="o3-deep-research"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Tools should be merged: deployment first, then request
+    assert "tools" in kwargs
+    assert len(kwargs["tools"]) == 2
+    assert kwargs["tools"][0] == {"type": "web_search"}
+    assert kwargs["tools"][1]["function"]["name"] == "get_weather"
+    # tool_choice from request (none) - deployment's should be used
+    assert kwargs["tool_choice"] == "auto"
+
+
+def test_update_kwargs_with_deployment_merge_tools_deployment_only():
+    """
+    Test that when only deployment has tools, they are applied to kwargs.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    "tool_choice": "required",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {"metadata": {}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="o3-deep-research"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["tools"] == [{"type": "web_search"}]
+    assert kwargs["tool_choice"] == "required"
+
+
+def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice():
+    """
+    Test that when request has tool_choice, it overrides deployment's.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    "tool_choice": "auto",
+                },
+            },
+        ],
+    )
+
+    kwargs: dict = {
+        "metadata": {},
+        "tool_choice": "none",
+    }
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="o3-deep-research"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    # Request tool_choice should be preserved (merged tools still applied)
+    assert kwargs["tool_choice"] == "none"
+
+
+def test_credential_name_injected_as_tag():
+    """
+    Test that litellm_credential_name from deployment litellm_params
+    is injected as a tag into metadata during _update_kwargs_with_deployment.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "xai-model",
+                "litellm_params": {
+                    "model": "xai/grok-4-1-fast",
+                    "litellm_credential_name": "xAI",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="xai-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert "Credential: xAI" in kwargs["metadata"]["tags"]
+    assert "A.101" in kwargs["metadata"]["tags"]
+
+
+def test_credential_name_not_duplicated_in_tags():
+    """
+    Test that if the credential tag already exists in the tags list,
+    it is not duplicated.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "xai-model",
+                "litellm_params": {
+                    "model": "xai/grok-4-1-fast",
+                    "litellm_credential_name": "xAI",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["Credential: xAI", "A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="xai-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["metadata"]["tags"].count("Credential: xAI") == 1
+
+
+def test_credential_name_not_injected_when_absent():
+    """
+    Test that when no litellm_credential_name is set, tags are unchanged.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                },
+            }
+        ],
+    )
+
+    kwargs: dict = {"metadata": {"tags": ["A.101"]}}
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-model"
+    )
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["metadata"]["tags"] == ["A.101"]

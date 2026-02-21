@@ -3242,7 +3242,7 @@ def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
         "id": "msg_vrtx_011pL6Np3MKxXL3R8theMRJW",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-7-sonnet-20250219",
+        "model": "claude-4-sonnet-20250514",
         "content": [
             {
                 "type": "thinking",
