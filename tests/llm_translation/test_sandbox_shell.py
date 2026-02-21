@@ -486,6 +486,54 @@ class TestSandboxShellExecutionLoop:
 
         mock_exec.assert_called_once_with(["date"])
 
+    @pytest.mark.asyncio
+    async def test_max_iterations_cap_async(self):
+        """
+        Loop should terminate after MAX_SHELL_ITERATIONS even if the model
+        keeps calling _litellm_shell on every turn.
+        """
+        from litellm.responses.shell_tool_handler import MAX_SHELL_ITERATIONS
+
+        always_shell = _make_tool_call_response(
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id="call_loop",
+                    type="function",
+                    function=Function(
+                        name="_litellm_shell",
+                        arguments='{"command": ["echo", "again"]}',
+                    ),
+                )
+            ]
+        )
+
+        handler = LiteLLMCompletionTransformationHandler()
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        with (
+            patch(
+                "litellm.responses.litellm_completion_transformation.handler.litellm.acompletion",
+                new_callable=AsyncMock,
+                return_value=always_shell,
+            ) as mock_acompletion,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value={"success": True, "output": "again\n", "error": "", "files": []},
+            ) as mock_exec,
+        ):
+            result = await handler._run_shell_execution_loop(
+                initial_response=always_shell,
+                completion_args={
+                    "model": "mistral/mistral-large-latest",
+                    "messages": [{"role": "user", "content": "loop forever"}],
+                    "tools": [shell_fn_tool],
+                },
+            )
+
+        assert mock_acompletion.call_count == MAX_SHELL_ITERATIONS
+        assert mock_exec.call_count == MAX_SHELL_ITERATIONS
+        assert result is always_shell
+
 
 # ---------------------------------------------------------------------------
 # Sync completion bridge shell execution loop
@@ -597,6 +645,52 @@ class TestSandboxShellExecutionLoopSync:
         assert "STDERR" in tool_msg["content"]
         assert "non-zero" in tool_msg["content"]
         assert result.id == "resp-shell-final"
+
+    def test_max_iterations_cap_sync(self):
+        """
+        Sync loop should terminate after MAX_SHELL_ITERATIONS even if
+        the model keeps calling _litellm_shell on every turn.
+        """
+        from litellm.responses.shell_tool_handler import MAX_SHELL_ITERATIONS
+
+        always_shell = _make_tool_call_response(
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id="call_loop",
+                    type="function",
+                    function=Function(
+                        name="_litellm_shell",
+                        arguments='{"command": ["echo", "again"]}',
+                    ),
+                )
+            ]
+        )
+
+        handler = LiteLLMCompletionTransformationHandler()
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        with (
+            patch(
+                "litellm.responses.litellm_completion_transformation.handler.litellm.completion",
+                return_value=always_shell,
+            ) as mock_completion,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value={"success": True, "output": "again\n", "error": "", "files": []},
+            ) as mock_exec,
+        ):
+            result = handler._run_shell_execution_loop_sync(
+                initial_response=always_shell,
+                completion_args={
+                    "model": "mistral/mistral-large-latest",
+                    "messages": [{"role": "user", "content": "loop forever"}],
+                    "tools": [shell_fn_tool],
+                },
+            )
+
+        assert mock_completion.call_count == MAX_SHELL_ITERATIONS
+        assert mock_exec.call_count == MAX_SHELL_ITERATIONS
+        assert result is always_shell
 
 
 # ---------------------------------------------------------------------------
@@ -1039,3 +1133,58 @@ class TestNativeResponsesAPIShellLoop:
         assert mock_exec.call_count == 2
         assert mock_aresponses.call_count == 2
         assert result.id == "resp-3"
+
+    @pytest.mark.asyncio
+    async def test_async_loop_max_iterations_cap(self):
+        """
+        Native Responses API loop should terminate after MAX_SHELL_ITERATIONS
+        even if the provider keeps returning _litellm_shell calls.
+        """
+        from litellm.responses.shell_tool_handler import (
+            MAX_SHELL_ITERATIONS,
+            run_shell_execution_loop_responses_api,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        always_shell = ResponsesAPIResponse(
+            **{
+                "id": "resp-loop",
+                "created_at": 1000,
+                "model": "volcengine/ep-xxx",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "fc_loop",
+                        "name": "_litellm_shell",
+                        "arguments": '{"command": ["echo", "again"]}',
+                        "id": "out-loop",
+                        "status": "completed",
+                    }
+                ],
+                "object": "response",
+                "status": "completed",
+            }
+        )
+
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        with (
+            patch(
+                "litellm.responses.main.aresponses",
+                new_callable=AsyncMock,
+                return_value=always_shell,
+            ) as mock_aresponses,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value={"success": True, "output": "again\n", "error": "", "files": []},
+            ) as mock_exec,
+        ):
+            result = await run_shell_execution_loop_responses_api(
+                response=always_shell,
+                model="volcengine/ep-xxx",
+                tools=[shell_fn_tool],
+            )
+
+        assert mock_aresponses.call_count == MAX_SHELL_ITERATIONS
+        assert mock_exec.call_count == MAX_SHELL_ITERATIONS
+        assert result.id == "resp-loop"
