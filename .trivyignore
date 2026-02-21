@@ -10,3 +10,15 @@ GHSA-h25m-26qc-wcjf
 
 # MEDIUM: Image Optimizer DoS
 CVE-2025-59471
+
+# Docusaurus docs build tool vulnerabilities (docs/my-website/package-lock.json)
+# These are dev-only dependencies used to build the docs site, not runtime dependencies.
+# The minimatch fix requires a 3.x→10.x major version jump (breaking API change) that
+# would break webpack internals. The ajv fix similarly requires cross-major overrides
+# that risk breaking the docs build. No production exposure.
+
+# MEDIUM: ajv ReDoS via $data reference
+CVE-2025-69873
+
+# HIGH: minimatch DoS via crafted glob patterns (fix requires breaking 3.x→10.x upgrade)
+CVE-2026-26996
