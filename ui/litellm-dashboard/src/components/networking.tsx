@@ -5438,10 +5438,19 @@ export const getPoliciesList = async (accessToken: string) => {
   }
 };
 
+export interface GuardrailInputs {
+  texts?: string[];
+  images?: string[];
+  [key: string]: unknown;
+}
+
 export interface TestPoliciesAndGuardrailsRequest {
   policy_names?: string[] | null;
   guardrail_names?: string[] | null;
-  inputs: { texts?: string[]; images?: string[]; [key: string]: unknown };
+  /** Single input (legacy). Use inputs_list for per-input batch processing. */
+  inputs?: GuardrailInputs | null;
+  /** List of inputs; each processed separately for batch compliance testing. */
+  inputs_list?: GuardrailInputs[] | null;
   request_data?: Record<string, unknown>;
   input_type?: "request" | "response";
 }
@@ -5452,8 +5461,10 @@ export interface GuardrailErrorEntry {
 }
 
 export interface TestPoliciesAndGuardrailsResponse {
-  inputs: Record<string, unknown>;
-  guardrail_errors: GuardrailErrorEntry[];
+  inputs?: Record<string, unknown>;
+  guardrail_errors?: GuardrailErrorEntry[];
+  /** Present when inputs_list was used; one result per input. */
+  results?: Array<{ inputs: Record<string, unknown>; guardrail_errors: GuardrailErrorEntry[] }>;
 }
 
 export const testPoliciesAndGuardrails = async (
@@ -5473,7 +5484,8 @@ export const testPoliciesAndGuardrails = async (
       body: JSON.stringify({
         policy_names: body.policy_names ?? null,
         guardrail_names: body.guardrail_names ?? null,
-        inputs: body.inputs,
+        inputs: body.inputs ?? null,
+        inputs_list: body.inputs_list ?? null,
         request_data: body.request_data ?? {},
         input_type: body.input_type ?? "request",
       }),

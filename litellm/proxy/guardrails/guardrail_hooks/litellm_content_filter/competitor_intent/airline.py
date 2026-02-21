@@ -78,6 +78,24 @@ AIRLINE_COMPETITOR_SIGNALS = [
     r"\bprivilege\s+club\b",
 ]
 
+# Operational-only: baggage, lounge, check-in, refund (no comparison language).
+# When only these appear with ambiguous token → treat as product query (OTHER_MEANING).
+AIRLINE_OPERATIONAL_SIGNALS = [
+    r"\bbaggage\s+allowance\b",
+    r"\blounge\b",
+    r"\bcheck[- ]?in\b",
+    r"\brefund\b",
+    r"\bpremium\s+lounge\b",
+]
+# Comparison language: if present with competitor signals → COMPETITOR.
+AIRLINE_COMPARISON_SIGNALS = [
+    r"\bbetter\b",
+    r"\bbest\b",
+    r"\bvs\.?\b",
+    r"\bversus\b",
+    r"\bcompare\b",
+]
+
 # Explicit markers: strong override when present.
 AIRLINE_EXPLICIT_COMPETITOR_MARKER = r"\b(airways?|airline|carrier)\b"
 AIRLINE_EXPLICIT_OTHER_MEANING_MARKER = (
@@ -126,6 +144,11 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
         if self._explicit_other_meaning_marker and self._explicit_other_meaning_marker.search(
             text_lower
         ):
+            return "OTHER_MEANING", 0.85
+        # Operational-only: baggage/lounge/check-in/refund with no comparison → product query
+        has_comparison = _count_signals(text_lower, AIRLINE_COMPARISON_SIGNALS) > 0
+        operational_count = _count_signals(text_lower, AIRLINE_OPERATIONAL_SIGNALS)
+        if not has_comparison and operational_count > 0:
             return "OTHER_MEANING", 0.85
         # Score: location/travel context vs airline context (no place-name list)
         other_count = _count_signals(text_lower, self._other_meaning_signals)

@@ -5,10 +5,7 @@ Tests for competitor intent detection (normalize, entity layer, scoring, policy)
 import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import (
-    AirlineCompetitorIntentChecker,
-    normalize,
-    text_for_entity_matching,
-)
+    AirlineCompetitorIntentChecker, normalize, text_for_entity_matching)
 
 
 class TestNormalize:
@@ -120,9 +117,8 @@ class TestContentFilterWithCompetitorIntent:
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_with_competitor_intent_allow(self):
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
-            ContentFilterGuardrail,
-        )
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
+            ContentFilterGuardrail
 
         guardrail = ContentFilterGuardrail(
             guardrail_name="test-competitor",
@@ -143,9 +139,8 @@ class TestContentFilterWithCompetitorIntent:
     async def test_apply_guardrail_with_competitor_intent_refuse(self):
         from fastapi import HTTPException
 
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
-            ContentFilterGuardrail,
-        )
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
+            ContentFilterGuardrail
 
         guardrail = ContentFilterGuardrail(
             guardrail_name="test-competitor",
@@ -163,3 +158,117 @@ class TestContentFilterWithCompetitorIntent:
                 inputs, request_data={}, input_type="request"
             )
         assert exc_info.value.status_code == 403
+
+
+# Exact config from litellm/proxy/_new_secret_config.yaml (lines 27-53).
+AIRLINE_PROXY_CONFIG = {
+    "brand_self": ["emirates", "ek"],
+    "competitors": ["qatar airways", "qatar", "etihad"],
+    "locations": ["qatar", "doha", "doh"],
+    "competitor_aliases": {
+        "qatar airways": ["qr", "doha airline"],
+        "qatar": ["qr"],
+    },
+    "policy": {
+        "competitor_comparison": "refuse",
+        "possible_competitor_comparison": "reframe",
+    },
+    "threshold_high": 0.70,
+    "threshold_medium": 0.45,
+    "threshold_low": 0.30,
+}
+
+# Config matching proxy + domain_words, category_ranking, and competitors for full dataset.
+AIRLINE_COMPLIANCE_CONFIG = {
+    "brand_self": ["emirates", "ek"],
+    "competitors": [
+        "qatar airways",
+        "qatar",
+        "etihad",
+        "turkish airlines",
+        "lufthansa",
+        "singapore airlines",
+    ],
+    "locations": ["qatar", "doha", "doh"],
+    "competitor_aliases": {
+        "qatar airways": ["qr", "doha airline"],
+        "qatar": ["qr"],
+    },
+    "domain_words": ["airline", "airlines", "carrier"],
+    "policy": {
+        "competitor_comparison": "refuse",
+        "possible_competitor_comparison": "reframe",
+        "category_ranking": "reframe",
+    },
+    "threshold_high": 0.70,
+    "threshold_medium": 0.45,
+    "threshold_low": 0.30,
+}
+
+# Dataset from ui/litellm-dashboard/src/data/compliancePrompts.ts airlineCompliancePrompts
+AIRLINE_COMPLIANCE_DATASET = [
+    # Destination Intent (should PASS)
+    ("airline_001", "Do you have flights to Qatar?", "pass"),
+    ("airline_002", "How long is the flight to Doha?", "pass"),
+    ("airline_003", "Do I need a visa to transit through Qatar?", "pass"),
+    ("airline_004", "Are there lounges at Hamad Airport?", "pass"),
+    ("airline_005", "What documents are required to enter Singapore?", "pass"),
+    ("airline_006", "What airlines fly to Turkey?", "pass"),
+    ("airline_007", "What is the airport code for Doha?", "pass"),
+    ("airline_008", "Is Doha a good place for a long layover?", "pass"),
+    ("airline_009", "What is the weather like in Qatar in March?", "pass"),
+    ("airline_010", "How much connection time do I need in Doha?", "pass"),
+    # Competitor Comparison (should FAIL)
+    ("airline_011", "Is Qatar Airways better than Emirates?", "fail"),
+    ("airline_012", "Which airline has better business class, Qatar or Singapore Airlines?", "fail"),
+    ("airline_013", "Which airline is the best for long haul flights?", "fail"),
+    ("airline_014", "Should I choose Qatar Airways or another airline?", "fail"),
+    ("airline_015", "Compare Turkish Airlines vs Lufthansa.", "fail"),
+    ("airline_016", "Which airline has better lounges?", "fail"),
+    ("airline_017", "Which airline has the best customer satisfaction?", "fail"),
+    ("airline_018", "Is the Doha airline better than other carriers?", "fail"),
+    ("airline_019", "Should I switch to another airline for a better experience?", "fail"),
+    ("airline_020", "Which airline is ranked number one worldwide?", "fail"),
+    # Ambiguous Entity (should PASS)
+    ("airline_021", "Qatar baggage allowance", "pass"),
+    ("airline_022", "Qatar lounge access rules", "pass"),
+    ("airline_023", "Qatar check in time", "pass"),
+    ("airline_024", "Doha premium lounge access", "pass"),
+    ("airline_025", "Qatar refund policy", "pass"),
+]
+
+
+class TestAirlineComplianceDataset:
+    """Run full airline compliance dataset with proxy config; all cases must match expected outcome."""
+
+    def test_airline_001_passes_with_exact_proxy_config(self):
+        """With exact proxy config, first compliance case (flights to Qatar) must pass (allow)."""
+        checker = AirlineCompetitorIntentChecker(AIRLINE_PROXY_CONFIG)
+        result = checker.run("Do you have flights to Qatar?")
+        assert result["intent"] == "other"
+        assert result["action_hint"] == "allow"
+
+    def test_airline_compliance_dataset_with_proxy_config(self):
+        """Every prompt must get intent/action consistent with expectedResult (pass=allow, fail=refuse/reframe)."""
+        checker = AirlineCompetitorIntentChecker(AIRLINE_COMPLIANCE_CONFIG)
+        failures = []
+        for prompt_id, prompt_text, expected in AIRLINE_COMPLIANCE_DATASET:
+            result = checker.run(prompt_text)
+            intent = result.get("intent", "other")
+            action_hint = result.get("action_hint", "allow")
+            if expected == "pass":
+                allowed = intent == "other" and action_hint == "allow"
+                if not allowed:
+                    failures.append(
+                        f"{prompt_id}: expected pass, got intent={intent!r} action_hint={action_hint!r} for {prompt_text!r}"
+                    )
+            else:
+                blocked = (
+                    intent != "other"
+                    and action_hint in ("refuse", "reframe")
+                )
+                if not blocked:
+                    failures.append(
+                        f"{prompt_id}: expected fail, got intent={intent!r} action_hint={action_hint!r} for {prompt_text!r}"
+                    )
+        assert not failures, f"Airline compliance dataset failures:\n" + "\n".join(failures)
