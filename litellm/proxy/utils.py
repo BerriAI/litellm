@@ -2289,6 +2289,10 @@ class PrismaClient:
         self._db_auth_reconnect_timeout_seconds: float = max(
             0.5, float(os.getenv("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", "2.0"))
         )
+        self._db_auth_reconnect_lock_timeout_seconds: float = max(
+            0.0,
+            float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
+        )
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -3587,6 +3591,7 @@ class PrismaClient:
         reason: str,
         force: bool = False,
         timeout_seconds: Optional[float] = None,
+        lock_timeout_seconds: Optional[float] = None,
     ) -> bool:
         """
         Attempt to reconnect the Prisma client in a singleflight manner.
@@ -3606,7 +3611,7 @@ class PrismaClient:
             )
             return False
 
-        async with self._db_reconnect_lock:
+        async def _attempt_reconnect_inside_lock() -> bool:
             now = time.time()
             if (
                 force is False
@@ -3641,6 +3646,28 @@ class PrismaClient:
                 self._db_last_reconnect_attempt_ts = time.time()
 
             return reconnect_succeeded
+
+        if lock_timeout_seconds is None:
+            async with self._db_reconnect_lock:
+                return await _attempt_reconnect_inside_lock()
+
+        try:
+            await asyncio.wait_for(
+                self._db_reconnect_lock.acquire(),
+                timeout=lock_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
+                reason,
+                lock_timeout_seconds,
+            )
+            return False
+
+        try:
+            return await _attempt_reconnect_inside_lock()
+        finally:
+            self._db_reconnect_lock.release()
 
     async def start_db_health_watchdog_task(self) -> None:
         """
