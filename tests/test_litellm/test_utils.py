@@ -3425,3 +3425,43 @@ class TestMetadataNoneHandling:
         litellm_params = {"metadata": None}
         metadata = litellm_params.get("metadata") or {}
         assert metadata == {}
+
+
+class TestValidateAndFixThinkingParam:
+    """Tests for validate_and_fix_thinking_param."""
+
+    def test_none_returns_none(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=None) is None
+
+    def test_already_snake_case(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+
+    def test_camel_case_normalized(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+        assert "budgetTokens" not in result
+
+    def test_both_keys_snake_case_wins(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "budgetTokens": 50000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 10000}
+        assert "budgetTokens" not in result
+
+    def test_original_dict_not_mutated(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        validate_and_fix_thinking_param(thinking=thinking)
+        assert "budgetTokens" in thinking
+        assert "budget_tokens" not in thinking

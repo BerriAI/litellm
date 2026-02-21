@@ -7666,6 +7666,23 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
     return new_tools
 
 
+def validate_and_fix_thinking_param(
+    thinking: Optional["AnthropicThinkingParam"],
+) -> Optional["AnthropicThinkingParam"]:
+    """
+    Normalizes camelCase keys in the thinking param to snake_case.
+    Handles clients that send budgetTokens instead of budget_tokens.
+    """
+    if thinking is None or not isinstance(thinking, dict):
+        return thinking
+    normalized = dict(thinking)
+    if "budgetTokens" in normalized and "budget_tokens" not in normalized:
+        normalized["budget_tokens"] = normalized.pop("budgetTokens")
+    elif "budgetTokens" in normalized and "budget_tokens" in normalized:
+        normalized.pop("budgetTokens")
+    return cast("AnthropicThinkingParam", normalized)
+
+
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
     Cleans up the message by removing the none field.
