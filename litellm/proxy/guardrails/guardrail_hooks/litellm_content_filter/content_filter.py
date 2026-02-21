@@ -1746,7 +1746,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
             masked_entity_count=masked_entity_count,
-            tracing_detail=GuardrailTracingDetail(**tracing_kw),
+            tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
         )
 
     async def apply_guardrail(
