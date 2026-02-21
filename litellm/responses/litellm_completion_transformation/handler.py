@@ -216,6 +216,12 @@ class LiteLLMCompletionTransformationHandler:
                     shell_calls.append({"id": tc.id, "command": command})
                 elif isinstance(command, str):
                     shell_calls.append({"id": tc.id, "command": [command]})
+                else:
+                    verbose_logger.warning(
+                        "Shell tool call %s has invalid/missing 'command' argument: %s",
+                        tc.id,
+                        args,
+                    )
         return shell_calls
 
     @staticmethod
