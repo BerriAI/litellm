@@ -55,7 +55,7 @@ The engine works well — the single miss is a unicode evasion case (Greek alpha
 
 ```bash
 # Run all evals (keyword + content filter):
-pytest tests/test_litellm/proxy/guardrails/guardrail_hooks/content_filter/topic_blocker/test_eval.py -v -s
+pytest litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/test_eval.py -v -s
 
 # Run specific eval:
 pytest ... -k "InvestmentContentFilter" -v -s

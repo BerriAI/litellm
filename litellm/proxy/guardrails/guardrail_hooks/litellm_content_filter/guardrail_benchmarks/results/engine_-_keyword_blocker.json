@@ -1,6 +1,6 @@
 {
   "label": "Engine \u2014 Keyword Blocker",
-  "timestamp": "2026-02-21T01:14:02.366734+00:00",
+  "timestamp": "2026-02-21T01:17:53.948612+00:00",
   "total": 34,
   "tp": 20,
   "tn": 13,
@@ -11,8 +11,8 @@
   "f1": 0.9756,
   "accuracy": 0.9706,
   "latency_p50_ms": 0.018,
-  "latency_p95_ms": 0.04,
-  "latency_avg_ms": 0.017,
+  "latency_p95_ms": 0.141,
+  "latency_avg_ms": 0.036,
   "wrong": [
     "  FN (score=0.000): '\u03b1lpha is red'                                               \u2014 Greek alpha character lookalike \u2014 evasion attempt"
   ],
@@ -25,7 +25,7 @@
       "test": "basic conditional \u2014 identifier + block word in same sentence",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.105
+      "latency_ms": 0.141
     },
     {
       "sentence": "bravo is blue",
@@ -35,7 +35,7 @@
       "test": "basic conditional \u2014 second identifier + second block word",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.04
+      "latency_ms": 0.044
     },
     {
       "sentence": "alpha is green",
@@ -75,7 +75,7 @@
       "test": "multiple matches in same sentence",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.026
+      "latency_ms": 0.028
     },
     {
       "sentence": "block this phrase",
@@ -85,7 +85,7 @@
       "test": "exact always-block keyword",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.026
+      "latency_ms": 0.028
     },
     {
       "sentence": "please block this phrase now",
@@ -105,7 +105,7 @@
       "test": "second always-block keyword",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.024
+      "latency_ms": 0.023
     },
     {
       "sentence": "block this",
@@ -125,7 +125,7 @@
       "test": "exception should override conditional match",
       "score": 0.0,
       "matched_topic": null,
-      "latency_ms": 0.003
+      "latency_ms": 0.002
     },
     {
       "sentence": "bravo safe context is blue",
@@ -135,7 +135,7 @@
       "test": "exception should override for second identifier",
       "score": 0.0,
       "matched_topic": null,
-      "latency_ms": 0.003
+      "latency_ms": 0.002
     },
     {
       "sentence": "ALPHA IS RED",
@@ -145,7 +145,7 @@
       "test": "all caps should still match",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.025
+      "latency_ms": 0.023
     },
     {
       "sentence": "Alpha Is Red",
@@ -155,7 +155,7 @@
       "test": "mixed case should still match",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.022
+      "latency_ms": 0.021
     },
     {
       "sentence": "BLOCK THIS PHRASE",
@@ -185,7 +185,7 @@
       "test": "match in first sentence, safe second sentence",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.019
+      "latency_ms": 0.018
     },
     {
       "sentence": "this is fine. alpha is red.",
@@ -195,7 +195,7 @@
       "test": "safe first sentence, match in second sentence",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.019
+      "latency_ms": 0.018
     },
     {
       "sentence": "alpha is red! bravo is blue?",
@@ -215,7 +215,7 @@
       "test": "newline-separated lines",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.016
+      "latency_ms": 0.019
     },
     {
       "sentence": "alpha is red; and bravo is blue",
@@ -235,7 +235,7 @@
       "test": "identifier and block word on different lines should pass",
       "score": 0.0,
       "matched_topic": null,
-      "latency_ms": 0.004
+      "latency_ms": 0.003
     },
     {
       "sentence": "alphabetical is red",
@@ -275,7 +275,7 @@
       "test": "exception in one sentence should NOT whitelist violation in another sentence",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.018
+      "latency_ms": 0.02
     },
     {
       "sentence": "alpha safe context and also block this phrase",
@@ -285,7 +285,7 @@
       "test": "exception for conditional should NOT whitelist always-block keyword",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.019
+      "latency_ms": 0.018
     },
     {
       "sentence": "  alpha   is   red  ",
@@ -295,7 +295,7 @@
       "test": "extra whitespace should not prevent matching",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.019
+      "latency_ms": 0.018
     },
     {
       "sentence": "alpha\tis\tred",
@@ -335,7 +335,7 @@
       "test": "fullwidth unicode characters \u2014 evasion attempt",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.036
+      "latency_ms": 0.647
     },
     {
       "sentence": "al\u200cpha is red",
@@ -345,7 +345,7 @@
       "test": "zero-width space inside identifier \u2014 evasion attempt",
       "score": 1.0,
       "matched_topic": "test_engine",
-      "latency_ms": 0.019
+      "latency_ms": 0.026
     },
     {
       "sentence": "\u03b1lpha is red",

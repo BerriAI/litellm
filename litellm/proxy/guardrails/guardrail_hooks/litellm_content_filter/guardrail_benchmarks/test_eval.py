@@ -1,5 +1,5 @@
 """
-Unified eval runner for topic blocker guardrails.
+Unified eval runner for content filter guardrail benchmarks.
 
 Runs every eval JSONL against every blocker implementation and prints
 a confusion matrix for each combination.
@@ -10,25 +10,21 @@ Structure:
   results/                     — eval results saved here (JSON)
 
 Run all evals:
-  pytest tests/test_litellm/proxy/guardrails/guardrail_hooks/content_filter/topic_blocker/test_eval.py -v -s
+  pytest litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/test_eval.py -v -s
 
 Run a specific eval:
-  pytest ... -k "engine"
-  pytest ... -k "investment_keyword"
-  pytest ... -k "investment_embedding_minilm"
+  pytest ... -k "InvestmentContentFilter"
+  pytest ... -k "InvestmentKeyword"
+  pytest ... -k "LlmJudgeGpt4oMini"
 """
 
 import json
 import os
-import sys
 import time
 from datetime import datetime, timezone
 from typing import List
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../"))
-
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.topic_blocker.keyword_blocker import (
@@ -142,42 +138,42 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     )
     accuracy = (tp + tn) / total if total > 0 else 0
 
-    # Print
-    print("\n")
-    print("=" * 70)
-    print(f"  {label}")
-    print("=" * 70)
-    print(f"  Total cases:  {total}")
-    print(f"  Correct:      {tp + tn}")
-    print(f"  Wrong:        {fp + fn}")
-    print()
-    print(f"  TP (correctly blocked):  {tp}")
-    print(f"  TN (correctly allowed):  {tn}")
-    print(f"  FP (wrongly blocked):    {fp}")
-    print(f"  FN (wrongly allowed):    {fn}")
-    print()
+    # Print confusion matrix (noqa: T201 — intentional eval output)
+    print("\n")  # noqa: T201
+    print("=" * 70)  # noqa: T201
+    print(f"  {label}")  # noqa: T201
+    print("=" * 70)  # noqa: T201
+    print(f"  Total cases:  {total}")  # noqa: T201
+    print(f"  Correct:      {tp + tn}")  # noqa: T201
+    print(f"  Wrong:        {fp + fn}")  # noqa: T201
+    print()  # noqa: T201
+    print(f"  TP (correctly blocked):  {tp}")  # noqa: T201
+    print(f"  TN (correctly allowed):  {tn}")  # noqa: T201
+    print(f"  FP (wrongly blocked):    {fp}")  # noqa: T201
+    print(f"  FN (wrongly allowed):    {fn}")  # noqa: T201
+    print()  # noqa: T201
     # Latency stats
     sorted_lat = sorted(latencies)
     p50 = sorted_lat[len(sorted_lat) // 2] if sorted_lat else 0
     p95 = sorted_lat[int(len(sorted_lat) * 0.95)] if sorted_lat else 0
     avg_lat = sum(latencies) / len(latencies) if latencies else 0
 
-    print(f"  Precision:  {precision:.1%}")
-    print(f"  Recall:     {recall:.1%}")
-    print(f"  F1:         {f1:.1%}")
-    print(f"  Accuracy:   {accuracy:.1%}")
-    print()
-    print(f"  Latency p50:  {p50:.1f}ms")
-    print(f"  Latency p95:  {p95:.1f}ms")
-    print(f"  Latency avg:  {avg_lat:.1f}ms")
-    print()
+    print(f"  Precision:  {precision:.1%}")  # noqa: T201
+    print(f"  Recall:     {recall:.1%}")  # noqa: T201
+    print(f"  F1:         {f1:.1%}")  # noqa: T201
+    print(f"  Accuracy:   {accuracy:.1%}")  # noqa: T201
+    print()  # noqa: T201
+    print(f"  Latency p50:  {p50:.1f}ms")  # noqa: T201
+    print(f"  Latency p95:  {p95:.1f}ms")  # noqa: T201
+    print(f"  Latency avg:  {avg_lat:.1f}ms")  # noqa: T201
+    print()  # noqa: T201
     if wrong:
-        print("WRONG ANSWERS:")
+        print("WRONG ANSWERS:")  # noqa: T201
         for line in wrong:
-            print(line)
+            print(line)  # noqa: T201
     else:
-        print("ALL CASES CORRECT")
-    print("=" * 70)
+        print("ALL CASES CORRECT")  # noqa: T201
+    print("=" * 70)  # noqa: T201
 
     # Save results
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -432,7 +428,7 @@ def _content_filter_investment():
 
     guardrail = ContentFilterGuardrail(
         guardrail_name="investment_eval",
-        categories=[
+        categories=[  # type: ignore[arg-type]
             {
                 "category": "denied_financial_advice",
                 "enabled": True,
