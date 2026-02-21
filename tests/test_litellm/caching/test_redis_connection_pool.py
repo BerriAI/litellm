@@ -39,29 +39,25 @@ def test_url_config_falls_back_to_from_url_without_pool():
     assert client.connection_pool is not None
 
 
-def test_max_connections_url_config():
+def test_max_connections_url_config(monkeypatch):
     """max_connections should be respected when using URL-based config."""
-    with patch("litellm._redis._get_redis_client_logic") as mock_logic:
-        mock_logic.return_value = {
-            "url": "redis://localhost:6379/0",
-            "max_connections": 10,
-        }
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    monkeypatch.setenv("REDIS_MAX_CONNECTIONS", "10")
 
-        pool = get_redis_connection_pool()
+    pool = get_redis_connection_pool()
 
     assert pool.max_connections == 10
 
 
-def test_max_connections_url_config_string_value():
+def test_max_connections_url_config_string_value(monkeypatch):
     """max_connections provided as a string (from env var) should be
     cast to int."""
-    with patch("litellm._redis._get_redis_client_logic") as mock_logic:
-        mock_logic.return_value = {
-            "url": "redis://localhost:6379/0",
-            "max_connections": "25",
-        }
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    monkeypatch.setenv("REDIS_MAX_CONNECTIONS", "25")
 
-        pool = get_redis_connection_pool()
+    pool = get_redis_connection_pool()
 
     assert pool.max_connections == 25
 
