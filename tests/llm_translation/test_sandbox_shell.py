@@ -722,32 +722,52 @@ class TestXAIShellToolLive:
     """
 
     @pytest.mark.asyncio
-    async def test_xai_shell_tool_non_streaming(self):
+    async def test_xai_shell_tool_multi_turn(self):
         """
-        Non-streaming: xAI model receives _litellm_shell function tool
-        and returns a valid response.
+        Full multi-turn: prompt → model calls _litellm_shell → we send
+        function_call_output back → model returns final text.
         """
+        # Turn 1: send prompt with shell tool
         response = await litellm.aresponses(
             model="xai/grok-3-mini",
             input="Run the command: echo 'hello from xai shell test'. Return the exact output.",
             tools=[SHELL_TOOL],
             max_output_tokens=256,
         )
-
         assert response is not None
-        resp_dict = dict(response) if not isinstance(response, dict) else response
-        assert resp_dict.get("id") is not None
-        assert resp_dict.get("status") is not None
-        print(
-            "xAI live non-streaming response:",
-            json.dumps(resp_dict, indent=2, default=str),
+        print(f"\nTurn 1 output: {response.output}")
+
+        # Find the function_call in the output
+        call_id = None
+        for item in response.output:
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if item_type == "function_call":
+                call_id = item.get("call_id") if isinstance(item, dict) else getattr(item, "call_id", None)
+                name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+                args = item.get("arguments") if isinstance(item, dict) else getattr(item, "arguments", None)
+                print(f"Function call: {name}({args}), call_id={call_id}")
+                break
+
+        assert call_id is not None, "Model should have called _litellm_shell"
+
+        # Turn 2: send the tool result back
+        follow_up = await litellm.aresponses(
+            model="xai/grok-3-mini",
+            previous_response_id=response.id,
+            input=[{
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": "hello from xai shell test\n",
+            }],
+            tools=[SHELL_TOOL],
+            max_output_tokens=256,
         )
+        assert follow_up is not None
+        print(f"\nTurn 2 output: {follow_up.output}")
 
     @pytest.mark.asyncio
     async def test_xai_shell_tool_streaming(self):
-        """
-        Streaming: xAI model with shell tool should produce streaming events.
-        """
+        """Streaming: xAI model with shell tool should produce streaming events."""
         response = await litellm.aresponses(
             model="xai/grok-3-mini",
             input="Run: echo 'streaming xai test'",
@@ -760,15 +780,12 @@ class TestXAIShellToolLive:
         async for event in response:
             event_count += 1
 
-        assert event_count > 0, "Should receive at least one streaming event"
-        print(f"xAI streaming: received {event_count} events")
+        assert event_count > 0
+        print(f"\nStreaming events: {event_count}")
 
     @pytest.mark.asyncio
     async def test_xai_shell_tool_with_function_tools(self):
-        """
-        xAI should accept both shell (→ _litellm_shell) and regular function
-        tools in the same request.
-        """
+        """xAI accepts both shell and function tools together."""
         response = await litellm.aresponses(
             model="xai/grok-3-mini",
             input="Run: echo hello",
@@ -777,10 +794,6 @@ class TestXAIShellToolLive:
         )
 
         assert response is not None
-        resp_dict = dict(response) if not isinstance(response, dict) else response
-        assert resp_dict.get("id") is not None
-        print(
-            "xAI live mixed tools response:",
-            json.dumps(resp_dict, indent=2, default=str),
-        )
+        assert response.id is not None
+        print(f"\nOutput: {response.output}")
 
