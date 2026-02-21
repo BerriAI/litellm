@@ -2511,7 +2511,7 @@ jobs:
             pip install "PyGithub==1.59.1"
             pip install "openai==1.100.1"
             pip install "litellm[proxy]"
-            pip install "pytest-xdist==3.6.1"
+            pip install "pytest-xdist==3.6.2"
       - run:
           name: Install dockerize
           command: |
