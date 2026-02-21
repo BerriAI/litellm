@@ -170,9 +170,9 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
     monkeypatch.setenv("DD_API_KEY", "test")
     monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
 
-    from litellm.litellm_core_utils import litellm_logging as logging_module
     from litellm.integrations.datadog.datadog import DataDogLogger
     from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
 
@@ -205,8 +205,8 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     monkeypatch.setenv("LOGFIRE_BASE_URL", "https://logfire-api-custom.pydantic.dev")  # no trailing slash on purpose
 
     # Import after env vars are set (important if module-level caching exists)
-    from litellm.litellm_core_utils import litellm_logging as logging_module
     from litellm.integrations.opentelemetry import OpenTelemetry  # logger class
+    from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
 
@@ -1589,3 +1589,56 @@ async def test_emit_standard_logging_payload_called_for_non_streaming():
         assert mock_emit.call_count >= 1
 
 
+@pytest.mark.asyncio
+async def test_async_success_handler_preserves_response_cost_for_pass_through_endpoints():
+    """Regression test: PR #19887 added a pass-through branch in async_success_handler
+    that unconditionally set response_cost=None, overwriting costs already calculated
+    by pass-through handlers (Gemini/Vertex)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gemini-2.5-flash-lite",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id-cost",
+        function_id="test-function-id-cost",
+    )
+
+    # Simulate what pass-through handlers do: pre-calculate response_cost
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}, "proxy_server_request": {}},
+        "litellm_call_id": "test-call-id-cost",
+        "response_cost": 0.0000047,  # Pre-calculated by pass-through handler
+        "custom_llm_provider": "gemini",
+    }
+
+    result = ModelResponse(
+        id="test-response",
+        model="gemini-2.5-flash-lite",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
+        await logging_obj.async_success_handler(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+        )
+
+    # response_cost must be preserved, not overwritten to None
+    assert logging_obj.model_call_details.get("response_cost") is not None
+    assert logging_obj.model_call_details["response_cost"] > 0
+
+    # standard_logging_object should also have the cost
+    slo = logging_obj.model_call_details.get("standard_logging_object")
+    assert slo is not None
+    assert slo["response_cost"] > 0
