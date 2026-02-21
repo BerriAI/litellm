@@ -19,17 +19,19 @@ class ComplexityTier(str, Enum):
 
 
 # ─── Default Keyword Lists ───
+# Note: Keywords should be full words/phrases to avoid substring false positives.
+# The matching logic uses word boundary detection for short keywords (<5 chars).
 
 DEFAULT_CODE_KEYWORDS: List[str] = [
-    "function", "class", "def ", "const ", "let ", "var ",
-    "import ", "export ", "return ", "async ", "await ",
-    " try ", "catch", "exception", " error ", "debug",
-    " api ", "endpoint", "request", "response",
-    "database", " sql ", "query ", "schema",
+    "function", "class", "def", "const", "let", "var",
+    "import", "export", "return", "async", "await",
+    "try", "catch", "exception", "error", "debug",
+    "api", "endpoint", "request", "response",
+    "database", "sql", "query", "schema",
     "algorithm", "implement", "refactor", "optimize",
-    "python", "javascript", "typescript", " java ", "rust", "golang",
-    "react", " vue ", "angular", " node ", "docker", "kubernetes",
-    " git ", "commit", "merge", "branch", "pull request",
+    "python", "javascript", "typescript", "java", "rust", "golang",
+    "react", "vue", "angular", "node", "docker", "kubernetes",
+    "git", "commit", "merge", "branch", "pull request",
 ]
 
 DEFAULT_REASONING_KEYWORDS: List[str] = [
@@ -54,13 +56,14 @@ DEFAULT_TECHNICAL_KEYWORDS: List[str] = [
 ]
 
 DEFAULT_SIMPLE_KEYWORDS: List[str] = [
-    "what is", "what's", "define ", "definition of",
+    "what is", "what's", "define", "definition of",
     "who is", "who was", "when did", "when was",
     "where is", "where was", "how many", "how much",
     "yes or no", "true or false",
     "simple", "brief", "short", "quick",
-    "hello", "hi ", "hey ", "thanks", "thank you",
-    "goodbye", "bye ", " ok ", "okay",
+    "hello", "hi", "hey", "thanks", "thank you",
+    "goodbye", "bye", "okay",
+    # Note: "ok" removed due to false positives (matches "token", "book", etc.)
 ]
 
 DEFAULT_MULTI_STEP_PATTERNS: List[str] = [

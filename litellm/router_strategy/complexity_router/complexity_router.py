@@ -131,6 +131,25 @@ class ComplexityRouter(CustomLogger):
             )
         return DimensionScore("tokenCount", 0, None)
     
+    def _keyword_matches(self, text: str, keyword: str) -> bool:
+        """
+        Check if a keyword matches in text using word boundary matching.
+        
+        For short keywords (<5 chars), uses regex word boundaries to avoid
+        false positives (e.g., "api" matching "capital").
+        For longer keywords/phrases, uses substring matching.
+        """
+        kw_lower = keyword.lower()
+        
+        # For short keywords, use word boundary matching to avoid false positives
+        # e.g., "api" should not match "capital", "git" should not match "digital"
+        if len(kw_lower) < 5 and " " not in kw_lower:
+            pattern = r'\b' + re.escape(kw_lower) + r'\b'
+            return bool(re.search(pattern, text))
+        
+        # For longer keywords or phrases, substring matching is fine
+        return kw_lower in text
+    
     def _score_keyword_match(
         self,
         text: str,
@@ -140,11 +159,11 @@ class ComplexityRouter(CustomLogger):
         thresholds: Tuple[int, int],  # (low, high)
         scores: Tuple[float, float, float],  # (none, low, high)
     ) -> DimensionScore:
-        """Score based on keyword matches."""
+        """Score based on keyword matches using word boundary matching."""
         low_threshold, high_threshold = thresholds
         score_none, score_low, score_high = scores
         
-        matches = [kw for kw in keywords if kw.lower() in text]
+        matches = [kw for kw in keywords if self._keyword_matches(text, kw)]
         
         if len(matches) >= high_threshold:
             return DimensionScore(
@@ -256,7 +275,7 @@ class ComplexityRouter(CustomLogger):
         # Check for reasoning override (2+ reasoning markers)
         reasoning_matches = [
             kw for kw in self.reasoning_keywords 
-            if kw.lower() in user_text
+            if self._keyword_matches(user_text, kw)
         ]
         if len(reasoning_matches) >= 2:
             return ComplexityTier.REASONING, weighted_score, signals
