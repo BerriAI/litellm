@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -1185,3 +1185,50 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose():
+    """Test that aclose() delegates to the underlying completion_stream's aclose()"""
+    mock_stream = AsyncMock()
+    mock_stream.aclose = AsyncMock()
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    await wrapper.aclose()
+    mock_stream.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_no_underlying():
+    """Test that aclose() is safe when completion_stream has no aclose method"""
+    mock_stream = MagicMock(spec=[])  # No aclose attribute
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=mock_stream,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_aclose_none_stream():
+    """Test that aclose() is safe when completion_stream is None"""
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model=None,
+        logging_obj=MagicMock(),
+        custom_llm_provider=None,
+    )
+
+    # Should not raise
+    await wrapper.aclose()
