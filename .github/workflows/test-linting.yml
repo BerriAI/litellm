@@ -74,3 +74,7 @@ jobs:
     - name: Check import safety
       run: |
         poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+
+    - name: Check schema.prisma files are in sync
+      run: |
+        bash ci_cd/check_schema_sync.sh

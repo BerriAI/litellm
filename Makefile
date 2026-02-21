@@ -128,11 +128,14 @@ check-circular-imports: install-dev
 check-import-safety: install-dev
 	@poetry run python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
+
+check-schema-sync:
+	bash ci_cd/check_schema_sync.sh
 # Combined linting (matches test-linting.yml workflow)
-lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
+lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety check-schema-sync
 
 # Faster linting for local development (only checks changed code)
-lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety
+lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety check-schema-sync
 
 # Testing targets
 test:
