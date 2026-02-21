@@ -1229,7 +1229,7 @@ class TestOverrideOpenAIResponseModel:
         without modifying the response.
         """
         fallback_model = "gpt-3.5-turbo"
-        
+
         # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = fallback_model
@@ -1238,14 +1238,14 @@ class TestOverrideOpenAIResponseModel:
                 "x-litellm-attempted-fallbacks": 1
             }
         }
-        
+
         # Call the function with None requested_model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=None,
             log_context="test_context",
         )
-        
+
         # Verify the model was not changed
         assert response_obj.model == fallback_model
         
@@ -1255,8 +1255,127 @@ class TestOverrideOpenAIResponseModel:
             requested_model="",
             log_context="test_context",
         )
-        
+
         # Verify the model was not changed
         assert response_obj.model == fallback_model
+
+    def test_override_model_known_alias_logs_debug_not_warning(self):
+        """
+        When downstream_model matches upstream_model (a known alias/internal name),
+        the function should log at DEBUG level — not WARNING — and still override
+        response.model to the client-requested model.
+        """
+        from unittest.mock import patch
+
+        requested_model = "my-alias"
+        upstream_model = "hosted_vllm/meta-llama/Llama-3-8b"
+
+        response_obj = MagicMock()
+        response_obj.model = upstream_model  # downstream == upstream (known alias)
+        response_obj._hidden_params = {}
+
+        with patch(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger"
+        ) as mock_logger:
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model=requested_model,
+                log_context="test_context",
+                upstream_model=upstream_model,
+            )
+
+        # Model must still be overridden to the client-requested value
+        assert response_obj.model == requested_model
+
+        # debug() should have been called (alias path)
+        mock_logger.debug.assert_called()
+        # warning() must NOT have been called — this is a known alias, not a real mismatch
+        mock_logger.warning.assert_not_called()
+
+    def test_override_model_unknown_mismatch_logs_warning(self):
+        """
+        When downstream_model differs from both requested_model and upstream_model,
+        the function should log at WARNING level to surface unexpected mismatches.
+        """
+        from unittest.mock import patch
+
+        requested_model = "my-alias"
+        upstream_model = "hosted_vllm/meta-llama/Llama-3-8b"
+        downstream_model = "some-other-model"  # Unexpected — matches neither
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {}
+
+        with patch(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger"
+        ) as mock_logger:
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model=requested_model,
+                log_context="test_context",
+                upstream_model=upstream_model,
+            )
+
+        assert response_obj.model == requested_model
+
+        mock_logger.warning.assert_called()
+        mock_logger.debug.assert_not_called()
+
+    def test_override_model_no_upstream_model_logs_warning(self):
+        """
+        When upstream_model is not provided (None) and downstream_model differs
+        from requested_model, the function should log at WARNING level.
+        """
+        from unittest.mock import patch
+
+        requested_model = "gpt-4"
+        downstream_model = "gpt-3.5-turbo"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {}
+
+        with patch(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger"
+        ) as mock_logger:
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model=requested_model,
+                log_context="test_context",
+                # upstream_model omitted (defaults to None)
+            )
+
+        assert response_obj.model == requested_model
+
+        mock_logger.warning.assert_called()
+        mock_logger.debug.assert_not_called()
+
+    def test_override_model_no_mismatch_no_logging(self):
+        """
+        When downstream_model already equals requested_model, no mismatch logging
+        should occur at all (neither debug nor warning).
+        """
+        from unittest.mock import patch
+
+        requested_model = "gpt-4"
+
+        response_obj = MagicMock()
+        response_obj.model = requested_model  # Already correct
+        response_obj._hidden_params = {}
+
+        with patch(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger"
+        ) as mock_logger:
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model=requested_model,
+                log_context="test_context",
+                upstream_model="hosted_vllm/gpt-4",
+            )
+
+        assert response_obj.model == requested_model
+        mock_logger.warning.assert_not_called()
+        mock_logger.debug.assert_not_called()
 
 
