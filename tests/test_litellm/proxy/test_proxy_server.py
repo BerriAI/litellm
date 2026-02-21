@@ -3519,6 +3519,157 @@ class TestInvitationEndpoints:
         assert "not allowed" in str(error_content).lower()
 
 
+@pytest.mark.asyncio
+async def test_async_data_generator_cleanup_on_early_exit():
+    """
+    Test that async_data_generator calls response.aclose() in the finally block
+    when the generator is abandoned mid-stream (client disconnect).
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+        {"choices": [{"delta": {"content": " more"}}]},
+    ]
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    async def mock_streaming_iterator(*args, **kwargs):
+        for chunk in mock_chunks:
+            yield chunk
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator
+    )
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs.get("response")
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    # Create a mock response with aclose
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        # Consume only the first chunk then abandon the generator (simulates client disconnect)
+        gen = async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        )
+        first_chunk = await gen.__anext__()
+        assert first_chunk.startswith("data: ")
+
+        # Close the generator early (simulates what ASGI does on client disconnect)
+        await gen.aclose()
+
+    # Verify aclose was called on the response to release the HTTP connection
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_cleanup_on_normal_completion():
+    """
+    Test that async_data_generator calls response.aclose() even on normal completion.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+    ]
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    async def mock_streaming_iterator(*args, **kwargs):
+        for chunk in mock_chunks:
+            yield chunk
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator
+    )
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs.get("response")
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    # Should have completed normally with [DONE]
+    assert any("[DONE]" in d for d in yielded_data)
+    # aclose should still be called via finally block
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_cleanup_on_midstream_error():
+    """
+    Test that async_data_generator calls response.aclose() via finally block
+    even when an exception occurs mid-stream.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    async def mock_streaming_iterator_with_error(*args, **kwargs):
+        yield {"choices": [{"delta": {"content": "Hello"}}]}
+        raise RuntimeError("upstream connection reset")
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator_with_error
+    )
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs.get("response")
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    # Should have yielded data chunk and then an error chunk
+    assert len(yielded_data) >= 2
+    assert any("error" in d for d in yielded_data)
+    # aclose must still be called via finally block despite the error
+    mock_response.aclose.assert_awaited_once()
+
+
 # ============================================================================
 # store_model_in_db DB Config Override Tests
 # ============================================================================

@@ -33,6 +33,7 @@ from typing import (
     cast,
 )
 
+import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
@@ -1561,6 +1562,7 @@ class Router:
                 return await self._async_generator.__anext__()
 
         async def stream_with_fallbacks():
+            fallback_response = None  # Track for cleanup in finally
             try:
                 async for item in model_response:
                     yield item
@@ -1659,6 +1661,30 @@ class Router:
                         f"Fallback also failed: {fallback_error}"
                     )
                     raise fallback_error
+            finally:
+                # Close the underlying streams to release HTTP connections
+                # back to the connection pool when the generator is closed
+                # (e.g. on client disconnect).
+                # Shield from anyio cancellation so the awaits can complete.
+                with anyio.CancelScope(shield=True):
+                    if hasattr(model_response, "aclose"):
+                        try:
+                            await model_response.aclose()
+                        except BaseException as e:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks: error closing model_response: %s",
+                                e,
+                            )
+                    if fallback_response is not None and hasattr(
+                        fallback_response, "aclose"
+                    ):
+                        try:
+                            await fallback_response.aclose()
+                        except BaseException as e:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks: error closing fallback_response: %s",
+                                e,
+                            )
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
