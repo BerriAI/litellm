@@ -48,6 +48,10 @@ headers = {"Authorization": f"Bearer {token}"}
 print("Testing proxy custom logger")
 
 
+@pytest.mark.skipif(
+    os.environ.get("OPENAI_API_KEY") is None,
+    reason="OPENAI_API_KEY not set - skipping integration test"
+)
 def test_embedding(client):
     try:
         litellm.set_verbose = False
@@ -118,6 +122,10 @@ def test_embedding(client):
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
+@pytest.mark.skipif(
+    os.environ.get("OPENAI_API_KEY") is None,
+    reason="OPENAI_API_KEY not set - skipping integration test"
+)
 def test_chat_completion(client):
     try:
         # Your test data
@@ -208,6 +216,10 @@ def test_chat_completion(client):
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
+@pytest.mark.skipif(
+    os.environ.get("OPENAI_API_KEY") is None,
+    reason="OPENAI_API_KEY not set - skipping integration test"
+)
 def test_chat_completion_stream(client):
     try:
         # Your test data

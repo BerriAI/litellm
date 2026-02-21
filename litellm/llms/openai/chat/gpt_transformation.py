@@ -162,6 +162,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "service_tier",
             "safety_identifier",
             "prompt_cache_key",
+            "store",
         ]  # works across all models
 
         model_specific_params = []
@@ -770,14 +771,36 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        """
+        Map 'reasoning' field to 'reasoning_content' field in delta.
+        
+        Some OpenAI-compatible providers (e.g., GLM-5, hosted_vllm) return 
+        delta.reasoning, but LiteLLM expects delta.reasoning_content.
+        
+        Args:
+            choices: List of choice objects from the streaming chunk
+            
+        Returns:
+            List of choices with reasoning field mapped to reasoning_content
+        """
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
+        return choices
+    
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
+            choices = chunk.get("choices", [])
+            choices = self._map_reasoning_to_reasoning_content(choices)
+            
             kwargs = {
                 "id": chunk["id"],
                 "object": "chat.completion.chunk",
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),
-                "choices": chunk.get("choices", []),
+                "choices": choices,
             }
             if "usage" in chunk and chunk["usage"] is not None:
                 kwargs["usage"] = chunk["usage"]

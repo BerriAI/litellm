@@ -29,9 +29,11 @@ Key concepts:
 - `condition`: Optional model condition for when guardrails apply
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Policy Condition
@@ -230,6 +232,10 @@ class Policy(BaseModel):
     condition: Optional[PolicyCondition] = Field(
         default=None,
         description="Optional condition for when this policy's guardrails apply.",
+    )
+    pipeline: Optional[GuardrailPipeline] = Field(
+        default=None,
+        description="Optional pipeline for ordered, conditional guardrail execution.",
     )
 
     model_config = ConfigDict(extra="forbid")
