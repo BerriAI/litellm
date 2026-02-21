@@ -38,7 +38,7 @@ Revert your deployment to the previous stable Docker image or Helm chart version
 Update your deployment manifest (e.g., K8s Deployment, Docker Compose) to use the previous version:
 ```yaml
 # Example: Reverting to the previous stable release
-image: docker.litellm.ai/berriai/litellm:main-v1.77.2-stable
+image: docker.litellm.ai/berriai/litellm:main-v<VERSION>-stable
 ```
 
 See [all available images](https://github.com/orgs/BerriAI/packages).
