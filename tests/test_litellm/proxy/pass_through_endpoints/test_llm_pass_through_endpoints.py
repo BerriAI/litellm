@@ -541,9 +541,13 @@ class TestVertexAIPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
         ) as mock_get_token, mock.patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
-        ) as mock_create_route:
+        ) as mock_create_route, mock.patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            new_callable=AsyncMock,
+        ) as mock_auth:
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
+            mock_auth.return_value = MagicMock()
 
             # Call the route
             try:

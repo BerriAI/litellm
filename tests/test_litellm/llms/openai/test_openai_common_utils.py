@@ -129,3 +129,38 @@ async def test_openai_client_reuse(function_name, is_async, args):
 
         # Verify we tried to get from cache 10 times (once per request)
         assert mock_get_cache.call_count == 10, "Should check cache for each request"
+
+
+def test_precomputed_init_params_match_inspect_signature():
+    """
+    Verify that the pre-computed _OPENAI_INIT_PARAMS and _AZURE_OPENAI_INIT_PARAMS
+    match what inspect.signature() returns. If the OpenAI SDK changes its __init__
+    params, this test will fail — signaling the constants need updating.
+    """
+    import inspect
+
+    from openai import AzureOpenAI, OpenAI
+
+    from litellm.llms.openai.common_utils import (
+        _AZURE_OPENAI_INIT_PARAMS,
+        _OPENAI_INIT_PARAMS,
+    )
+
+    expected_openai = [
+        p for p in inspect.signature(OpenAI.__init__).parameters if p != "self"
+    ]
+    expected_azure = [
+        p for p in inspect.signature(AzureOpenAI.__init__).parameters if p != "self"
+    ]
+
+    assert _OPENAI_INIT_PARAMS == expected_openai
+    assert _AZURE_OPENAI_INIT_PARAMS == expected_azure
+
+
+@pytest.mark.parametrize("client_type", ["openai", "azure"])
+def test_get_openai_client_initialization_param_fields(client_type):
+    """Verify the method returns the correct pre-computed params for each client type."""
+    result = BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type)
+    assert isinstance(result, list)
+    assert len(result) > 0
+    assert "self" not in result

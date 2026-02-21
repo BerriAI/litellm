@@ -925,6 +925,132 @@ def test_router_get_model_access_groups_team_only_models():
     assert list(access_groups.keys()) == ["default-models"]
 
 
+def test_get_model_access_groups_caching():
+    """
+    Test that get_model_access_groups caches the no-args result
+    and invalidates on deployment changes.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"access_groups": ["premium"]},
+            },
+        ]
+    )
+
+    # First call computes and populates cache
+    result1 = router.get_model_access_groups()
+    assert "premium" in result1
+
+    # All subsequent calls should return the same cached object (including first)
+    result2 = router.get_model_access_groups()
+    assert result1 is result2
+
+    # Calls with args should bypass cache
+    result_with_args = router.get_model_access_groups(model_name="gpt-4")
+    assert result_with_args is not result2
+
+    # Add a deployment — cache should be invalidated
+    router.add_deployment(
+        Deployment(
+            model_name="gpt-3.5",
+            litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
+            model_info={"access_groups": ["default"]},
+        )
+    )
+    result3 = router.get_model_access_groups()
+    assert result3 is not result2
+    assert "premium" in result3
+    assert "default" in result3
+
+    # Delete the deployment — cache should be invalidated again
+    deployment_id = None
+    for m in router.model_list:
+        if m.get("model_name") == "gpt-3.5":
+            deployment_id = m.get("model_info", {}).get("id")
+            break
+    assert deployment_id is not None
+    router.delete_deployment(id=deployment_id)
+    result4 = router.get_model_access_groups()
+    assert result4 is not result3
+    assert "default" not in result4
+    assert "premium" in result4
+
+
+def test_get_model_access_groups_cache_invalidation_set_model_list():
+    """
+    Test that set_model_list invalidates the access groups cache.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"access_groups": ["premium"]},
+            },
+        ]
+    )
+
+    # Populate cache
+    result1 = router.get_model_access_groups()
+    assert "premium" in result1
+
+    # set_model_list should invalidate cache
+    router.set_model_list(
+        [
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3-opus-20240229"},
+                "model_info": {"access_groups": ["research"]},
+            },
+        ]
+    )
+    result2 = router.get_model_access_groups()
+    assert result2 is not result1
+    assert "research" in result2
+    assert "premium" not in result2
+
+
+def test_get_model_access_groups_cache_invalidation_upsert_deployment():
+    """
+    Test that upsert_deployment invalidates the access groups cache.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"access_groups": ["premium"]},
+            },
+        ]
+    )
+
+    # Populate cache
+    result1 = router.get_model_access_groups()
+    assert "premium" in result1
+
+    # Get the existing deployment's ID
+    existing_id = router.model_list[0]["model_info"]["id"]
+
+    # Upsert with the same ID but different params — triggers pop + re-add
+    router.upsert_deployment(
+        Deployment(
+            model_name="gpt-4-updated",
+            litellm_params=LiteLLM_Params(model="gpt-4-turbo"),
+            model_info={"id": existing_id, "access_groups": ["updated-group"]},
+        )
+    )
+    result2 = router.get_model_access_groups()
+    assert result2 is not result1
+    assert "updated-group" in result2
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator():
     """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
