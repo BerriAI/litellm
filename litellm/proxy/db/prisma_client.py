@@ -405,7 +405,11 @@ class PrismaManager:
                     if attempts_left > 0
                     else ""
                 )
-                error_details = f"{e}. Stderr: {e.stderr}" if hasattr(e, 'stderr') and e.stderr else str(e)
+                error_details = (
+                    f"{e}. Stderr: {e.stderr}"
+                    if hasattr(e, "stderr") and e.stderr
+                    else str(e)
+                )
                 verbose_proxy_logger.warning(
                     f"The process failed to execute. Details: {error_details}.{retry_msg}"
                 )

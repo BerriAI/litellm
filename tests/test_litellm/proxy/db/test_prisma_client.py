@@ -43,34 +43,77 @@ async def test_recreate_prisma_client_successful_disconnect():
     """
     # Mock the original prisma client
     mock_prisma = AsyncMock()
-    
+
     # Create a mock PrismaWrapper instance
     wrapper = Mock()
     wrapper._original_prisma = mock_prisma
-    
+
     # Configure disconnect to succeed
     mock_prisma.disconnect.return_value = None
-    
+
     # Mock the entire recreate_prisma_client method to avoid import issues
     async def mock_recreate_prisma_client(new_db_url: str, http_client=None):
         try:
             await mock_prisma.disconnect()
         except Exception:
             pass
-        
+
         mock_new_prisma = AsyncMock()
         wrapper._original_prisma = mock_new_prisma
         await mock_new_prisma.connect()
-    
+
     # Assign the mock method to the wrapper
     wrapper.recreate_prisma_client = mock_recreate_prisma_client
-    
+
     # Call the method
     await wrapper.recreate_prisma_client("postgresql://new:new@localhost:5432/new")
-    
+
     # Verify that disconnect was called
     mock_prisma.disconnect.assert_called_once()
-    
+
     # Verify that the new client replaced the original
     assert wrapper._original_prisma != mock_prisma
-    assert hasattr(wrapper._original_prisma, 'connect') 
+    assert hasattr(wrapper._original_prisma, "connect")
+
+
+def test_prisma_manager_setup_database_error_logging():
+    """
+    Test that PrismaManager.setup_database includes stderr in error logs.
+    """
+    import subprocess
+    from litellm.proxy.db.prisma_client import PrismaManager
+
+    # We mock out the import of litellm_proxy_extras to force the base failure path
+    with patch("subprocess.run") as mock_run, patch(
+        "litellm.proxy.db.prisma_client.verbose_proxy_logger"
+    ) as mock_logger, patch(
+        "litellm.proxy.db.prisma_client.PrismaManager._get_prisma_dir",
+        return_value="/tmp",
+    ), patch(
+        "os.chdir"
+    ), patch(
+        "time.sleep"
+    ):
+
+        # Simulating failure to load proxy extras to reach the base logic
+        with patch.dict("sys.modules", {"litellm_proxy_extras.utils": None}):
+            # Mock a subprocess error with stderr
+            mock_run.side_effect = subprocess.CalledProcessError(
+                returncode=1,
+                cmd=["prisma", "db", "push"],
+                stderr="P1001: Connection failed",
+            )
+
+            # Call setup_database (it will retry and eventually log)
+            try:
+                # use_migrate=False to hit the 'else' path where we added capture_output=True
+                PrismaManager.setup_database(use_migrate=False)
+            except Exception:
+                pass
+
+            # Check if any log warning contains the stderr
+            any_call_has_details = any(
+                "P1001: Connection failed" in str(call)
+                for call in mock_logger.warning.call_args_list
+            )
+            assert any_call_has_details is True
