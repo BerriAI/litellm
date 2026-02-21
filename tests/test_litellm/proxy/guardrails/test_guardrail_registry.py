@@ -1,7 +1,13 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
     get_guardrail_initializer_from_hooks,
     InMemoryGuardrailHandler,
+    GuardrailRegistry,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams
 
@@ -48,3 +54,27 @@ def test_update_in_memory_guardrail():
         handler.guardrail_id_to_custom_guardrail["123"].event_hook
         is GuardrailEventHooks.pre_call
     )
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_by_name_allows_duplicates():
+    registry = GuardrailRegistry()
+    table = SimpleNamespace(
+        find_first=AsyncMock(
+            return_value={
+                "guardrail_id": "id-1",
+                "guardrail_name": "duplicate-name",
+                "litellm_params": {},
+                "guardrail_info": {"source": "test"},
+            }
+        )
+    )
+    prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_guardrailstable=table))
+
+    guardrail = await registry.get_guardrail_by_name_from_db(
+        "duplicate-name", prisma_client
+    )
+
+    table.find_first.assert_awaited_once_with(where={"guardrail_name": "duplicate-name"})
+    assert guardrail["guardrail_id"] == "id-1"
+    assert guardrail["guardrail_name"] == "duplicate-name"

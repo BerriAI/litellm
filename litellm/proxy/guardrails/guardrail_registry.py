@@ -366,10 +366,12 @@ class GuardrailRegistry:
         self, guardrail_name: str, prisma_client: PrismaClient
     ) -> Optional[Guardrail]:
         """
-        Get a guardrail by its name from the database
+        Get a guardrail by its name from the database.
+
+        Note: guardrail_name is not unique; this returns the first match.
         """
         try:
-            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+            guardrail = await prisma_client.db.litellm_guardrailstable.find_first(
                 where={"guardrail_name": guardrail_name}
             )
 
