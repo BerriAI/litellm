@@ -703,3 +703,84 @@ class TestSandboxShellExecutionLoopSync:
         assert mock_exec.call_count == MAX_SHELL_ITERATIONS
         assert result is always_shell
 
+
+# ---------------------------------------------------------------------------
+# Live E2E tests — xAI (requires XAI_API_KEY)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not os.environ.get("XAI_API_KEY"),
+    reason="XAI_API_KEY not set — skipping live xAI test",
+)
+class TestXAIShellToolLive:
+    """
+    Live tests against the xAI API with the shell tool.
+
+    xAI does not natively support shell/code-execution, so the Responses API
+    translation layer converts ``shell`` → ``_litellm_shell`` function tool.
+    """
+
+    @pytest.mark.asyncio
+    async def test_xai_shell_tool_non_streaming(self):
+        """
+        Non-streaming: xAI model receives _litellm_shell function tool
+        and returns a valid response.
+        """
+        response = await litellm.aresponses(
+            model="xai/grok-3-mini",
+            input="Run the command: echo 'hello from xai shell test'. Return the exact output.",
+            tools=[SHELL_TOOL],
+            max_output_tokens=256,
+        )
+
+        assert response is not None
+        resp_dict = dict(response) if not isinstance(response, dict) else response
+        assert resp_dict.get("id") is not None
+        assert resp_dict.get("status") is not None
+        print(
+            "xAI live non-streaming response:",
+            json.dumps(resp_dict, indent=2, default=str),
+        )
+
+    @pytest.mark.asyncio
+    async def test_xai_shell_tool_streaming(self):
+        """
+        Streaming: xAI model with shell tool should produce streaming events.
+        """
+        response = await litellm.aresponses(
+            model="xai/grok-3-mini",
+            input="Run: echo 'streaming xai test'",
+            tools=[SHELL_TOOL],
+            max_output_tokens=256,
+            stream=True,
+        )
+
+        event_count = 0
+        async for event in response:
+            event_count += 1
+
+        assert event_count > 0, "Should receive at least one streaming event"
+        print(f"xAI streaming: received {event_count} events")
+
+    @pytest.mark.asyncio
+    async def test_xai_shell_tool_with_function_tools(self):
+        """
+        xAI should accept both shell (→ _litellm_shell) and regular function
+        tools in the same request.
+        """
+        response = await litellm.aresponses(
+            model="xai/grok-3-mini",
+            input="Run: echo hello",
+            tools=[FUNCTION_TOOL, SHELL_TOOL],
+            max_output_tokens=256,
+        )
+
+        assert response is not None
+        resp_dict = dict(response) if not isinstance(response, dict) else response
+        assert resp_dict.get("id") is not None
+        print(
+            "xAI live mixed tools response:",
+            json.dumps(resp_dict, indent=2, default=str),
+        )
+
