@@ -210,9 +210,13 @@ async def test_create_vertex_fine_tune_jobs_mocked():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -259,6 +263,8 @@ async def test_create_vertex_fine_tune_jobs_mocked():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 @pytest.mark.asyncio()
@@ -291,9 +297,13 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
 
     # Save original callbacks to restore later
     original_callbacks = litellm.callbacks
-    # Disable callbacks to avoid Datadog logging interfering with the mock
+    original_success_callback = litellm.success_callback
+    original_async_success_callback = litellm._async_success_callback
+    # Disable all callbacks to avoid Datadog/other loggers interfering with the mock
     litellm.callbacks = []
-    
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+
     try:
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -352,6 +362,8 @@ async def test_create_vertex_fine_tune_jobs_mocked_with_hyperparameters():
     finally:
         # Restore original callbacks
         litellm.callbacks = original_callbacks
+        litellm.success_callback = original_success_callback
+        litellm._async_success_callback = original_async_success_callback
 
 
 # Testing OpenAI -> Vertex AI param mapping
