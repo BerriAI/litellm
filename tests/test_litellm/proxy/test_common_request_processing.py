@@ -1378,4 +1378,79 @@ class TestOverrideOpenAIResponseModel:
         mock_logger.warning.assert_not_called()
         mock_logger.debug.assert_not_called()
 
+    def test_override_model_dict_known_alias_logs_debug_not_warning(self):
+        """
+        Dict branch: when downstream_model matches upstream_model (a known alias),
+        the function should log at DEBUG — not WARNING — and override response["model"].
+        """
+        from unittest.mock import patch
+
+        requested_model = "my-alias"
+        upstream_model = "hosted_vllm/meta-llama/Llama-3-8b"
+        response_obj = {"model": upstream_model, "choices": []}
+
+        with patch(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger"
+        ) as mock_logger:
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model=requested_model,
+                log_context="test_context",
+                upstream_model=upstream_model,
+            )
+
+        assert response_obj["model"] == requested_model
+        mock_logger.debug.assert_called()
+        mock_logger.warning.assert_not_called()
+
+    def test_override_model_dict_unknown_mismatch_logs_warning(self):
+        """
+        Dict branch: when downstream_model differs from both requested_model and
+        upstream_model, the function should log at WARNING level.
+        """
+        from unittest.mock import patch
+
+        requested_model = "my-alias"
+        upstream_model = "hosted_vllm/meta-llama/Llama-3-8b"
+        downstream_model = "some-other-model"
+        response_obj = {"model": downstream_model, "choices": []}
+
+        with patch(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger"
+        ) as mock_logger:
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model=requested_model,
+                log_context="test_context",
+                upstream_model=upstream_model,
+            )
+
+        assert response_obj["model"] == requested_model
+        mock_logger.warning.assert_called()
+        mock_logger.debug.assert_not_called()
+
+    def test_override_model_dict_no_upstream_model_logs_warning(self):
+        """
+        Dict branch: when upstream_model is not provided (None) and downstream_model
+        differs from requested_model, the function should log at WARNING level.
+        """
+        from unittest.mock import patch
+
+        requested_model = "gpt-4"
+        downstream_model = "gpt-3.5-turbo"
+        response_obj = {"model": downstream_model, "choices": []}
+
+        with patch(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger"
+        ) as mock_logger:
+            _override_openai_response_model(
+                response_obj=response_obj,
+                requested_model=requested_model,
+                log_context="test_context",
+            )
+
+        assert response_obj["model"] == requested_model
+        mock_logger.warning.assert_called()
+        mock_logger.debug.assert_not_called()
+
 

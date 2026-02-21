@@ -290,12 +290,21 @@ def _override_openai_response_model(
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
         if downstream_model != requested_model:
-            verbose_proxy_logger.debug(
-                "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
-                log_context,
-                requested_model,
-                downstream_model,
-            )
+            if upstream_model and downstream_model == upstream_model:
+                verbose_proxy_logger.debug(
+                    "%s: response model is known alias - requested=%r upstream=%r downstream=%r. Overriding response['model'].",
+                    log_context,
+                    requested_model,
+                    upstream_model,
+                    downstream_model,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
+                    log_context,
+                    requested_model,
+                    downstream_model,
+                )
         response_obj["model"] = requested_model
         return
 
