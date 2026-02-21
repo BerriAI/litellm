@@ -215,7 +215,7 @@ async def test_db_health_watchdog_should_trigger_reconnect_on_db_error(mock_prox
         "litellm.proxy.utils.asyncio.sleep",
         AsyncMock(side_effect=[None, asyncio.CancelledError()]),
     ), patch(
-        "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_connection_error",
+        "litellm.proxy.db.exception_handler.PrismaDBExceptionHandler.is_database_transport_error",
         return_value=True,
     ):
         await client._db_health_watchdog_loop()
