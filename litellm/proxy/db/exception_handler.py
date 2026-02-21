@@ -32,7 +32,28 @@ class PrismaDBExceptionHandler:
     @staticmethod
     def is_database_connection_error(e: Exception) -> bool:
         """
-        Returns True if the exception is from a database outage / connection error
+        Returns True if the exception is from a database outage / connection error.
+        Any PrismaError qualifies — the DB failed to serve the request.
+        Used by allow_requests_on_db_unavailable logic and endpoint 503 responses.
+        """
+        import prisma
+
+        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+            return True
+        if isinstance(e, prisma.errors.PrismaError):
+            return True
+        if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
+            return True
+        return False
+
+    @staticmethod
+    def is_database_transport_error(e: Exception) -> bool:
+        """
+        Returns True only for transport/connectivity failures where a reconnect
+        attempt makes sense (e.g. DB is unreachable, connection dropped).
+
+        Use this for reconnect logic — data-layer errors like UniqueViolationError
+        mean the DB IS reachable, so reconnecting would be pointless.
         """
         import prisma
 
@@ -44,8 +65,6 @@ class PrismaDBExceptionHandler:
             return True
         if isinstance(e, prisma.errors.PrismaError):
             error_message = str(e).lower()
-            # Treat generic PrismaError as connection error only when its text
-            # clearly indicates transport/connectivity failure.
             connection_keywords = (
                 "can't reach database server",
                 "cannot reach database server",
