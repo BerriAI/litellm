@@ -147,6 +147,7 @@ class CustomStreamWrapper:
         self.chunks: List = (
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
 
@@ -192,7 +193,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def safety_checker(self) -> None:
+    def raise_on_model_repetition(self) -> None:
         """
         Fixes - https://github.com/BerriAI/litellm/issues/5158
 
@@ -200,29 +201,36 @@ class CustomStreamWrapper:
 
         Raises - InternalServerError, if LLM enters infinite loop while streaming
         """
-        if len(self.chunks) >= litellm.REPEATED_STREAMING_CHUNK_LIMIT:
-            # Get the last n chunks
-            last_chunks = self.chunks[-litellm.REPEATED_STREAMING_CHUNK_LIMIT :]
+        if len(self.chunks) < 2:
+            return
 
-            # Extract the relevant content from the chunks
-            last_contents = [chunk.choices[0].delta.content for chunk in last_chunks]
+        last_content = self.chunks[-1].choices[0].delta.content
 
-            # Check if all extracted contents are identical
-            if all(content == last_contents[0] for content in last_contents):
-                if (
-                    last_contents[0] is not None
-                    and isinstance(last_contents[0], str)
-                    and len(last_contents[0]) > 2
-                ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
-                    # All last n chunks are identical
-                    raise litellm.InternalServerError(
-                        message="The model is repeating the same chunk = {}.".format(
-                            last_contents[0]
-                        ),
-                        model="",
-                        llm_provider="",
-                    )
+        if (
+            last_content is None
+            or not isinstance(last_content, str)
+            or len(last_content) <= 2
+        ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
+            self._repeated_messages_count = 1
+            return
 
+        second_to_last_content = self.chunks[-2].choices[0].delta.content
+
+        if last_content == second_to_last_content:
+            self._repeated_messages_count += 1
+        else:
+            self._repeated_messages_count = 1
+
+        if self._repeated_messages_count >= litellm.REPEATED_STREAMING_CHUNK_LIMIT:
+            # All last n chunks are identical
+            raise litellm.InternalServerError(
+                message="The model is repeating the same chunk = {}.".format(
+                    last_content
+                ),
+                model="",
+                llm_provider="",
+            )
+        
     def check_special_tokens(self, chunk: str, finish_reason: Optional[str]):
         """
         Output parse <s> / </s> special tokens for sagemaker + hf streaming.
@@ -878,7 +886,7 @@ class CustomStreamWrapper:
         if (
             is_chunk_non_empty
         ):  # cannot set content of an OpenAI Object to be an empty string
-            self.safety_checker()
+            self.raise_on_model_repetition()
             hold, model_response_str = self.check_special_tokens(
                 chunk=completion_obj["content"],
                 finish_reason=model_response.choices[0].finish_reason,
