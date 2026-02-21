@@ -135,7 +135,7 @@ def _load_competitors_excluding_brand(brand_self: List[str]) -> List[str]:
             continue
         match_str = entry.get("match") or ""
         variants = [v.strip().lower() for v in match_str.split("|") if v.strip()]
-        words_in_match: set[str] = set()
+        words_in_match: Set[str] = set()
         for v in variants:
             words_in_match.update(v.split())
         if brand_set & words_in_match or any(v in brand_set for v in variants):
