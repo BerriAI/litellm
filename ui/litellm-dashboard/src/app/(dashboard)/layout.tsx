@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
@@ -22,7 +22,7 @@ function withBase(path: string): string {
 }
 /** -------------------------------- */
 
-export default function Layout({ children }: { children: React.ReactNode }) {
+function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
@@ -56,8 +56,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           userRole={userRole}
           premiumUser={premiumUser}
           proxySettings={undefined}
-          setProxySettings={() => {}}
+          setProxySettings={() => { }}
           accessToken={accessToken}
+          isDarkMode={false}
+          toggleDarkMode={() => { }}
         />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
@@ -67,5 +69,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     </ThemeProvider>
+  );
+}
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+      <LayoutContent>{children}</LayoutContent>
+    </Suspense>
   );
 }

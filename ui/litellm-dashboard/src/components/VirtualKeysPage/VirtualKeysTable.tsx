@@ -129,22 +129,25 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       id: "token",
       accessorKey: "token",
       header: "Key ID",
-      size: 150,
+      size: 100,
       enableSorting: true,
-      cell: (info) => (
-        <div className="overflow-hidden">
-          <Tooltip title={info.getValue() as string}>
+      cell: (info) => {
+        const value = info.getValue() as string;
+        const width = info.cell.column.getSize();
+        return (
+          <Tooltip title={value}>
             <Button
               size="xs"
               variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
+              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
+              style={{ maxWidth: width, overflow: "hidden" }}
               onClick={() => setSelectedKey(info.row.original)}
             >
-              {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
+              {value ?? "-"}
             </Button>
           </Tooltip>
-        </div>
-      ),
+        );
+      },
     },
     {
       id: "key_alias",
@@ -188,13 +191,19 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       id: "team_id",
       accessorKey: "team_id",
       header: "Team ID",
-      size: 120,
+      size: 80,
       enableSorting: false,
-      cell: (info) => (
-        <Tooltip title={info.getValue() as string}>
-          {info.getValue() ? `${(info.getValue() as string).slice(0, 7)}...` : "-"}
-        </Tooltip>
-      ),
+      cell: (info) => {
+        const value = info.getValue() as string | null;
+        const width = info.cell.column.getSize();
+        return (
+          <Tooltip title={value}>
+            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+              {value ?? "-"}
+            </span>
+          </Tooltip>
+        );
+      },
     },
     {
       id: "organization_id",
@@ -227,18 +236,19 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       id: "user_id",
       accessorKey: "user_id",
       header: "User ID",
-      size: 120,
+      size: 70,
       enableSorting: false,
       cell: (info) => {
         const userId = info.getValue() as string | null;
-        if (userId && userId.length > 15) {
-          return (
-            <Tooltip title={userId}>
-              <span>{userId.slice(0, 7)}...</span>
-            </Tooltip>
-          );
-        }
-        return userId ? userId : "-";
+        const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
+        const width = info.cell.column.getSize();
+        return (
+          <Tooltip title={displayValue}>
+            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+              {displayValue ?? "-"}
+            </span>
+          </Tooltip>
+        );
       },
     },
     {
@@ -256,18 +266,19 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       id: "created_by",
       accessorKey: "created_by",
       header: "Created By",
-      size: 120,
+      size: 70,
       enableSorting: false,
       cell: (info) => {
         const value = info.getValue() as string | null;
-        if (value && value.length > 15) {
-          return (
-            <Tooltip title={value}>
-              <span>{value.slice(0, 7)}...</span>
-            </Tooltip>
-          );
-        }
-        return value;
+        const displayValue = value === "default_user_id" ? "Default Proxy Admin" : value;
+        const width = info.cell.column.getSize();
+        return (
+          <Tooltip title={displayValue}>
+            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+              {displayValue ?? "-"}
+            </span>
+          </Tooltip>
+        );
       },
     },
     {
@@ -716,7 +727,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                                 whiteSpace: "pre-wrap",
                                 overflow: "hidden",
                               }}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && Array.isArray(cell.getValue()) && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
                             >
                               {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </TableCell>

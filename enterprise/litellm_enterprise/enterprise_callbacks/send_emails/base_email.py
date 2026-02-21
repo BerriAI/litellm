@@ -30,8 +30,15 @@ from litellm.integrations.email_templates.user_invitation_email import (
 from litellm.integrations.email_templates.templates import (
     MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
+    TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
 )
-from litellm.proxy._types import CallInfo, InvitationNew, UserAPIKeyAuth, WebhookEvent
+from litellm.proxy._types import (
+    CallInfo,
+    InvitationNew,
+    Litellm_EntityType,
+    UserAPIKeyAuth,
+    WebhookEvent,
+)
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 from litellm.constants import (
@@ -217,6 +224,78 @@ class BaseEmailLogger(CustomLogger):
         )
         pass
 
+    async def send_team_soft_budget_alert_email(self, event: WebhookEvent):
+        """
+        Send email to team members when team soft budget is crossed
+        Supports multiple recipients via alert_emails field from team metadata
+        """
+        # Collect all recipient emails
+        recipient_emails: List[str] = []
+        
+        # Add additional alert emails from team metadata.soft_budget_alert_emails
+        if hasattr(event, "alert_emails") and event.alert_emails:
+            for email in event.alert_emails:
+                if email and email not in recipient_emails:  # Avoid duplicates
+                    recipient_emails.append(email)
+        
+        # If no recipients found, skip sending
+        if not recipient_emails:
+            verbose_proxy_logger.warning(
+                f"No recipient emails found for team soft budget alert. event={event.model_dump(exclude_none=True)}"
+            )
+            return
+
+        # Validate that we have at least one valid email address
+        first_recipient_email = recipient_emails[0]
+        if not first_recipient_email or not first_recipient_email.strip():
+            verbose_proxy_logger.warning(
+                f"Invalid recipient email found for team soft budget alert. event={event.model_dump(exclude_none=True)}"
+            )
+            return
+
+        verbose_proxy_logger.debug(
+            f"send_team_soft_budget_alert_email_event: {json.dumps(event.model_dump(exclude_none=True), indent=4, default=str)}"
+        )
+
+        # Get email params using the first recipient email (for template formatting)
+        # For team alerts with alert_emails, we don't need user_id lookup since we already have email addresses
+        # Pass user_id=None to prevent _get_email_params from trying to look up email from a potentially None user_id
+        email_params = await self._get_email_params(
+            email_event=EmailEvent.soft_budget_crossed,
+            user_id=None,  # Team alerts don't require user_id when alert_emails are provided
+            user_email=first_recipient_email,
+            event_message=event.event_message,
+        )
+
+        # Format budget values
+        soft_budget_str = f"${event.soft_budget}" if event.soft_budget is not None else "N/A"
+        spend_str = f"${event.spend}" if event.spend is not None else "$0.00"
+        max_budget_info = ""
+        if event.max_budget is not None:
+            max_budget_info = f"<b>Maximum Budget:</b> ${event.max_budget} <br />"
+
+        # Use team alias or generic greeting
+        team_alias = event.team_alias or "Team"
+
+        email_html_content = TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+            email_logo_url=email_params.logo_url,
+            team_alias=team_alias,
+            soft_budget=soft_budget_str,
+            spend=spend_str,
+            max_budget_info=max_budget_info,
+            base_url=email_params.base_url,
+            email_support_contact=email_params.support_contact,
+        )
+        
+        # Send email to all recipients
+        await self.send_email(
+            from_email=self.DEFAULT_LITELLM_EMAIL,
+            to_email=recipient_emails,
+            subject=email_params.subject,
+            html_body=email_html_content,
+        )
+        pass
+
     async def send_max_budget_alert_email(self, event: WebhookEvent):
         """
         Send email to user when max budget alert threshold is reached
@@ -285,15 +364,36 @@ class BaseEmailLogger(CustomLogger):
         # - Don't re-alert, if alert already sent
         _cache: DualCache = self.internal_usage_cache
 
-        # percent of max_budget left to spend
-        if user_info.max_budget is None and user_info.soft_budget is None:
-            return
-
         # For soft_budget alerts, check if we've already sent an alert
         if type == "soft_budget":
+            # For team soft budget alerts, we only need team soft_budget to be set
+            # For other entity types, we need either max_budget or soft_budget
+            if user_info.event_group == Litellm_EntityType.TEAM:
+                if user_info.soft_budget is None:
+                    return
+                # For team soft budget alerts, require alert_emails to be configured
+                # Team soft budget alerts are sent via metadata.soft_budget_alerting_emails
+                if user_info.alert_emails is None or len(user_info.alert_emails) == 0:
+                    verbose_proxy_logger.debug(
+                        "Skipping team soft budget email alert: no alert_emails configured",
+                    )
+                    return
+            else:
+                # For non-team alerts, require either max_budget or soft_budget
+                if user_info.max_budget is None and user_info.soft_budget is None:
+                    return
             if user_info.soft_budget is not None and user_info.spend >= user_info.soft_budget:
                 # Generate cache key based on event type and identifier
-                _id = user_info.token or user_info.user_id or "default_id"
+                # Use appropriate ID based on event_group to ensure unique cache keys per entity type
+                if user_info.event_group == Litellm_EntityType.TEAM:
+                    _id = user_info.team_id or "default_id"
+                elif user_info.event_group == Litellm_EntityType.ORGANIZATION:
+                    _id = user_info.organization_id or "default_id"
+                elif user_info.event_group == Litellm_EntityType.USER:
+                    _id = user_info.user_id or "default_id"
+                else:
+                    # For KEY and other types, use token or user_id
+                    _id = user_info.token or user_info.user_id or "default_id"
                 _cache_key = f"email_budget_alerts:soft_budget_crossed:{_id}"
                 
                 # Check if we've already sent this alert
@@ -318,10 +418,15 @@ class BaseEmailLogger(CustomLogger):
                         projected_exceeded_date=user_info.projected_exceeded_date,
                         projected_spend=user_info.projected_spend,
                         event_group=user_info.event_group,
+                        alert_emails=user_info.alert_emails,
                     )
                     
                     try:
-                        await self.send_soft_budget_alert_email(webhook_event)
+                        # Use team-specific function for team alerts, otherwise use standard function
+                        if user_info.event_group == Litellm_EntityType.TEAM:
+                            await self.send_team_soft_budget_alert_email(webhook_event)
+                        else:
+                            await self.send_soft_budget_alert_email(webhook_event)
                         
                         # Cache the alert to prevent duplicate sends
                         await _cache.async_set_cache(

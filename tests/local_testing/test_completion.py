@@ -1373,8 +1373,8 @@ HF Tests we should pass
 
 
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
-)  # "vertex_ai",
+    "provider", ["openai", "lm_studio", "llamafile"]
+)  # "vertex_ai", hosted_vllm removed - no longer uses OpenAI client
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
     litellm.set_verbose = True
@@ -1414,10 +1414,9 @@ async def test_openai_compatible_custom_api_base(provider):
     "provider",
     [
         "openai",
-        "hosted_vllm",
         "llamafile",
     ],
-)  # "vertex_ai",
+)  # "vertex_ai", hosted_vllm removed - no longer uses OpenAI client
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_video(provider):
     litellm.set_verbose = True
@@ -2182,20 +2181,6 @@ async def test_acompletion_ollama_function_call_stream(model):
             == "get_current_weather"
         )
         assert first_chunk.choices[0].finish_reason == "tool_calls"
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_completion_openrouter1():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="openrouter/mistralai/mistral-tiny",
-            messages=messages,
-            max_tokens=5,
-        )
-        # Add any assertions here to check the response
-        print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

@@ -31,6 +31,16 @@ else:
 GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
+def is_valid_json(value: str) -> bool:
+    """Checks whether the value passed is a valid serialized JSON string"""
+    try:
+        json.loads(value)
+    except json.JSONDecodeError:
+        return False
+    else:
+        return True
+
+
 class GigaChatError(BaseLLMException):
     """GigaChat API error."""
 
@@ -101,7 +111,11 @@ class GigaChatConfig(BaseConfig):
         Set up headers with OAuth token.
         """
         # Get access token
-        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
+        credentials = (
+            api_key
+            or get_secret_str("GIGACHAT_CREDENTIALS")
+            or get_secret_str("GIGACHAT_API_KEY")
+        )
         access_token = get_access_token(credentials=credentials)
 
         # Store credentials for image uploads
@@ -158,13 +172,10 @@ class GigaChatConfig(BaseConfig):
                 # Convert tools to functions format
                 optional_params["functions"] = self._convert_tools_to_functions(value)
             elif param == "tool_choice":
-                if isinstance(value, dict) and value.get("function"):
-                    optional_params["function_call"] = {"name": value["function"]["name"]}
-                elif value == "auto":
-                    pass  # Default behavior
-                elif value == "required":
-                    # GigaChat doesn't have 'required', handled differently
-                    pass
+                # Map OpenAI tool_choice to GigaChat function_call
+                mapped_choice = self._map_tool_choice(value)
+                if mapped_choice is not None:
+                    optional_params["function_call"] = mapped_choice
             elif param == "functions":
                 optional_params["functions"] = value
             elif param == "function_call":
@@ -196,12 +207,56 @@ class GigaChatConfig(BaseConfig):
         for tool in tools:
             if tool.get("type") == "function":
                 func = tool.get("function", {})
-                functions.append({
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": func.get("parameters", {}),
-                })
+                functions.append(
+                    {
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {}),
+                    }
+                )
         return functions
+
+    def _map_tool_choice(
+        self, tool_choice: Union[str, dict]
+    ) -> Optional[Union[str, dict]]:
+        """
+        Map OpenAI tool_choice to GigaChat function_call format.
+
+        OpenAI format:
+        - "auto": Call zero, one, or multiple functions (default)
+        - "required": Call one or more functions
+        - "none": Don't call any functions
+        - {"type": "function", "function": {"name": "get_weather"}}: Force specific function
+
+        GigaChat format:
+        - "none": Disable function calls
+        - "auto": Automatic mode (default)
+        - {"name": "get_weather"}: Force specific function
+
+        Args:
+            tool_choice: OpenAI tool_choice value
+
+        Returns:
+            GigaChat function_call value or None
+        """
+        if tool_choice == "none":
+            return "none"
+        elif tool_choice == "auto":
+            return "auto"
+        elif tool_choice == "required":
+            # GigaChat doesn't have a direct "required" equivalent
+            # Use "auto" as the closest behavior
+            return "auto"
+        elif isinstance(tool_choice, dict):
+            # OpenAI format: {"type": "function", "function": {"name": "func_name"}}
+            # GigaChat format: {"name": "func_name"}
+            if tool_choice.get("type") == "function":
+                func_name = tool_choice.get("function", {}).get("name")
+                if func_name:
+                    return {"name": func_name}
+        
+        # Default to None (don't set function_call)
+        return None
 
     def _upload_image(self, image_url: str) -> Optional[str]:
         """
@@ -242,8 +297,14 @@ class GigaChatConfig(BaseConfig):
         }
 
         # Add optional params
-        for key in ["temperature", "top_p", "max_tokens", "stream",
-                    "repetition_penalty", "profanity_check"]:
+        for key in [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "repetition_penalty",
+            "profanity_check",
+        ]:
             if key in optional_params:
                 request_data[key] = optional_params[key]
 
@@ -275,7 +336,7 @@ class GigaChatConfig(BaseConfig):
             elif role == "tool":
                 message["role"] = "function"
                 content = message.get("content", "")
-                if not isinstance(content, str):
+                if not isinstance(content, str) or not is_valid_json(content):
                     message["content"] = json.dumps(content, ensure_ascii=False)
 
             # Handle None content
@@ -325,33 +386,7 @@ class GigaChatConfig(BaseConfig):
 
             transformed.append(message)
 
-        # Collapse consecutive user messages
-        return self._collapse_user_messages(transformed)
-
-    def _collapse_user_messages(self, messages: List[dict]) -> List[dict]:
-        """Collapse consecutive user messages into one."""
-        collapsed: List[dict] = []
-        prev_user_msg: Optional[dict] = None
-        content_parts: List[str] = []
-
-        for msg in messages:
-            if msg.get("role") == "user" and prev_user_msg is not None:
-                content_parts.append(msg.get("content", ""))
-            else:
-                if content_parts and prev_user_msg:
-                    prev_user_msg["content"] = "\n".join(
-                        [prev_user_msg.get("content", "")] + content_parts
-                    )
-                    content_parts = []
-                collapsed.append(msg)
-                prev_user_msg = msg if msg.get("role") == "user" else None
-
-        if content_parts and prev_user_msg:
-            prev_user_msg["content"] = "\n".join(
-                [prev_user_msg.get("content", "")] + content_parts
-            )
-
-        return collapsed
+        return transformed
 
     def transform_response(
         self,
@@ -402,14 +437,16 @@ class GigaChatConfig(BaseConfig):
                     # Convert to tool_calls format
                     if isinstance(args, dict):
                         args = json.dumps(args, ensure_ascii=False)
-                    message_data["tool_calls"] = [{
-                        "id": f"call_{uuid.uuid4().hex[:24]}",
-                        "type": "function",
-                        "function": {
-                            "name": func_call.get("name", ""),
-                            "arguments": args,
+                    message_data["tool_calls"] = [
+                        {
+                            "id": f"call_{uuid.uuid4().hex[:24]}",
+                            "type": "function",
+                            "function": {
+                                "name": func_call.get("name", ""),
+                                "arguments": args,
+                            },
                         }
-                    }]
+                    ]
                     message_data.pop("function_call", None)
                     finish_reason = "tool_calls"
 

@@ -219,6 +219,22 @@ def test_get_standard_logging_metadata_invalid_user_api_key():
     assert result["user_api_key_hash"] is None
 
 
+def test_get_standard_logging_metadata_non_string_user_api_key():
+    """Non-string user_api_key should not be set as user_api_key_hash."""
+    metadata = {"user_api_key": 12345}
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    all_fields_present(result)
+    assert result["user_api_key_hash"] is None
+
+
+def test_get_standard_logging_metadata_none_user_api_key():
+    """None user_api_key should not be set as user_api_key_hash."""
+    metadata = {"user_api_key": None}
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    all_fields_present(result)
+    assert result["user_api_key_hash"] is None
+
+
 def test_get_standard_logging_metadata_invalid_keys():
     metadata = {
         "user_api_key_alias": "test_alias",

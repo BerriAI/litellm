@@ -234,6 +234,14 @@ db:
   #  instance.  See the "postgresql" top level key for additional configuration.
   deployStandalone: true
 
+# Lifecycle hooks for the LiteLLM container
+# Example:
+# lifecycle:
+#   preStop:
+#     exec:
+#       command: ["/bin/sh", "-c", "sleep 10"]
+lifecycle: {}
+
 # Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
 #  otherwise)
 postgresql:
@@ -273,6 +281,7 @@ migrationJob:
   #    cpu: 100m
   #    memory: 100Mi
   extraContainers: []
+  extraInitContainers: []
 
   # Hook configuration
   hooks:

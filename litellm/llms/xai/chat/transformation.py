@@ -4,6 +4,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import XAI_API_BASE
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
@@ -13,8 +14,6 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, ModelResponse, Usage, PromptTokensDetailsWrapper
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-
-XAI_API_BASE = "https://api.x.ai/v1"
 
 
 class XAIChatConfig(OpenAIGPTConfig):

@@ -35,7 +35,7 @@ export interface TeamListCallOptions {
   status?: string | null;
 }
 
-const teamListCall = async (
+export const teamListCall = async (
   accessToken: string,
   page: number,
   pageSize: number,

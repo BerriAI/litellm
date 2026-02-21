@@ -5,12 +5,10 @@ Azure Batches API Handler
 from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
-
 from openai import AsyncOpenAI, OpenAI
 
 from litellm.llms.azure.azure import AsyncAzureOpenAI, AzureOpenAI
 from litellm.types.llms.openai import (
-    Batch,
     CancelBatchRequest,
     CreateBatchRequest,
     RetrieveBatchRequest,
@@ -130,9 +128,9 @@ class AzureBatchesAPI(BaseAzureLLM):
         self,
         cancel_batch_data: CancelBatchRequest,
         client: Union[AsyncAzureOpenAI, AsyncOpenAI],
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         response = await client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def cancel_batch(
         self,
@@ -160,8 +158,23 @@ class AzureBatchesAPI(BaseAzureLLM):
             raise ValueError(
                 "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
             )
+        
+        if _is_async is True:
+            if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
+                raise ValueError(
+                    "Azure client is not an instance of AsyncAzureOpenAI or AsyncOpenAI. Make sure you passed an async client."
+                )
+            return self.acancel_batch(  # type: ignore
+                cancel_batch_data=cancel_batch_data, client=azure_client
+            )
+        
+        # At this point, azure_client is guaranteed to be a sync client
+        if not isinstance(azure_client, (AzureOpenAI, OpenAI)):
+            raise ValueError(
+                "Azure client is not an instance of AzureOpenAI or OpenAI. Make sure you passed a sync client."
+            )
         response = azure_client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     async def alist_batches(
         self,

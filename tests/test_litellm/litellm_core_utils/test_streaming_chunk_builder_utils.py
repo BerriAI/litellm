@@ -158,6 +158,76 @@ def test_get_combined_tool_content():
     ]
 
 
+def test_get_combined_thinking_content_preserves_interleaved_blocks():
+    base_chunk = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1234567890,
+        "model": "claude-sonnet-4-20250514",
+    }
+
+    def make_chunk(**delta_kwargs):
+        return ModelResponseStream(
+            **base_chunk,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(**delta_kwargs),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+    chunks = [
+        make_chunk(role="assistant", content=None),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": "Step 1 analysis...", "signature": None}
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": None, "signature": "sig_block1"}
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {
+                    "type": "redacted_thinking",
+                    "data": "EuoBCoYBGAIi...encrypted...",
+                }
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": "Step 2 analysis...", "signature": None}
+            ]
+        ),
+        make_chunk(
+            thinking_blocks=[
+                {"type": "thinking", "thinking": None, "signature": "sig_block2"}
+            ]
+        ),
+    ]
+
+    thinking_chunks = [
+        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
+    ]
+    processor = ChunkProcessor(chunks=chunks)
+    result = processor.get_combined_thinking_content(thinking_chunks)
+
+    assert result is not None
+    assert len(result) == 3
+    assert result[0]["type"] == "thinking"
+    assert result[0]["thinking"] == "Step 1 analysis..."
+    assert result[0]["signature"] == "sig_block1"
+    assert result[1]["type"] == "redacted_thinking"
+    assert result[1]["data"] == "EuoBCoYBGAIi...encrypted..."
+    assert result[2]["type"] == "thinking"
+    assert result[2]["thinking"] == "Step 2 analysis..."
+    assert result[2]["signature"] == "sig_block2"
+
+
 def test_cache_read_input_tokens_retained():
     chunk1 = ModelResponseStream(
         id="chatcmpl-95aabb85-c39f-443d-ae96-0370c404d70c",

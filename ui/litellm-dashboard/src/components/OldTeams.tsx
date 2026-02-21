@@ -1,6 +1,6 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import AvailableTeamsPanel from "@/components/team/available_teams";
-import TeamInfoView from "@/components/team/team_info";
+import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
 import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -38,10 +38,12 @@ import {
 import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
+import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import { fetchTeams } from "./common_components/fetch_teams";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "./common_components/RouterSettingsAccordion";
 import {
   fetchAvailableModelsForTeamOrKey,
   getModelDisplayName,
@@ -51,7 +53,7 @@ import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Organization, fetchMCPAccessGroups, getGuardrailsList, teamDeleteCall } from "./networking";
+import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
@@ -222,11 +224,14 @@ const Teams: React.FC<TeamProps> = ({
   const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -270,7 +275,22 @@ const Teams: React.FC<TeamProps> = ({
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        if (accessToken == null) {
+          return;
+        }
+
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPolicies();
   }, [accessToken]);
 
   const fetchMcpAccessGroups = async () => {
@@ -317,6 +337,8 @@ const Teams: React.FC<TeamProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleMemberOk = () => {
@@ -330,6 +352,8 @@ const Teams: React.FC<TeamProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setModelAliases({});
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleMemberCancel = () => {
@@ -503,6 +527,17 @@ const Teams: React.FC<TeamProps> = ({
           formValues.model_aliases = modelAliases;
         }
 
+        // Add router_settings if any are defined
+        if (routerSettings?.router_settings) {
+          // Only include router_settings if it has at least one non-null value
+          const hasValues = Object.values(routerSettings.router_settings).some(
+            (value) => value !== null && value !== undefined && value !== "",
+          );
+          if (hasValues) {
+            formValues.router_settings = routerSettings.router_settings;
+          }
+        }
+
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -514,6 +549,8 @@ const Teams: React.FC<TeamProps> = ({
         form.resetFields();
         setLoggingSettings([]);
         setModelAliases({});
+        setRouterSettings(null);
+        setRouterSettingsKey((prev) => prev + 1);
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -998,7 +1035,7 @@ const Teams: React.FC<TeamProps> = ({
           {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Modal
               title="Create Team"
-              visible={isTeamModalVisible}
+              open={isTeamModalVisible}
               width={1000}
               footer={null}
               onOk={handleOk}
@@ -1313,6 +1350,51 @@ const Teams: React.FC<TeamProps> = ({
                       <Form.Item
                         label={
                           <span>
+                            Policies{" "}
+                            <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                              <a
+                                href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </a>
+                            </Tooltip>
+                          </span>
+                        }
+                        name="policies"
+                        className="mt-8"
+                        help="Select existing policies or enter new ones"
+                      >
+                        <Select2
+                          mode="tags"
+                          style={{ width: "100%" }}
+                          placeholder="Select or enter policies"
+                          options={policiesList.map((name) => ({
+                            value: name,
+                            label: name,
+                          }))}
+                        />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
+                            Access Groups{" "}
+                            <Tooltip title="Assign access groups to this team. Access groups control which models, MCP servers, and agents this team can use">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="access_group_ids"
+                        className="mt-8"
+                        help="Select access groups to assign to this team"
+                      >
+                        <AccessGroupSelector placeholder="Select access groups (optional)" />
+                      </Form.Item>
+                      <Form.Item
+                        label={
+                          <span>
                             Allowed Vector Stores{" "}
                             <Tooltip title="Select which vector stores this team can access by default. Leave empty for access to all vector stores">
                               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
@@ -1423,6 +1505,23 @@ const Teams: React.FC<TeamProps> = ({
                           value={loggingSettings}
                           onChange={setLoggingSettings}
                           premiumUser={premiumUser}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Router Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4 w-full">
+                        <RouterSettingsAccordion
+                          key={routerSettingsKey}
+                          accessToken={accessToken || ""}
+                          value={routerSettings || undefined}
+                          onChange={setRouterSettings}
+                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
                         />
                       </div>
                     </AccordionBody>

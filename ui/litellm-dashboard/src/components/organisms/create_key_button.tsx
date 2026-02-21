@@ -19,8 +19,10 @@ import ModelAliasManager from "../common_components/ModelAliasManager";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import TeamDropdown from "../common_components/team_dropdown";
-import Createuser from "../create_user_button";
+import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -28,6 +30,7 @@ import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
   getGuardrailsList,
+  getPoliciesList,
   getPossibleUserRoles,
   getPromptsList,
   keyCreateCall,
@@ -149,6 +152,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
@@ -159,19 +163,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
-  const [keyType, setKeyType] = useState<string>("default");
+  const [keyType, setKeyType] = useState<string>("llm_api");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleCancel = () => {
@@ -181,10 +189,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   useEffect(() => {
@@ -204,6 +214,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
@@ -214,6 +234,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     };
 
     fetchGuardrails();
+    fetchPolicies();
     fetchPrompts();
   }, [accessToken]);
 
@@ -301,9 +322,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         formValues.rotation_interval = rotationInterval;
       }
 
-      // Handle duration field for key expiry
-      if (formValues.duration) {
-        formValues.duration = formValues.duration;
+      // Handle duration field for key expiry - convert empty string to null
+      if (!formValues.duration || formValues.duration.trim() === "") {
+        formValues.duration = null;
       }
 
       // Update the formValues with the final metadata
@@ -381,6 +402,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       // Add model_aliases if any are defined
       if (Object.keys(modelAliases).length > 0) {
         formValues.aliases = JSON.stringify(modelAliases);
+      }
+
+      // Add router_settings if any are defined
+      if (routerSettings?.router_settings) {
+        // Only include router_settings if it has at least one non-null value
+        const hasValues = Object.values(routerSettings.router_settings).some(
+          (value) => value !== null && value !== undefined && value !== "",
+        );
+        if (hasValues) {
+          formValues.router_settings = routerSettings.router_settings;
+        }
       }
 
       let response;
@@ -676,11 +708,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   </span>
                 }
                 name="key_type"
-                initialValue="default"
+                initialValue="llm_api"
                 className="mt-4"
               >
                 <Select
-                  defaultValue="default"
+                  defaultValue="llm_api"
                   placeholder="Select key type"
                   style={{ width: "100%" }}
                   optionLabelProp="label"
@@ -696,15 +728,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <div style={{ padding: "4px 0" }}>
                       <div style={{ fontWeight: 500 }}>Default</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call LLM API + Management routes
+                        Can call AI APIs + Management routes
                       </div>
                     </div>
                   </Option>
-                  <Option value="llm_api" label="LLM API">
+                  <Option value="llm_api" label="AI APIs">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>LLM API</div>
+                      <div style={{ fontWeight: 500 }}>AI APIs</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call only LLM API routes (chat/completions, embeddings, etc.)
+                        Can call only AI API routes (chat/completions, embeddings, etc.)
                       </div>
                     </div>
                   </Option>
@@ -900,6 +932,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   <Form.Item
                     label={
                       <span>
+                        Policies{" "}
+                        <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="policies"
+                    className="mt-4"
+                    help={
+                      premiumUser
+                        ? "Select existing policies or enter new ones"
+                        : "Premium feature - Upgrade to set policies by key"
+                    }
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      disabled={!premiumUser}
+                      placeholder={
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set policies by key"
+                          : "Select or enter policies"
+                      }
+                      options={policiesList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
                         Prompts{" "}
                         <Tooltip title="Allow this key to use specific prompt templates">
                           <a
@@ -929,6 +997,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                         !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
                       }
                       options={promptsList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Access Groups{" "}
+                        <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="access_group_ids"
+                    className="mt-4"
+                    help="Select access groups to assign to this key"
+                  >
+                    <AccessGroupSelector
+                      placeholder="Select access groups (optional)"
                     />
                   </Form.Item>
                   <Form.Item
@@ -1154,6 +1239,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     </Tooltip>
                   )}
 
+                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Router Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4 w-full">
+                        <RouterSettingsAccordion
+                          key={routerSettingsKey}
+                          accessToken={accessToken || ""}
+                          value={routerSettings || undefined}
+                          onChange={setRouterSettings}
+                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
                       <b>Model Aliases</b>
@@ -1186,6 +1288,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           onAutoRotationChange={setAutoRotationEnabled}
                           rotationInterval={rotationInterval}
                           onRotationIntervalChange={setRotationInterval}
+                          isCreateMode={true}
                         />
                       </div>
                     </AccordionBody>
@@ -1257,12 +1360,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       {isCreateUserModalVisible && (
         <Modal
           title="Create New User"
-          visible={isCreateUserModalVisible}
+          open={isCreateUserModalVisible}
           onCancel={() => setIsCreateUserModalVisible(false)}
           footer={null}
           width={800}
         >
-          <Createuser
+          <CreateUserButton
             userID={userID}
             accessToken={accessToken}
             teams={teams}
@@ -1274,7 +1377,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       )}
 
       {apiKey && (
-        <Modal visible={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
+        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>

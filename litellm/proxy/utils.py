@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -76,8 +76,12 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    ModifyResponseException,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
@@ -110,6 +114,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.mcp import (
@@ -117,6 +122,7 @@ from litellm.types.mcp import (
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
 )
+from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
@@ -450,18 +456,26 @@ class ProxyLogging:
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         self._add_proxy_hooks(llm_router)
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
-        for callback in litellm.callbacks:
+
+        # Track string callbacks and their initialized instances so we can
+        # replace them in-place, preventing duplicates (string + instance) in
+        # litellm.callbacks which caused double-counting of metrics.
+        string_callbacks_to_replace: Dict[int, CustomLogger] = {}
+
+        for idx, callback in enumerate(litellm.callbacks):
             if isinstance(callback, str):
-                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                initialized_callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
 
-                if callback is None:
-                    continue
+                if initialized_callback is not None:
+                    string_callbacks_to_replace[idx] = initialized_callback
 
-            litellm.logging_callback_manager.add_litellm_callback(callback)
+        # Replace string entries in litellm.callbacks with initialized instances
+        for idx, initialized_callback in string_callbacks_to_replace.items():
+            litellm.callbacks[idx] = initialized_callback
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -740,7 +754,7 @@ class ProxyLogging:
         self, dynamic_success_callbacks: Optional[List], global_callbacks: List
     ) -> List:
         if dynamic_success_callbacks is None:
-            return global_callbacks
+            return list(global_callbacks)
         return list(set(dynamic_success_callbacks + global_callbacks))
 
     def _parse_pre_mcp_call_hook_response(
@@ -945,6 +959,7 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: CallTypesLiteral,
+        event_type: GuardrailEventHooks,
     ) -> Optional[dict]:
         """
         Process a guardrail callback during pre-call hook.
@@ -964,8 +979,10 @@ class ProxyLogging:
         from litellm.types.guardrails import GuardrailEventHooks
 
         # Determine the event type based on call type
-        event_type = GuardrailEventHooks.pre_call
-        if call_type == CallTypes.call_mcp_tool.value:
+        if (
+            event_type is GuardrailEventHooks.pre_call
+            and call_type == CallTypes.call_mcp_tool.value
+        ):
             event_type = GuardrailEventHooks.pre_mcp_call
 
         # Check if the guardrail should run for this request
@@ -982,7 +999,9 @@ class ProxyLogging:
 
         try:
             # Check if load balancing should be used
-            if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
+            if guardrail_name and self._should_use_guardrail_load_balancing(
+                guardrail_name
+            ):
                 response = await self._execute_guardrail_with_load_balancing(
                     guardrail_name=guardrail_name,
                     hook_type="pre_call",
@@ -1017,7 +1036,11 @@ class ProxyLogging:
             latency_seconds = guardrail_end_time - guardrail_start_time
 
             # Get guardrail name for metrics (fallback if not set)
-            metrics_guardrail_name = guardrail_name or getattr(callback, "guardrail_name", callback.__class__.__name__) or "unknown"
+            metrics_guardrail_name = (
+                guardrail_name
+                or getattr(callback, "guardrail_name", callback.__class__.__name__)
+                or "unknown"
+            )
 
             # Find PrometheusLogger in callbacks and record metrics
             for prom_callback in litellm.callbacks:
@@ -1135,6 +1158,95 @@ class ProxyLogging:
                         request_data=data, guardrail_name=guardrail_name
                     )
 
+    async def _maybe_execute_pipelines(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+        event_hook: str,
+    ) -> dict:
+        """
+        Execute guardrail pipelines if any are configured for this request.
+
+        Checks metadata for pipelines resolved by the policy engine
+        and executes them. Handles the result (allow/block/modify_response).
+
+        Returns the (possibly modified) data dict.
+        """
+        metadata = data.get("metadata", data.get("litellm_metadata", {})) or {}
+        pipelines = metadata.get("_guardrail_pipelines")
+        if not pipelines:
+            return data
+
+        for policy_name, pipeline in pipelines:
+            if pipeline.mode != event_hook:
+                continue
+
+            result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
+                steps=pipeline.steps,
+                mode=pipeline.mode,
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                policy_name=policy_name,
+            )
+
+            data = self._handle_pipeline_result(
+                result=result,
+                data=data,
+                policy_name=policy_name,
+            )
+
+        return data
+
+    @staticmethod
+    def _handle_pipeline_result(
+        result: Any,
+        data: dict,
+        policy_name: str,
+    ) -> dict:
+        """
+        Handle a PipelineExecutionResult — allow, block, or modify_response.
+
+        Returns data dict if allowed, raises on block/modify_response.
+        """
+        if result.terminal_action == "allow":
+            if result.modified_data is not None:
+                data.update(result.modified_data)
+            return data
+
+        if result.terminal_action == "block":
+            step_results_serializable = [
+                {
+                    "guardrail": sr.guardrail_name,
+                    "outcome": sr.outcome,
+                    "action": sr.action_taken,
+                }
+                for sr in result.step_results
+            ]
+            error_detail = {
+                "error": {
+                    "message": f"Content blocked by guardrail pipeline '{policy_name}'",
+                    "type": "guardrail_pipeline_error",
+                    "pipeline_context": {
+                        "policy": policy_name,
+                        "step_results": step_results_serializable,
+                    },
+                }
+            }
+            raise HTTPException(status_code=400, detail=error_detail)
+
+        if result.terminal_action == "modify_response":
+            raise ModifyResponseException(
+                message=result.modify_response_message or "Response modified by pipeline",
+                model=data.get("model", "unknown"),
+                request_data=data,
+                guardrail_name=f"pipeline:{policy_name}",
+                detection_info=None,
+            )
+
+        return data
+
     # The actual implementation of the function
     @overload
     async def pre_call_hook(
@@ -1197,6 +1309,18 @@ class ProxyLogging:
             )
 
         try:
+            # Execute guardrail pipelines before the normal callback loop
+            data = await self._maybe_execute_pipelines(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                event_hook="pre_call",
+            )
+
+            # Get pipeline-managed guardrails to skip in normal loop
+            metadata = data.get("metadata", data.get("litellm_metadata", {})) or {}
+            pipeline_managed: set = metadata.get("_pipeline_managed_guardrails", set())
+
             for callback in litellm.callbacks:
                 start_time = time.time()
                 _callback = None
@@ -1211,11 +1335,16 @@ class ProxyLogging:
                     and isinstance(_callback, CustomGuardrail)
                     and data is not None
                 ):
+                    # Skip guardrails managed by a pipeline
+                    if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                        continue
+
                     result = await self._process_guardrail_callback(
                         callback=_callback,
                         data=data,  # type: ignore
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
+                        event_type=GuardrailEventHooks.pre_call,
                     )
                     if result is None:
                         continue
@@ -1364,17 +1493,35 @@ class ProxyLogging:
         ],
         user_info: CallInfo,
     ):
-        if self.alerting is None:
-            # do nothing if alerting is not switched on
+        # For soft_budget alerts with alert_emails set, allow email sending even if alerting is None
+        # This enables team-specific soft budget email alerts via metadata.soft_budget_alerting_emails
+        # Note: user_info is a CallInfo that can represent user/team/org level info. For team budgets,
+        # alert_emails is populated from team_object.metadata.soft_budget_alerting_emails (see auth_checks.py)
+        is_soft_budget_with_alert_emails = (
+            type == "soft_budget"
+            and user_info.alert_emails is not None
+            and len(user_info.alert_emails) > 0
+        )
+
+        if self.alerting is None and not is_soft_budget_with_alert_emails:
+            # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if "slack" in self.alerting:
-            await self.slack_alerting_instance.budget_alerts(
-                type=type,
-                user_info=user_info,
-            )
+        if self.alerting is not None and "slack" in self.alerting:
+            if self.slack_alerting_instance is not None:
+                await self.slack_alerting_instance.budget_alerts(
+                    type=type,
+                    user_info=user_info,
+                )
 
-        if "email" in self.alerting and self.email_logging_instance is not None:
+        # Call email_logging_instance if:
+        # 1. "email" is in alerting config, OR
+        # 2. It's a soft_budget alert with team-specific alert_emails (bypasses global alerting config)
+        should_send_email = (
+            self.alerting is not None and "email" in self.alerting
+        ) or is_soft_budget_with_alert_emails
+
+        if should_send_email and self.email_logging_instance is not None:
             await self.email_logging_instance.budget_alerts(
                 type=type,
                 user_info=user_info,
@@ -1737,6 +1884,7 @@ class ProxyLogging:
 
         from litellm.types.guardrails import GuardrailEventHooks
 
+
         guardrail_callbacks: List[CustomGuardrail] = []
         other_callbacks: List[CustomLogger] = []
         try:
@@ -1793,12 +1941,58 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                await callback.async_post_call_success_hook(
+                callback_response = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
+                if callback_response is not None:
+                    response = callback_response
         except Exception as e:
             raise e
         return response
+
+    async def post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """
+        Calls async_post_call_response_headers_hook on all CustomLogger callbacks.
+        Merges all returned header dicts (later callbacks override earlier ones).
+
+        Returns:
+            Dict[str, str]: Merged headers from all callbacks.
+        """
+        merged_headers: Dict[str, str] = {}
+        try:
+            for callback in litellm.callbacks:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is not None and isinstance(_callback, CustomLogger):
+                    result = await _callback.async_post_call_response_headers_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_headers=request_headers,
+                    )
+                    if result is not None:
+                        merged_headers.update(result)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error in post_call_response_headers_hook: %s", str(e)
+            )
+        return merged_headers
+
+    def is_a2a_streaming_response(self, response: dict) -> bool:
+        expected_keys = ["jsonrpc", "id", "result"]
+        return all(key in response for key in expected_keys)
 
     async def async_post_call_streaming_hook(
         self,
@@ -1820,6 +2014,10 @@ class ProxyLogging:
         response_str: Optional[str] = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
+        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+            from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+            response_str = extract_text_from_a2a_response(response)
         if response_str is not None:
             for callback in litellm.callbacks:
                 try:
@@ -1852,16 +2050,14 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        potential_error_response = (
+                        callback_response = (
                             await _callback.async_post_call_streaming_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=complete_response,
                             )
                         )
-                        if isinstance(
-                            potential_error_response, str
-                        ) and potential_error_response.startswith("data: "):
-                            return potential_error_response
+                        if callback_response is not None:
+                            response = callback_response
                 except Exception as e:
                     raise e
         return response
@@ -1895,7 +2091,18 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-                    if "apply_guardrail" in type(callback).__dict__:
+                    if (
+                        "async_post_call_streaming_iterator_hook"
+                        in type(callback).__dict__
+                    ):
+                        current_response = (
+                            _callback.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=current_response,
+                                request_data=request_data,
+                            )
+                        )
+                    elif "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
                         current_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
@@ -1954,6 +2161,58 @@ def jsonify_object(data: dict) -> dict:
                 # This avoids Prisma retrying this 5 times, and making 5 clients
                 db_data[k] = "failed-to-serialize-json"
     return db_data
+
+
+# In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
+# Avoids a DB query on every auth request for non-deprecated keys.
+# Bounded to prevent memory leaks from accumulated rotations.
+_deprecated_key_cache: LimitedSizeOrderedDict = LimitedSizeOrderedDict(max_size=1000)
+_DEPRECATED_KEY_CACHE_TTL_SECONDS = 60
+
+
+async def _lookup_deprecated_key(
+    db: Any,
+    hashed_token: str,
+) -> Optional[str]:
+    """
+    Check if a token exists in the deprecated keys table and is still within its grace period.
+
+    Returns the active_token_id if found and valid, otherwise None.
+    Uses an in-memory cache to avoid DB queries on every auth request.
+    """
+    now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
+
+    # Check cache first
+    cached = _deprecated_key_cache.get(hashed_token)
+    cached = _deprecated_key_cache.get(hashed_token)
+    if cached is not None:
+        active_token_id, cache_expires_at_ts, revoke_at_ts = cached
+        if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
+            return active_token_id
+        else:
+            _deprecated_key_cache.pop(hashed_token, None)
+
+    try:
+        deprecated_row = await db.litellm_deprecatedverificationtoken.find_first(
+            where={
+                "token": hashed_token,
+                "revoke_at": {"gt": now},
+            },
+            select={"active_token_id": True},
+        )
+        if deprecated_row and deprecated_row.active_token_id:
+            _deprecated_key_cache[hashed_token] = (
+                deprecated_row.active_token_id,
+                now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+            )
+            return deprecated_row.active_token_id
+        # Only cache positive results; negative lookups are fast on indexed columns
+        # and caching them risks evicting real deprecated key entries.
+    except Exception as e:
+        verbose_proxy_logger.debug("Deprecated key lookup skipped: %s", e)
+
+    return None
 
 
 class PrismaClient:
@@ -2218,17 +2477,17 @@ class PrismaClient:
     ) -> Optional[dict]:
         """
         Execute a query with automatic fallback for PostgreSQL cached plan errors.
-        
+
         This handles the "cached plan must not change result type" error that occurs
         during rolling deployments when schema changes are applied while old pods
         still have cached query plans expecting the old schema.
-        
+
         Args:
             sql_query: SQL query string to execute
-            
+
         Returns:
             Query result or None
-            
+
         Raises:
             Original exception if not a cached plan error
         """
@@ -2241,7 +2500,7 @@ class PrismaClient:
                 # Add a unique comment to make the query different
                 sql_query_retry = sql_query.replace(
                     "SELECT",
-                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */"
+                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */",
                 )
                 verbose_proxy_logger.warning(
                     "PostgreSQL cached plan error detected for token lookup, "
@@ -2291,6 +2550,7 @@ class PrismaClient:
         parent_otel_span: Optional[Span] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
         budget_id_list: Optional[List[str]] = None,
+        check_deprecated: bool = True,
     ):
         args_passed_in = locals()
         start_time = time.time()
@@ -2550,7 +2810,8 @@ class PrismaClient:
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
-                            t.max_budget AS team_max_budget, 
+                            t.max_budget AS team_max_budget,
+                            t.soft_budget AS team_soft_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.models AS team_models,
@@ -2583,7 +2844,33 @@ class PrismaClient:
                         WHERE v.token = '{token}'
                     """
 
-                    response = await self._query_first_with_cached_plan_fallback(sql_query)
+                    response = await self._query_first_with_cached_plan_fallback(
+                        sql_query
+                    )
+
+                    # If not found in main table, check deprecated keys (grace period)
+                    # check_deprecated=False on the recursive call prevents unbounded chaining
+                    if (
+                        response is None
+                        and hashed_token is not None
+                        and check_deprecated
+                    ):
+                        active_token_id = await _lookup_deprecated_key(
+                            db=self.db, hashed_token=hashed_token
+                        )
+                        if active_token_id:
+                            response = await self.get_data(
+                                token=active_token_id,
+                                table_name="combined_view",
+                                query_type="find_unique",
+                                parent_otel_span=parent_otel_span,
+                                proxy_logging_obj=proxy_logging_obj,
+                                check_deprecated=False,
+                            )
+                            if response is not None:
+                                verbose_proxy_logger.debug(
+                                    "Deprecated key used during grace period"
+                                )
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -3891,11 +4178,15 @@ def _raise_failed_update_spend_exception(
     raise e
 
 
+def _get_month_end_date(today: date) -> date:
+    if today.month == 12:
+        return date(today.year + 1, 1, 1) - timedelta(days=1)
+    return date(today.year, today.month + 1, 1) - timedelta(days=1)
+
+
 def _is_projected_spend_over_limit(
     current_spend: float, soft_budget_limit: Optional[float]
 ):
-    from datetime import date
-
     if soft_budget_limit is None:
         # If there's no limit, we can't exceed it.
         return False
@@ -3903,10 +4194,7 @@ def _is_projected_spend_over_limit(
     today = date.today()
 
     # Finding the first day of the next month, then subtracting one day to get the end of the current month.
-    if today.month == 12:  # December edge case
-        end_month = date(today.year + 1, 1, 1) - timedelta(days=1)
-    else:
-        end_month = date(today.year, today.month + 1, 1) - timedelta(days=1)
+    end_month = _get_month_end_date(today)
 
     remaining_days = (end_month - today).days
 
@@ -3928,25 +4216,30 @@ def _is_projected_spend_over_limit(
 def _get_projected_spend_over_limit(
     current_spend: float, soft_budget_limit: Optional[float]
 ) -> Optional[tuple]:
-    import datetime
-
     if soft_budget_limit is None:
         return None
 
-    today = datetime.date.today()
-    end_month = datetime.date(today.year, today.month + 1, 1) - datetime.timedelta(
-        days=1
-    )
+    today = date.today()
+    end_month = _get_month_end_date(today)
     remaining_days = (end_month - today).days
 
-    daily_spend = current_spend / (
-        today.day - 1
-    )  # assuming the current spend till today (not including today)
-    projected_spend = daily_spend * remaining_days
+    # assuming the current spend till today (not including today)
+    if today.day == 1:
+        daily_spend = current_spend
+    else:
+        daily_spend = current_spend / (today.day - 1)
+    projected_spend = current_spend + (daily_spend * remaining_days)
 
     if projected_spend > soft_budget_limit:
-        approx_days = soft_budget_limit / daily_spend
-        limit_exceed_date = today + datetime.timedelta(days=approx_days)
+        if daily_spend <= 0:
+            limit_exceed_date = today
+        else:
+            remaining_budget = soft_budget_limit - current_spend
+            if remaining_budget <= 0:
+                limit_exceed_date = today
+            else:
+                approx_days = remaining_budget / daily_spend
+                limit_exceed_date = today + timedelta(days=approx_days)
 
         # return the projected spend and the date it will exceeded
         return projected_spend, limit_exceed_date
@@ -4221,7 +4514,7 @@ def get_server_root_path() -> str:
     - If SERVER_ROOT_PATH is set, return it.
     - Otherwise, default to "/".
     """
-    return os.getenv("SERVER_ROOT_PATH", "/")
+    return os.getenv("SERVER_ROOT_PATH", "")
 
 
 def get_prisma_client_or_throw(message: str):

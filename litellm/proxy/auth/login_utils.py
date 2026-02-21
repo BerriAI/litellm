@@ -34,59 +34,6 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
-async def expire_previous_ui_session_tokens(
-    user_id: str, prisma_client: Optional[PrismaClient]
-) -> None:
-    """
-    Expire (block) all other valid UI session tokens for a user.
-
-    This prevents accumulation of multiple valid UI session tokens that
-    are supposed to be short-lived test keys. Only affects keys with
-    team_id = "litellm-dashboard" and that haven't expired yet.
-
-    Args:
-        user_id: The user ID whose previous UI session tokens should be expired
-        prisma_client: Database client for performing the update
-    """
-    if prisma_client is None:
-        return
-
-    try:
-        from datetime import datetime, timezone
-
-        current_time = datetime.now(timezone.utc)
-
-        # Find all unblocked AND non-expired UI session tokens for this user
-        ui_session_tokens = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={
-                "user_id": user_id,
-                "team_id": "litellm-dashboard",
-                "OR": [
-                    {"blocked": None},  # Tokens that have never been blocked (null)
-                    {"blocked": False},  # Tokens explicitly set to not blocked
-                ],
-                "expires": {"gt": current_time},  # Only get tokens that haven't expired
-            }
-        )
-
-        if not ui_session_tokens:
-            return
-
-        # Block all the found tokens
-        tokens_to_block = [token.token for token in ui_session_tokens if token.token]
-
-        if tokens_to_block:
-            await prisma_client.db.litellm_verificationtoken.update_many(
-                where={"token": {"in": tokens_to_block}},
-                data={"blocked": True}
-            )
-
-    except Exception:
-        # Silently fail - don't block login if cleanup fails
-        # This is a best-effort operation
-        pass
-
-
 def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
     """
     Get UI username and password from environment variables or master key.
@@ -197,9 +144,9 @@ async def authenticate_user(  # noqa: PLR0915
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
-        password, ui_password
-    ):
+    if secrets.compare_digest(
+        username.encode("utf-8"), ui_username.encode("utf-8")
+    ) and secrets.compare_digest(password.encode("utf-8"), ui_password.encode("utf-8")):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
@@ -227,10 +174,6 @@ async def authenticate_user(  # noqa: PLR0915
         )
 
         if os.getenv("DATABASE_URL") is not None:
-            # Expire any previous UI session tokens for this user
-            await expire_previous_ui_session_tokens(
-                user_id=key_user_id, prisma_client=prisma_client
-            )
             response = await generate_key_helper_fn(
                 request_type="key",
                 **{
@@ -313,15 +256,10 @@ async def authenticate_user(  # noqa: PLR0915
 
         # check if password == _user_row.password
         hash_password = hash_token(token=password)
-        if secrets.compare_digest(password, _password) or secrets.compare_digest(
-            hash_password, _password
-        ):
+        if secrets.compare_digest(
+            password.encode("utf-8"), _password.encode("utf-8")
+        ) or secrets.compare_digest(hash_password.encode("utf-8"), _password.encode("utf-8")):
             if os.getenv("DATABASE_URL") is not None:
-                # Expire any previous UI session tokens for this user
-                await expire_previous_ui_session_tokens(
-                    user_id=user_id, prisma_client=prisma_client
-                )
-
                 response = await generate_key_helper_fn(
                     request_type="key",
                     **{  # type: ignore

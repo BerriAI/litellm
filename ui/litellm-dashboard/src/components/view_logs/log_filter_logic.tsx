@@ -7,8 +7,9 @@ import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_hel
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
+import type { LogsSortField } from "./columns";
 
-export const FILTER_KEYS = {
+const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
@@ -18,6 +19,7 @@ export const FILTER_KEYS = {
   STATUS: "Status",
   KEY_ALIAS: "Key Alias",
   ERROR_CODE: "Error Code",
+  ERROR_MESSAGE: "Error Message",
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -33,6 +35,9 @@ export function useLogFilterLogic({
   setCurrentPage,
   userID,
   userRole,
+  sortBy = "startTime",
+  sortOrder = "desc",
+  currentPage = 1,
 }: {
   logs: PaginatedResponse;
   accessToken: string | null;
@@ -43,6 +48,9 @@ export function useLogFilterLogic({
   setCurrentPage: (page: number) => void;
   userID: string | null;
   userRole: string | null;
+  sortBy?: LogsSortField;
+  sortOrder?: "asc" | "desc";
+  currentPage?: number;
 }) {
   const defaultFilters = useMemo<LogFilterState>(
     () => ({
@@ -55,6 +63,7 @@ export function useLogFilterLogic({
       [FILTER_KEYS.STATUS]: "",
       [FILTER_KEYS.KEY_ALIAS]: "",
       [FILTER_KEYS.ERROR_CODE]: "",
+      [FILTER_KEYS.ERROR_MESSAGE]: "",
     }),
     [],
   );
@@ -82,22 +91,27 @@ export function useLogFilterLogic({
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
       try {
-        const response = await uiSpendLogsCall(
+        const response = await uiSpendLogsCall({
           accessToken,
-          filters[FILTER_KEYS.KEY_HASH] || undefined,
-          filters[FILTER_KEYS.TEAM_ID] || undefined,
-          filters[FILTER_KEYS.REQUEST_ID] || undefined,
-          formattedStartTime,
-          formattedEndTime,
+          start_date: formattedStartTime,
+          end_date: formattedEndTime,
           page,
-          pageSize,
-          filters[FILTER_KEYS.USER_ID] || undefined,
-          filters[FILTER_KEYS.END_USER] || undefined,
-          filters[FILTER_KEYS.STATUS] || undefined,
-          filters[FILTER_KEYS.MODEL] || undefined,
-          filters[FILTER_KEYS.KEY_ALIAS] || undefined,
-          filters[FILTER_KEYS.ERROR_CODE] || undefined,
-        );
+          page_size: pageSize,
+          params: {
+            api_key: filters[FILTER_KEYS.KEY_HASH] || undefined,
+            team_id: filters[FILTER_KEYS.TEAM_ID] || undefined,
+            request_id: filters[FILTER_KEYS.REQUEST_ID] || undefined,
+            user_id: filters[FILTER_KEYS.USER_ID] || undefined,
+            end_user: filters[FILTER_KEYS.END_USER] || undefined,
+            status_filter: filters[FILTER_KEYS.STATUS] || undefined,
+            model_id: filters[FILTER_KEYS.MODEL] || undefined,
+            key_alias: filters[FILTER_KEYS.KEY_ALIAS] || undefined,
+            error_code: filters[FILTER_KEYS.ERROR_CODE] || undefined,
+            error_message: filters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
+            sort_by: sortBy,
+            sort_order: sortOrder,
+          },
+        });
 
         if (currentTimestamp === lastSearchTimestamp.current && response.data) {
           setBackendFilteredLogs(response);
@@ -106,7 +120,7 @@ export function useLogFilterLogic({
         console.error("Error searching users:", error);
       }
     },
-    [accessToken, startTime, endTime, isCustomDate, pageSize],
+    [accessToken, startTime, endTime, isCustomDate, pageSize, sortBy, sortOrder],
   );
 
   const debouncedSearch = useMemo(
@@ -137,10 +151,19 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.REQUEST_ID] ||
         filters[FILTER_KEYS.USER_ID] ||
         filters[FILTER_KEYS.END_USER] ||
-        filters[FILTER_KEYS.ERROR_CODE]
+        filters[FILTER_KEYS.ERROR_CODE] ||
+        filters[FILTER_KEYS.ERROR_MESSAGE] ||
+        filters[FILTER_KEYS.MODEL]
       ),
     [filters],
   );
+
+  // Refetch when sort or page changes (backend filters use their own fetch, not the main query)
+  useEffect(() => {
+    if (hasBackendFilters && accessToken) {
+      performSearch(filters, currentPage);
+    }
+  }, [sortBy, sortOrder, currentPage]);
 
   // Compute client-side filtered logs directly from incoming logs and filters
   const clientDerivedFilteredLogs: PaginatedResponse = useMemo(() => {
@@ -175,7 +198,7 @@ export function useLogFilterLogic({
     }
 
     if (filters[FILTER_KEYS.MODEL]) {
-      filteredData = filteredData.filter((log) => log.model === filters[FILTER_KEYS.MODEL]);
+      filteredData = filteredData.filter((log) => log.model_id === filters[FILTER_KEYS.MODEL]);
     }
 
     if (filters[FILTER_KEYS.KEY_HASH]) {

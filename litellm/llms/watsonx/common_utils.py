@@ -42,6 +42,7 @@ def generate_iam_token(api_key=None, **params) -> str:
                 get_secret_str("WX_API_KEY")
                 or get_secret_str("WATSONX_API_KEY")
                 or get_secret_str("WATSONX_APIKEY")
+                or get_secret_str("WATSONX_ZENAPIKEY")
             )
         if api_key is None:
             raise ValueError("API key is required")
@@ -319,6 +320,7 @@ class IBMWatsonXMixin:
             or get_secret_str("WATSONX_APIKEY")
             or get_secret_str("WATSONX_API_KEY")
             or get_secret_str("WX_API_KEY")
+            or get_secret_str("WATSONX_ZENAPIKEY")
         )
 
         api_base = (

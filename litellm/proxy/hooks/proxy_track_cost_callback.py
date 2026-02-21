@@ -202,8 +202,16 @@ class _ProxyDBLogger(CustomLogger):
                         max_budget=end_user_max_budget,
                     )
             else:
-                if kwargs["stream"] is not True or (
-                    kwargs["stream"] is True and "complete_streaming_response" in kwargs
+                # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
+                # Use .get() for "stream" to avoid KeyError on health checks.
+                if sl_object is None and not kwargs.get("model"):
+                    verbose_proxy_logger.warning(
+                        "Cost tracking - skipping, no standard_logging_object and no model for call_type=%s",
+                        kwargs.get("call_type", "unknown"),
+                    )
+                    return
+                if kwargs.get("stream") is not True or (
+                    kwargs.get("stream") is True and "complete_streaming_response" in kwargs
                 ):
                     if sl_object is not None:
                         cost_tracking_failure_debug_info: Union[dict, str] = (

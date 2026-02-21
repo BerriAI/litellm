@@ -76,7 +76,7 @@ def validate_first_format(chunk):
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
-    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
+    assert getattr(chunk, "usage", None) is None, "Chunk cannot contain usage"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -108,7 +108,7 @@ def validate_second_format(chunk):
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
-    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
+    assert getattr(chunk, "usage", None) is None, "Chunk cannot contain usage"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
@@ -146,7 +146,7 @@ def validate_last_format(chunk):
     assert isinstance(chunk["created"], int), "'created' should be an integer."
     assert isinstance(chunk["model"], str), "'model' should be a string."
     assert isinstance(chunk["choices"], list), "'choices' should be a list."
-    assert not hasattr(chunk, "usage"), "Chunk cannot contain usage"
+    assert getattr(chunk, "usage", None) is None, "Chunk cannot contain usage"
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."

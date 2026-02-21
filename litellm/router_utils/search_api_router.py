@@ -127,8 +127,9 @@ class SearchAPIRouter:
                 model=search_tool_name, kwargs=kwargs, metadata_variable_name="litellm_metadata"
             )
             
+            available_search_tool_names = [tool.get("search_tool_name") for tool in router_instance.search_tools]
             verbose_router_logger.debug(
-                f"Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: {search_tool_name}; kwargs: {kwargs}"
+                f"Inside SearchAPIRouter.async_search_with_fallbacks() - search_tool_name: {search_tool_name}, Available Search Tools: {available_search_tool_names}, kwargs: {kwargs}"
             )
             
             # Use the existing retry/fallback infrastructure

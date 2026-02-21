@@ -279,3 +279,146 @@ def test_output_format_with_no_schema():
     # Content should remain as string (not converted to list)
     assert isinstance(last_user_message["content"], str)
     assert last_user_message["content"] == "Hello"
+
+
+def test_opus_4_5_model_detection():
+    """
+    Test that the _is_claude_opus_4_5 method correctly identifies Opus 4.5 models
+    with various naming conventions.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    
+    config = AmazonAnthropicClaudeMessagesConfig()
+    
+    # Test various Opus 4.5 naming patterns
+    opus_4_5_models = [
+        "anthropic.claude-opus-4-5-20250514-v1:0",
+        "anthropic.claude-opus-4.5-20250514-v1:0",
+        "anthropic.claude-opus_4_5-20250514-v1:0",
+        "anthropic.claude-opus_4.5-20250514-v1:0",
+        "us.anthropic.claude-opus-4-5-20250514-v1:0",
+        "ANTHROPIC.CLAUDE-OPUS-4-5-20250514-V1:0",  # Case insensitive
+    ]
+    
+    for model in opus_4_5_models:
+        assert config._is_claude_opus_4_5(model), \
+            f"Should detect {model} as Opus 4.5"
+    
+    # Test non-Opus 4.5 models
+    non_opus_4_5_models = [
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-opus-4-20250514-v1:0",  # Opus 4, not 4.5
+        "anthropic.claude-opus-4-1-20250514-v1:0",  # Opus 4.1, not 4.5
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+    ]
+    
+    for model in non_opus_4_5_models:
+        assert not config._is_claude_opus_4_5(model), \
+            f"Should not detect {model} as Opus 4.5"
+
+
+# def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
+#     """
+#     Test that unsupported beta headers are filtered out for Bedrock Invoke API.
+    
+#     Bedrock Invoke API only supports a specific whitelist of beta flags and returns
+#     "invalid beta flag" error for others (e.g., structured-outputs, mcp-servers).
+#     This test ensures unsupported headers are filtered while keeping supported ones.
+    
+#     Fixes: https://github.com/BerriAI/litellm/issues/16726
+#     """
+#     config = AmazonAnthropicClaudeConfig()
+    
+#     messages = [{"role": "user", "content": "test"}]
+    
+#     # Test 1: structured-outputs beta header (unsupported)
+#     headers = {"anthropic-beta": "structured-outputs-2025-11-13"}
+    
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
+    
+#     # Verify structured-outputs beta is filtered out
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+    
+#     # Test 2: mcp-servers beta header (unsupported - the main issue from #16726)
+#     headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
+    
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
+    
+#     # Verify mcp-servers beta is filtered out
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+    
+#     # Test 3: Mix of supported and unsupported beta headers
+#     headers = {"anthropic-beta": "computer-use-2024-10-22,mcp-servers-2025-12-04,structured-outputs-2025-11-13"}
+    
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
+    
+#     # Verify only supported betas are kept
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+#     assert any("computer-use" in beta for beta in anthropic_beta), \
+#         f"computer-use beta should be kept, got: {anthropic_beta}"
+
+
+def test_output_format_removed_from_bedrock_invoke_request():
+    """
+    Test that output_format parameter is removed from Bedrock Invoke requests.
+    
+    Bedrock Invoke API doesn't support the output_format parameter (only supported
+    in Anthropic Messages API). This test ensures it's removed to prevent errors.
+    """
+    config = AmazonAnthropicClaudeConfig()
+    
+    messages = [{"role": "user", "content": "test"}]
+    
+    # Create a request with output_format via map_openai_params
+    non_default_params = {
+        "response_format": {"type": "json_object"}
+    }
+    optional_params = {}
+    
+    # This should trigger tool-based structured outputs
+    optional_params = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        drop_params=False,
+    )
+    
+    result = config.transform_request(
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    
+    # Verify output_format is not in the request
+    assert "output_format" not in result, \
+        f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
