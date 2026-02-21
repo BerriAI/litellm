@@ -1,6 +1,6 @@
 {
   "label": "Engine \u2014 Keyword Blocker",
-  "timestamp": "2026-02-20T23:41:54.181140+00:00",
+  "timestamp": "2026-02-21T01:14:02.366734+00:00",
   "total": 34,
   "tp": 20,
   "tn": 13,
@@ -10,8 +10,11 @@
   "recall": 0.9524,
   "f1": 0.9756,
   "accuracy": 0.9706,
+  "latency_p50_ms": 0.018,
+  "latency_p95_ms": 0.04,
+  "latency_avg_ms": 0.017,
   "wrong": [
-    "  FN: '\u03b1lpha is red'                                               \u2014 Greek alpha character lookalike \u2014 evasion attempt"
+    "  FN (score=0.000): '\u03b1lpha is red'                                               \u2014 Greek alpha character lookalike \u2014 evasion attempt"
   ],
   "rows": [
     {
@@ -19,238 +22,340 @@
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "basic conditional \u2014 identifier + block word in same sentence"
+      "test": "basic conditional \u2014 identifier + block word in same sentence",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.105
     },
     {
       "sentence": "bravo is blue",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "basic conditional \u2014 second identifier + second block word"
+      "test": "basic conditional \u2014 second identifier + second block word",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.04
     },
     {
       "sentence": "alpha is green",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "identifier without block word should pass"
+      "test": "identifier without block word should pass",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
     },
     {
       "sentence": "red is nice",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "block word without identifier should pass"
+      "test": "block word without identifier should pass",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
     },
     {
       "sentence": "hello world",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "no matching words at all"
+      "test": "no matching words at all",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
     },
     {
       "sentence": "bravo is red and alpha is blue",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "multiple matches in same sentence"
+      "test": "multiple matches in same sentence",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.026
     },
     {
       "sentence": "block this phrase",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "exact always-block keyword"
+      "test": "exact always-block keyword",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.026
     },
     {
       "sentence": "please block this phrase now",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "always-block keyword embedded in longer text"
+      "test": "always-block keyword embedded in longer text",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.024
     },
     {
       "sentence": "also block this",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "second always-block keyword"
+      "test": "second always-block keyword",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.024
     },
     {
       "sentence": "block this",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "partial match on always-block keyword should pass"
+      "test": "partial match on always-block keyword should pass",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
     },
     {
       "sentence": "alpha safe context is red",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "exception should override conditional match"
+      "test": "exception should override conditional match",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
     },
     {
       "sentence": "bravo safe context is blue",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "exception should override for second identifier"
+      "test": "exception should override for second identifier",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
     },
     {
       "sentence": "ALPHA IS RED",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "all caps should still match"
+      "test": "all caps should still match",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.025
     },
     {
       "sentence": "Alpha Is Red",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "mixed case should still match"
+      "test": "mixed case should still match",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.022
     },
     {
       "sentence": "BLOCK THIS PHRASE",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "always-block keyword in caps"
+      "test": "always-block keyword in caps",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.018
     },
     {
       "sentence": "I said alpha. Then I said red.",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "identifier and block word in DIFFERENT sentences should pass"
+      "test": "identifier and block word in DIFFERENT sentences should pass",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
     },
     {
       "sentence": "alpha is red. this is fine.",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "match in first sentence, safe second sentence"
+      "test": "match in first sentence, safe second sentence",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.019
     },
     {
       "sentence": "this is fine. alpha is red.",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "safe first sentence, match in second sentence"
+      "test": "safe first sentence, match in second sentence",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.019
     },
     {
       "sentence": "alpha is red! bravo is blue?",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "! and ? as sentence delimiters"
+      "test": "! and ? as sentence delimiters",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.018
     },
     {
       "sentence": "alpha is red\nbravo is blue",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "newline-separated lines"
+      "test": "newline-separated lines",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.016
     },
     {
       "sentence": "alpha is red; and bravo is blue",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "semicolon-separated clauses"
+      "test": "semicolon-separated clauses",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.018
     },
     {
       "sentence": "I said alpha\nThen I said red",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "identifier and block word on different lines should pass"
+      "test": "identifier and block word on different lines should pass",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
     },
     {
       "sentence": "alphabetical is red",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "identifier as substring of another word should NOT match"
+      "test": "identifier as substring of another word should NOT match",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
     },
     {
       "sentence": "the redwood tree is alpha",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "block word as substring of another word should NOT match"
+      "test": "block word as substring of another word should NOT match",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
     },
     {
       "sentence": "bravo! that was a reddish hue",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "block word as prefix of another word should NOT match"
+      "test": "block word as prefix of another word should NOT match",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
     },
     {
       "sentence": "alpha safe context. alpha is red.",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "exception in one sentence should NOT whitelist violation in another sentence"
+      "test": "exception in one sentence should NOT whitelist violation in another sentence",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.018
     },
     {
       "sentence": "alpha safe context and also block this phrase",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "exception for conditional should NOT whitelist always-block keyword"
+      "test": "exception for conditional should NOT whitelist always-block keyword",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.019
     },
     {
       "sentence": "  alpha   is   red  ",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "extra whitespace should not prevent matching"
+      "test": "extra whitespace should not prevent matching",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.019
     },
     {
       "sentence": "alpha\tis\tred",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "tab characters between words"
+      "test": "tab characters between words",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.017
     },
     {
       "sentence": "",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "empty string"
+      "test": "empty string",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.0
     },
     {
       "sentence": "   ",
       "expected": "ALLOW",
       "actual": "ALLOW",
       "correct": true,
-      "test": "whitespace only"
+      "test": "whitespace only",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.0
     },
     {
       "sentence": "\uff41\uff4c\uff50\uff48\uff41 is red",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "fullwidth unicode characters \u2014 evasion attempt"
+      "test": "fullwidth unicode characters \u2014 evasion attempt",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.036
     },
     {
       "sentence": "al\u200cpha is red",
       "expected": "BLOCK",
       "actual": "BLOCK",
       "correct": true,
-      "test": "zero-width space inside identifier \u2014 evasion attempt"
+      "test": "zero-width space inside identifier \u2014 evasion attempt",
+      "score": 1.0,
+      "matched_topic": "test_engine",
+      "latency_ms": 0.019
     },
     {
       "sentence": "\u03b1lpha is red",
       "expected": "BLOCK",
       "actual": "ALLOW",
       "correct": false,
-      "test": "Greek alpha character lookalike \u2014 evasion attempt"
+      "test": "Greek alpha character lookalike \u2014 evasion attempt",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
     }
   ]
 }

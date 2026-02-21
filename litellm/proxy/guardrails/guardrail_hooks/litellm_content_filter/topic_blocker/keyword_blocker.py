@@ -5,20 +5,21 @@ Blocks messages that match denied topics. A topic is defined by:
   - identifier_words: words that signal the topic (e.g. "stock", "invest")
   - block_words: words that combined with an identifier = block (e.g. "buy", "price")
   - always_block_phrases: phrases that are always blocked regardless of context
+  - phrase_patterns: regex patterns for flexible paraphrase matching
   - exception_phrases: phrases that override a match (e.g. "in stock")
 
-Matching rules:
-  - A message is blocked if any SENTENCE contains both an identifier word
-    AND a block word (conditional match).
-  - A message is blocked if it contains any always-block phrase.
-  - Exception phrases override conditional matches in the sentence they appear in.
+Matching rules (checked in order):
+  1. Always-block phrases: substring match → BLOCK
+  2. Phrase patterns: regex match on full text → BLOCK
+  3. Conditional: identifier + block word in same sentence → BLOCK
+     (unless an exception phrase is in that sentence)
   - All matching uses word boundaries (whole words only).
   - Text is normalized before matching (lowercase, strip zero-width chars, normalize unicode).
 """
 
 import re
 import unicodedata
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -69,6 +70,7 @@ class DeniedTopic:
         identifier_words: List[str],
         block_words: List[str],
         always_block_phrases: Optional[List[str]] = None,
+        phrase_patterns: Optional[List[str]] = None,
         exception_phrases: Optional[List[str]] = None,
     ):
         self.topic_name = topic_name
@@ -85,6 +87,13 @@ class DeniedTopic:
         # because they're full phrases like "should i invest"
         self.always_block_phrases: List[str] = [
             p.lower() for p in (always_block_phrases or [])
+        ]
+
+        # Phrase patterns: regex patterns for flexible paraphrase matching
+        # Each pattern is compiled with IGNORECASE
+        self.phrase_patterns: List[Tuple[str, re.Pattern]] = [
+            (p, re.compile(p, re.IGNORECASE))
+            for p in (phrase_patterns or [])
         ]
 
         # Exception phrases use substring matching
@@ -141,6 +150,24 @@ class TopicBlocker:
                             "topic": topic.topic_name,
                             "matched_phrase": phrase,
                             "match_type": "always_block",
+                        },
+                    )
+
+        # Check phrase patterns (regex-based paraphrase detection)
+        for topic in self.denied_topics:
+            for pattern_str, pattern in topic.phrase_patterns:
+                if pattern.search(normalized):
+                    verbose_proxy_logger.warning(
+                        f"Topic blocker: phrase pattern matched "
+                        f"for topic '{topic.topic_name}'"
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": f"Content blocked: denied topic '{topic.topic_name}'",
+                            "topic": topic.topic_name,
+                            "matched_phrase": pattern_str,
+                            "match_type": "phrase_pattern",
                         },
                     )
 
