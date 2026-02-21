@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.secret_managers.main import get_secret_bool
+from litellm._logging import verbose_proxy_logger
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -38,8 +39,6 @@ class LiteLLMDatabaseConnectionPool(Enum):
 
 
 def append_query_params(url: Optional[str], params: dict) -> str:
-    from litellm._logging import verbose_proxy_logger
-
     verbose_proxy_logger.debug(f"url: {url}")
     verbose_proxy_logger.debug(f"params: {params}")
     if not isinstance(url, str) or url == "":
@@ -799,8 +798,6 @@ def run_server(  # noqa: PLR0915
                 ):
                     PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
                 else:
-                    from litellm._logging import verbose_proxy_logger
-
                     verbose_proxy_logger.debug(
                         "Prisma schema updates are disabled. Skipping setup_database and check_prisma_schema_diff."
                     )

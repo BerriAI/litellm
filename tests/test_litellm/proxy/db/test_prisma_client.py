@@ -15,7 +15,7 @@ from litellm.proxy.db.prisma_client import should_update_prisma_schema
 def test_should_update_prisma_schema(monkeypatch):
     # CASE 1: Environment variable behavior
     # When DISABLE_SCHEMA_UPDATE is not set -> should update
-    monkeypatch.setenv("DISABLE_SCHEMA_UPDATE", None)
+    monkeypatch.delenv("DISABLE_SCHEMA_UPDATE", raising=False)
     assert should_update_prisma_schema() is True
 
     # When DISABLE_SCHEMA_UPDATE="true" -> should not update
@@ -27,10 +27,10 @@ def test_should_update_prisma_schema(monkeypatch):
     assert should_update_prisma_schema() is True
 
     # CASE 2: Explicit parameter behavior (overrides env var)
-    monkeypatch.setenv("DISABLE_SCHEMA_UPDATE", None)
+    monkeypatch.delenv("DISABLE_SCHEMA_UPDATE", raising=False)
     assert should_update_prisma_schema(True) is False  # Param True -> should not update
 
-    monkeypatch.setenv("DISABLE_SCHEMA_UPDATE", None)  # Set env var opposite to param
+    monkeypatch.delenv("DISABLE_SCHEMA_UPDATE", raising=False)  # Set env var opposite to param
     assert should_update_prisma_schema(False) is True  # Param False -> should update
 
 
