@@ -350,12 +350,15 @@ class LakeraAIGuardrail(CustomGuardrail):
         if original_messages is None:
             original_messages = []
 
-        # Extract assistant messages from the response, keeping only role/content
+        # Extract assistant messages from the response, keeping only role/content.
+        # Track choice indices so we write masked content back to the correct choice
+        # when some choices have null content (e.g. tool-call-only).
         response_messages: List[AllMessageValues] = []
+        choice_indices: List[int] = []
         response_dict = (
             response.model_dump() if hasattr(response, "model_dump") else {}
         )
-        for choice in response_dict.get("choices", []):
+        for i, choice in enumerate(response_dict.get("choices", [])):
             msg = choice.get("message")
             if not msg:
                 continue
@@ -363,6 +366,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             content = msg.get("content")
             if role and content:
                 response_messages.append({"role": role, "content": content})
+                choice_indices.append(i)
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
         post_call_messages = copy.deepcopy(original_messages) + response_messages
@@ -386,8 +390,9 @@ class LakeraAIGuardrail(CustomGuardrail):
                 )
                 assistant_messages = masked_messages[len(original_messages) :]
                 for idx, msg in enumerate(assistant_messages):
-                    if idx < len(response_dict.get("choices", [])):
-                        response_dict["choices"][idx]["message"] = {
+                    if idx < len(choice_indices):
+                        choice_idx = choice_indices[idx]
+                        response_dict["choices"][choice_idx]["message"] = {
                             "role": msg.get("role", "assistant"),
                             "content": msg.get("content", ""),
                         }
@@ -396,14 +401,12 @@ class LakeraAIGuardrail(CustomGuardrail):
                 )
                 return ModelResponse(**response_dict)
 
-            action = getattr(self, "on_flagged", "block")
-            if action == "monitor":
+            if self.on_flagged == "monitor":
                 verbose_proxy_logger.warning(
                     "Lakera Guardrail: Post-call violation detected in monitor mode"
                 )
                 # Allow response to proceed
-            else:
-                # Default/block behavior
+            elif self.on_flagged == "block":
                 raise self._get_http_exception_for_blocked_guardrail(
                     lakera_guardrail_response
                 )
