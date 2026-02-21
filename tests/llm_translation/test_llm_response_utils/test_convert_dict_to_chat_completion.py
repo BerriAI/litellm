@@ -864,7 +864,7 @@ def test_convert_to_model_response_object_with_thinking_content():
         "response_object": {
             "id": "chatcmpl-8cc87354-70f3-4a14-b71b-332e965d98d2",
             "created": 1741057687,
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-4-sonnet-20250514",
             "object": "chat.completion",
             "system_fingerprint": None,
             "choices": [

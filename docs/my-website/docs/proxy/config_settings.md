@@ -485,6 +485,7 @@ router_settings:
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
 | COHERE_API_BASE | Base URL for Cohere API. Default is https://api.cohere.com
+| COMPETITOR_LLM_TEMPERATURE | Temperature setting for the LLM used in competitor discovery. Default is 0.3
 | DATABASE_HOST | Hostname for the database server
 | DATABASE_NAME | Name of the database
 | DATABASE_PASSWORD | Password for the database user
@@ -806,6 +807,7 @@ router_settings:
 | LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. Default is 50,000
 | LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. Default is 20.0
 | LOGGING_WORKER_CLEAR_PERCENTAGE | Percentage of the queue to extract when clearing. Default is 50% 
+| MAX_COMPETITOR_NAMES | Maximum number of competitor names allowed in policy template enrichment. Default is 100
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
 | MAX_ITERATIONS_TO_CLEAR_QUEUE | Maximum number of iterations to attempt when clearing the logging worker queue during shutdown. Default is 200
 | MAX_TIME_TO_CLEAR_QUEUE | Maximum time in seconds to spend clearing the logging worker queue during shutdown. Default is 5.0

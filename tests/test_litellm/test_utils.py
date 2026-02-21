@@ -429,7 +429,7 @@ def test_anthropic_web_search_in_model_info():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
-        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-4-sonnet-20250514",
         "anthropic/claude-sonnet-4-5-20250929",
         "anthropic/claude-3-5-sonnet-20241022",
         "anthropic/claude-3-5-haiku-20241022",
@@ -1050,7 +1050,7 @@ def test_supports_computer_use_utility():
     try:
         # Test a model known to support computer_use from backup JSON
         supports_cu_anthropic = supports_computer_use(
-            model="anthropic/claude-3-7-sonnet-20250219"
+            model="anthropic/claude-4-sonnet-20250514"
         )
         assert supports_cu_anthropic is True
 
@@ -1073,7 +1073,7 @@ def test_supports_computer_use_utility():
 def test_get_model_info_shows_supports_computer_use():
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
-    We'll use 'claude-3-7-sonnet-20250219' as it's configured
+    We'll use 'claude-4-sonnet-20250514' as it's configured
     in the backup JSON to have supports_computer_use: True.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1082,7 +1082,7 @@ def test_get_model_info_shows_supports_computer_use():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # This model should have 'supports_computer_use': True in the backup JSON
-    model_known_to_support_computer_use = "claude-3-7-sonnet-20250219"
+    model_known_to_support_computer_use = "claude-4-sonnet-20250514"
     info = litellm.get_model_info(model_known_to_support_computer_use)
     print(f"Info for {model_known_to_support_computer_use}: {info}")
 

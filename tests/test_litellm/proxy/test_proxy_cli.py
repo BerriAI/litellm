@@ -225,13 +225,15 @@ class TestProxyInitializationHelpers:
         assert modified_url == ""
 
     @patch("uvicorn.run")
-    @patch("atexit.register")  # 🔥 critical
-    def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):
+    @patch("atexit.register")  # critical
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_skip_server_startup(self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
 
-        runner = CliRunner()
+        runner = CliRunner(mix_stderr=False)
 
         mock_proxy_module = MagicMock(
             app=MagicMock(),
@@ -594,7 +596,7 @@ class TestHealthAppFactory:
 
         from litellm.proxy.proxy_cli import run_server
 
-        runner = CliRunner()
+        runner = CliRunner(mix_stderr=False)
 
         # Mock subprocess.run to simulate prisma being available
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -602,20 +604,18 @@ class TestHealthAppFactory:
         # Mock should_update_prisma_schema to return True (so setup_database gets called)
         mock_should_update_schema.return_value = True
 
-        mock_app = MagicMock()
-        mock_proxy_config = MagicMock()
-        mock_key_mgmt = MagicMock()
-        mock_save_worker_config = MagicMock()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
 
         with patch.dict(
             "sys.modules",
             {
-                "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
-                )
+                "proxy_server": mock_proxy_module,
+                "litellm.proxy.proxy_server": mock_proxy_module,
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
