@@ -1962,7 +1962,24 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             ## LOGGING HOOK ##
             for callback in callbacks:
-                if isinstance(callback, CustomLogger):
+                if isinstance(callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
+
+                    if (
+                        callback.should_run_guardrail(
+                            data=self.model_call_details,
+                            event_type=GuardrailEventHooks.logging_only,
+                        )
+                        is not True
+                    ):
+                        continue
+
+                    self.model_call_details, result = callback.logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
+                    )
+                elif isinstance(callback, CustomLogger):
                     self.model_call_details, result = callback.logging_hook(
                         kwargs=self.model_call_details,
                         result=result,
@@ -5454,3 +5471,4 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         model_parameters={"stream": True},
         hidden_params=hidden_params,
     )
+
