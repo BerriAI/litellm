@@ -1197,7 +1197,12 @@ class Router:
         enable_responses_api_affinity = (
             "responses_api_deployment_check" in optional_pre_call_checks
         )
-        if enable_user_key_affinity or enable_responses_api_affinity:
+        enable_session_id_affinity = "session_affinity" in optional_pre_call_checks
+        if (
+            enable_user_key_affinity
+            or enable_responses_api_affinity
+            or enable_session_id_affinity
+        ):
             if self.optional_callbacks is None:
                 self.optional_callbacks = []
 
@@ -1216,6 +1221,10 @@ class Router:
                     existing_affinity_callback.enable_responses_api_affinity
                     or enable_responses_api_affinity
                 )
+                existing_affinity_callback.enable_session_id_affinity = (
+                    existing_affinity_callback.enable_session_id_affinity
+                    or enable_session_id_affinity
+                )
                 existing_affinity_callback.ttl_seconds = (
                     self.deployment_affinity_ttl_seconds
                 )
@@ -1225,11 +1234,10 @@ class Router:
                     ttl_seconds=self.deployment_affinity_ttl_seconds,
                     enable_user_key_affinity=enable_user_key_affinity,
                     enable_responses_api_affinity=enable_responses_api_affinity,
+                    enable_session_id_affinity=enable_session_id_affinity,
                 )
                 self.optional_callbacks.append(affinity_callback)
-                litellm.logging_callback_manager.add_litellm_callback(
-                    affinity_callback
-                )
+                litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
         # ---------------------------------------------------------------------
         # Remaining optional pre-call checks
@@ -1239,6 +1247,7 @@ class Router:
             if pre_call_check in (
                 "deployment_affinity",
                 "responses_api_deployment_check",
+                "session_affinity",
             ):
                 continue
             if pre_call_check == "prompt_caching":
@@ -1948,9 +1957,7 @@ class Router:
         return deployment_pydantic_obj
 
     @staticmethod
-    def _merge_tools_from_deployment(
-        deployment: dict, kwargs: dict
-    ) -> None:
+    def _merge_tools_from_deployment(deployment: dict, kwargs: dict) -> None:
         """
         Merge tools from deployment litellm_params with request kwargs.
         When both have tools, concatenate them (deployment tools first, then request tools).
@@ -3779,7 +3786,7 @@ class Router:
             )
             raise e
 
-    async def _acreate_file( # noqa: PLR0915
+    async def _acreate_file(  # noqa: PLR0915
         self,
         model: str,
         **kwargs,
@@ -3840,8 +3847,12 @@ class Router:
                     )
 
                     kwargs_copy["file"] = file
-                if "gcs_bucket_name" in data:  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
-                    kwargs_copy.setdefault("litellm_metadata", {})["gcs_bucket_name"] = data["gcs_bucket_name"]
+                if (
+                    "gcs_bucket_name" in data
+                ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
+                    kwargs_copy.setdefault("litellm_metadata", {})[
+                        "gcs_bucket_name"
+                    ] = data["gcs_bucket_name"]
                 response = litellm.acreate_file(
                     **{
                         **data,
@@ -3920,15 +3931,15 @@ class Router:
     ):
         """
         Create a vector store for a specific model.
-        
+
         Args:
             model: Model name from router config
             **kwargs: Vector store creation parameters
-            
+
         Returns:
             VectorStoreCreateResponse
         """
-        try:            
+        try:
             # If model is None, use the factory function approach (direct SDK call)
             if model is None:
                 from litellm.vector_stores.main import acreate
@@ -3938,8 +3949,9 @@ class Router:
                     acreate, call_type="avector_store_create"
                 )
                 return await factory_fn(**kwargs)
-            
+
             from litellm.vector_stores import acreate as avector_store_create_sdk
+
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
@@ -3950,7 +3962,9 @@ class Router:
             data = deployment["litellm_params"].copy()
             model_name = data["model"]
             self._update_kwargs_with_deployment(
-                deployment=deployment, kwargs=kwargs, function_name="avector_store_create"
+                deployment=deployment,
+                kwargs=kwargs,
+                function_name="avector_store_create",
             )
 
             model_client = self._get_async_openai_model_client(
@@ -3961,7 +3975,7 @@ class Router:
 
             # Get custom provider
             _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
-            
+
             response = avector_store_create_sdk(
                 **{
                     **data,
@@ -4005,7 +4019,6 @@ class Router:
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
-
 
     def _override_vector_store_methods_for_router(self):
         """
@@ -4724,20 +4737,20 @@ class Router:
     ):
         """
         Initialize the Vector Store API endpoints on the router.
-        
+
         If a model is provided in kwargs, use model-based routing to get
         the deployment credentials. Otherwise, call the original function directly.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
-        
+
         # If model is provided, use generic API call with fallbacks for proper routing
         if kwargs.get("model"):
             return await self._ageneric_api_call_with_fallbacks(
                 original_function=original_function,
                 **kwargs,
             )
-        
+
         # Otherwise, call the original function directly
         return await original_function(**kwargs)
 
@@ -5141,7 +5154,9 @@ class Router:
         )
         ## ADD RETRY TRACKING TO METADATA - used for spend logs retry tracking
         _metadata["attempted_retries"] = 0
-        _metadata["max_retries"] = num_retries  # Updated after overrides in exception handler
+        _metadata[
+            "max_retries"
+        ] = num_retries  # Updated after overrides in exception handler
         try:
             self._handle_mock_testing_rate_limit_error(
                 model_group=model_group, kwargs=kwargs
@@ -5175,10 +5190,7 @@ class Router:
             # Check retry policy FIRST, before should_retry_this_error
             # This allows retry policies to override the healthy deployments check
             _retry_policy_applies = False
-            if (
-                self.retry_policy is not None
-                or model_group_retry_policy is not None
-            ):
+            if self.retry_policy is not None or model_group_retry_policy is not None:
                 # get num_retries from retry policy
                 # Use the model_group captured at the start of the function, or get it from metadata
                 # kwargs.get("model") at this point is the deployment model, not the model_group
@@ -6173,9 +6185,7 @@ class Router:
             # unique model_id above.
             _custom_pricing_fields = CustomPricingLiteLLMParams.model_fields.keys()
             _shared_model_info = {
-                k: v
-                for k, v in _model_info.items()
-                if k not in _custom_pricing_fields
+                k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
             }
             litellm.register_model(
                 model_cost={
@@ -8365,9 +8375,7 @@ class Router:
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
-            verbose_router_logger.debug(
-                f"cooldown deployments: {cooldown_deployments}"
-            )
+            verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
         healthy_deployments = self._filter_cooldown_deployments(
             healthy_deployments=healthy_deployments,
             cooldown_deployments=cooldown_deployments,
