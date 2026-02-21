@@ -19,7 +19,7 @@ vi.mock("../networking", () => ({
 
 // Mock scrollIntoView which is not available in jsdom
 beforeEach(() => {
-  Element.prototype.scrollIntoView = () => {};
+  Element.prototype.scrollIntoView = () => { };
 });
 
 describe("ChatUI", () => {
@@ -217,5 +217,160 @@ describe("ChatUI", () => {
       // Check if the first option is 'Enter custom model'
       expect(options[0]).toHaveTextContent("Enter custom model");
     });
+  });
+
+  it("should enable the MCP tools selector for chat completions", async () => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const endpointTypeText = screen.getByText("Endpoint Type");
+    const endpointSelect = endpointTypeText.parentElement?.querySelector(".ant-select-selector") as HTMLElement | null;
+    expect(endpointSelect).not.toBeNull();
+
+    const selectEndpointOption = async (label: string) => {
+      act(() => {
+        fireEvent.mouseDown(endpointSelect!);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText(label)).toBeInTheDocument();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByText(label));
+      });
+    };
+
+    const getMcpSelect = () =>
+      screen.getByText("MCP Servers").closest("div")?.querySelector(".ant-select") as HTMLElement | null;
+
+    await selectEndpointOption("/v1/embeddings");
+
+    const mcpSelect = getMcpSelect();
+    expect(mcpSelect).not.toBeNull();
+
+    await waitFor(() => {
+      expect(mcpSelect).toHaveClass("ant-select-disabled");
+    });
+
+    await selectEndpointOption("/v1/chat/completions");
+
+    await waitFor(() => {
+      expect(mcpSelect).not.toHaveClass("ant-select-disabled");
+    });
+  });
+
+  it("should show Simulate failure to test fallbacks in Model Settings when chat endpoint is selected", async () => {
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    // Model Settings button only appears when a chat model is selected; select "Model 1" first
+    const selectModelLabel = screen.getByText("Select Model");
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
+    expect(modelSelect).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.mouseDown(modelSelect!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Model 1").length).toBeGreaterThan(0);
+    });
+
+    // Ant Design Select options may not have role="option"; click the dropdown option by text
+    const model1Options = screen.getAllByText("Model 1");
+    await act(async () => {
+      fireEvent.click(model1Options[model1Options.length - 1]);
+    });
+
+    await waitFor(() => {
+      const modelSettingsButton = screen.getByTestId("model-settings-button");
+      expect(modelSettingsButton).toBeInTheDocument();
+    });
+
+    const modelSettingsButton = screen.getByTestId("model-settings-button");
+    await act(async () => {
+      fireEvent.click(modelSettingsButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+      expect(screen.getByText(/Simulate failure to test fallbacks/i)).toBeInTheDocument();
+    });
+
+    const fallbacksCheckbox = screen.getByRole("checkbox", {
+      name: /Simulate failure to test fallbacks/i,
+    });
+    expect(fallbacksCheckbox).not.toBeChecked();
+
+    await act(async () => {
+      fireEvent.click(fallbacksCheckbox);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: /Simulate failure to test fallbacks/i })).toBeChecked();
+    });
+  });
+
+  it("should show Fill button and populate customProxyBaseUrl when proxySettings.LITELLM_UI_API_DOC_BASE_URL is provided", async () => {
+    const testProxyUrl = "http://localhost:5000";
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+        proxySettings={{
+          LITELLM_UI_API_DOC_BASE_URL: testProxyUrl,
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const fillButton = screen.getByText("Fill");
+    expect(fillButton).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(fillButton);
+    });
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem("customProxyBaseUrl")).toBe(testProxyUrl);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Fill")).toBeNull();
+    });
+
+    const customProxyInput = screen.getByPlaceholderText("Optional: Enter custom proxy URL (e.g., http://localhost:5000)");
+    expect(customProxyInput).toHaveValue(testProxyUrl);
   });
 });

@@ -32,7 +32,7 @@ This release brings:
 docker run
 -e STORE_MODEL_IN_DB=True
 -p 4000:4000
-ghcr.io/berriai/litellm:main-v1.63.14-stable.patch1
+docker.litellm.ai/berriai/litellm:main-v1.63.14-stable.patch1
 ```
 
 ## Demo Instance

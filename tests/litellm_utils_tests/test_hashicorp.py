@@ -23,7 +23,16 @@ litellm.proxy.proxy_server.premium_user = True
 
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
 
-hashicorp_secret_manager = HashicorpSecretManager()
+
+@pytest.fixture
+def hashicorp_secret_manager():
+    """Provide a fresh HashicorpSecretManager per test to avoid shared state."""
+    manager = HashicorpSecretManager()
+    manager.vault_addr = "https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200"
+    manager.vault_namespace = "admin"
+    manager.vault_mount_name = "secret"
+    manager.vault_path_prefix = None
+    return manager
 
 
 mock_vault_response = {
@@ -67,7 +76,7 @@ mock_write_response = {
 }
 
 
-def test_hashicorp_secret_manager_get_secret():
+def test_hashicorp_secret_manager_get_secret(hashicorp_secret_manager):
     with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get") as mock_get:
         # Configure the mock response using MagicMock
         mock_response = MagicMock()
@@ -92,7 +101,7 @@ def test_hashicorp_secret_manager_get_secret():
 
 
 @pytest.mark.asyncio
-async def test_hashicorp_secret_manager_write_secret():
+async def test_hashicorp_secret_manager_write_secret(hashicorp_secret_manager):
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
     ) as mock_post:
@@ -136,7 +145,47 @@ async def test_hashicorp_secret_manager_write_secret():
 
 
 @pytest.mark.asyncio
-async def test_hashicorp_secret_manager_delete_secret():
+async def test_hashicorp_secret_manager_write_secret_with_team_overrides(
+    hashicorp_secret_manager,
+):
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_write_response
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+
+        secret_value = "value-mock"
+        team_settings = {
+            "namespace": "team-namespace",
+            "mount": "kv-team",
+            "path_prefix": "teams/custom",
+            "data": "password",
+        }
+
+        response = await hashicorp_secret_manager.async_write_secret(
+            secret_name="team-secret",
+            secret_value=secret_value,
+            optional_params=team_settings,
+        )
+
+        assert response == mock_write_response
+        mock_post.assert_called_once()
+
+        called_url = mock_post.call_args[1]["url"]
+        expected_url = (
+            f"{hashicorp_secret_manager.vault_addr}/v1/"
+            "team-namespace/kv-team/data/teams/custom/team-secret"
+        )
+        assert called_url == expected_url
+
+        json_data = mock_post.call_args[1]["json"]
+        assert json_data["data"] == {"password": secret_value}
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_delete_secret(hashicorp_secret_manager):
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
     ) as mock_delete:
@@ -169,7 +218,42 @@ async def test_hashicorp_secret_manager_delete_secret():
         )
 
 
-def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_delete_secret_with_team_overrides(
+    hashicorp_secret_manager,
+):
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
+    ) as mock_delete:
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_delete.return_value = mock_response
+
+        team_settings = {
+            "namespace": "team-namespace",
+            "mount": "kv-team",
+            "path_prefix": "teams/custom",
+        }
+
+        response = await hashicorp_secret_manager.async_delete_secret(
+            secret_name="team-secret", optional_params=team_settings
+        )
+
+        assert response == {
+            "status": "success",
+            "message": "Secret team-secret deleted successfully",
+        }
+
+        mock_delete.assert_called_once()
+        called_url = mock_delete.call_args[1]["url"]
+        expected_url = (
+            f"{hashicorp_secret_manager.vault_addr}/v1/"
+            "team-namespace/kv-team/data/teams/custom/team-secret"
+        )
+        assert called_url == expected_url
+
+
+def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch, hashicorp_secret_manager):
     monkeypatch.setenv("HCP_VAULT_TOKEN", "test-client-token-12345")
     print("HCP_VAULT_TOKEN=", os.getenv("HCP_VAULT_TOKEN"))
     # Mock both httpx.post and httpx.Client
@@ -217,7 +301,7 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
         assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
 
 
-def test_hashicorp_secret_manager_approle_auth(monkeypatch):
+def test_hashicorp_secret_manager_approle_auth(monkeypatch, hashicorp_secret_manager):
     """
     Test AppRole authentication makes the expected POST request to the correct URL.
     """
@@ -260,7 +344,7 @@ def test_hashicorp_secret_manager_approle_auth(monkeypatch):
         assert test_manager.cache.get_cache("hcp_vault_approle_token") == "hvs.approle-token-67890"
 
 
-def test_hashicorp_custom_mount_and_prefix():
+def test_hashicorp_custom_mount_and_prefix(hashicorp_secret_manager):
     """Test URL construction with custom mount name and path prefix using get_url method."""
     # Save original values
     original_mount = hashicorp_secret_manager.vault_mount_name
@@ -296,3 +380,383 @@ def test_hashicorp_custom_mount_and_prefix():
         hashicorp_secret_manager.vault_mount_name = original_mount
         hashicorp_secret_manager.vault_path_prefix = original_prefix
         hashicorp_secret_manager.vault_namespace = original_namespace
+
+
+mock_old_vault_response = {
+    "request_id": "80fafb6a-e96a-4c5b-29fa-ff505ac72201",
+    "lease_id": "",
+    "renewable": False,
+    "lease_duration": 0,
+    "data": {
+        "data": {"key": "old-secret-value"},
+        "metadata": {
+            "created_time": "2025-01-01T22:13:50.93942388Z",
+            "custom_metadata": None,
+            "deletion_time": "",
+            "destroyed": False,
+            "version": 1,
+        },
+    },
+    "wrap_info": None,
+    "warnings": None,
+    "auth": None,
+    "mount_type": "kv",
+}
+
+mock_new_vault_response = {
+    "request_id": "80fafb6a-e96a-4c5b-29fa-ff505ac72201",
+    "lease_id": "",
+    "renewable": False,
+    "lease_duration": 0,
+    "data": {
+        "data": {"key": "new-secret-value"},
+        "metadata": {
+            "created_time": "2025-01-02T22:13:50.93942388Z",
+            "custom_metadata": None,
+            "deletion_time": "",
+            "destroyed": False,
+            "version": 1,
+        },
+    },
+    "wrap_info": None,
+    "warnings": None,
+    "auth": None,
+    "mount_type": "kv",
+}
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_rotate_secret_different_names(hashicorp_secret_manager):
+    """Test rotating a secret with different names (create new, delete old)."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
+    ) as mock_delete:
+        # Mock GET for current secret check
+        mock_get_response_current = MagicMock()
+        mock_get_response_current.json.return_value = mock_old_vault_response
+        mock_get_response_current.raise_for_status.return_value = None
+        
+        # Mock POST for creating new secret
+        mock_post_response = MagicMock()
+        mock_post_response.json.return_value = mock_write_response
+        mock_post_response.raise_for_status.return_value = None
+        
+        # Mock GET for verifying new secret
+        mock_get_response_new = MagicMock()
+        mock_get_response_new.json.return_value = mock_new_vault_response
+        mock_get_response_new.raise_for_status.return_value = None
+        
+        # Mock DELETE for deleting old secret
+        mock_delete_response = MagicMock()
+        mock_delete_response.raise_for_status.return_value = None
+        
+        # Configure mock return values
+        mock_get.side_effect = [mock_get_response_current, mock_get_response_new]
+        mock_post.return_value = mock_post_response
+        mock_delete.return_value = mock_delete_response
+        
+        current_secret_name = f"old-secret-{uuid.uuid4()}"
+        new_secret_name = f"new-secret-{uuid.uuid4()}"
+        new_secret_value = "new-secret-value"
+        
+        response = await hashicorp_secret_manager.async_rotate_secret(
+            current_secret_name=current_secret_name,
+            new_secret_name=new_secret_name,
+            new_secret_value=new_secret_value,
+        )
+        
+        # Verify response
+        assert response == mock_write_response
+        
+        # Verify GET was called twice (check current, verify new)
+        assert mock_get.call_count == 2
+        
+        # Verify POST was called once (create new secret)
+        mock_post.assert_called_once()
+        
+        # Verify DELETE was called once (delete old secret)
+        mock_delete.assert_called_once()
+        
+        # Verify URLs
+        get_calls = mock_get.call_args_list
+        assert current_secret_name in get_calls[0][1]["url"]
+        assert new_secret_name in get_calls[1][1]["url"]
+        
+        delete_url = mock_delete.call_args[1]["url"]
+        assert current_secret_name in delete_url
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_rotate_secret_same_name(hashicorp_secret_manager):
+    """Test rotating a secret with the same name (update value only, no delete)."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
+    ) as mock_delete:
+        # Mock GET for current secret check
+        mock_get_response_current = MagicMock()
+        mock_get_response_current.json.return_value = mock_old_vault_response
+        mock_get_response_current.raise_for_status.return_value = None
+        
+        # Mock POST for updating secret
+        mock_post_response = MagicMock()
+        mock_post_response.json.return_value = mock_write_response
+        mock_post_response.raise_for_status.return_value = None
+        
+        # Mock GET for verifying updated secret - use updated value
+        mock_get_response_new = MagicMock()
+        mock_updated_vault_response = {
+            "request_id": "80fafb6a-e96a-4c5b-29fa-ff505ac72201",
+            "lease_id": "",
+            "renewable": False,
+            "lease_duration": 0,
+            "data": {
+                "data": {"key": "updated-secret-value"},
+                "metadata": {
+                    "created_time": "2025-01-02T22:13:50.93942388Z",
+                    "custom_metadata": None,
+                    "deletion_time": "",
+                    "destroyed": False,
+                    "version": 1,
+                },
+            },
+            "wrap_info": None,
+            "warnings": None,
+            "auth": None,
+            "mount_type": "kv",
+        }
+        mock_get_response_new.json.return_value = mock_updated_vault_response
+        mock_get_response_new.raise_for_status.return_value = None
+        
+        # Configure mock return values
+        mock_get.side_effect = [mock_get_response_current, mock_get_response_new]
+        mock_post.return_value = mock_post_response
+        
+        secret_name = f"same-secret-{uuid.uuid4()}"
+        new_secret_value = "updated-secret-value"
+        
+        response = await hashicorp_secret_manager.async_rotate_secret(
+            current_secret_name=secret_name,
+            new_secret_name=secret_name,  # Same name
+            new_secret_value=new_secret_value,
+        )
+        
+        # Verify response
+        assert response == mock_write_response
+        
+        # Verify GET was called twice (check current, verify new)
+        assert mock_get.call_count == 2
+        
+        # Verify POST was called once (update secret)
+        mock_post.assert_called_once()
+        
+        # Verify DELETE was NOT called (same name means no delete)
+        mock_delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_rotate_secret_current_not_found(hashicorp_secret_manager):
+    """Test rotating a secret when current secret doesn't exist."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get:
+        # Mock GET to return 404
+        mock_404_response = MagicMock()
+        mock_404_response.status_code = 404
+        mock_404_response.text = "Not Found"
+        
+        http_error = httpx.HTTPStatusError(
+            "Not Found",
+            request=MagicMock(),
+            response=mock_404_response,
+        )
+        mock_get.side_effect = http_error
+        
+        current_secret_name = f"non-existent-{uuid.uuid4()}"
+        new_secret_name = f"new-secret-{uuid.uuid4()}"
+        
+        response = await hashicorp_secret_manager.async_rotate_secret(
+            current_secret_name=current_secret_name,
+            new_secret_name=new_secret_name,
+            new_secret_value="new-value",
+        )
+        
+        # Verify error response
+        assert response["status"] == "error"
+        assert current_secret_name in response["message"]
+        assert "not found" in response["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_rotate_secret_write_fails(hashicorp_secret_manager):
+    """Test rotating a secret when write fails."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
+        # Mock GET for current secret check
+        mock_get_response_current = MagicMock()
+        mock_get_response_current.json.return_value = mock_old_vault_response
+        mock_get_response_current.raise_for_status.return_value = None
+        mock_get.return_value = mock_get_response_current
+        
+        # Mock POST to return error
+        mock_post_response = MagicMock()
+        mock_post_response.json.return_value = {"status": "error", "message": "Write failed"}
+        mock_post.return_value = mock_post_response
+        
+        current_secret_name = f"old-secret-{uuid.uuid4()}"
+        new_secret_name = f"new-secret-{uuid.uuid4()}"
+        
+        response = await hashicorp_secret_manager.async_rotate_secret(
+            current_secret_name=current_secret_name,
+            new_secret_name=new_secret_name,
+            new_secret_value="new-value",
+        )
+        
+        # Verify error response
+        assert response["status"] == "error"
+        assert "Write failed" in response["message"]
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_rotate_secret_with_team_overrides(hashicorp_secret_manager):
+    """Test rotating a secret with optional_params (team settings)."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.delete"
+    ) as mock_delete:
+        # Mock GET for current secret check
+        mock_get_response_current = MagicMock()
+        mock_get_response_current.json.return_value = mock_old_vault_response
+        mock_get_response_current.raise_for_status.return_value = None
+        
+        # Mock POST for creating new secret
+        mock_post_response = MagicMock()
+        mock_post_response.json.return_value = mock_write_response
+        mock_post_response.raise_for_status.return_value = None
+        
+        # Mock GET for verifying new secret - use password key for team settings
+        mock_get_response_new = MagicMock()
+        mock_team_vault_response = {
+            "request_id": "80fafb6a-e96a-4c5b-29fa-ff505ac72201",
+            "lease_id": "",
+            "renewable": False,
+            "lease_duration": 0,
+            "data": {
+                "data": {"password": "new-team-secret-value"},  # Use password key
+                "metadata": {
+                    "created_time": "2025-01-02T22:13:50.93942388Z",
+                    "custom_metadata": None,
+                    "deletion_time": "",
+                    "destroyed": False,
+                    "version": 1,
+                },
+            },
+            "wrap_info": None,
+            "warnings": None,
+            "auth": None,
+            "mount_type": "kv",
+        }
+        mock_get_response_new.json.return_value = mock_team_vault_response
+        mock_get_response_new.raise_for_status.return_value = None
+        
+        # Mock DELETE for deleting old secret
+        mock_delete_response = MagicMock()
+        mock_delete_response.raise_for_status.return_value = None
+        
+        # Configure mock return values
+        mock_get.side_effect = [mock_get_response_current, mock_get_response_new]
+        mock_post.return_value = mock_post_response
+        mock_delete.return_value = mock_delete_response
+        
+        team_settings = {
+            "secret_manager_settings": {
+                "namespace": "team-namespace",
+                "mount": "kv-team",
+                "path_prefix": "teams/custom",
+                "data": "password",
+            }
+        }
+        
+        current_secret_name = "team-old-secret"
+        new_secret_name = "team-new-secret"
+        new_secret_value = "new-team-secret-value"
+        
+        response = await hashicorp_secret_manager.async_rotate_secret(
+            current_secret_name=current_secret_name,
+            new_secret_name=new_secret_name,
+            new_secret_value=new_secret_value,
+            optional_params=team_settings,
+        )
+        
+        # Verify response
+        assert response == mock_write_response
+        
+        # Verify URLs use team settings
+        get_calls = mock_get.call_args_list
+        assert "team-namespace" in get_calls[0][1]["url"]
+        assert "kv-team" in get_calls[0][1]["url"]
+        assert "teams/custom" in get_calls[0][1]["url"]
+        
+        delete_url = mock_delete.call_args[1]["url"]
+        assert "team-namespace" in delete_url
+        assert "kv-team" in delete_url
+
+
+@pytest.mark.asyncio
+async def test_hashicorp_secret_manager_rotate_secret_value_mismatch(hashicorp_secret_manager):
+    """Test rotating a secret when verification shows value mismatch."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get, patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
+        # Mock GET for current secret check
+        mock_get_response_current = MagicMock()
+        mock_get_response_current.json.return_value = mock_old_vault_response
+        mock_get_response_current.raise_for_status.return_value = None
+        
+        # Mock POST for creating new secret
+        mock_post_response = MagicMock()
+        mock_post_response.json.return_value = mock_write_response
+        mock_post_response.raise_for_status.return_value = None
+        
+        # Mock GET for verifying new secret - return different value
+        mock_get_response_new = MagicMock()
+        mock_get_response_new.json.return_value = {
+            "data": {
+                "data": {"key": "different-value"},  # Different from expected
+            }
+        }
+        mock_get_response_new.raise_for_status.return_value = None
+        
+        # Configure mock return values
+        mock_get.side_effect = [mock_get_response_current, mock_get_response_new]
+        mock_post.return_value = mock_post_response
+        
+        current_secret_name = f"old-secret-{uuid.uuid4()}"
+        new_secret_name = f"new-secret-{uuid.uuid4()}"
+        new_secret_value = "expected-value"
+        
+        response = await hashicorp_secret_manager.async_rotate_secret(
+            current_secret_name=current_secret_name,
+            new_secret_name=new_secret_name,
+            new_secret_value=new_secret_value,
+        )
+        
+        # Verify error response
+        assert response["status"] == "error"
+        assert "mismatch" in response["message"].lower()
+        assert "expected-value" in response["message"]

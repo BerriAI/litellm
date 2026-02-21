@@ -169,7 +169,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["low", "medium", "high"]
+    thinkingLevel: Literal["minimal", "low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
@@ -207,6 +207,7 @@ class GenerationConfig(TypedDict, total=False):
     frequency_penalty: float
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
+    response_json_schema: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
@@ -260,6 +261,7 @@ class UsageMetadata(TypedDict, total=False):
     responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
     candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
@@ -394,6 +396,8 @@ class Candidates(TypedDict, total=False):
         "BLOCKLIST",
         "PROHIBITED_CONTENT",
         "SPII",
+        "MALFORMED_FUNCTION_CALL",
+        "IMAGE_SAFETY",
     ]
     safetyRatings: List[SafetyRatings]
     citationMetadata: CitationMetadata

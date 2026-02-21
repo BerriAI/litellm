@@ -9,6 +9,7 @@ from httpx import Response
 import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 
 MAX_IMGS_IN_MEMORY = 10
 
@@ -21,7 +22,29 @@ def _process_image_response(response: Response, url: str) -> str:
             f"Error: Unable to fetch image from URL. Status code: {response.status_code}, url={url}"
         )
 
-    image_bytes = response.content
+    # Check size before downloading if Content-Length header is present
+    content_length = response.headers.get("Content-Length")
+    if content_length is not None:
+        size_mb = int(content_length) / (1024 * 1024)
+        if size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
+            raise litellm.ImageFetchError(
+                f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
+            )
+
+    # Stream download with size checking to prevent downloading huge files
+    max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    image_bytes = bytearray()
+    bytes_downloaded = 0
+    
+    for chunk in response.iter_bytes(chunk_size=8192):
+        bytes_downloaded += len(chunk)
+        if bytes_downloaded > max_bytes:
+            size_mb = bytes_downloaded / (1024 * 1024)
+            raise litellm.ImageFetchError(
+                f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
+            )
+        image_bytes.extend(chunk)
+    
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
     image_type = response.headers.get("Content-Type")
@@ -48,6 +71,12 @@ def _process_image_response(response: Response, url: str) -> str:
 
 
 async def async_convert_url_to_base64(url: str) -> str:
+    # If MAX_IMAGE_URL_DOWNLOAD_SIZE_MB is 0, block all image downloads
+    if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
+        raise litellm.ImageFetchError(
+            f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
+        )
+
     cached_result = in_memory_cache.get_cache(url)
     if cached_result:
         return cached_result
@@ -67,6 +96,12 @@ async def async_convert_url_to_base64(url: str) -> str:
 
 
 def convert_url_to_base64(url: str) -> str:
+    # If MAX_IMAGE_URL_DOWNLOAD_SIZE_MB is 0, block all image downloads
+    if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
+        raise litellm.ImageFetchError(
+            f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
+        )
+
     cached_result = in_memory_cache.get_cache(url)
     if cached_result:
         return cached_result

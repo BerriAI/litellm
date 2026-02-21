@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
 
 from litellm.proxy._types import (
+    LiteLLM_DeletedTeamTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -45,7 +46,7 @@ class UpdateTeamMemberPermissionsRequest(BaseModel):
 class TeamListResponse(BaseModel):
     """Response to get the list of teams"""
 
-    teams: List[LiteLLM_TeamTable]
+    teams: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]
     total: int
     page: int
     page_size: int

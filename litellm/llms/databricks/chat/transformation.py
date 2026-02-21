@@ -2,6 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completions`
 """
 
+import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -26,7 +27,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    strip_name_from_message
+    strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
@@ -58,6 +59,38 @@ from litellm.types.utils import (
 from ...anthropic.chat.transformation import AnthropicConfig
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
+
+def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
+    """
+    Remove or filter content so empty text blocks are not sent.
+    Databricks Model Serving uses Anthropic Messages API spec and rejects empty text blocks.
+    """
+    content = message_dict.get("content")
+    if content is None:
+        message_dict.pop("content", None)
+        return
+    if isinstance(content, str):
+        if not content.strip():
+            message_dict.pop("content")
+        return
+    if isinstance(content, list):
+        if not content:
+            message_dict.pop("content")
+            return
+        filtered = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and not (block.get("text") or "").strip()
+            )
+        ]
+        if not filtered:
+            message_dict.pop("content")
+        else:
+            message_dict["content"] = filtered
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -124,12 +157,24 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        # Check for custom user agent in optional_params or environment
+        # This allows partners building on LiteLLM to set their own telemetry
+        # Use pop() to remove these keys so they don't get sent to the API
+        custom_user_agent = (
+            optional_params.pop("user_agent", None)
+            or optional_params.pop("databricks_user_agent", None)
+            or litellm_params.get("user_agent")
+            or os.getenv("LITELLM_USER_AGENT")
+            or os.getenv("DATABRICKS_USER_AGENT")
+        )
+
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
             api_key=api_key,
             endpoint_type="chat_completions",
             custom_endpoint=False,
             headers=headers,
+            custom_user_agent=custom_user_agent,
         )
         # Ensure Content-Type header is set
         headers["Content-Type"] = "application/json"
@@ -173,9 +218,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # Build DatabricksFunction explicitly to avoid parameter conflicts
         function_params: DatabricksFunction = {
             "name": tool["name"],
-            "parameters": cast(dict, tool.get("input_schema") or {})
+            "parameters": cast(dict, tool.get("input_schema") or {}),
         }
-        
+
         # Only add description if it exists
         description = tool.get("description")
         if description is not None:
@@ -229,7 +274,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks supports Anthropic-style cache control for Claude models.
         Databricks ignores the cache_control flag with other models.
         """
-        # TODO: Think about how to best design the request transformation so that 
+        # TODO: Think about how to best design the request transformation so that
         # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
         return messages, tools
 
@@ -285,7 +330,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         if "reasoning_effort" in non_default_params and "claude" in model:
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                non_default_params.get("reasoning_effort")
+                reasoning_effort=non_default_params.get("reasoning_effort"),
+                model=model
             )
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
@@ -336,6 +382,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
+            _sanitize_empty_content(cast(dict[str, Any], _message))
             new_messages.append(_message)
 
         if is_async:
@@ -347,15 +394,17 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 messages=new_messages, model=model, is_async=cast(Literal[False], False)
             )
 
-    def _move_cache_control_into_string_content_block(self, message: AllMessageValues) -> AllMessageValues:
+    def _move_cache_control_into_string_content_block(
+        self, message: AllMessageValues
+    ) -> AllMessageValues:
         """
         Moves message-level cache_control into a content block when content is a string.
-        
+
         Transforms:
             {"role": "user", "content": "text", "cache_control": {...}}
         Into:
             {"role": "user", "content": [{"type": "text", "text": "text", "cache_control": {...}}]}
-        
+
         This is required for Anthropic's prompt caching API when cache_control is specified
         at the message level but content is a simple string (not already an array of content blocks).
         """
@@ -371,7 +420,6 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             }
         ]
         return cast(AllMessageValues, transformed_message)
-        
 
     @staticmethod
     def extract_content_str(
@@ -509,9 +557,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     reasoning_content=reasoning_content,
                     thinking_blocks=thinking_blocks,
                     tool_calls=choice["message"].get("tool_calls"),
-                    provider_specific_fields={"citations": citations}
-                    if citations is not None
-                    else None,
+                    provider_specific_fields=(
+                        {"citations": citations} if citations is not None else None
+                    ),
                 )
 
             if finish_reason is None:
@@ -543,12 +591,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-        ## LOGGING
+        # Redact sensitive data before logging to prevent credential leakage
+        redacted_request_data = self.redact_sensitive_data(request_data)
+
+        ## LOGGING - Never log actual API keys
         logging_obj.post_call(
             input=messages,
-            api_key=api_key,
+            api_key="[REDACTED]",
             original_response=raw_response.text,
-            additional_args={"complete_input_dict": request_data},
+            additional_args={"complete_input_dict": redacted_request_data},
         )
 
         ## RESPONSE OBJECT

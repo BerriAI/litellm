@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 
 class LiteLLM_UserScimMetadata(BaseModel):
@@ -111,4 +111,68 @@ class SCIMServiceProviderConfig(BaseModel):
     sort: SCIMFeature = SCIMFeature(supported=False)
     etag: SCIMFeature = SCIMFeature(supported=False)
     authenticationSchemes: Optional[List[Dict[str, Any]]] = None
+    meta: Optional[Dict[str, Any]] = None
+
+
+# SCIM ResourceType Models (RFC 7643 Section 6)
+class SCIMSchemaExtension(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_: str  # aliased to "schema" in serialization
+    required: bool
+
+    def model_dump(self, **kwargs):
+        d = super().model_dump(**kwargs)
+        d["schema"] = d.pop("schema_")
+        return d
+
+
+class SCIMResourceType(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schemas: List[str] = [
+        "urn:ietf:params:scim:schemas:core:2.0:ResourceType"
+    ]
+    id: str
+    name: str
+    description: Optional[str] = None
+    endpoint: str
+    schema_: str  # "schema" is a reserved name in Pydantic context
+
+    schemaExtensions: Optional[List[SCIMSchemaExtension]] = None
+    meta: Optional[Dict[str, Any]] = None
+
+    def model_dump(self, **kwargs):
+        d = super().model_dump(**kwargs)
+        d["schema"] = d.pop("schema_")
+        if d.get("schemaExtensions") is None:
+            d.pop("schemaExtensions", None)
+        return d
+
+
+# SCIM Schema Models (RFC 7643 Section 7)
+class SCIMSchemaAttribute(BaseModel):
+    name: str
+    type: str
+    multiValued: bool = False
+    description: Optional[str] = None
+    required: bool = False
+    mutability: str = "readWrite"
+    returned: str = "default"
+    uniqueness: str = "none"
+    subAttributes: Optional[List["SCIMSchemaAttribute"]] = None
+
+    def model_dump(self, **kwargs):
+        d = super().model_dump(**kwargs)
+        if d.get("subAttributes") is None:
+            d.pop("subAttributes", None)
+        return d
+
+
+class SCIMSchema(BaseModel):
+    schemas: List[str] = ["urn:ietf:params:scim:schemas:core:2.0:Schema"]
+    id: str
+    name: str
+    description: Optional[str] = None
+    attributes: List[SCIMSchemaAttribute] = []
     meta: Optional[Dict[str, Any]] = None

@@ -11,12 +11,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
 )
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
@@ -64,12 +66,21 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        if api_base and self._should_use_api_key_header(api_base):
-            headers["api-key"] = api_key
+        if api_key:
+            if api_base and self._should_use_api_key_header(api_base):
+                headers["api-key"] = api_key
+            else:
+                headers["Authorization"] = f"Bearer {api_key}"
         else:
-            headers["Authorization"] = f"Bearer {api_key}"
+            # No api_key provided — fall back to Azure AD token-based auth
+            litellm_params_obj = GenericLiteLLMParams(
+                **(litellm_params if isinstance(litellm_params, dict) else {})
+            )
+            headers = BaseAzureLLM._base_validate_azure_environment(
+                headers=headers, litellm_params=litellm_params_obj
+            )
 
-        headers["Content-Type"] = "application/json"  # tell Azure AI Studio to expect JSON
+        headers["Content-Type"] = "application/json"
 
         return headers
 

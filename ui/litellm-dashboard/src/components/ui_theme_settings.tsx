@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, TextInput, Button } from "@tremor/react";
 import { useTheme } from "@/contexts/ThemeContext";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface UIThemeSettingsProps {
@@ -29,7 +29,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       const response = await fetch(url, {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
       });
@@ -53,7 +53,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       const response = await fetch(url, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -87,7 +87,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       const response = await fetch(url, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({

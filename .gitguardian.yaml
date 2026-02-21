@@ -1,0 +1,111 @@
+version: 2
+
+secret:
+  # Exclude files and paths by globbing
+  ignored_paths:
+    - "**/*.whl"
+    - "**/*.pyc"
+    - "**/__pycache__/**"
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.git/**"
+    - "**/venv/**"
+    - "**/.venv/**"
+    
+    # Large data/metadata files that don't need scanning
+    - "**/model_prices_and_context_window*.json"
+    - "**/*_metadata/*.txt"
+    - "**/tokenizers/*.json"
+    - "**/tokenizers/*"
+    - "miniconda.sh"
+    
+    # Build outputs and static assets
+    - "litellm/proxy/_experimental/out/**"
+    - "ui/litellm-dashboard/public/**"
+    - "**/swagger/*.js"
+    - "**/*.woff"
+    - "**/*.woff2"
+    - "**/*.avif"
+    - "**/*.webp"
+    
+    # Test data files
+    - "**/tests/**/data_map.txt"
+    - "tests/**/*.txt"
+    
+    # Documentation and other non-code files
+    - "docs/**"
+    - "**/*.md"
+    - "**/*.lock"
+    - "poetry.lock"
+    - "package-lock.json"
+
+  # Ignore security incidents with the SHA256 of the occurrence (false positives)
+  ignored_matches:
+    # === Current detected false positives (SHA-based) ===
+    
+    # gcs_pub_sub_body - folder name, not a password
+    - name: GCS pub/sub test folder name
+      match: 75f377c456eede69e5f6e47399ccee6016a2a93cc5dd11db09cc5b1359ae569a
+    
+    # os.environ/APORIA_API_KEY_1 - environment variable reference
+    - name: Environment variable reference APORIA_API_KEY_1
+      match: e2ddeb8b88eca97a402559a2be2117764e11c074d86159ef9ad2375dea188094
+    
+    # os.environ/APORIA_API_KEY_2 - environment variable reference
+    - name: Environment variable reference APORIA_API_KEY_2
+      match: 09aa39a29e050b86603aa55138af1ff08fb86a4582aa965c1bd0672e1575e052
+    
+    # oidc/circleci_v2/ - test authentication path, not a secret
+    - name: OIDC CircleCI test path
+      match: feb3475e1f89a65b7b7815ac4ec597e18a9ec1847742ad445c36ca617b536e15
+    
+    # text-davinci-003 - OpenAI model identifier, not a secret
+    - name: OpenAI model identifier text-davinci-003
+      match: c489000cf6c7600cee0eefb80ad0965f82921cfb47ece880930eb7e7635cf1f1
+    
+    # Base64 Basic Auth in test_pass_through_endpoints.py - test fixture, not a real secret
+    - name: Test Base64 Basic Auth header in pass_through_endpoints test
+      match: 61bac0491f395040617df7ef6d06029eac4d92a4457ac784978db80d97be1ae0
+    
+    # PostgreSQL password "postgres" in CI configs - standard test database password
+    - name: Test PostgreSQL password in CI configurations
+      match: 6e0d657eb1f0fbc40cf0b8f3c3873ef627cc9cb7c4108d1c07d979c04bc8a4bb
+    
+    # Bearer token in locustfile.py - test/example API key for load testing
+    - name: Test Bearer token in locustfile load test
+      match: 2a0abc2b0c3c1760a51ffcdf8d6b1d384cef69af740504b1cfa82dd70cdc7ff9
+    
+    # Inkeep API key in docusaurus.config.js - public documentation site key
+    - name: Inkeep API key in documentation config
+      match: c366657791bfb5fc69045ec11d49452f09a0aebbc8648f94e2469b4025e29a75
+    
+    # Langfuse credentials in test_completion.py - test credentials for integration test
+    - name: Langfuse test credentials in test_completion
+      match: c39310f68cc3d3e22f7b298bb6353c4f45759adcc37080d8b7f4e535d3cfd7f4
+    
+    # Test password "sk-1234" in e2e test fixtures - test fixture, not a real secret
+    - name: Test password in e2e test fixtures
+      match: ce32b547202e209ec1dd50107b64be4cfcf2eb15c3b4f8e9dc611ef747af634f
+    
+    # === Preventive patterns for test keys (pattern-based) ===
+    
+    # Test API keys (124 instances across 45 files)
+    - name: Test API keys with sk-test prefix
+      match: sk-test-
+    
+    # Mock API keys
+    - name: Mock API keys with sk-mock prefix
+      match: sk-mock-
+    
+    # Fake API keys
+    - name: Fake API keys with sk-fake prefix
+      match: sk-fake-
+    
+    # Generic test API key patterns
+    - name: Test API key patterns
+      match: test-api-key
+
+    - name: Short fake sk keys (1–9 digits only)
+      match: \bsk-\d{1,9}\b
+

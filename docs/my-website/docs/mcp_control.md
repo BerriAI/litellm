@@ -13,6 +13,7 @@ LiteLLM provides fine-grained permission management for MCP servers, allowing yo
 - **Restrict MCP access by entity**: Control which keys, teams, or organizations can access specific MCP servers
 - **Tool-level filtering**: Automatically filter available tools based on entity permissions
 - **Centralized control**: Manage all MCP permissions from the LiteLLM Admin UI or API
+- **One-click public MCPs**: Mark specific servers as available to every LiteLLM API key when you don't need per-key restrictions
 
 This ensures that only authorized entities can discover and use MCP tools, providing an additional security layer for your MCP infrastructure.
 
@@ -94,6 +95,48 @@ mcp_servers:
 
 - If you specify both `allowed_tools` and `disallowed_tools`, the allowed list takes priority
 - Tool names are case-sensitive
+
+## Public MCP Servers (allow_all_keys)
+
+Some MCP servers are meant to be shared broadly—think internal knowledge bases, calendar integrations, or other low-risk utilities where every team should be able to connect without requesting access. Instead of adding those servers to every key, team, or organization, enable the new `allow_all_keys` toggle.
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+1. Open **MCP Servers → Add / Edit** in the Admin UI.
+2. Expand **Permission Management / Access Control**.
+3. Toggle **Allow All LiteLLM Keys** on.
+
+<Image 
+  img={require('../img/mcp_allow_all_ui.png')}
+  style={{width: '80%', display: 'block', margin: '1rem auto'}}
+  alt="MCP server configuration in Admin UI"
+/> 
+
+The toggle makes the server “public” without touching existing access groups.
+
+</TabItem>
+<TabItem value="config" label="config.yaml">
+
+Set `allow_all_keys: true` to mark the server as public:
+
+```yaml title="Make an MCP server public" showLineNumbers
+mcp_servers:
+  deepwiki:
+    url: https://mcp.deepwiki.com/mcp
+    allow_all_keys: true
+```
+
+</TabItem>
+</Tabs>
+
+### When to use it
+
+- You have shared MCP utilities where fine-grained ACLs would only add busywork.
+- You want a “default enabled” experience for internal users, while still being able to layer tool-level restrictions.
+- You’re onboarding new teams and want the safest MCPs available out of the box.
+
+Once enabled, LiteLLM automatically includes the server for every key during tool discovery/calls—no extra virtual-key or team configuration is required.
 
 ---
 
@@ -591,3 +634,31 @@ Control which tools different teams can access from the same MCP server. For exa
 This video shows how to set allowed tools for a Key, Team, or Organization.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/7464d444c3324078892367272fe50745" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+
+## Dashboard View Modes
+
+Proxy admins can also control what non-admins see inside the MCP dashboard via `general_settings.user_mcp_management_mode`:
+
+- `restricted` *(default)* – users only see servers that their team explicitly has access to.
+- `view_all` – every dashboard user can see the full MCP server list. 
+
+```yaml title="Config example"
+general_settings:
+  user_mcp_management_mode: view_all
+```
+
+This is useful when you want discoverability for MCP offerings without granting additional execution privileges.
+
+
+## Publish MCP Registry
+
+If you want other systems—for example external agent frameworks such as MCP-capable IDEs running outside your network—to automatically discover the MCP servers hosted on LiteLLM, you can expose a Model Context Protocol Registry endpoint. This registry lists the built-in LiteLLM MCP server and every server you have configured, using the [official MCP Registry spec](https://github.com/modelcontextprotocol/registry).
+
+1. Set `enable_mcp_registry: true` under `general_settings` in your proxy config (or DB settings) and restart the proxy.
+2. LiteLLM will serve the registry at `GET /v1/mcp/registry.json`.
+3. Each entry points to either `/mcp` (built-in server) or `/{mcp_server_name}/mcp` for your custom servers, so clients can connect directly using the advertised Streamable HTTP URL.
+
+:::note Permissions still apply
+The registry only advertises server URLs. Actual access control is still enforced by LiteLLM when the client connects to `/mcp` or `/{server}/mcp`, so publishing the registry does not bypass per-key permissions.
+:::

@@ -6,6 +6,7 @@ and following LiteLLM testing patterns and best practices.
 """
 
 # Standard library imports
+import importlib
 import os
 import sys
 from typing import Dict
@@ -37,7 +38,6 @@ from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
-
 # ============================================================================
 # FIXTURES
 # ============================================================================
@@ -49,11 +49,15 @@ def setup_and_teardown():
     Standard LiteLLM fixture that reloads litellm before every function
     to speed up testing by removing callbacks being chained.
     """
-    import importlib
     import asyncio
+    global litellm
 
-    # Reload litellm to ensure clean state
-    importlib.reload(litellm)
+    # Always import then reload to ensure fresh state
+    # This handles both cases uniformly:
+    # 1. litellm not in sys.modules (parallel worker removed it)
+    # 2. litellm already imported (normal case)
+    _module = importlib.import_module("litellm")
+    litellm = importlib.reload(_module)
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()
@@ -1140,6 +1144,305 @@ def test_get_config_model():
     config_model = PillarGuardrail.get_config_model()
     assert config_model is not None
     assert hasattr(config_model, "ui_friendly_name")
+
+
+# ============================================================================
+# MASKING TESTS
+# ============================================================================
+
+
+@pytest.fixture
+def pillar_masked_response():
+    """Fixture providing a Pillar API response with masked messages."""
+    return Response(
+        json={
+            "session_id": "test-session-123",
+            "flagged": True,
+            "masked_session_messages": [
+                {"role": "user", "content": "My email is [MASKED_EMAIL]"}
+            ],
+            "evidence": [
+                {
+                    "category": "pii",
+                    "type": "email",
+                    "evidence": "test@example.com",
+                }
+            ],
+            "scanners": {
+                "jailbreak": False,
+                "prompt_injection": False,
+                "pii": True,
+                "toxic_language": False,
+            },
+        },
+        status_code=200,
+        request=Request(
+            method="POST", url="https://api.pillar.security/api/v1/protect"
+        ),
+    )
+
+
+@pytest.fixture
+def pillar_mask_guardrail(env_setup):
+    """Fixture providing a PillarGuardrail instance in mask mode."""
+    return PillarGuardrail(
+        guardrail_name="pillar-mask",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        on_flagged_action="mask",
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_masking_mode(
+    pillar_mask_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_masked_response,
+):
+    """Test pre-call hook masks content when action is 'mask'."""
+    original_messages = sample_request_data["messages"].copy()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_masked_response,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    # Messages should be replaced with masked messages
+    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert result["messages"] != original_messages
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_masking_no_masked_messages(
+    pillar_mask_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+):
+    """Test masking mode when API doesn't return masked_session_messages."""
+    response_no_mask = Response(
+        json={
+            "session_id": "test-session-123",
+            "flagged": True,
+            # No masked_session_messages
+        },
+        status_code=200,
+        request=Request(
+            method="POST", url="https://api.pillar.security/api/v1/protect"
+        ),
+    )
+
+    original_messages = sample_request_data["messages"].copy()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response_no_mask,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+
+    # Messages should remain unchanged if no masked messages provided
+    assert result["messages"] == original_messages
+
+
+# ============================================================================
+# CONDITIONAL EXCEPTION DETAILS TESTS
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_exception_without_scanners(
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response,
+):
+    """Test exception excludes scanners when include_scanners is False."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-no-scanners",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=False,
+            include_evidence=True,
+        )
+
+        with pytest.raises(HTTPException) as excinfo:
+            await guardrail.async_pre_call_hook(
+                data=sample_request_data,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
+            )
+
+    error_detail = excinfo.value.detail
+    assert "pillar_response" in error_detail
+    assert "scanners" not in error_detail["pillar_response"]
+    assert "evidence" in error_detail["pillar_response"]
+
+
+@pytest.mark.asyncio
+async def test_exception_without_evidence(
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response,
+):
+    """Test exception excludes evidence when include_evidence is False."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-no-evidence",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=True,
+            include_evidence=False,
+        )
+
+        with pytest.raises(HTTPException) as excinfo:
+            await guardrail.async_pre_call_hook(
+                data=sample_request_data,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
+            )
+
+    error_detail = excinfo.value.detail
+    assert "pillar_response" in error_detail
+    assert "scanners" in error_detail["pillar_response"]
+    assert "evidence" not in error_detail["pillar_response"]
+
+
+@pytest.mark.asyncio
+async def test_exception_without_scanners_or_evidence(
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_flagged_response,
+):
+    """Test exception excludes both scanners and evidence when both are False."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        guardrail = PillarGuardrail(
+            guardrail_name="pillar-minimal",
+            api_key="test-pillar-key",
+            api_base="https://api.pillar.security",
+            on_flagged_action="block",
+            include_scanners=False,
+            include_evidence=False,
+        )
+
+        with pytest.raises(HTTPException) as excinfo:
+            await guardrail.async_pre_call_hook(
+                data=sample_request_data,
+                cache=dual_cache,
+                user_api_key_dict=user_api_key_dict,
+                call_type="completion",
+            )
+
+    error_detail = excinfo.value.detail
+    assert "pillar_response" in error_detail
+    pillar_response = error_detail["pillar_response"]
+    assert "scanners" not in pillar_response
+    assert "evidence" not in pillar_response
+    assert "session_id" in pillar_response  # session_id should always be present
+
+
+# ============================================================================
+# MCP CALL SUPPORT TESTS
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_mcp_call(
+    pillar_guardrail_instance,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_clean_response,
+):
+    """Test pre-call hook works with MCP call type."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        result = await pillar_guardrail_instance.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="mcp_call",
+        )
+
+    assert result == sample_request_data
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_mcp_call(
+    pillar_guardrail_instance,
+    sample_request_data,
+    user_api_key_dict,
+    pillar_clean_response,
+):
+    """Test moderation hook works with MCP call type."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        result = await pillar_guardrail_instance.async_moderation_hook(
+            data=sample_request_data,
+            user_api_key_dict=user_api_key_dict,
+            call_type="mcp_call",
+        )
+
+    assert result == sample_request_data
+
+
+@pytest.mark.asyncio
+async def test_mcp_call_masking(
+    pillar_mask_guardrail,
+    sample_request_data,
+    user_api_key_dict,
+    dual_cache,
+    pillar_masked_response,
+):
+    """Test masking works with MCP call type."""
+    original_messages = sample_request_data["messages"].copy()
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_masked_response,
+    ):
+        result = await pillar_mask_guardrail.async_pre_call_hook(
+            data=sample_request_data,
+            cache=dual_cache,
+            user_api_key_dict=user_api_key_dict,
+            call_type="mcp_call",
+        )
+
+    # Messages should be replaced with masked messages
+    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert result["messages"] != original_messages
 
 
 if __name__ == "__main__":

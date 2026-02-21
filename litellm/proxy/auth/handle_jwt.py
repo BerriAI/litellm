@@ -48,10 +48,12 @@ from .auth_checks import (
     get_actual_routes,
     get_end_user_object,
     get_org_object,
+    get_org_object_by_alias,
     get_role_based_models,
     get_role_based_routes,
     get_team_membership,
     get_team_object,
+    get_team_object_by_alias,
     get_user_object,
 )
 
@@ -194,10 +196,13 @@ class JWTHandler:
     def is_required_team_id(self) -> bool:
         """
         Returns:
-        - True: if 'team_id_jwt_field' is set
-        - False: if not
+        - True: if 'team_id_jwt_field' or 'team_alias_jwt_field' is set
+        - False: if neither is set
         """
-        if self.litellm_jwtauth.team_id_jwt_field is None:
+        if (
+            self.litellm_jwtauth.team_id_jwt_field is None
+            and self.litellm_jwtauth.team_alias_jwt_field is None
+        ):
             return False
         return True
 
@@ -239,6 +244,31 @@ class JWTHandler:
         except KeyError:
             team_id = default_value
         return team_id
+
+    def get_team_alias(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+        """
+        Extract team name/alias from JWT token using the configured team_alias_jwt_field.
+
+        Args:
+            token: The decoded JWT token dictionary
+            default_value: Default value to return if field not found
+
+        Returns:
+            The team alias from the token, or default_value if not found
+        """
+        try:
+            if self.litellm_jwtauth.team_alias_jwt_field is not None:
+                team_alias = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.team_alias_jwt_field,
+                    default=default_value,
+                )
+                return team_alias
+            else:
+                team_alias = None
+        except KeyError:
+            team_alias = default_value
+        return team_alias
 
     def is_upsert_user_id(self, valid_user_email: Optional[bool] = None) -> bool:
         """
@@ -382,6 +412,31 @@ class JWTHandler:
         except KeyError:
             org_id = default_value
         return org_id
+
+    def get_org_alias(self, token: dict, default_value: Optional[str]) -> Optional[str]:
+        """
+        Extract organization name/alias from JWT token using the configured org_alias_jwt_field.
+
+        Args:
+            token: The decoded JWT token dictionary
+            default_value: Default value to return if field not found
+
+        Returns:
+            The organization alias from the token, or default_value if not found
+        """
+        try:
+            if self.litellm_jwtauth.org_alias_jwt_field is not None:
+                org_alias = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.org_alias_jwt_field,
+                    default=default_value,
+                )
+                return org_alias
+            else:
+                org_alias = None
+        except KeyError:
+            org_alias = default_value
+        return org_alias
 
     def get_scopes(self, token: dict) -> List[str]:
         try:
@@ -604,7 +659,7 @@ class JWTHandler:
                     token,
                     public_key_obj,  # type: ignore
                     algorithms=algorithms,
-                    options=decode_options,
+                    options=decode_options,  # type: ignore[arg-type]
                     audience=audience,
                     leeway=self.leeway,  # allow testing of expired tokens
                 )
@@ -813,18 +868,14 @@ class JWTAuthManager:
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
-        """Find and validate specific team ID"""
+        """Find and validate specific team ID from team_id_jwt_field or team_alias_jwt_field"""
         individual_team_id = jwt_handler.get_team_id(
             token=jwt_valid_token, default_value=None
         )
 
-        if not individual_team_id and jwt_handler.is_required_team_id() is True:
-            raise Exception(
-                f"No team id found in token. Checked team_id field '{jwt_handler.litellm_jwtauth.team_id_jwt_field}'"
-            )
-
-        ## VALIDATE TEAM OBJECT ###
         team_object: Optional[LiteLLM_TeamTable] = None
+
+        # First try to get team by team_id
         if individual_team_id:
             team_object = await get_team_object(
                 team_id=individual_team_id,
@@ -833,6 +884,37 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+            )
+            return individual_team_id, team_object
+
+        # If no team_id found, try to resolve via team_alias_jwt_field
+        team_alias = jwt_handler.get_team_alias(
+            token=jwt_valid_token, default_value=None
+        )
+        if team_alias:
+            verbose_proxy_logger.info(
+                f"JWT Auth: Resolving team by alias: '{team_alias}'"
+            )
+            team_object = await get_team_object_by_alias(
+                team_alias=team_alias,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if team_object:
+                individual_team_id = team_object.team_id
+                verbose_proxy_logger.info(
+                    f"JWT Auth: Resolved team_alias='{team_alias}' to team_id='{individual_team_id}'"
+                )
+                return individual_team_id, team_object
+
+        # Check if team is required but not found
+        if jwt_handler.is_required_team_id() is True:
+            team_id_field = jwt_handler.litellm_jwtauth.team_id_jwt_field
+            team_alias_field = jwt_handler.litellm_jwtauth.team_alias_jwt_field
+            raise Exception(
+                f"No team found in token. Checked team_id field '{team_id_field}' and team_alias field '{team_alias_field}'"
             )
 
         return individual_team_id, team_object
@@ -882,7 +964,7 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or can_team_access_model(
+                        or await can_team_access_model(
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
@@ -893,6 +975,9 @@ class JWTAuthManager:
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                        )
+                        verbose_proxy_logger.debug(
+                            f"JWT team route check: team_id={team_id}, route={route}, is_allowed={is_allowed}"
                         )
                         if is_allowed:
                             return team_id, team_object
@@ -942,13 +1027,16 @@ class JWTAuthManager:
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
         route: str,
+        org_alias: Optional[str] = None,
     ) -> Tuple[
         Optional[LiteLLM_UserTable],
         Optional[LiteLLM_OrganizationTable],
-        Optional[LiteLLM_EndUserTable],
+        Optional[LiteLLM_EndUserTable], 
         Optional[LiteLLM_TeamMembership],
     ]:
-        """Get user, org, and end user objects"""
+        """Get user, org, and end user objects. Also resolves org aliases to IDs if configured."""
+        
+        # Get org object - first try by ID, then by alias
         org_object: Optional[LiteLLM_OrganizationTable] = None
         if org_id:
             org_object = (
@@ -961,6 +1049,30 @@ class JWTAuthManager:
                 )
                 if org_id
                 else None
+            )
+        elif org_alias:
+            verbose_proxy_logger.info(
+                f"JWT Auth: Resolving org by alias: '{org_alias}'"
+            )
+            org_object = await get_org_object_by_alias(
+                org_alias=org_alias,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if org_object:
+                verbose_proxy_logger.info(
+                    f"JWT Auth: Resolved org_alias='{org_alias}' to org_id='{org_object.organization_id}'"
+                )
+
+        # Check if email domain is allowed before attempting to get/create user
+        if valid_user_email is False:
+            raise ProxyException(
+                message=f"Email domain not allowed. User email: {user_email}. Allowed domain: {jwt_handler.litellm_jwtauth.user_allowed_email_domain}",
+                type=ProxyErrorTypes.auth_error,
+                param="user_email",
+                code=403,
             )
 
         user_object: Optional[LiteLLM_UserTable] = None
@@ -1304,6 +1416,8 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
             )
+        # Extract alias fields for resolution (if configured)
+        org_alias = jwt_handler.get_org_alias(token=jwt_valid_token, default_value=None)
 
         # Get other objects
         user_object, org_object, end_user_object, team_membership_object = (
@@ -1320,8 +1434,12 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 route=route,
+                org_alias=org_alias,
             )
         )
+
+        # Derive org_id from org_object if resolved by alias
+        resolved_org_id = org_object.organization_id if org_object else org_id
 
         await JWTAuthManager.sync_user_role_and_teams(
             jwt_handler=jwt_handler,
@@ -1345,10 +1463,9 @@ class JWTAuthManager:
         )
 
         # check if user is proxy admin
-        if user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN:
-            is_proxy_admin = True
-        else:
-            is_proxy_admin = False
+        is_proxy_admin = bool(
+            user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN
+        )
 
         return JWTAuthBuilderResult(
             is_proxy_admin=is_proxy_admin,
@@ -1356,7 +1473,7 @@ class JWTAuthManager:
             team_object=team_object,
             user_id=user_id,
             user_object=user_object,
-            org_id=org_id,
+            org_id=resolved_org_id,  # Use resolved org_id (from alias lookup if applicable)
             org_object=org_object,
             end_user_id=end_user_id,
             end_user_object=end_user_object,

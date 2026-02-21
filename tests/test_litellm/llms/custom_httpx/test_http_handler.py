@@ -128,13 +128,90 @@ async def test_ssl_verification_with_aiohttp_transport():
         assert isinstance(transport_connector, TCPConnector)
 
         aiohttp_session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(verify_ssl=False)
+            connector=aiohttp.TCPConnector(ssl=False)
         )
         aiohttp_connector = aiohttp_session.connector
         assert isinstance(aiohttp_connector, aiohttp.TCPConnector)
 
         # assert both litellm transport and aiohttp session have ssl_verify=False
         assert transport_connector._ssl == aiohttp_connector._ssl
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_ssl_verification_with_shared_session():
+    """
+    Test that ssl_verify=False is respected even with shared sessions.
+
+    This was a bug where shared sessions bypassed SSL configuration because
+    _create_aiohttp_transport returned immediately without passing ssl_verify
+    to the LiteLLMAiohttpTransport constructor.
+
+    The fix stores ssl_verify in the transport and passes it per-request.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a shared session (simulating what happens in production)
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and ssl_verify=False
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_verify=False,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL setting is stored in the transport for per-request use
+            assert transport._ssl_verify is False
+        finally:
+            await shared_session.close()
+    finally:
+        # Restore original setting
+        litellm.disable_aiohttp_transport = original_disable
+
+
+@pytest.mark.asyncio
+async def test_ssl_context_with_shared_session():
+    """
+    Test that ssl_context is respected even with shared sessions.
+    """
+    import aiohttp
+
+    # Ensure aiohttp transport is enabled for this test
+    original_disable = litellm.disable_aiohttp_transport
+    litellm.disable_aiohttp_transport = False
+
+    try:
+        # Create a custom SSL context
+        custom_ssl_context = ssl.create_default_context()
+
+        # Create a shared session
+        shared_session = aiohttp.ClientSession()
+
+        try:
+            # Create transport with shared session and custom ssl_context
+            transport = AsyncHTTPHandler._create_aiohttp_transport(
+                ssl_context=custom_ssl_context,
+                shared_session=shared_session,
+            )
+
+            # Verify the transport uses the shared session
+            assert transport.client is shared_session
+
+            # Verify the SSL context is stored in the transport for per-request use
+            assert transport._ssl_verify is custom_ssl_context
+        finally:
+            await shared_session.close()
     finally:
         # Restore original setting
         litellm.disable_aiohttp_transport = original_disable
@@ -281,38 +358,40 @@ async def test_async_handler_with_shared_session():
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_with_shared_session():
     """Test get_async_httpx_client with shared session"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock shared session
     mock_session = MockClientSession()
-    
+
     # Test with shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
 async def test_get_async_httpx_client_without_shared_session():
     """Test get_async_httpx_client without shared session (backward compatibility)"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Test without shared session
     client = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=None
     )
-    
+
     # Verify the client was created successfully
     assert client is not None
-    assert isinstance(client, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client, AsyncHTTPHandlerReload)
 
 
 @pytest.mark.asyncio
@@ -373,30 +452,110 @@ def test_shared_session_parameter_in_completion():
 @pytest.mark.asyncio
 async def test_session_reuse_integration():
     """Integration test for session reuse functionality"""
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, AsyncHTTPHandler as AsyncHTTPHandlerReload
     from litellm.types.utils import LlmProviders
-    
+
     # Create a mock session
     mock_session = MockClientSession()
-    
+
     # Create two clients with the same session
     client1 = get_async_httpx_client(
         llm_provider=LlmProviders.ANTHROPIC,
         shared_session=mock_session  # type: ignore
     )
-    
+
     client2 = get_async_httpx_client(
         llm_provider=LlmProviders.OPENAI,
         shared_session=mock_session  # type: ignore
     )
-    
+
     # Both clients should be created successfully
     assert client1 is not None
     assert client2 is not None
-    
+
     # Both should be AsyncHTTPHandler instances
-    assert isinstance(client1, AsyncHTTPHandler)
-    assert isinstance(client2, AsyncHTTPHandler)
+    # Import locally to avoid stale reference after module reload in conftest
+    assert isinstance(client1, AsyncHTTPHandlerReload)
+    assert isinstance(client2, AsyncHTTPHandlerReload)
+
+    # Clean up
+    await client1.close()
+    await client2.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_session_bypasses_cache():
+    """
+    Test that when shared_session is provided, the cache is bypassed.
+    
+    This is critical for aiohttp tracing support - users need their custom
+    ClientSession (with trace_configs) to be used, not a cached session.
+    
+    Related: GitHub issue #20174
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+    
+    # First, get a cached client without shared_session
+    cached_client = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=None
+    )
+    
+    # Now create a mock shared session
+    mock_session = MockClientSession()
+    
+    # Get a client WITH shared_session - this should NOT return the cached client
+    client_with_session = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,  # Same provider!
+        shared_session=mock_session  # type: ignore
+    )
+    
+    # The clients should be DIFFERENT - cache should be bypassed when shared_session is provided
+    assert client_with_session is not cached_client, \
+        "Cache should be bypassed when shared_session is provided"
+    
+    # Verify the shared_session handler is using our mock session
+    # The transport should have our mock_session as its client
+    transport = client_with_session.client._transport
+    if hasattr(transport, 'client'):
+        assert transport.client is mock_session, \
+            "Handler should use the provided shared_session"
+    
+    # Clean up
+    await cached_client.close()
+    await client_with_session.close()
+
+
+@pytest.mark.asyncio  
+async def test_shared_session_each_call_gets_new_handler():
+    """
+    Test that each call with shared_session creates a new handler.
+    
+    This ensures user sessions (with their trace_configs, etc.) are always
+    used and not affected by caching.
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+    
+    # Create two different mock sessions
+    mock_session1 = MockClientSession()
+    mock_session2 = MockClientSession()
+    
+    # Get clients with different sessions for the same provider
+    client1 = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,
+        shared_session=mock_session1  # type: ignore
+    )
+    
+    client2 = get_async_httpx_client(
+        llm_provider=LlmProviders.ANTHROPIC,  # Same provider
+        shared_session=mock_session2  # type: ignore  # Different session
+    )
+    
+    # Should be different clients, each using their own session
+    assert client1 is not client2, \
+        "Different shared_sessions should create different handlers"
     
     # Clean up
     await client1.close()
@@ -471,3 +630,87 @@ def test_ssl_ecdh_curve(env_curve, litellm_curve, expected_curve, should_call, m
                     assert isinstance(ssl_context, ssl.SSLContext)
         finally:
             litellm.ssl_ecdh_curve = original_value
+
+
+def test_default_user_agent_is_litellm_version(monkeypatch):
+    from litellm._version import version
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    assert get_default_headers()["User-Agent"] == f"litellm/{version}"
+
+
+def test_user_agent_can_be_overridden_via_env_var(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    assert get_default_headers()["User-Agent"] == "Claude Code"
+
+
+def test_user_agent_env_var_can_be_empty_string(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "")
+
+    assert get_default_headers()["User-Agent"] == ""
+
+
+def test_user_agent_override_is_not_appended_to_default(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.delenv("LITELLM_USER_AGENT", raising=False)
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request(
+            "GET",
+            "https://example.com",
+            headers={"user-agent": "Claude Code"},
+        )
+
+        assert req.headers.get_list("User-Agent") == ["Claude Code"]
+    finally:
+        handler.close()
+
+
+def test_sync_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = AsyncHTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_httpx_handler_uses_env_user_agent(monkeypatch):
+    from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
+
+    monkeypatch.setenv("LITELLM_USER_AGENT", "Claude Code")
+
+    handler = HTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()

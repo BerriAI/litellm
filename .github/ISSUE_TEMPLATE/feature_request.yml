@@ -7,6 +7,14 @@ body:
     attributes:
       value: |
         Thanks for making LiteLLM better! 
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: Check for existing issues
+      description: Please search to see if an issue already exists for the feature you are requesting.
+      options:
+        - label: I have searched the existing issues and checked that my issue is not a duplicate.
+          required: true
   - type: textarea
     id: the-feature
     attributes:
@@ -20,6 +28,19 @@ body:
     attributes:
       label: Motivation, pitch
       description: Please outline the motivation for the proposal. Is your feature request related to a specific problem? e.g., "I'm working on X and would like Y to be possible". If this is related to another GitHub issue, please link here too.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: What part of LiteLLM is this about?
+      options:
+        - ''
+        - "SDK (litellm Python package)"
+        - "Proxy"
+        - "UI Dashboard"
+        - "Docs"
+        - "Other"
     validations:
       required: true
   - type: dropdown

@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Azure AI Image Generation
+# Azure AI Image Generation (Black Forest Labs - Flux)
 
 Azure AI provides powerful image generation capabilities using FLUX models from Black Forest Labs to create high-quality images from text descriptions.
 
@@ -12,7 +12,7 @@ Azure AI provides powerful image generation capabilities using FLUX models from 
 | Description | Azure AI Image Generation uses FLUX models to generate high-quality images from text descriptions. |
 | Provider Route on LiteLLM | `azure_ai/` |
 | Provider Doc | [Azure AI FLUX Models ↗](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/black-forest-labs-flux-1-kontext-pro-and-flux1-1-pro-now-available-in-azure-ai-f/4434659) |
-| Supported Operations | [`/images/generations`](#image-generation) |
+| Supported Operations | [`/images/generations`](#image-generation), [`/images/edits`](#image-editing) |
 
 ## Setup
 
@@ -33,6 +33,7 @@ Get your API key and endpoint from [Azure AI Studio](https://ai.azure.com/).
 |------------|-------------|----------------|
 | `azure_ai/FLUX-1.1-pro` | Latest FLUX 1.1 Pro model for high-quality image generation | $0.04 |
 | `azure_ai/FLUX.1-Kontext-pro` | FLUX 1 Kontext Pro model with enhanced context understanding | $0.04 |
+| `azure_ai/flux.2-pro` | FLUX 2 Pro model for next-generation image generation | $0.04 |
 
 ## Image Generation
 
@@ -81,6 +82,32 @@ response = litellm.image_generation(
 )
 
 print(response.data[0].url)
+```
+
+</TabItem>
+
+<TabItem value="flux2" label="FLUX 2 Pro">
+
+```python showLineNumbers title="FLUX 2 Pro Image Generation"
+import litellm
+import os
+
+# Set your API credentials
+os.environ["AZURE_AI_API_KEY"] = "your-api-key-here"
+os.environ["AZURE_AI_API_BASE"] = "your-azure-ai-endpoint"  # e.g., https://litellm-ci-cd-prod.services.ai.azure.com
+
+# Generate image with FLUX 2 Pro
+response = litellm.image_generation(
+    model="azure_ai/flux.2-pro",
+    prompt="A photograph of a red fox in an autumn forest",
+    api_base=os.environ["AZURE_AI_API_BASE"],
+    api_key=os.environ["AZURE_AI_API_KEY"],
+    api_version="preview",
+    size="1024x1024",
+    n=1
+)
+
+print(response.data[0].b64_json)  # FLUX 2 returns base64 encoded images
 ```
 
 </TabItem>
@@ -165,6 +192,15 @@ model_list:
     model_info:
       mode: image_generation
 
+  - model_name: azure-flux-2-pro
+    litellm_params:
+      model: azure_ai/flux.2-pro
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_version: preview
+    model_info:
+      mode: image_generation
+
 general_settings:
   master_key: sk-1234
 ```
@@ -234,6 +270,103 @@ curl --location 'http://localhost:4000/v1/images/generations' \
     "n": 1,
     "size": "1024x1024"
 }'
+```
+
+</TabItem>
+</Tabs>
+
+## Image Editing
+
+FLUX 2 Pro supports image editing by passing an input image along with a prompt describing the desired modifications.
+
+### Usage - LiteLLM Python SDK
+
+<Tabs>
+<TabItem value="basic-edit" label="Basic Image Edit">
+
+```python showLineNumbers title="Basic Image Editing with FLUX 2 Pro"
+import litellm
+import os
+
+# Set your API credentials
+os.environ["AZURE_AI_API_KEY"] = "your-api-key-here"
+os.environ["AZURE_AI_API_BASE"] = "your-azure-ai-endpoint"  # e.g., https://litellm-ci-cd-prod.services.ai.azure.com
+
+# Edit an existing image
+response = litellm.image_edit(
+    model="azure_ai/flux.2-pro",
+    prompt="Add a red hat to the subject",
+    image=open("input_image.png", "rb"),
+    api_base=os.environ["AZURE_AI_API_BASE"],
+    api_key=os.environ["AZURE_AI_API_KEY"],
+    api_version="preview",
+)
+
+print(response.data[0].b64_json)  # FLUX 2 returns base64 encoded images
+```
+
+</TabItem>
+
+<TabItem value="async-edit" label="Async Image Edit">
+
+```python showLineNumbers title="Async Image Editing"
+import litellm
+import asyncio
+import os
+
+async def edit_image():
+    os.environ["AZURE_AI_API_KEY"] = "your-api-key-here"
+    os.environ["AZURE_AI_API_BASE"] = "your-azure-ai-endpoint"
+    
+    response = await litellm.aimage_edit(
+        model="azure_ai/flux.2-pro",
+        prompt="Change the background to a sunset beach",
+        image=open("input_image.png", "rb"),
+        api_base=os.environ["AZURE_AI_API_BASE"],
+        api_key=os.environ["AZURE_AI_API_KEY"],
+        api_version="preview",
+    )
+    
+    return response
+
+asyncio.run(edit_image())
+```
+
+</TabItem>
+</Tabs>
+
+### Usage - LiteLLM Proxy Server
+
+<Tabs>
+<TabItem value="curl-edit" label="cURL">
+
+```bash showLineNumbers title="Image Edit via Proxy - cURL"
+curl --location 'http://localhost:4000/v1/images/edits' \
+--header 'Authorization: Bearer sk-1234' \
+--form 'model="azure-flux-2-pro"' \
+--form 'prompt="Add sunglasses to the person"' \
+--form 'image=@"input_image.png"'
+```
+
+</TabItem>
+
+<TabItem value="openai-sdk-edit" label="OpenAI SDK">
+
+```python showLineNumbers title="Image Edit via Proxy - OpenAI SDK"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+response = client.images.edit(
+    model="azure-flux-2-pro",
+    prompt="Make the sky more dramatic with storm clouds",
+    image=open("input_image.png", "rb"),
+)
+
+print(response.data[0].b64_json)
 ```
 
 </TabItem>

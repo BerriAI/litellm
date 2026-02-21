@@ -4,11 +4,13 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy.guardrails.guardrail_hooks.pangea import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.pangea.pangea import (
     PangeaGuardrailMissingSecrets,
     PangeaHandler,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -42,6 +44,28 @@ def test_pangea_guardrail_config():
         ],
         config_file_path="",
     )
+
+
+def test_initialize_guardrail_sets_event_hook():
+    litellm_params = LitellmParams(
+        guardrail="pangea",
+        mode=GuardrailEventHooks.post_call,
+        api_key="pts_pangeatokenid",
+        pangea_input_recipe="guard_llm_request",
+        pangea_output_recipe="guard_llm_response",
+    )
+
+    guardrail = {"guardrail_name": "pangea-ai-guard"}
+
+    with patch(
+        "litellm.logging_callback_manager.add_litellm_callback"
+    ) as mock_add_callback:
+        callback = initialize_guardrail(
+            litellm_params=litellm_params, guardrail=guardrail
+        )
+
+    assert callback.event_hook == GuardrailEventHooks.post_call
+    mock_add_callback.assert_called_once_with(callback)
 
 
 def test_pangea_guardrail_config_no_api_key():

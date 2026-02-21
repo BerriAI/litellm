@@ -696,7 +696,7 @@ def test_is_allowed_route():
         "request": request,
         "request_data": {"input": ["hello world"], "model": "embedding-small"},
         "valid_token": UserAPIKeyAuth(
-            token="9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+            token="sk-test-mock-token-101",
             key_name="sk-...CJjQ",
             key_alias=None,
             spend=0.0,
@@ -1044,8 +1044,13 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True}
     )
 
-    # Mock JWTAuthManager.auth_builder
+    # Mock enterprise license check and JWTAuthManager.auth_builder
+    # License check must be mocked to avoid environment variable pollution
+    # in parallel test execution
     with patch(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
+    ), patch(
         "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
         return_value=mock_jwt_response,
     ):

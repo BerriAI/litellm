@@ -80,6 +80,53 @@ def test_get_usage(response_obj, expected_values):
     assert usage.total_tokens == expected_values[2]
 
 
+def test_get_usage_from_image_generation_response():
+    """
+    Test that image generation usage (with input_tokens/output_tokens format)
+    is correctly transformed to standard usage format with image_tokens preserved.
+
+    Note: get_usage_from_response_obj() is used by multiple endpoints including
+    /images/generations and Response API (/responses), both of which use the
+    input_tokens/output_tokens format instead of prompt_tokens/completion_tokens.
+
+    This tests the fix for the bug where image_tokens were being lost during
+    spend log creation for /images/generations endpoint.
+    """
+    # Simulating image generation response usage from OpenAI
+    response_obj = {
+        "usage": {
+            "input_tokens": 13,
+            "output_tokens": 372,
+            "total_tokens": 385,
+            "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 13,
+            },
+            "output_tokens_details": {
+                "image_tokens": 272,
+                "text_tokens": 100,
+            },
+        }
+    }
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    # Check basic token counts are mapped correctly
+    assert usage.prompt_tokens == 13
+    assert usage.completion_tokens == 372
+    assert usage.total_tokens == 385
+
+    # Check that prompt_tokens_details contains image_tokens and text_tokens
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.image_tokens == 0
+    assert usage.prompt_tokens_details.text_tokens == 13
+
+    # Check that completion_tokens_details contains image_tokens and text_tokens
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.image_tokens == 272
+    assert usage.completion_tokens_details.text_tokens == 100
+
+
 def test_get_additional_headers():
     additional_headers = {
         "x-ratelimit-limit-requests": "2000",
@@ -167,6 +214,22 @@ def test_get_standard_logging_metadata_user_api_key_hash():
 def test_get_standard_logging_metadata_invalid_user_api_key():
     invalid_hash = "not_a_valid_hash"
     metadata = {"user_api_key": invalid_hash}
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    all_fields_present(result)
+    assert result["user_api_key_hash"] is None
+
+
+def test_get_standard_logging_metadata_non_string_user_api_key():
+    """Non-string user_api_key should not be set as user_api_key_hash."""
+    metadata = {"user_api_key": 12345}
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    all_fields_present(result)
+    assert result["user_api_key_hash"] is None
+
+
+def test_get_standard_logging_metadata_none_user_api_key():
+    """None user_api_key should not be set as user_api_key_hash."""
+    metadata = {"user_api_key": None}
     result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
     all_fields_present(result)
     assert result["user_api_key_hash"] is None
@@ -656,3 +719,188 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
     assert payload["response_cost"] == 0.0001
     
     print("✅ Cost breakdown missing test passed!")
+
+
+def test_merge_litellm_metadata_basic():
+    """
+    Test that merge_litellm_metadata correctly merges metadata and litellm_metadata.
+    User API key fields (from metadata) should take precedence over model-related fields (from litellm_metadata).
+    """
+    litellm_params = {
+        "metadata": {
+            "user_api_key": "test-key-123",
+            "user_api_key_user_id": "user-456",
+            "user_api_key_team_id": "team-789",
+        },
+        "litellm_metadata": {
+            "model_group": "gpt-4-group",
+            "model_info": {"id": "model-123"},
+            "tags": ["tag1", "tag2"],
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # Check that user API key fields are present
+    assert result["user_api_key"] == "test-key-123"
+    assert result["user_api_key_user_id"] == "user-456"
+    assert result["user_api_key_team_id"] == "team-789"
+
+    # Check that model-related fields are present
+    assert result["model_group"] == "gpt-4-group"
+    assert result["model_info"] == {"id": "model-123"}
+    assert result["tags"] == ["tag1", "tag2"]
+
+
+def test_merge_litellm_metadata_precedence():
+    """
+    Test that metadata fields take precedence over litellm_metadata when there are conflicts.
+    """
+    litellm_params = {
+        "metadata": {
+            "tags": ["user-tag1", "user-tag2"],
+            "custom_field": "from_metadata",
+        },
+        "litellm_metadata": {
+            "tags": ["model-tag1", "model-tag2"],  # This should NOT overwrite
+            "custom_field": "from_litellm_metadata",  # This should NOT overwrite
+            "model_group": "gpt-4-group",  # This should be included
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # metadata values should take precedence
+    assert result["tags"] == ["user-tag1", "user-tag2"]
+    assert result["custom_field"] == "from_metadata"
+
+    # litellm_metadata values should only be included if not in metadata
+    assert result["model_group"] == "gpt-4-group"
+
+
+def test_merge_litellm_metadata_skip_non_serializable():
+    """
+    Test that non-serializable objects like UserAPIKeyAuth are skipped.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    litellm_params = {
+        "metadata": {
+            "user_api_key": "test-key-123",
+            "user_api_key_auth": user_api_key_auth,  # This should be skipped
+            "safe_field": "safe_value",
+        },
+        "litellm_metadata": {
+            "model_group": "gpt-4-group",
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # user_api_key_auth should be skipped
+    assert "user_api_key_auth" not in result
+
+    # Other fields should be present
+    assert result["user_api_key"] == "test-key-123"
+    assert result["safe_field"] == "safe_value"
+    assert result["model_group"] == "gpt-4-group"
+
+
+def test_merge_litellm_metadata_empty_params():
+    """
+    Test that merge_litellm_metadata handles empty or missing metadata gracefully.
+    """
+    # Test with empty litellm_params
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata({})
+    assert result == {}
+
+    # Test with only metadata
+    litellm_params = {
+        "metadata": {
+            "user_api_key": "test-key",
+        }
+    }
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert result == {"user_api_key": "test-key"}
+
+    # Test with only litellm_metadata
+    litellm_params = {
+        "litellm_metadata": {
+            "model_group": "gpt-4-group",
+        }
+    }
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert result == {"model_group": "gpt-4-group"}
+
+    # Test with None values
+    litellm_params = {
+        "metadata": None,
+        "litellm_metadata": None,
+    }
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+    assert result == {}
+
+
+def test_merge_litellm_metadata_bedrock_passthrough_scenario():
+    """
+    Test merge_litellm_metadata in a Bedrock passthrough scenario where both 
+    user API key metadata and model metadata need to be merged.
+    
+    This is the specific scenario that was fixed - bedrock passthrough requests
+    should include complete user authentication metadata in logging.
+    """
+    litellm_params = {
+        "metadata": {
+            # User API key fields from authentication
+            "user_api_key": "sk-bedrock-test-key-123",
+            "user_api_key_hash": "hashed-key-123",
+            "user_api_key_user_id": "bedrock-user-456",
+            "user_api_key_team_id": "bedrock-team-789",
+            "user_api_key_org_id": "bedrock-org-101",
+            "user_api_key_alias": "bedrock-key-alias",
+            "user_api_key_team_alias": "bedrock-team-alias",
+            "user_api_key_end_user_id": "end-user-123",
+            "user_api_key_request_route": "/bedrock/model/invoke",
+        },
+        "litellm_metadata": {
+            # Model-related fields from Bedrock configuration
+            "model_group": "bedrock-claude-group",
+            "model_info": {
+                "id": "anthropic.claude-3-sonnet",
+                "mode": "chat",
+            },
+            "aws_region_name": "us-east-1",
+            "tags": ["production", "bedrock"],
+        },
+    }
+
+    result = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+
+    # Verify all user API key fields are present
+    assert result["user_api_key"] == "sk-bedrock-test-key-123"
+    assert result["user_api_key_hash"] == "hashed-key-123"
+    assert result["user_api_key_user_id"] == "bedrock-user-456"
+    assert result["user_api_key_team_id"] == "bedrock-team-789"
+    assert result["user_api_key_org_id"] == "bedrock-org-101"
+    assert result["user_api_key_alias"] == "bedrock-key-alias"
+    assert result["user_api_key_team_alias"] == "bedrock-team-alias"
+    assert result["user_api_key_end_user_id"] == "end-user-123"
+    assert result["user_api_key_request_route"] == "/bedrock/model/invoke"
+
+    # Verify all model-related fields are present
+    assert result["model_group"] == "bedrock-claude-group"
+    assert result["model_info"] == {
+        "id": "anthropic.claude-3-sonnet",
+        "mode": "chat",
+    }
+    assert result["aws_region_name"] == "us-east-1"
+    assert result["tags"] == ["production", "bedrock"]
+
+    # Verify total number of fields (9 user fields + 4 model fields = 13)
+    assert len(result) == 13

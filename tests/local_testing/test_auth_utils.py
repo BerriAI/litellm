@@ -311,3 +311,75 @@ def test_get_internal_user_header_from_mapping_no_internal_returns_none():
     single_mapping = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
     result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single_mapping)
     assert result is None
+
+
+@pytest.mark.parametrize(
+    "request_data, route, expected_model",
+    [
+        # Vertex AI passthrough URL patterns
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+            "gemini-1.5-pro"
+        ),
+        (
+            {},
+            "/vertex_ai/v1beta1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.0-pro:streamGenerateContent",
+            "gemini-1.0-pro"
+        ),
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/asia-southeast1/publishers/google/models/gemini-2.0-flash:generateContent",
+            "gemini-2.0-flash"
+        ),
+        # Model without method suffix (no colon) - should still extract
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro",
+            "gemini-pro"  # Should match even without colon
+        ),
+        # Request body model takes precedence over URL
+        (
+            {"model": "gpt-4o"},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+            "gpt-4o"
+        ),
+        # Non-vertex route should not extract from vertex pattern
+        (
+            {},
+            "/openai/v1/chat/completions",
+            None
+        ),
+        # Azure deployment pattern should still work
+        (
+            {},
+            "/openai/deployments/my-deployment/chat/completions",
+            "my-deployment"
+        ),
+        # Custom model_name with slashes (e.g., gcp/google/gemini-2.5-flash)
+        # This is the NVIDIA P0 bug fix - regex should capture full model name including slashes
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent",
+            "gcp/google/gemini-2.5-flash"
+        ),
+        # Another custom model_name with slashes
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:generateContent",
+            "gcp/google/gemini-3-flash-preview"
+        ),
+        # Model name with single slash
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/custom/model:generateContent",
+            "custom/model"
+        ),
+    ],
+)
+def test_get_model_from_request_vertex_ai_passthrough(request_data, route, expected_model):
+    """Test that get_model_from_request correctly extracts Vertex AI model from URL"""
+    from litellm.proxy.auth.auth_utils import get_model_from_request
+
+    model = get_model_from_request(request_data, route)
+    assert model == expected_model

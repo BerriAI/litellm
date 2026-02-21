@@ -236,16 +236,51 @@ class FireworksAIConfig(OpenAIGPTConfig):
                                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                             )
             filter_value_from_dict(cast(dict, message), "cache_control")
+            # Remove fields not permitted by FireworksAI that may cause:
+            # "Not permitted, field: 'messages[n].provider_specific_fields'"
+            if isinstance(message, dict) and "provider_specific_fields" in message:
+                cast(dict, message).pop("provider_specific_fields", None)
 
         return messages
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
-        provider_specific_model_info = ProviderSpecificModelInfo(
-            supports_function_calling=True,
-            supports_prompt_caching=True,  # https://docs.fireworks.ai/guides/prompt-caching
-            supports_pdf_input=True,  # via document inlining
-            supports_vision=True,  # via document inlining
+        # Models that support reasoning_effort
+        reasoning_supported_models = [
+            "qwen3-8b",
+            "qwen3-32b",
+            "qwen3-coder-480b-a35b-instruct",
+            "deepseek-v3p1",
+            "deepseek-v3p2",
+            "glm-4p5",
+            "glm-4p5-air",
+            "glm-4p6",
+            "gpt-oss-120b",
+            "gpt-oss-20b",
+        ]
+        
+        # Normalize model name - remove prefix if present
+        normalized_model = model
+        if model.startswith("fireworks_ai/"):
+            normalized_model = model.replace("fireworks_ai/", "")
+        if normalized_model.startswith("accounts/fireworks/models/"):
+            normalized_model = normalized_model.replace("accounts/fireworks/models/", "")
+        
+        # Check if model supports reasoning
+        supports_reasoning_value = any(
+            reasoning_model in normalized_model for reasoning_model in reasoning_supported_models
         )
+        
+        provider_specific_model_info: ProviderSpecificModelInfo = {
+            "supports_function_calling": True,
+            "supports_prompt_caching": True,  # https://docs.fireworks.ai/guides/prompt-caching
+            "supports_pdf_input": True,  # via document inlining
+            "supports_vision": True,  # via document inlining
+        }
+        
+        # Only include supports_reasoning if True
+        if supports_reasoning_value:
+            provider_specific_model_info["supports_reasoning"] = True
+        
         return provider_specific_model_info
 
     def transform_request(

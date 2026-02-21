@@ -103,7 +103,10 @@ class LowestTPMLoggingHandler(CustomLogger):
                     "model_group", None
                 )
 
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                model_info = kwargs["litellm_params"].get("model_info")
+                id = None
+                if model_info is not None and isinstance(model_info, dict):
+                    id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):

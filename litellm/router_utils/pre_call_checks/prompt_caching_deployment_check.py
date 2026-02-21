@@ -61,9 +61,10 @@ class PromptCachingDeploymentCheck(CustomLogger):
         if (
             call_type != CallTypes.completion.value
             and call_type != CallTypes.acompletion.value
+            and call_type != CallTypes.anthropic_messages.value
         ):  # only use prompt caching for completion calls
             verbose_logger.debug(
-                "litellm.router_utils.pre_call_checks.prompt_caching_deployment_check: skipping adding model id to prompt caching cache, CALL TYPE IS NOT COMPLETION"
+                "litellm.router_utils.pre_call_checks.prompt_caching_deployment_check: skipping adding model id to prompt caching cache, CALL TYPE IS NOT COMPLETION or ANTHROPIC MESSAGE"
             )
             return
 

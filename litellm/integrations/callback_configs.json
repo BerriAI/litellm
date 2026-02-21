@@ -84,6 +84,33 @@
     "description": "Datadog Logging Integration"
   },
   {
+    "id": "datadog_cost_management",
+    "displayName": "Datadog Cost Management",
+    "logo": "datadog.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "dd_api_key": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "Datadog API key for authentication",
+        "required": true
+      },
+      "dd_app_key": {
+        "type": "password",
+        "ui_name": "App Key",
+        "description": "Datadog Application Key for Cloud Cost Management",
+        "required": true
+      },
+      "dd_site": {
+        "type": "text",
+        "ui_name": "Site",
+        "description": "Datadog site URL (e.g., us5.datadoghq.com)",
+        "required": true
+      }
+    },
+    "description": "Datadog Cloud Cost Management Integration"
+  },
+  {
     "id": "lago",
     "displayName": "Lago",
     "logo": "lago.svg",
@@ -186,6 +213,12 @@
         "type": "number",
         "ui_name": "Sampling Rate",
         "description": "Sampling rate for logging (0.0 to 1.0, default: 1.0)",
+        "required": false
+      },
+      "langsmith_tenant_id": {
+        "type": "text",
+        "ui_name": "Tenant ID",
+        "description": "LangSmith tenant ID for organization-scoped API keys (required when using org-scoped keys)",
         "required": false
       }
     },

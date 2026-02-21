@@ -2,14 +2,15 @@ import json
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
 
 from litellm import verbose_logger
-
 from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionImageObject,
     ChatCompletionRequest,
     ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolChoiceValues,
     ChatCompletionToolMessage,
@@ -385,13 +386,36 @@ class GoogleGenAIAdapter:
 
             if role == "user":
                 # Handle user messages with potential function responses
-                combined_text = ""
+                content_parts: List[
+                    Union[ChatCompletionTextObject, ChatCompletionImageObject]
+                ] = []
                 tool_messages: List[ChatCompletionToolMessage] = []
 
                 for part in parts:
                     if isinstance(part, dict):
                         if "text" in part:
-                            combined_text += part["text"]
+                            content_parts.append(
+                                cast(
+                                    ChatCompletionTextObject,
+                                    {"type": "text", "text": part["text"]},
+                                )
+                            )
+                        elif "inline_data" in part:
+                            # Handle Base64 image data
+                            inline_data = part["inline_data"]
+                            mime_type = inline_data.get("mime_type", "image/jpeg")
+                            data = inline_data.get("data", "")
+                            content_parts.append(
+                                cast(
+                                    ChatCompletionImageObject,
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{mime_type};base64,{data}"
+                                        },
+                                    },
+                                )
+                            )
                         elif "functionResponse" in part:
                             # Transform function response to tool message
                             func_response = part["functionResponse"]
@@ -402,13 +426,33 @@ class GoogleGenAIAdapter:
                             )
                             tool_messages.append(tool_message)
                     elif isinstance(part, str):
-                        combined_text += part
+                        content_parts.append(
+                            cast(
+                                ChatCompletionTextObject, {"type": "text", "text": part}
+                            )
+                        )
 
-                # Add user message if there's text content
-                if combined_text:
-                    messages.append(
-                        ChatCompletionUserMessage(role="user", content=combined_text)
-                    )
+                # Add user message if there's content
+                if content_parts:
+                    # If only one text part, use simple string format for backward compatibility
+                    if (
+                        len(content_parts) == 1
+                        and isinstance(content_parts[0], dict)
+                        and content_parts[0].get("type") == "text"
+                    ):
+                        text_part = cast(ChatCompletionTextObject, content_parts[0])
+                        messages.append(
+                            ChatCompletionUserMessage(
+                                role="user", content=text_part["text"]
+                            )
+                        )
+                    else:
+                        # Use multimodal format (array of content parts)
+                        messages.append(
+                            ChatCompletionUserMessage(
+                                role="user", content=content_parts
+                            )
+                        )
 
                 # Add tool messages
                 messages.extend(tool_messages)
@@ -467,7 +511,6 @@ class GoogleGenAIAdapter:
         Returns:
             Dict in Google GenAI generate_content response format
         """
-
 
         # Extract the main response content
         choice = response.choices[0] if response.choices else None
@@ -727,6 +770,8 @@ class GoogleGenAIAdapter:
             "content_filter": "SAFETY",
             "tool_calls": "STOP",
             "function_call": "STOP",
+            "finish_reason_unspecified": "FINISH_REASON_UNSPECIFIED",
+            "malformed_function_call": "MALFORMED_FUNCTION_CALL",
         }
 
         return mapping.get(finish_reason, "STOP")

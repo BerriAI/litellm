@@ -91,6 +91,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,
             "Content-Type": "application/json",
+            "AI-Client-Type": "LiteLLM",
         }
 
     @property
@@ -202,10 +203,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
         model_params = {
-            k: v for k, v in optional_params.items() if k in supported_params
+            k: v for k, v in optional_params.items() if k not in {"tools", "model_version", "deployment_url"}
         }
+
         model_version = optional_params.pop("model_version", "latest")
         template = []
         for message in messages:

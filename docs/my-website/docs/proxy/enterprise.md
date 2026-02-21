@@ -29,7 +29,7 @@ Features:
 - **Spend Tracking & Data Exports**
     - ✅ [Set USD Budgets Spend for Custom Tags](./provider_budget_routing#-tag-budgets)
     - ✅ [Set Model budgets for Virtual Keys](./users#-virtual-key-model-specific)
-    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](./proxy/bucket#🪣-logging-gcs-s3-buckets)
+    - ✅ [Exporting LLM Logs to GCS Bucket, Azure Blob Storage](../observability/gcs_bucket_integration)
     - ✅ [`/spend/report` API endpoint](cost_tracking.md#✨-enterprise-api-endpoints-to-get-spend)
 - **Control Guardrails per API Key/Team**
 - **Custom Branding**

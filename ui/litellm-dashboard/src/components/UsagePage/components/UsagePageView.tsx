@@ -6,33 +6,30 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
+import { InfoCircleOutlined, LoadingOutlined, UserOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
   Col,
   DateRangePickerValue,
-  DonutChart,
   Grid,
   Tab,
   TabGroup,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
   TabList,
   TabPanel,
   TabPanels,
   Text,
-  Title,
+  Title
 } from "@tremor/react";
-import { Alert, Badge } from "antd";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Segmented, Select, Tooltip, Typography } from "antd";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import React, { useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { Button } from "@tremor/react";
 import { all_admin_roles } from "../../../utils/roles";
@@ -41,7 +38,6 @@ import CloudZeroExportModal from "../../cloudzero_export_modal";
 import EntityUsageExportModal from "../../EntityUsageExport";
 import { Team } from "../../key_team_helpers/key_list";
 import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
-import { getProviderLogoAndName } from "../../provider_info_helpers";
 import AdvancedDatePicker from "../../shared/advanced_date_picker";
 import { ChartLoader } from "../../shared/chart_loader";
 import { Tag } from "../../tag_management/types";
@@ -49,7 +45,9 @@ import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
+import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
+import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
@@ -80,15 +78,74 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   });
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
-  const { data: customers = [] } = useCustomers(accessToken, userRole);
-  const { data: agentsResponse } = useAgents(accessToken, userRole);
+  const { data: customers = [] } = useCustomers();
+  const { data: agentsResponse } = useAgents();
+  const { data: currentUser } = useCurrentUser();
+  console.log(`currentUser: ${JSON.stringify(currentUser)}`);
+  console.log(`currentUser max budget: ${currentUser?.max_budget}`);
+  const isAdmin = all_admin_roles.includes(userRole || "");
+
+  // Debounced search for user selector
+  const [userSearchInput, setUserSearchInput] = useState("");
+  const [debouncedUserSearch, setDebouncedUserSearch] = useDebouncedState("", {
+    wait: 300,
+  });
+
+  const {
+    data: usersInfiniteData,
+    fetchNextPage: fetchNextUsersPage,
+    hasNextPage: hasNextUsersPage,
+    isFetchingNextPage: isFetchingNextUsersPage,
+    isLoading: isLoadingUsers,
+  } = useInfiniteUsers(50, debouncedUserSearch || undefined);
+
+  const userOptions = useMemo(() => {
+    if (!usersInfiniteData?.pages) return [];
+    const seen = new Set<string>();
+    const result: { value: string; label: string }[] = [];
+    for (const page of usersInfiniteData.pages) {
+      for (const user of page.users) {
+        if (seen.has(user.user_id)) continue;
+        seen.add(user.user_id);
+        result.push({
+          value: user.user_id,
+          label: user.user_alias
+            ? `${user.user_alias} (${user.user_id})`
+            : user.user_email
+              ? `${user.user_email} (${user.user_id})`
+              : user.user_id,
+        });
+      }
+    }
+    return result;
+  }, [usersInfiniteData]);
+
+  const handleUserSearchChange = (value: string) => {
+    setUserSearchInput(value);
+    setDebouncedUserSearch(value);
+  };
+
+  const handleUserPopupScroll = (e: UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const scrollRatio =
+      (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    if (scrollRatio >= 0.8 && hasNextUsersPage && !isFetchingNextUsersPage) {
+      fetchNextUsersPage();
+    }
+  };
+
+  // For admins: null means global view (all users), a string means filter by that user
+  // For non-admins: always set to their own user ID
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(
+    isAdmin ? null : (userID || null)
+  );
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [showOrganizationBanner, setShowOrganizationBanner] = useState(true);
-  const [showCustomerBanner, setShowCustomerBanner] = useState(true);
   const [usageView, setUsageView] = useState<UsageOption>("global");
-  const [showAgentBanner, setShowAgentBanner] = useState(true);
+  const [showCredentialBanner, setShowCredentialBanner] = useState(true);
+  const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
+  const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const getAllTags = async () => {
     if (!accessToken) {
       return;
@@ -106,11 +163,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     getAllTags();
   }, [accessToken]);
 
+  // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
+  useEffect(() => {
+    if (!isAdmin && userID) {
+      setSelectedUserId(userID);
+    }
+  }, [isAdmin, userID]);
+
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
 
   // Calculate top models from the breakdown data
-  const getTopModels = () => {
+  const getTopModels = (limit: number = 5) => {
     const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
@@ -153,10 +217,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5);
+      .slice(0, limit);
   };
 
-  const getTopModelGroups = () => {
+  const getTopModelGroups = (limit: number = 5) => {
     const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
@@ -200,7 +264,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5);
+      .slice(0, limit);
   };
 
   // Calculate provider spend from the breakdown data
@@ -248,7 +312,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   };
 
   // Calculate top API keys from the breakdown data
-  const getTopKeys = () => {
+  const getTopKeys = (limit: number = 5) => {
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
@@ -294,11 +358,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5);
+      .slice(0, limit);
   };
 
   const fetchUserSpendData = useCallback(async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
+
+    // For non-admins, always pass their own user_id
+    const effectiveUserId = isAdmin ? selectedUserId : (userID || null);
 
     setLoading(true);
 
@@ -309,14 +376,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     try {
       // Prefer aggregated endpoint to avoid many page requests
       try {
-        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime);
+        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId);
         setUserSpendData(aggregated);
         return;
       } catch (e) {
         // Fallback to paginated calls if aggregated endpoint is unavailable
       }
 
-      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime);
+      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId);
 
       if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
@@ -327,7 +394,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       const aggregatedMetadata = { ...firstPageData.metadata };
 
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
-        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
+        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId);
         allResults.push(...pageData.results);
         if (pageData.metadata) {
           aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
@@ -348,7 +415,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       setLoading(false);
       setIsDateChanging(false);
     }
-  }, [accessToken, dateValue.from, dateValue.to]);
+  }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID]);
 
   // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
@@ -371,9 +438,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return () => clearTimeout(timeoutId);
   }, [fetchUserSpendData]);
 
-  const modelMetrics = processActivityData(userSpendData, "models");
-  const keyMetrics = processActivityData(userSpendData, "api_keys");
-  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers");
+  const modelMetrics = processActivityData(userSpendData, "models", teams);
+  const keyMetrics = processActivityData(userSpendData, "api_keys", teams);
+  const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers", teams);
 
   return (
     <div style={{ width: "100%" }} className="p-8 relative">
@@ -419,17 +486,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       <div className="flex items-end justify-between gap-6 mb-6">
         <div className="flex-1">
           <div className="flex items-end justify-between gap-6 mb-4 w-full">
-            <Badge color="blue" count="New">
-              <UsageViewSelect
-                value={usageView}
-                onChange={(value) => setUsageView(value)}
-                isAdmin={all_admin_roles.includes(userRole || "")}
-              />
-            </Badge>
+            <UsageViewSelect
+              value={usageView}
+              onChange={(value) => setUsageView(value)}
+              isAdmin={isAdmin}
+            />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
           {/* Your Usage Panel */}
           {usageView === "global" && (
+            <>
             <TabGroup>
               <div className="flex justify-between items-center">
                 <TabList variant="solid" className="mt-1">
@@ -437,6 +503,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <Tab>Model Activity</Tab>
                   <Tab>Key Activity</Tab>
                   <Tab>MCP Server Activity</Tab>
+                  <Tab>Endpoint Activity</Tab>
                 </TabList>
                 <Button
                   onClick={() => setIsGlobalExportModalOpen(true)}
@@ -460,26 +527,67 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <Grid numItems={2} className="gap-2 w-full">
                     {/* Total Spend Card */}
                     <Col numColSpan={2}>
-                      <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
-                        Project Spend{" "}
-                        {dateValue.from && dateValue.to && (
-                          <>
-                            {dateValue.from.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
-                            })}
-                            {" - "}
-                            {dateValue.to.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            })}
-                          </>
+                      <div className="flex items-center gap-4 mt-2 mb-2">
+                        <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content text-lg">
+                          Project Spend{" "}
+                          {dateValue.from && dateValue.to && (
+                            <>
+                              {dateValue.from.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
+                              })}
+                              {" - "}
+                              {dateValue.to.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })}
+                            </>
+                          )}
+                        </Text>
+                        {isAdmin && (
+                          <div className="flex items-center gap-2">
+                            <UserOutlined style={{ fontSize: "14px", color: "#6b7280" }} />
+                            <Select
+                              showSearch
+                              allowClear
+                              style={{ width: 300 }}
+                              placeholder="All Users (Global View)"
+                              value={selectedUserId}
+                              onChange={(value) => setSelectedUserId(value ?? null)}
+                              filterOption={false}
+                              onSearch={handleUserSearchChange}
+                              searchValue={userSearchInput}
+                              onPopupScroll={handleUserPopupScroll}
+                              loading={isLoadingUsers}
+                              notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
+                              options={userOptions}
+                              popupRender={(menu) => (
+                                <>
+                                  {menu}
+                                  {isFetchingNextUsersPage && (
+                                    <div style={{ textAlign: "center", padding: 8 }}>
+                                      <LoadingOutlined spin />
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            />
+                            {selectedUserId && (
+                              <span className="text-xs text-gray-500">
+                                Filtering by user
+                              </span>
+                            )}
+                          </div>
                         )}
-                      </Text>
+                      </div>
 
-                      <ViewUserSpend userSpend={totalSpend} selectedTeam={null} userMaxBudget={null} />
+                      <ViewUserSpend
+                        userSpend={totalSpend}
+                        selectedTeam={null}
+                        userMaxBudget={currentUser?.max_budget || null}
+                      />
                     </Col>
 
                     <Col numColSpan={2}>
@@ -499,7 +607,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </Text>
                           </Card>
                           <Card>
-                            <Title>Failed Requests</Title>
+                            <div className="flex items-center gap-2">
+                              <Title>Failed Requests</Title>
+                              <Tooltip title="Includes requests that failed to route to a provider, tool usage failures, and other request errors where the provider cannot be determined.">
+                                <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
+                              </Tooltip>
+                            </div>
                             <Text className="text-2xl font-bold mt-2 text-red-600">
                               {userSpendData.metadata?.total_failed_requests?.toLocaleString() || 0}
                             </Text>
@@ -565,32 +678,45 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     <Col numColSpan={1}>
                       <Card className="h-full">
                         <Title>Top Virtual Keys</Title>
-                        <TopKeyView topKeys={getTopKeys()} teams={null} />
+                        <TopKeyView
+                          topKeys={getTopKeys(topKeysLimit)}
+                          teams={null}
+                          topKeysLimit={topKeysLimit}
+                          setTopKeysLimit={setTopKeysLimit}
+                        />
                       </Card>
                     </Col>
 
                     {/* Top Models */}
                     <Col numColSpan={1}>
                       <Card className="h-full">
+                        <Title>{modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}</Title>
                         <div className="flex justify-between items-center mb-4">
-                          <Title>{modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}</Title>
+                          <Segmented
+                            options={[
+                              { label: "5", value: 5 },
+                              { label: "10", value: 10 },
+                              { label: "25", value: 25 },
+                              { label: "50", value: 50 },
+                            ]}
+                            value={topModelsLimit}
+                            onChange={(value) => setTopModelsLimit(value as number)}
+                          />
                           <div className="flex bg-gray-100 rounded-lg p-1">
                             <button
-                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                modelViewType === "groups"
-                                  ? "bg-white shadow-sm text-gray-900"
-                                  : "text-gray-600 hover:text-gray-900"
-                              }`}
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${modelViewType === "groups"
+                                ? "bg-white shadow-sm text-gray-900"
+                                : "text-gray-600 hover:text-gray-900"
+                                }`}
                               onClick={() => setModelViewType("groups")}
                             >
                               Public Model Name
                             </button>
                             <button
-                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                modelViewType === "individual"
-                                  ? "bg-white shadow-sm text-gray-900"
-                                  : "text-gray-600 hover:text-gray-900"
-                              }`}
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${modelViewType === "individual"
+                                ? "bg-white shadow-sm text-gray-900"
+                                : "text-gray-600 hover:text-gray-900"
+                                }`}
                               onClick={() => setModelViewType("individual")}
                             >
                               Litellm Model Name
@@ -600,112 +726,57 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         {loading ? (
                           <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
-                          <BarChart
-                            className="mt-4 h-40"
-                            data={modelViewType === "groups" ? getTopModelGroups() : getTopModels()}
-                            index="key"
-                            categories={["spend"]}
-                            colors={["cyan"]}
-                            valueFormatter={valueFormatterSpend}
-                            layout="vertical"
-                            yAxisWidth={200}
-                            showLegend={false}
-                            customTooltip={({ payload, active }) => {
-                              if (!active || !payload?.[0]) return null;
-                              const data = payload[0].payload;
+                          <div className="relative max-h-[600px] overflow-y-auto">
+                            {(() => {
+                              const modelData =
+                                modelViewType === "groups"
+                                  ? getTopModelGroups(topModelsLimit)
+                                  : getTopModels(topModelsLimit);
                               return (
-                                <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                  <p className="font-bold">{data.key}</p>
-                                  <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
-                                  <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
-                                  <p className="text-green-600">
-                                    Successful: {data.successful_requests.toLocaleString()}
-                                  </p>
-                                  <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
-                                  <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                                </div>
+                                <BarChart
+                                  className="mt-4"
+                                  style={{ height: Math.min(modelData.length, topModelsLimit) * 52 }}
+                                  data={modelData}
+                                  index="key"
+                                  categories={["spend"]}
+                                  colors={["cyan"]}
+                                  valueFormatter={valueFormatterSpend}
+                                  layout="vertical"
+                                  yAxisWidth={200}
+                                  showLegend={false}
+                                  customTooltip={({ payload, active }) => {
+                                    if (!active || !payload?.[0]) return null;
+                                    const data = payload[0].payload;
+                                    return (
+                                      <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                        <p className="font-bold">{data.key}</p>
+                                        <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
+                                        <p className="text-gray-600">
+                                          Total Requests: {data.requests.toLocaleString()}
+                                        </p>
+                                        <p className="text-green-600">
+                                          Successful: {data.successful_requests.toLocaleString()}
+                                        </p>
+                                        <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
+                                        <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                                      </div>
+                                    );
+                                  }}
+                                />
                               );
-                            }}
-                          />
+                            })()}
+                          </div>
                         )}
                       </Card>
                     </Col>
 
                     {/* Spend by Provider */}
                     <Col numColSpan={2}>
-                      <Card className="h-full">
-                        <div className="flex justify-between items-center mb-4">
-                          <Title>Spend by Provider</Title>
-                        </div>
-                        {loading ? (
-                          <ChartLoader isDateChanging={isDateChanging} />
-                        ) : (
-                          <Grid numItems={2}>
-                            <Col numColSpan={1}>
-                              <DonutChart
-                                className="mt-4 h-40"
-                                data={getProviderSpend()}
-                                index="provider"
-                                category="spend"
-                                valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                                colors={["cyan"]}
-                              />
-                            </Col>
-                            <Col numColSpan={1}>
-                              <Table>
-                                <TableHead>
-                                  <TableRow>
-                                    <TableHeaderCell>Provider</TableHeaderCell>
-                                    <TableHeaderCell>Spend</TableHeaderCell>
-                                    <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                                    <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                                    <TableHeaderCell>Tokens</TableHeaderCell>
-                                  </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                  {getProviderSpend()
-                                    .filter((provider) => provider.spend > 0)
-                                    .map((provider) => (
-                                      <TableRow key={provider.provider}>
-                                        <TableCell>
-                                          <div className="flex items-center space-x-2">
-                                            {provider.provider && (
-                                              <img
-                                                src={getProviderLogoAndName(provider.provider).logo}
-                                                alt={`${provider.provider} logo`}
-                                                className="w-4 h-4"
-                                                onError={(e) => {
-                                                  const target = e.target as HTMLImageElement;
-                                                  const parent = target.parentElement;
-                                                  if (parent) {
-                                                    const fallbackDiv = document.createElement("div");
-                                                    fallbackDiv.className =
-                                                      "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                                    fallbackDiv.textContent = provider.provider?.charAt(0) || "-";
-                                                    parent.replaceChild(fallbackDiv, target);
-                                                  }
-                                                }}
-                                              />
-                                            )}
-                                            <span>{provider.provider}</span>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
-                                        <TableCell className="text-green-600">
-                                          {provider.successful_requests.toLocaleString()}
-                                        </TableCell>
-                                        <TableCell className="text-red-600">
-                                          {provider.failed_requests.toLocaleString()}
-                                        </TableCell>
-                                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                                      </TableRow>
-                                    ))}
-                                </TableBody>
-                              </Table>
-                            </Col>
-                          </Grid>
-                        )}
-                      </Card>
+                      <SpendByProvider
+                        loading={loading}
+                        isDateChanging={isDateChanging}
+                        providerSpend={getProviderSpend()}
+                      />
                     </Col>
 
                     {/* Usage Metrics */}
@@ -722,39 +793,30 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 <TabPanel>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
                 </TabPanel>
+                <TabPanel>
+                  <EndpointUsage userSpendData={userSpendData} />
+                </TabPanel>
               </TabPanels>
             </TabGroup>
+            </>
           )}
           {/* Organization Usage Panel */}
 
           {usageView === "organization" && (
-            <>
-              {showOrganizationBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Organization usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowOrganizationBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="organization"
-                userID={userID}
-                userRole={userRole}
-                dateValue={dateValue}
-                entityList={
-                  organizations?.map((organization) => ({
-                    label: organization.organization_alias,
-                    value: organization.organization_id,
-                  })) || null
-                }
-                premiumUser={premiumUser}
-              />
-            </>
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="organization"
+              userID={userID}
+              userRole={userRole}
+              dateValue={dateValue}
+              entityList={
+                organizations?.map((organization) => ({
+                  label: organization.organization_alias,
+                  value: organization.organization_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+            />
           )}
 
           {/* Team Usage Panel */}
@@ -777,71 +839,64 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
           {/* Customer Usage Panel */}
           {usageView === "customer" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="customer"
+              userID={userID}
+              userRole={userRole}
+              entityList={
+                customers?.map((customer) => ({
+                  label: customer.alias || customer.user_id,
+                  value: customer.user_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
+          )}
+          {/* Tag Usage Panel */}
+          {usageView === "tag" && (
             <>
-              {showCustomerBanner && (
+              {showCredentialBanner && (
                 <Alert
                   banner
                   type="info"
-                  message="Customer usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
+                  message="Reusable credentials are automatically tracked as tags"
+                  description={
+                    <Typography.Text>
+                      When a reusable credential is used, it will appear as a tag prefixed with{" "}
+                      <Typography.Text code>Credential: </Typography.Text>
+                      in this view.
+                    </Typography.Text>
+                  }
                   closable
-                  onClose={() => setShowCustomerBanner(false)}
+                  onClose={() => setShowCredentialBanner(false)}
                   className="mb-5"
                 />
               )}
               <EntityUsage
                 accessToken={accessToken}
-                entityType="customer"
+                entityType="tag"
                 userID={userID}
                 userRole={userRole}
-                entityList={
-                  customers?.map((customer) => ({
-                    label: customer.alias || customer.user_id,
-                    value: customer.user_id,
-                  })) || null
-                }
+                entityList={allTags}
                 premiumUser={premiumUser}
                 dateValue={dateValue}
               />
             </>
           )}
-          {/* Tag Usage Panel */}
-          {usageView === "tag" && (
+          {usageView === "agent" && (
             <EntityUsage
               accessToken={accessToken}
-              entityType="tag"
+              entityType="agent"
               userID={userID}
               userRole={userRole}
-              entityList={allTags}
+              entityList={
+                agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
+              }
               premiumUser={premiumUser}
               dateValue={dateValue}
             />
-          )}
-          {usageView === "agent" && (
-            <>
-              {showAgentBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Agent usage (A2A) is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowAgentBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="agent"
-                userID={userID}
-                userRole={userRole}
-                entityList={
-                  agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
-                }
-                premiumUser={premiumUser}
-                dateValue={dateValue}
-              />{" "}
-            </>
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (

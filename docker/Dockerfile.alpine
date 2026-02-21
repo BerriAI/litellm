@@ -34,8 +34,8 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
-# Update dependencies and clean up
-RUN apk upgrade --no-cache
+# Update dependencies and clean up, install libsndfile for audio processing
+RUN apk upgrade --no-cache && apk add --no-cache libsndfile
 
 WORKDIR /app
 
@@ -46,8 +46,9 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x docker/prod_entrypoint.sh
+# Convert Windows line endings to Unix for entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
+RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 

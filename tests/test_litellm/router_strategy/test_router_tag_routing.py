@@ -313,17 +313,31 @@ async def test_error_from_tag_routing():
 
 def test_tag_routing_with_list_of_tags():
     """
-    Test that the router can handle a list of tags
+    Test that the router can handle a list of tags with match_any behavior
     """
     from litellm.router_strategy.tag_based_routing import is_valid_deployment_tag
 
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA"])
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamB"])
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"])
+    assert is_valid_deployment_tag(["teamA"], ["teamA", "teamB"])
     assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamC"])
     assert not is_valid_deployment_tag(["teamA", "teamB"], [])
     assert not is_valid_deployment_tag(["default"], ["teamA"])
 
+def test_tag_routing_with_list_of_tags_match_all():
+    """
+    Test that the router can handle a list of tags with match_all behavior
+    """
+    from litellm.router_strategy.tag_based_routing import is_valid_deployment_tag
+
+    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA"], match_any=False)
+    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamB"], match_any=False)
+    assert not is_valid_deployment_tag(["teamA", "teamB", "teamC"], ["teamA", "teamD"], match_any=False)
+    assert not is_valid_deployment_tag(["teamA"], ["teamA", "teamB"], match_any=False)
+    assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"], match_any=False)
+    assert not is_valid_deployment_tag(["teamA", "teamB"], [], match_any=False)
+    assert not is_valid_deployment_tag(["default"], ["teamA"], match_any=False)
 
 @pytest.mark.asyncio()
 async def test_router_free_paid_tier_with_responses_api():

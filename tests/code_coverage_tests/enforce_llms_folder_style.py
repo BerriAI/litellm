@@ -12,8 +12,11 @@ SEARCH_PROVIDERS = [
     "google_pse",
     "parallel_ai",
     "exa_ai",
+    "brave",
     "firecrawl",
     "searxng",
+    "linkup",
+    "duckduckgo",
 ]
 
 ALLOWED_FILES_IN_LLMS_FOLDER = [
@@ -71,8 +74,8 @@ def run_lint_check(unique_names):
 
 
 def main():
-    llms_dir = "./litellm/llms/"  # Update this path if needed
-    # llms_dir = "../../litellm/llms/"  # LOCAL TESTING
+    # llms_dir = "./litellm/llms/"  # Update this path if needed
+    llms_dir = "litellm/litellm/llms"  # LOCAL TESTING
 
     unique_names = get_unique_names_from_llms_dir(llms_dir)
     print("Unique names in llms directory:", sorted(list(unique_names)))

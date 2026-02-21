@@ -706,7 +706,7 @@ def _count_content_list(
             if isinstance(c, str):
                 num_tokens += count_function(c)
             elif c["type"] == "text":
-                num_tokens += count_function(c.get("text", ""))
+                num_tokens += count_function(str(c.get("text", "")))
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(
@@ -719,6 +719,12 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
+            elif c["type"] == "thinking":
+                # Claude extended thinking content block
+                # Count the thinking text and skip signature (opaque signature blob)
+                thinking_text = str(c.get("thinking", ""))
+                if thinking_text:
+                    num_tokens += count_function(thinking_text)
             else:
                 raise ValueError(
                     f"Invalid content item type: {type(c).__name__}. "

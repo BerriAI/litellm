@@ -440,6 +440,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "asearch",
             "avector_store_create",
             "avector_store_search",
+            "acreate_skill",
         ]
     ],
 )
@@ -482,6 +483,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
             "input_file_id": "123",
         },
         "aretrieve_batch": {"batch_id": "123"},
+        "acancel_batch": {"batch_id": "123"},
         "aget_assistants": {"custom_llm_provider": "azure"},
         "acreate_assistants": {"custom_llm_provider": "azure"},
         "adelete_assistant": {"custom_llm_provider": "azure", "assistant_id": "123"},
@@ -536,7 +538,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         patch_target = (
             "litellm.rerank_api.main.azure_rerank.initialize_azure_sdk_client"
         )
-    elif call_type == CallTypes.acreate_batch or call_type == CallTypes.aretrieve_batch:
+    elif call_type == CallTypes.acreate_batch or call_type == CallTypes.aretrieve_batch or call_type == CallTypes.acancel_batch:
         patch_target = (
             "litellm.batches.main.azure_batches_instance.initialize_azure_sdk_client"
         )
@@ -570,6 +572,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         or call_type == CallTypes.acreate_container
         or call_type == CallTypes.adelete_container
         or call_type == CallTypes.alist_container_files
+        or call_type == CallTypes.aupload_container_file
     ):
         # Skip container call types as they're not supported for Azure (only OpenAI)
         pytest.skip(f"Skipping {call_type.value} because Azure doesn't support container operations")
@@ -1540,3 +1543,119 @@ def test_is_azure_v1_api_version(api_version, expected):
     """
     result = BaseAzureLLM._is_azure_v1_api_version(api_version=api_version)
     assert result == expected
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_uses_openai_client(api_version):
+    """
+    Test that Azure v1 API versions use OpenAI client instead of AzureOpenAI.
+
+    When api_version is 'v1', 'latest', or 'preview', the client should be
+    instantiated as OpenAI/AsyncOpenAI with base_url pointing to /openai/v1/
+    instead of the traditional AzureOpenAI client with /deployments/ URL pattern.
+
+    See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
+    """
+    from openai import AsyncOpenAI, OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    # Test sync client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        # Should be OpenAI client, not AzureOpenAI
+        assert isinstance(client, OpenAI), f"Expected OpenAI client for api_version={api_version}"
+        # base_url should be /openai/v1/ (not /deployments/)
+        assert "/openai/v1/" in str(client.base_url), f"base_url should contain /openai/v1/, got {client.base_url}"
+
+    # Test async client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        async_client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+        # Should be AsyncOpenAI client, not AsyncAzureOpenAI
+        assert isinstance(async_client, AsyncOpenAI), f"Expected AsyncOpenAI client for api_version={api_version}"
+        # base_url should be /openai/v1/
+        assert "/openai/v1/" in str(async_client.base_url), f"base_url should contain /openai/v1/, got {async_client.base_url}"
+
+
+def test_azure_traditional_api_uses_azure_openai_client():
+    """
+    Test that traditional Azure API versions still use AzureOpenAI client.
+
+    When api_version is a dated version like '2023-05-15', the client should
+    be instantiated as AzureOpenAI/AsyncAzureOpenAI with the traditional
+    /deployments/ URL pattern.
+    """
+    from openai import AsyncAzureOpenAI, AzureOpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    api_version = "2023-05-15"
+
+    # Test sync client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        # Should be AzureOpenAI client
+        assert isinstance(client, AzureOpenAI), f"Expected AzureOpenAI client for api_version={api_version}"
+
+    # Test async client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        async_client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+        # Should be AsyncAzureOpenAI client
+        assert isinstance(async_client, AsyncAzureOpenAI), f"Expected AsyncAzureOpenAI client for api_version={api_version}"

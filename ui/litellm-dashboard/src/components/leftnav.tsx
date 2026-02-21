@@ -1,10 +1,14 @@
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
   AppstoreOutlined,
+  AuditOutlined,
   BankOutlined,
   BarChartOutlined,
   BgColorsOutlined,
   BlockOutlined,
+  BookOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -21,19 +25,21 @@ import {
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Badge, ConfigProvider, Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
+import { ConfigProvider, Layout, Menu } from "antd";
+import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
-import UsageIndicator from "./usage_indicator";
+import NewBadge from "./common_components/NewBadge";
+import type { Organization } from "./networking";
+import UsageIndicator from "./UsageIndicator";
 const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
-  accessToken: string | null;
   setPage: (page: string) => void;
-  userRole: string;
   defaultSelectedKey: string;
   collapsed?: boolean;
+  enabledPagesInternalUsers?: string[] | null;
 }
 
 // Menu item configuration
@@ -44,6 +50,7 @@ interface MenuItem {
   roles?: string[];
   children?: MenuItem[];
   icon?: React.ReactNode;
+  external_url?: string;
 }
 
 // Group configuration
@@ -53,7 +60,282 @@ interface MenuGroup {
   roles?: string[];
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defaultSelectedKey, collapsed = false }) => {
+// Menu groups organized by category - defined outside component for export
+const menuGroups: MenuGroup[] = [
+  {
+    groupLabel: "AI GATEWAY",
+    items: [
+      {
+        key: "api-keys",
+        page: "api-keys",
+        label: "Virtual Keys",
+        icon: <KeyOutlined />,
+      },
+      {
+        key: "llm-playground",
+        page: "llm-playground",
+        label: "Playground",
+        icon: <PlayCircleOutlined />,
+        roles: rolesWithWriteAccess,
+      },
+      {
+        key: "models",
+        page: "models",
+        label: "Models + Endpoints",
+        icon: <BlockOutlined />,
+        roles: rolesWithWriteAccess,
+      },
+      {
+        key: "agents",
+        page: "agents",
+        label: "Agents",
+        icon: <RobotOutlined />,
+        roles: rolesWithWriteAccess,
+      },
+      {
+        key: "mcp-servers",
+        page: "mcp-servers",
+        label: "MCP Servers",
+        icon: <ToolOutlined />,
+      },
+      {
+        key: "guardrails",
+        page: "guardrails",
+        label: "Guardrails",
+        icon: <SafetyOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "policies",
+        page: "policies",
+        label: (
+          <span className="flex items-center gap-4">
+            Policies
+          </span>
+        ),
+        icon: <AuditOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "tools",
+        page: "tools",
+        label: "Tools",
+        icon: <ToolOutlined />,
+        children: [
+          {
+            key: "search-tools",
+            page: "search-tools",
+            label: "Search Tools",
+            icon: <SearchOutlined />,
+          },
+          {
+            key: "vector-stores",
+            page: "vector-stores",
+            label: "Vector Stores",
+            icon: <DatabaseOutlined />,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "OBSERVABILITY",
+    items: [
+      {
+        key: "new_usage",
+        page: "new_usage",
+        icon: <BarChartOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+        label: "Usage",
+      },
+      {
+        key: "logs",
+        page: "logs",
+        label: "Logs",
+        icon: <LineChartOutlined />,
+      },
+    ],
+  },
+  {
+    groupLabel: "ACCESS CONTROL",
+    items: [
+      {
+        key: "users",
+        page: "users",
+        label: "Internal Users",
+        icon: <UserOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "teams",
+        page: "teams",
+        label: "Teams",
+        icon: <TeamOutlined />,
+      },
+      {
+        key: "organizations",
+        page: "organizations",
+        label: "Organizations",
+        icon: <BankOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "access-groups",
+        page: "access-groups",
+        label: (
+          <span className="flex items-center gap-2">
+            Access Groups <NewBadge />
+          </span>
+        ),
+        icon: <BlockOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "budgets",
+        page: "budgets",
+        label: "Budgets",
+        icon: <CreditCardOutlined />,
+        roles: all_admin_roles,
+      },
+    ],
+  },
+  {
+    groupLabel: "DEVELOPER TOOLS",
+    items: [
+      {
+        key: "api_ref",
+        page: "api_ref",
+        label: "API Reference",
+        icon: <ApiOutlined />,
+      },
+      {
+        key: "model-hub-table",
+        page: "model-hub-table",
+        label: "AI Hub",
+        icon: <AppstoreOutlined />,
+      },
+      {
+        key: "learning-resources",
+        page: "learning-resources",
+        label: "Learning Resources",
+        icon: <BookOutlined />,
+        external_url: "https://models.litellm.ai/cookbook",
+      },
+      {
+        key: "experimental",
+        page: "experimental",
+        label: "Experimental",
+        icon: <ExperimentOutlined />,
+        children: [
+          {
+            key: "caching",
+            page: "caching",
+            label: "Caching",
+            icon: <DatabaseOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "prompts",
+            page: "prompts",
+            label: "Prompts",
+            icon: <FileTextOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "transform-request",
+            page: "transform-request",
+            label: "API Playground",
+            icon: <ApiOutlined />,
+            roles: [...all_admin_roles, ...internalUserRoles],
+          },
+          {
+            key: "tag-management",
+            page: "tag-management",
+            label: "Tag Management",
+            icon: <TagsOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "claude-code-plugins",
+            page: "claude-code-plugins",
+            label: "Claude Code Plugins",
+            icon: <ToolOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "4",
+            page: "usage",
+            label: "Old Usage",
+            icon: <BarChartOutlined />,
+          }
+        ],
+      },
+    ],
+  },
+  {
+    groupLabel: "SETTINGS",
+    roles: all_admin_roles,
+    items: [
+      {
+        key: "settings",
+        page: "settings",
+        label: <span className="flex items-center gap-4">Settings</span>,
+        icon: <SettingOutlined />,
+        roles: all_admin_roles,
+        children: [
+          {
+            key: "router-settings",
+            page: "router-settings",
+            label: "Router Settings",
+            icon: <SettingOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "logging-and-alerts",
+            page: "logging-and-alerts",
+            label: "Logging & Alerts",
+            icon: <SettingOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "admin-panel",
+            page: "admin-panel",
+            label: "Admin Settings",
+            icon: <SettingOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "cost-tracking",
+            page: "cost-tracking",
+            label: "Cost Tracking",
+            icon: <BarChartOutlined />,
+            roles: all_admin_roles,
+          },
+          {
+            key: "ui-theme",
+            page: "ui-theme",
+            label: "UI Theme",
+            icon: <BgColorsOutlined />,
+            roles: all_admin_roles,
+          },
+        ],
+      },
+    ],
+  },
+];
+
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers }) => {
+  const { userId, accessToken, userRole } = useAuthorized();
+  const { data: organizations } = useOrganizations();
+
+  // Check if user is an org_admin
+  const isOrgAdmin = useMemo(() => {
+    if (!userId || !organizations) return false;
+    return organizations.some((org: Organization) =>
+      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
+    );
+  }, [userId, organizations]);
+
   // Navigate to page helper
   const navigateToPage = (page: string) => {
     const newSearchParams = new URLSearchParams(window.location.search);
@@ -62,251 +344,62 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
     setPage(page);
   };
 
-  // Menu groups organized by category
-  const menuGroups: MenuGroup[] = [
-    {
-      groupLabel: "AI GATEWAY",
-      items: [
-        {
-          key: "api-keys",
-          page: "api-keys",
-          label: "Virtual Keys",
-          icon: <KeyOutlined />,
-        },
-        {
-          key: "llm-playground",
-          page: "llm-playground",
-          label: "Playground",
-          icon: <PlayCircleOutlined />,
-          roles: rolesWithWriteAccess,
-        },
-        {
-          key: "models",
-          page: "models",
-          label: "Models + Endpoints",
-          icon: <BlockOutlined />,
-          roles: rolesWithWriteAccess,
-        },
-        {
-          key: "agents",
-          page: "agents",
-          label: (
-            <span className="flex items-center gap-4">
-              Agents <Badge color="blue" count="New" />
-            </span>
-          ),
-          icon: <RobotOutlined />,
-          roles: rolesWithWriteAccess,
-        },
-        {
-          key: "mcp-servers",
-          page: "mcp-servers",
-          label: "MCP Servers",
-          icon: <ToolOutlined />,
-        },
-        {
-          key: "guardrails",
-          page: "guardrails",
-          label: "Guardrails",
-          icon: <SafetyOutlined />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "tools",
-          page: "tools",
-          label: "Tools",
-          icon: <ToolOutlined />,
-          children: [
-            {
-              key: "search-tools",
-              page: "search-tools",
-              label: "Search Tools",
-              icon: <SearchOutlined />,
-            },
-            {
-              key: "vector-stores",
-              page: "vector-stores",
-              label: "Vector Stores",
-              icon: <DatabaseOutlined />,
-              roles: all_admin_roles,
-            },
-          ],
-        },
-      ],
-    },
-    {
-      groupLabel: "OBSERVABILITY",
-      items: [
-        {
-          key: "new_usage",
-          page: "new_usage",
-          icon: <BarChartOutlined />,
-          roles: [...all_admin_roles, ...internalUserRoles],
-          label: (
-            <span className="flex items-center gap-4">
-              Usage <Badge color="blue" count="New" />
-            </span>
-        ),
-        },
-        {
-          key: "logs",
-          page: "logs",
-          label: "Logs",
-          icon: <LineChartOutlined />,
-        },
-      ],
-    },
-    {
-      groupLabel: "ACCESS CONTROL",
-      items: [
-        {
-          key: "users",
-          page: "users",
-          label: "Internal Users",
-          icon: <UserOutlined />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "teams",
-          page: "teams",
-          label: "Teams",
-          icon: <TeamOutlined />,
-        },
-        {
-          key: "organizations",
-          page: "organizations",
-          label: "Organizations",
-          icon: <BankOutlined />,
-          roles: all_admin_roles,
-        },
-        {
-          key: "budgets",
-          page: "budgets",
-          label: "Budgets",
-          icon: <CreditCardOutlined />,
-          roles: all_admin_roles,
-        },
-      ],
-    },
-    {
-      groupLabel: "DEVELOPER TOOLS",
-      items: [
-        {
-          key: "api_ref",
-          page: "api_ref",
-          label: "API Reference",
-          icon: <ApiOutlined />,
-        },
-        {
-          key: "model-hub-table",
-          page: "model-hub-table",
-          label: "AI Hub",
-          icon: <AppstoreOutlined />,
-        },
-        {
-          key: "experimental",
-          page: "experimental",
-          label: "Experimental",
-          icon: <ExperimentOutlined />,
-          children: [
-            {
-              key: "caching",
-              page: "caching",
-              label: "Caching",
-              icon: <DatabaseOutlined />,
-              roles: all_admin_roles,
-            },
-            {
-              key: "prompts",
-              page: "prompts",
-              label: "Prompts",
-              icon: <FileTextOutlined />,
-              roles: all_admin_roles,
-            },
-            {
-              key: "transform-request",
-              page: "transform-request",
-              label: "API Playground",
-              icon: <ApiOutlined />,
-              roles: [...all_admin_roles, ...internalUserRoles],
-            },
-            {
-              key: "tag-management",
-              page: "tag-management",
-              label: "Tag Management",
-              icon: <TagsOutlined />,
-              roles: all_admin_roles,
-            },
-            {
-              key: "4",
-              page: "usage",
-              label: "Old Usage",
-              icon: <BarChartOutlined />,
-            },
-          ],
-        },
-      ],
-    },
-    {
-      groupLabel: "SETTINGS",
-      roles: all_admin_roles,
-      items: [
-        {
-          key: "settings",
-          page: "settings",
-          label: "Settings",
-          icon: <SettingOutlined />,
-          roles: all_admin_roles,
-          children: [
-            {
-              key: "router-settings",
-              page: "router-settings",
-              label: "Router Settings",
-              icon: <SettingOutlined />,
-              roles: all_admin_roles,
-            },
-            {
-              key: "logging-and-alerts",
-              page: "logging-and-alerts",
-              label: "Logging & Alerts",
-              icon: <SettingOutlined />,
-              roles: all_admin_roles,
-            },
-            {
-              key: "admin-panel",
-              page: "admin-panel",
-              label: "Admin Settings",
-              icon: <SettingOutlined />,
-              roles: all_admin_roles,
-            },
-            {
-              key: "cost-tracking",
-              page: "cost-tracking",
-              label: "Cost Tracking",
-              icon: <BarChartOutlined />,
-              roles: all_admin_roles,
-            },
-            {
-              key: "ui-theme",
-              page: "ui-theme",
-              label: "UI Theme",
-              icon: <BgColorsOutlined />,
-              roles: all_admin_roles,
-            },
-          ],
-        },
-      ],
-    },
-  ];
-
-  // Filter items based on user role
+  // Filter items based on user role and enabled pages for internal users
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
+    const isAdmin = isAdminRole(userRole);
+
+    // Debug logging
+    if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
+      console.log("[LeftNav] Filtering with enabled pages:", {
+        userRole,
+        isAdmin,
+        enabledPagesInternalUsers,
+      });
+    }
+
     return items
-      .filter((item) => !item.roles || item.roles.includes(userRole))
       .map((item) => ({
         ...item,
         children: item.children ? filterItemsByRole(item.children) : undefined,
-      }));
+      }))
+      .filter((item) => {
+        // Special handling for organizations menu item - allow org_admins
+        if (item.key === "organizations") {
+          const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
+          if (!hasRoleAccess) return false;
+
+          // Check enabled pages for internal users (non-admins)
+          if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
+            const isIncluded = enabledPagesInternalUsers.includes(item.page);
+            console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
+            return isIncluded;
+          }
+          return true;
+        }
+
+        // Existing role check
+        if (item.roles && !item.roles.includes(userRole)) return false;
+
+        // Check enabled pages for internal users (non-admins)
+        if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
+          // If item has children, check if any children are visible
+          if (item.children && item.children.length > 0) {
+            const hasVisibleChildren = item.children.some((child) =>
+              enabledPagesInternalUsers.includes(child.page)
+            );
+            if (hasVisibleChildren) {
+              console.log(`[LeftNav] Parent "${item.page}" (${item.key}): VISIBLE (has visible children)`);
+              return true;
+            }
+          }
+
+          const isIncluded = enabledPagesInternalUsers.includes(item.page);
+          console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
+          return isIncluded;
+        }
+
+        return true;
+      });
   };
 
   // Build menu items with groups
@@ -348,9 +441,23 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
             key: child.key,
             icon: child.icon,
             label: child.label,
-            onClick: () => navigateToPage(child.page),
+            onClick: () => {
+              if (child.external_url) {
+                window.open(child.external_url, "_blank");
+              } else {
+                navigateToPage(child.page);
+              }
+            },
           })),
-          onClick: !item.children ? () => navigateToPage(item.page) : undefined,
+          onClick: !item.children
+            ? () => {
+              if (item.external_url) {
+                window.open(item.external_url, "_blank");
+              } else {
+                navigateToPage(item.page);
+              }
+            }
+            : undefined,
         })),
       });
     });
@@ -427,3 +534,6 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
 };
 
 export default Sidebar;
+
+// Also export menuGroups for advanced use cases
+export { menuGroups };

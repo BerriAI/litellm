@@ -34,6 +34,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
 )
@@ -43,7 +44,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
-        AnthropicResponseTextBlock,
     )
 
 
@@ -75,9 +75,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request = (
+        chat_completion_compatible_request, tool_name_mapping = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                anthropic_message_request=cast(AnthropicMessagesRequest, data)
+                # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
+                anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
             )
         )
 
@@ -85,9 +86,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tools_to_check: List[ChatCompletionToolParam] = (
-            chat_completion_compatible_request.get("tools", [])
-        )
+        tools_to_check: List[
+            ChatCompletionToolParam
+        ] = chat_completion_compatible_request.get("tools", [])
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
@@ -111,6 +112,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["tools"] = tools_to_check
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
+            # Include model information if available
+            model = data.get("model")
+            if model:
+                inputs["model"] = model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -119,6 +124,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_tools = guardrailed_inputs.get("tools")
+            if guardrailed_tools is not None:
+                data["tools"] = guardrailed_tools
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(
@@ -189,7 +197,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             openai_tools = self.adapter.translate_anthropic_tools_to_openai(
                 tools=cast(List[AllAnthropicToolsValues], tools)
             )
-            tools_to_check.extend(openai_tools)
+            tools_to_check.extend(openai_tools) # type: ignore
 
     async def _apply_guardrail_responses_to_input(
         self,
@@ -253,20 +261,42 @@ class AnthropicMessagesHandler(BaseTranslation):
         task_mappings: List[Tuple[int, Optional[int]]] = []
         # Track (content_index, None) for each text
 
-        response_content = response.get("content", [])
+        # Handle both dict and object responses
+        response_content: List[Any] = []
+        if isinstance(response, dict):
+            response_content = response.get("content", []) or []
+        elif hasattr(response, "content"):
+            content = getattr(response, "content", None)
+            response_content = content or []
+        else:
+            response_content = []
+
         if not response_content:
             return response
 
         # Step 1: Extract all text content and tool calls from response
         for content_idx, content_block in enumerate(response_content):
-            # Check if this is a text or tool_use block by checking the 'type' field
-            if isinstance(content_block, dict) and content_block.get("type") in [
-                "text",
-                "tool_use",
-            ]:
-                # Cast to dict to handle the union type properly
+            # Handle both dict and Pydantic object content blocks
+            block_dict: Dict[str, Any] = {}
+            if isinstance(content_block, dict):
+                block_type = content_block.get("type")
+                block_dict = cast(Dict[str, Any], content_block)
+            elif hasattr(content_block, "type"):
+                block_type = getattr(content_block, "type", None)
+                # Convert Pydantic object to dict for processing
+                if hasattr(content_block, "model_dump"):
+                    block_dict = content_block.model_dump()
+                else:
+                    block_dict = {
+                        "type": block_type,
+                        "text": getattr(content_block, "text", None),
+                    }
+            else:
+                continue
+
+            if block_type in ["text", "tool_use"]:
                 self._extract_output_text_and_images(
-                    content_block=cast(Dict[str, Any], content_block),
+                    content_block=block_dict,
                     content_idx=content_idx,
                     texts_to_check=texts_to_check,
                     images_to_check=images_to_check,
@@ -291,6 +321,14 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
+            # Include model information from the response if available
+            response_model = None
+            if isinstance(response, dict):
+                response_model = response.get("model")
+            elif hasattr(response, "model"):
+                response_model = getattr(response, "model", None)
+            if response_model:
+                inputs["model"] = response_model
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -328,30 +366,40 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
-
             # build the model response from the responses_so_far
-            model_response = cast(
-                ModelResponse,
-                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                    all_chunks=responses_so_far,
-                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
-                    model="",
-                ),
+            built_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=responses_so_far,
+                litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                model="",
             )
-            tool_calls_list = cast(Optional[List[ChatCompletionMessageToolCall]], model_response.choices[0].message.tool_calls)  # type: ignore
-            string_so_far = model_response.choices[0].message.content  # type: ignore
-            guardrail_inputs = GenericGuardrailAPIInputs()
-            if string_so_far:
-                guardrail_inputs["texts"] = [string_so_far]
-            if tool_calls_list:
-                guardrail_inputs["tool_calls"] = tool_calls_list
 
-            _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
-                inputs=guardrail_inputs,
-                request_data={},
-                input_type="response",
-                logging_obj=litellm_logging_obj,
-            )
+            # Check if model_response is valid and has choices before accessing
+            if (
+                built_response is not None
+                and hasattr(built_response, "choices")
+                and built_response.choices
+            ):
+                model_response = cast(ModelResponse, built_response)
+                first_choice = cast(Choices, model_response.choices[0])
+                tool_calls_list = cast(
+                    Optional[List[ChatCompletionMessageToolCall]],
+                    first_choice.message.tool_calls,
+                )
+                string_so_far = first_choice.message.content
+                guardrail_inputs = GenericGuardrailAPIInputs()
+                if string_so_far:
+                    guardrail_inputs["texts"] = [string_so_far]
+                if tool_calls_list:
+                    guardrail_inputs["tool_calls"] = tool_calls_list
+
+                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                    inputs=guardrail_inputs,
+                    request_data={},
+                    input_type="response",
+                    logging_obj=litellm_logging_obj,
+                )
+            else:
+                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
@@ -530,7 +578,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         Override this method to customize text content detection.
         """
-        response_content = response.get("content", [])
+        if isinstance(response, dict):
+            response_content = response.get("content", [])
+        else:
+            response_content = getattr(response, "content", None) or []
+
         if not response_content:
             return False
         for content_block in response_content:
@@ -590,7 +642,16 @@ class AnthropicMessagesHandler(BaseTranslation):
             mapping = task_mappings[task_idx]
             content_idx = cast(int, mapping[0])
 
-            response_content = response.get("content", [])
+            # Handle both dict and object responses
+            response_content: List[Any] = []
+            if isinstance(response, dict):
+                response_content = response.get("content", []) or []
+            elif hasattr(response, "content"):
+                content = getattr(response, "content", None)
+                response_content = content or []
+            else:
+                continue
+
             if not response_content:
                 continue
 
@@ -601,7 +662,14 @@ class AnthropicMessagesHandler(BaseTranslation):
             content_block = response_content[content_idx]
 
             # Verify it's a text block and update the text field
-            if isinstance(content_block, dict) and content_block.get("type") == "text":
-                # Cast to dict to handle the union type properly for assignment
-                content_block = cast("AnthropicResponseTextBlock", content_block)
-                content_block["text"] = guardrail_response
+            # Handle both dict and Pydantic object content blocks
+            if isinstance(content_block, dict):
+                if content_block.get("type") == "text":
+                    cast(Dict[str, Any], content_block)["text"] = guardrail_response
+            elif (
+                hasattr(content_block, "type")
+                and getattr(content_block, "type", None) == "text"
+            ):
+                # Update Pydantic object's text attribute
+                if hasattr(content_block, "text"):
+                    content_block.text = guardrail_response

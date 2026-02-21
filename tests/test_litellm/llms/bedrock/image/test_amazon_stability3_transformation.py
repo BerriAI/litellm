@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
-from litellm.llms.bedrock.image.amazon_stability3_transformation import (
+from litellm.llms.bedrock.image_generation.amazon_stability3_transformation import (
     AmazonStability3Config,
 )
 

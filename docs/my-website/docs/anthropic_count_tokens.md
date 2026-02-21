@@ -92,6 +92,7 @@ model_list:
       model: vertex_ai/claude-3-5-sonnet-v2@20241022
       vertex_project: my-project
       vertex_location: us-east5
+      vertex_count_tokens_location: us-east5 # Optional: Override location for token counting (count_tokens not available on global location)
 
   - model_name: claude-bedrock
     litellm_params:

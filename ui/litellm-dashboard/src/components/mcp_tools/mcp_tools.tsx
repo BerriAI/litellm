@@ -5,7 +5,8 @@ import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from ".
 import { listMCPTools, callMCPTool } from "../networking";
 
 import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined } from "@ant-design/icons";
+import { RobotOutlined, ToolOutlined, SearchOutlined } from "@ant-design/icons";
+import { Input } from "antd";
 
 const MCPToolsViewer = ({
   serverId,
@@ -18,6 +19,7 @@ const MCPToolsViewer = ({
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
+  const [toolSearchTerm, setToolSearchTerm] = useState("");
 
   // Query to fetch MCP tools
   const {
@@ -40,7 +42,7 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result: CallMCPToolResponse = await callMCPTool(accessToken, args.tool.name, args.arguments);
+        const result: CallMCPToolResponse = await callMCPTool(accessToken, serverId, args.tool.name, args.arguments);
         return result;
       } catch (error) {
         throw error;
@@ -57,6 +59,16 @@ const MCPToolsViewer = ({
   });
 
   const toolsData = mcpToolsResponse?.tools || [];
+
+  // Filter tools based on search term
+  const filteredTools = toolsData.filter((tool: MCPTool) => {
+    const searchLower = toolSearchTerm.toLowerCase();
+    return (
+      tool.name.toLowerCase().includes(searchLower) ||
+      (tool.description && tool.description.toLowerCase().includes(searchLower)) ||
+      (tool.mcp_info.server_name && tool.mcp_info.server_name.toLowerCase().includes(searchLower))
+    );
+  });
 
   return (
     <div className="w-full h-screen p-4 bg-white">
@@ -77,6 +89,21 @@ const MCPToolsViewer = ({
                     </span>
                   )}
                 </Text>
+
+                {/* Search Bar */}
+                {toolsData.length > 0 && (
+                  <div className="mb-3">
+                    <Input
+                      placeholder="Search tools..."
+                      prefix={<SearchOutlined className="text-gray-400" />}
+                      value={toolSearchTerm}
+                      onChange={(e) => setToolSearchTerm(e.target.value)}
+                      allowClear
+                      className="rounded-lg"
+                      size="middle"
+                    />
+                  </div>
+                )}
 
                 {/* Loading State */}
                 {isLoadingTools && (
@@ -116,22 +143,29 @@ const MCPToolsViewer = ({
 
                 {/* Tools List */}
                 {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
-                  <div
-                    className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
-                    style={{
-                      maxHeight: "400px",
-                      scrollbarWidth: "auto",
-                      scrollbarColor: "#cbd5e0 #f7fafc",
-                    }}
-                  >
-                    {toolsData.map((tool: MCPTool) => (
+                  <>
+                    {filteredTools.length === 0 ? (
+                      <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                        <SearchOutlined className="text-2xl text-gray-400 mb-2" />
+                        <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
+                        <p className="text-xs text-gray-500">No tools match "{toolSearchTerm}"</p>
+                      </div>
+                    ) : (
+                      <div
+                        className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
+                        style={{
+                          maxHeight: "400px",
+                          scrollbarWidth: "auto",
+                          scrollbarColor: "#cbd5e0 #f7fafc",
+                        }}
+                      >
+                        {filteredTools.map((tool: MCPTool) => (
                       <div
                         key={tool.name}
-                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
-                          selectedTool?.name === tool.name
+                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${selectedTool?.name === tool.name
                             ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
                             : "border-gray-200 bg-white hover:border-gray-300"
-                        }`}
+                          }`}
                         onClick={() => {
                           setSelectedTool(tool);
                           setToolResult(null);
@@ -169,8 +203,10 @@ const MCPToolsViewer = ({
                           </div>
                         )}
                       </div>
-                    ))}
-                  </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>

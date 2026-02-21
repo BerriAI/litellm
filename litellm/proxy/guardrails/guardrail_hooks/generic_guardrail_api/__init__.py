@@ -13,9 +13,13 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     _generic_guardrail_api_callback = GenericGuardrailAPI(
         api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
         headers=getattr(litellm_params, "headers", None),
         additional_provider_specific_params=getattr(
             litellm_params, "additional_provider_specific_params", {}
+        ),
+        unreachable_fallback=getattr(
+            litellm_params, "unreachable_fallback", "fail_closed"
         ),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

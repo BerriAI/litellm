@@ -1,25 +1,24 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
-import {
-  modelHubPublicModelsCall,
-  getPublicModelHubInfo,
-  agentHubPublicModelsCall,
-  mcpHubPublicServersCall,
-  getUiConfig,
-} from "./networking";
-import { ModelDataTable } from "./model_dashboard/table";
-import { ColumnDef } from "@tanstack/react-table";
-import { Card, Text, Title, Button } from "@tremor/react";
-import { Tag, Tooltip, Modal, Select, Tabs } from "antd";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
+import { ColumnDef } from "@tanstack/react-table";
+import { Button, Card, Text, Title } from "@tremor/react";
+import { Modal, Select, Tabs, Tag, Tooltip } from "antd";
 import { Copy, Info } from "lucide-react";
-import { Table as TableInstance } from "@tanstack/react-table";
+import React, { useEffect, useMemo, useState } from "react";
+import { ModelDataTable } from "./model_dashboard/table";
+import NotificationsManager from "./molecules/notifications_manager";
+import Navbar from "./navbar";
+import {
+  agentHubPublicModelsCall,
+  getPublicModelHubInfo,
+  getUiConfig,
+  mcpHubPublicServersCall,
+  modelHubPublicModelsCall,
+} from "./networking";
 import { generateCodeSnippet } from "./playground/chat_ui/CodeSnippets";
 import { getEndpointType } from "./playground/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "./playground/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import Navbar from "./navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
-import NotificationsManager from "./molecules/notifications_manager";
 
 const { TabPane } = Tabs;
 
@@ -37,6 +36,9 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
+  health_status?: string;
+  health_response_time?: number;
+  health_checked_at?: string;
   [key: string]: any;
 }
 
@@ -118,9 +120,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [proxySettings, setProxySettings] = useState<any>({});
   const [activeTab, setActiveTab] = useState<string>("models");
-  const tableRef = useRef<TableInstance<any>>(null);
-  const agentTableRef = useRef<TableInstance<any>>(null);
-  const mcpTableRef = useRef<TableInstance<any>>(null);
 
   useEffect(() => {
     const initializeAndFetch = async () => {
@@ -251,7 +250,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   };
 
   const filteredData = useMemo(() => {
-    if (!modelHubData) return [];
+    if (!modelHubData || !Array.isArray(modelHubData)) return [];
 
     let searchResults = modelHubData;
 
@@ -325,7 +324,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   }, [modelHubData, searchTerm, selectedProviders, selectedModes, selectedFeatures]);
 
   const filteredAgentData = useMemo(() => {
-    if (!agentHubData) return [];
+    if (!agentHubData || !Array.isArray(agentHubData)) return [];
 
     let searchResults = agentHubData;
 
@@ -376,7 +375,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   }, [agentHubData, agentSearchTerm, selectedAgentSkills]);
 
   const filteredMcpData = useMemo(() => {
-    if (!mcpHubData) return [];
+    if (!mcpHubData || !Array.isArray(mcpHubData)) return [];
 
     let searchResults = mcpHubData;
 
@@ -692,6 +691,38 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       size: 120,
     },
     {
+      header: "Health Status",
+      accessorKey: "health_status",
+      enableSorting: true,
+      cell: ({ row }) => {
+        const original = row.original;
+        const tagColor =
+          original.health_status === "healthy" ? "green" : original.health_status === "unhealthy" ? "red" : "default";
+        const responseTimeLabel = original.health_response_time
+          ? `Response Time: ${Number(original.health_response_time).toFixed(2)}ms`
+          : "N/A";
+        const lastCheckedLabel = original.health_checked_at
+          ? `Last Checked: ${new Date(original.health_checked_at).toLocaleString()}`
+          : "N/A";
+
+        return (
+          <Tooltip
+            title={
+              <>
+                <div>{responseTimeLabel}</div>
+                <div>{lastCheckedLabel}</div>
+              </>
+            }
+          >
+            <Tag key={original.model_group} color={tagColor}>
+              <span className="capitalize">{original.health_status ?? "Unknown"}</span>
+            </Tag>
+          </Tooltip>
+        );
+      },
+      size: 100,
+    },
+    {
       header: "Limits",
       accessorKey: "rpm",
       enableSorting: true,
@@ -942,6 +973,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
+            isDarkMode={false}
+            toggleDarkMode={() => {}}
           />
         )}
 
@@ -1070,6 +1103,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       }}
                     >
                       {modelHubData &&
+                        Array.isArray(modelHubData) &&
                         getUniqueProviders(modelHubData).map((provider) => (
                           <Select.Option key={provider} value={provider}>
                             {provider}
@@ -1089,6 +1123,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       allowClear
                     >
                       {modelHubData &&
+                        Array.isArray(modelHubData) &&
                         getUniqueModes(modelHubData).map((mode) => (
                           <Select.Option key={mode} value={mode}>
                             {mode}
@@ -1108,6 +1143,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       allowClear
                     >
                       {modelHubData &&
+                        Array.isArray(modelHubData) &&
                         getUniqueFeatures(modelHubData).map((feature) => (
                           <Select.Option key={feature} value={feature}>
                             {feature}
@@ -1121,7 +1157,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   columns={publicModelHubColumns()}
                   data={filteredData}
                   isLoading={loading}
-                  table={tableRef}
                   defaultSorting={[{ id: "model_group", desc: false }]}
                 />
 
@@ -1133,7 +1168,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               </TabPane>
 
               {/* Agents Tab */}
-              {agentHubData && agentHubData.length > 0 && (
+              {agentHubData && Array.isArray(agentHubData) && agentHubData.length > 0 && (
                 <TabPane tab="Agent Hub" key="agents">
                   <div className="flex justify-between items-center mb-8">
                     <Title className="text-2xl font-semibold text-gray-900">Available Agents</Title>
@@ -1171,6 +1206,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         allowClear
                       >
                         {agentHubData &&
+                          Array.isArray(agentHubData) &&
                           getUniqueAgentSkills(agentHubData).map((skill) => (
                             <Select.Option key={skill} value={skill}>
                               {skill}
@@ -1184,7 +1220,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicAgentHubColumns()}
                     data={filteredAgentData}
                     isLoading={agentLoading}
-                    table={agentTableRef}
                     defaultSorting={[{ id: "name", desc: false }]}
                   />
 
@@ -1197,7 +1232,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
               )}
 
               {/* MCP Servers Tab */}
-              {mcpHubData && mcpHubData.length > 0 && (
+              {mcpHubData && Array.isArray(mcpHubData) && mcpHubData.length > 0 && (
                 <TabPane tab="MCP Hub" key="mcp">
                   <div className="flex justify-between items-center mb-8">
                     <Title className="text-2xl font-semibold text-gray-900">Available MCP Servers</Title>
@@ -1235,6 +1270,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         allowClear
                       >
                         {mcpHubData &&
+                          Array.isArray(mcpHubData) &&
                           getUniqueMcpTransports(mcpHubData).map((transport) => (
                             <Select.Option key={transport} value={transport}>
                               {transport}
@@ -1248,7 +1284,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     columns={publicMCPHubColumns()}
                     data={filteredMcpData}
                     isLoading={mcpLoading}
-                    table={mcpTableRef}
                     defaultSorting={[{ id: "server_name", desc: false }]}
                   />
 
@@ -1453,7 +1488,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
-                        selectedMCPTools: [],
+                        selectedPolicies: [],
+                        selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: "openai",
@@ -1474,7 +1510,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
-                        selectedMCPTools: [],
+                        selectedPolicies: [],
+                        selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,
                         selectedSdk: "openai",

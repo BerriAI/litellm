@@ -141,7 +141,22 @@ class TestVertexAIGeminiImageGenerationConfig:
                         ]
                     }
                 }
-            ]
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 93,
+                "promptTokensDetails": [
+                    {
+                        "modality": "TEXT",
+                        "tokenCount": 54,
+                    },
+                    {
+                        "modality": "IMAGE",
+                        "tokenCount": 39,
+                    }
+                ],
+                "candidatesTokenCount": 17,
+                "totalTokenCount": 110,
+            }
         }
         mock_response.headers = {}
 
@@ -162,6 +177,12 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64_encoded_image_data"
         assert result.data[0].url is None
+        assert result.usage.input_tokens == 93
+        assert result.usage.input_tokens_details.text_tokens == 54
+        assert result.usage.input_tokens_details.image_tokens == 39
+        assert result.usage.output_tokens == 17
+        assert result.usage.total_tokens == 110
+
 
     def test_transform_image_generation_response_multiple_images(self):
         """Test response transformation with multiple images"""
@@ -208,6 +229,47 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert len(result.data) == 2
         assert result.data[0].b64_json == "image1"
         assert result.data[1].b64_json == "image2"
+
+    def test_transform_image_generation_response_signature(self):
+        """Test response transformation includes thoughtSignature for Gemini 3 Pro"""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "base64_encoded_image_data",
+                                },
+                                "thoughtSignature": "test_signature_abc123",
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        mock_response.headers = {}
+
+        from litellm.types.utils import ImageResponse
+
+        model_response = ImageResponse()
+        result = self.config.transform_image_generation_response(
+            model="gemini-3-pro-image-preview",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(result.data) == 1
+        assert result.data[0].b64_json == "base64_encoded_image_data"
+        assert result.data[0].provider_specific_fields["thought_signature"] == "test_signature_abc123"
 
 
 class TestVertexAIImagenImageGenerationConfig:

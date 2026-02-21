@@ -4,7 +4,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Dict, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    EnterpriseLicenseData,
     Litellm_EntityType,
     ProxyErrorTypes,
     ProxyException,
@@ -30,8 +31,110 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.secret_managers.main import get_secret
+from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
 #### Health ENDPOINTS ####
+
+
+def _resolve_os_environ_variables(params: dict) -> dict:
+    """
+    Resolve ``os.environ/`` environment variables in ``litellm_params``.
+
+    This walks the input dict/list structure iteratively (no Python recursion) to
+    avoid unbounded recursion / stack overflows on deeply nested inputs.
+    """
+    if not isinstance(params, dict):
+        return params
+
+    # Use an explicit stack to avoid recursion and handle nested dicts/lists.
+    # We also keep a `seen` set to guard against accidental cycles.
+    resolved_root: dict = {}
+    stack: list[tuple[object, object]] = [(params, resolved_root)]
+    seen: set[int] = {id(params)}
+
+    while stack:
+        src, dst = stack.pop()
+
+        if isinstance(src, dict) and isinstance(dst, dict):
+            for key, value in src.items():
+                # Direct string replacement for os.environ/ references
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    dst[key] = get_secret(value)
+                elif isinstance(value, dict):
+                    if id(value) in seen:
+                        # Cycle detected – keep a shallow copy reference to prevent infinite loops
+                        dst[key] = {}
+                        continue
+                    seen.add(id(value))
+                    new_dict: dict = {}
+                    dst[key] = new_dict
+                    stack.append((value, new_dict))
+                elif isinstance(value, list):
+                    if id(value) in seen:
+                        dst[key] = []
+                        continue
+                    seen.add(id(value))
+                    new_list: list = []
+                    dst[key] = new_list
+                    stack.append((value, new_list))
+                else:
+                    dst[key] = value
+
+        elif isinstance(src, list) and isinstance(dst, list):
+            for item in src:
+                if isinstance(item, str) and item.startswith("os.environ/"):
+                    dst.append(get_secret(item))
+                elif isinstance(item, dict):
+                    if id(item) in seen:
+                        dst.append({})
+                        continue
+                    seen.add(id(item))
+                    new_dict = {}
+                    dst.append(new_dict)
+                    stack.append((item, new_dict))
+                elif isinstance(item, list):
+                    if id(item) in seen:
+                        dst.append([])
+                        continue
+                    seen.add(id(item))
+                    new_list = []
+                    dst.append(new_list)
+                    stack.append((item, new_list))
+                else:
+                    dst.append(item)
+
+    return resolved_root
+
+
+def get_callback_identifier(callback):
+    """
+    Get the callback identifier string, handling both strings and objects.
+    
+    This function extracts a string identifier from a callback, which can be:
+    - A string (returned as-is)
+    - An object with a callback_name attribute
+    - An object registered in CustomLoggerRegistry
+    - Falls back to callback_name() helper function
+    
+    Args:
+        callback: The callback to identify (can be str or object)
+        
+    Returns:
+        str: The callback identifier string
+    """
+    if isinstance(callback, str):
+        return callback
+    if hasattr(callback, 'callback_name') and callback.callback_name:
+        return callback.callback_name
+    if hasattr(callback, '__class__'):
+        callback_strs = CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback.__class__)
+        if hasattr(callback, 'callback_name') and callback.callback_name in callback_strs:
+            return callback.callback_name
+        if callback_strs:
+            return callback_strs[0]
+    return callback_name(callback)
+
 
 router = APIRouter()
 services = Union[
@@ -45,6 +148,7 @@ services = Union[
         "email",
         "braintrust",
         "datadog",
+        "datadog_llm_observability",
         "generic_api",
         "arize",
         "sqs"
@@ -117,6 +221,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "custom_callback_api",
             "langsmith",
             "datadog",
+            "datadog_llm_observability",
             "generic_api",
             "arize",
             "sqs"
@@ -128,11 +233,24 @@ async def health_services_endpoint(  # noqa: PLR0915
                 },
             )
 
+        service_in_success_callbacks = False
+        if service in litellm.success_callback:
+            service_in_success_callbacks = True
+        else:
+            for cb in litellm.success_callback:
+                if hasattr(cb, 'callback_name') and cb.callback_name == service:
+                    service_in_success_callbacks = True
+                    break
+                cb_id = get_callback_identifier(cb)
+                if cb_id == service:
+                    service_in_success_callbacks = True
+                    break
+        
         if (
             service == "openmeter"
             or service == "braintrust"
             or service == "generic_api"
-            or (service in litellm.success_callback and service != "langfuse")
+            or (service_in_success_callbacks and service != "langfuse")
         ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
@@ -888,6 +1006,91 @@ async def shared_health_check_status_endpoint(
         )
 
 
+def _read_license_data() -> Optional[Dict[str, Any]]:
+    from litellm.proxy.proxy_server import (
+        _license_check,
+        premium_user_data,
+    )
+
+    license_data: Optional[EnterpriseLicenseData] = (
+        premium_user_data or _license_check.airgapped_license_data
+    )
+
+    if (
+        license_data is None
+        and getattr(_license_check, "license_str", None)
+        and getattr(_license_check, "public_key", None)
+    ):
+        try:
+            verification_result = _license_check.verify_license_without_api_request(
+                public_key=_license_check.public_key,
+                license_key=_license_check.license_str,
+            )
+            if verification_result is True:
+                license_data = _license_check.airgapped_license_data
+        except Exception:
+            pass
+
+    if license_data is None:
+        return None
+    return cast(Dict[str, Any], license_data)
+
+
+def _read_allowed_features(license_data: Dict[str, Any]) -> list:
+    raw_allowed_features = license_data.get("allowed_features")
+    if isinstance(raw_allowed_features, list):
+        return list(raw_allowed_features)
+    if raw_allowed_features is None:
+        return []
+    return [raw_allowed_features]
+
+
+@router.get(
+    "/health/license",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_license_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return metadata about the configured LiteLLM license without exposing the key."""
+    from litellm.proxy.proxy_server import (
+        _license_check,
+        premium_user,
+    )
+
+    license_data = _read_license_data()
+    has_license = bool(getattr(_license_check, "license_str", None))
+    license_type = "enterprise" if premium_user else "community"
+
+    if license_data is None:
+        return {
+            "has_license": has_license,
+            "license_type": license_type,
+            "expiration_date": None,
+            "allowed_features": [],
+            "limits": {
+                "max_users": None,
+                "max_teams": None,
+            },
+        }
+
+    expiration_date = license_data.get("expiration_date")
+    max_users = license_data.get("max_users")
+    max_teams = license_data.get("max_teams")
+
+    return {
+        "has_license": has_license,
+        "license_type": license_type,
+        "expiration_date": expiration_date,
+        "allowed_features": _read_allowed_features(license_data),
+        "limits": {
+            "max_users": max_users,
+            "max_teams": max_teams,
+        },
+    }
+
+
 db_health_cache = {"status": "unknown", "last_updated": datetime.now()}
 
 
@@ -1166,20 +1369,40 @@ async def test_model_connection(
     
     Example:
     ```bash
+    # If model is configured in proxy_config.yaml, you only need to specify the model name:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
       -H 'Authorization: Bearer sk-1234' \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
-            "model": "gpt-4",
-            "custom_llm_provider": "azure_ai",
-            "litellm_credential_name": null,
-            "api_key": "6xxxxxxx",
-            "api_base": "https://litellm8397336933.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21",
+            "model": "gpt-4o"
+        },
+        "mode": "chat"
+      }'
+    
+    # The endpoint will automatically use api_key, api_base, etc. from proxy_config.yaml
+    
+    # You can also override specific params or test with custom credentials:
+    curl -X POST 'http://localhost:4000/health/test_connection' \\
+      -H 'Authorization: Bearer sk-1234' \\
+      -H 'Content-Type: application/json' \\
+      -d '{
+        "litellm_params": {
+            "model": "azure/gpt-4o",
+            "api_key": "os.environ/AZURE_OPENAI_API_KEY",
+            "api_base": "os.environ/AZURE_OPENAI_ENDPOINT",
+            "api_version": "2024-10-21"
         },
         "mode": "chat"
       }'
     ```
+    
+    Note: 
+    - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.) 
+      will be automatically loaded from the config (with resolved environment variables).
+    - You can override specific params by including them in the request.
+    - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
+      which will be resolved automatically (same as in proxy_config.yaml).
     
     Returns:
         dict: A dictionary containing the health check result with either success information or error details.
@@ -1188,7 +1411,7 @@ async def test_model_connection(
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import llm_router, premium_user, prisma_client
     from litellm.types.router import Deployment, LiteLLM_Params
 
     try:
@@ -1197,6 +1420,46 @@ async def test_model_connection(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+        
+        # Get model name from litellm_params
+        request_litellm_params = litellm_params or {}
+        model_name = request_litellm_params.get("model")
+        
+        # Look up model configuration from router if model name is provided
+        # This gets the litellm_params from proxy config (with resolved env vars)
+        config_litellm_params: dict = {}
+        if model_name and llm_router is not None:
+            try:
+                # First try to find by proxy model_name (e.g., "gpt-4o")
+                deployments = llm_router.get_model_list(model_name=model_name)
+                
+                # If not found, try to find by litellm model name (e.g., "azure/gpt-4o")
+                if not deployments or len(deployments) == 0:
+                    all_deployments = llm_router.get_model_list(model_name=None)
+                    if all_deployments:
+                        for deployment in all_deployments:
+                            if deployment.get("litellm_params", {}).get("model") == model_name:
+                                deployments = [deployment]
+                                break
+                
+                if deployments and len(deployments) > 0:
+                    # Use the first deployment's litellm_params as base config
+                    # These already have resolved environment variables from proxy config
+                    config_litellm_params = dict(deployments[0].get("litellm_params", {}))
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Could not find model {model_name} in router: {e}. "
+                    "Proceeding with request params only."
+                )
+        
+        # Merge: config params (from proxy config) as base, request params override
+        # This allows users to override specific params while using config for credentials
+        merged_litellm_params = {**config_litellm_params, **request_litellm_params}
+        
+        # Resolve os.environ/ environment variables in any remaining request params
+        # This handles cases where user explicitly passes os.environ/ values to override config
+        litellm_params = _resolve_os_environ_variables(merged_litellm_params)
+        
         ## Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(

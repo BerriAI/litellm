@@ -30,7 +30,6 @@ response = client.chat.completions.create(
     ],
     extra_headers={
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "prompt-caching-2024-07-31",
     },
 )
 

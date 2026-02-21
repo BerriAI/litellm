@@ -269,7 +269,7 @@ spec:
     spec:
       containers:
       - name: litellm-proxy
-        image: ghcr.io/berriai/litellm:latest
+        image: docker.litellm.ai/berriai/litellm:latest
         env:
         - name: USE_SHARED_HEALTH_CHECK
           value: "true"

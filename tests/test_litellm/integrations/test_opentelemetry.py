@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
+from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
@@ -171,11 +172,127 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
 
+class TestOpenTelemetryProviderInitialization(unittest.TestCase):
+    """Test suite for verifying provider initialization respects existing providers"""
+
+    def test_init_tracing_respects_existing_tracer_provider(self):
+        """
+        Unit test: _init_tracing() should respect existing TracerProvider.
+
+        When a TracerProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        # Setup: Create and set an existing TracerProvider
+        tracer_provider = TracerProvider()
+        trace.set_tracer_provider(tracer_provider)
+        existing_provider = trace.get_tracer_provider()
+
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        otel_integration = OpenTelemetry()
+
+        # Assert: The existing provider should still be active
+        current_provider = trace.get_tracer_provider()
+        assert current_provider is existing_provider, (
+            "Existing TracerProvider should be respected and not overridden"
+        )
+
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
+    def test_init_metrics_respects_existing_meter_provider(self):
+        """
+        Unit test: _init_metrics() should respect existing MeterProvider.
+
+        When a MeterProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+
+        # Create and set an existing MeterProvider
+        meter_provider = MeterProvider()
+        metrics.set_meter_provider(meter_provider)
+        existing_provider = metrics.get_meter_provider()
+
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        config = OpenTelemetryConfig.from_env()
+        otel_integration = OpenTelemetry(config=config)
+
+        # Assert: The existing provider should still be active
+        current_provider = metrics.get_meter_provider()
+        assert current_provider is existing_provider, (
+            "Existing MeterProvider should be respected and not overridden"
+        )
+
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS": "true"}, clear=True)
+    def test_init_logs_respects_existing_logger_provider(self):
+        """
+        Unit test: _init_logs() should respect existing LoggerProvider.
+
+        When a LoggerProvider already exists (e.g., set by Langfuse SDK),
+        LiteLLM should use it instead of creating a new one.
+        """
+        from opentelemetry._logs import get_logger_provider, set_logger_provider
+        from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
+
+        # Create and set an existing LoggerProvider
+        logger_provider = OTLoggerProvider()
+        set_logger_provider(logger_provider)
+        existing_provider = get_logger_provider()
+
+        # Act: Initialize OpenTelemetry integration (should detect existing provider)
+        config = OpenTelemetryConfig.from_env()
+        otel_integration = OpenTelemetry(config=config)
+
+        # Assert: The existing provider should still be active
+        current_provider = get_logger_provider()
+        assert current_provider is existing_provider, (
+            "Existing LoggerProvider should be respected and not overridden"
+        )
+
+
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
     MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
     HERE = os.path.dirname(__file__)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_open_telemetry_config_manual_defaults(self):
+        """Manual OpenTelemetryConfig creation should populate default identifiers."""
+        config = OpenTelemetryConfig(exporter="console", endpoint="http://collector")
+        self.assertEqual(config.service_name, "litellm")
+        self.assertEqual(config.deployment_environment, "production")
+        self.assertEqual(config.model_id, "litellm")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_open_telemetry_config_custom_service_name(self):
+        """Model ID should inherit provided service name when not explicitly set."""
+        config = OpenTelemetryConfig(service_name="custom-service", exporter="console")
+        self.assertEqual(config.service_name, "custom-service")
+        self.assertEqual(config.deployment_environment, "production")
+        self.assertEqual(config.model_id, "custom-service")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_open_telemetry_config_auto_infer_otlp_http_when_endpoint_set(self):
+        """When endpoint is set but exporter is default 'console', auto-infer 'otlp_http'.
+
+        This fixes an issue where UI-configured OTEL settings would default to console
+        output instead of sending traces to the configured endpoint.
+        See: https://github.com/BerriAI/litellm/issues/XXXX
+        """
+        # When endpoint is specified without explicit exporter, should auto-infer otlp_http
+        config = OpenTelemetryConfig(endpoint="https://otel-collector.example.com:443")
+        self.assertEqual(config.exporter, "otlp_http")
+
+        # When exporter is explicitly set to something other than console, should not override
+        config_grpc = OpenTelemetryConfig(exporter="grpc", endpoint="https://otel-collector.example.com:443")
+        self.assertEqual(config_grpc.exporter, "grpc")
+
+        # When no endpoint is set, should keep console as default
+        config_no_endpoint = OpenTelemetryConfig()
+        self.assertEqual(config_no_endpoint.exporter, "console")
 
     def wait_for_spans(self, exporter: InMemorySpanExporter, prefix: str):
         """Poll until we see at least one span with an attribute key starting with `prefix`."""
@@ -423,8 +540,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self, mock_detector_cls, mock_resource_create
     ):
         """Test _get_litellm_resource with default values when no environment variables are set."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
         # Mock the Resource.create method
         mock_base_resource = MagicMock()
         mock_resource_create.return_value = mock_base_resource
@@ -439,8 +554,8 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_merged_resource = MagicMock()
         mock_base_resource.merge.return_value = mock_merged_resource
 
-        # Call the function
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify Resource.create was called with correct default attributes
         expected_attributes = {
@@ -468,8 +583,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self, mock_detector_cls, mock_resource_create
     ):
         """Test _get_litellm_resource with LiteLLM-specific environment variables."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
         # Mock the Resource.create method
         mock_base_resource = MagicMock()
         mock_resource_create.return_value = mock_base_resource
@@ -484,8 +597,8 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_merged_resource = MagicMock()
         mock_base_resource.merge.return_value = mock_merged_resource
 
-        # Call the function
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify Resource.create was called with environment variable values
         expected_attributes = {
@@ -512,8 +625,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self, mock_detector_cls, mock_resource_create
     ):
         """Test _get_litellm_resource with OTEL_RESOURCE_ATTRIBUTES environment variable."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
         # Mock the Resource.create method to simulate the actual behavior
         # In reality, Resource.create() would parse OTEL_RESOURCE_ATTRIBUTES and merge it
         mock_base_resource = MagicMock()
@@ -529,8 +640,8 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_merged_resource = MagicMock()
         mock_base_resource.merge.return_value = mock_merged_resource
 
-        # Call the function
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify Resource.create was called with the base attributes
         # The actual OTEL_RESOURCE_ATTRIBUTES parsing is handled by OpenTelemetry SDK
@@ -547,10 +658,8 @@ class TestOpenTelemetry(unittest.TestCase):
     @patch.dict(os.environ, {}, clear=True)
     def test_get_litellm_resource_integration_with_real_resource(self):
         """Integration test to verify _get_litellm_resource works with actual OpenTelemetry Resource."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
-        # This test uses the real OpenTelemetry Resource.create() method
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify the result is a Resource instance
         from opentelemetry.sdk.resources import Resource
@@ -572,10 +681,8 @@ class TestOpenTelemetry(unittest.TestCase):
     )
     def test_get_litellm_resource_real_otel_resource_attributes(self):
         """Integration test to verify OTEL_RESOURCE_ATTRIBUTES is properly handled."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
-        # This test uses the real OpenTelemetry Resource.create() method
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         print("RESULT", result)
 
@@ -602,10 +709,8 @@ class TestOpenTelemetry(unittest.TestCase):
     )
     def test_get_litellm_resource_precedence(self):
         """Test that OTEL_SERVICE_NAME takes precedence over OTEL_RESOURCE_ATTRIBUTES according to OpenTelemetry spec."""
-        from litellm.integrations.opentelemetry import _get_litellm_resource
-
-        # This test verifies the OpenTelemetry standard behavior
-        result = _get_litellm_resource()
+        config = OpenTelemetryConfig.from_env()
+        result = OpenTelemetry._get_litellm_resource(config)
 
         # Verify the result is a Resource instance
         from opentelemetry.sdk.resources import Resource
@@ -617,7 +722,6 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertEqual(attributes.get("service.name"), "litellm-service")
         # But other attributes from OTEL_RESOURCE_ATTRIBUTES should still be present
         self.assertEqual(attributes.get("extra.attr"), "extra-value")
-
 
 
     def test_handle_success_spans_only(self):
@@ -686,11 +790,8 @@ class TestOpenTelemetry(unittest.TestCase):
         logs = log_exporter.get_finished_logs()
         self.assertFalse(logs, "Did not expect any logs")
 
+    @patch.dict(os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True)
     def test_handle_success_spans_and_metrics(self):
-        # only metrics on
-        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
-        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"] = "true"
-
         # ─── build in‐memory OTEL providers/exporters ─────────────────────────────
         span_exporter = InMemorySpanExporter()
         tracer_provider = TracerProvider()
@@ -1318,3 +1419,707 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
                 "http://collector:4317/v1/traces", "logs"
             )
             self.assertEqual(normalized, "http://collector:4317/v1/logs")
+
+    def test_get_metric_reader_uses_http_exporter_for_http_protobuf(self):
+        """Test that http/protobuf protocol uses OTLPMetricExporterHTTP"""
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+            OTLPMetricExporter,
+        )
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+        config = OpenTelemetryConfig(
+            exporter="http/protobuf", endpoint="http://collector:4318"
+        )
+        otel = OpenTelemetry(config=config)
+
+        reader = otel._get_metric_reader()
+
+        self.assertIsInstance(reader, PeriodicExportingMetricReader)
+        self.assertIsInstance(reader._exporter, OTLPMetricExporter)
+
+
+class TestOpenTelemetryExternalSpan(unittest.TestCase):
+    """
+    Test suite for external span handling in OpenTelemetry integration.
+
+    These tests verify that LiteLLM correctly handles spans created outside
+    of LiteLLM (e.g., by Langfuse SDK, user application code, or global context)
+    without closing them prematurely.
+
+    Background:
+    - External spans can come from: Langfuse SDK, user code, HTTP traceparent headers, global context
+    - LiteLLM should NEVER close spans it did not create
+    - Bug: LiteLLM was reusing and closing external spans in _start_primary_span
+    """
+
+    HERE = os.path.dirname(__file__)
+
+    def setUp(self):
+        """Set up common test fixtures"""
+        self.span_exporter = InMemorySpanExporter()
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
+            SimpleSpanProcessor(self.span_exporter)
+        )
+
+        # Don't set global tracer provider - instead, get tracers directly from our provider
+        # This avoids "Overriding of current TracerProvider is not allowed" warnings
+
+        # Clear any existing spans
+        self.span_exporter.clear()
+
+    def _create_test_kwargs_and_response(self):
+        """Load test data from JSON files"""
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
+            kwargs = json.load(f)
+
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
+            response_obj = json.load(f)
+
+        return kwargs, response_obj
+
+    def _get_spans_by_name(self, name):
+        """Get all spans with the given name"""
+        spans = self.span_exporter.get_finished_spans()
+        return [s for s in spans if s.name == name]
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_not_closed_with_use_otel_litellm_request_span_false(self):
+        """
+        Test that external spans are not closed when USE_OTEL_LITELLM_REQUEST_SPAN=false (default).
+
+        Expected behavior:
+        - External span remains open (is_recording = True)
+        - raw_gen_ai_request spans are direct children of external span (shallow hierarchy)
+        - No litellm_request span is created
+        - Multiple completions work correctly
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+            parent_span_id = parent_ctx.span_id
+
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should be recording before completion calls"
+            )
+
+            # First completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after first completion"
+            )
+
+            # Second completion call
+            start_time2 = end_time
+            end_time2 = start_time2 + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time2, end_time2)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after second completion"
+            )
+
+        # After exiting context, verify spans
+        spans = self.span_exporter.get_finished_spans()
+
+        # All spans should have the same trace_id
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                f"Span {span.name} should have same trace_id as parent"
+            )
+
+        # Should have external_parent_span
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
+
+        # Verify LiteLLM set attributes on external parent span
+        parent_span_finished = parent_spans[0]
+        self.assertIsNotNone(
+            parent_span_finished.attributes,
+            "Parent span should have attributes set by LiteLLM"
+        )
+        self.assertIn(
+            "gen_ai.request.model",
+            parent_span_finished.attributes,
+            "Parent span should have model attribute from LiteLLM"
+        )
+
+        # Should have raw_gen_ai_request spans (if message_logging is on)
+        raw_spans = self._get_spans_by_name("raw_gen_ai_request")
+        # Note: May be 0 if message_logging is off, or 2 if on
+
+        # Should NOT have litellm_request spans (USE_OTEL_LITELLM_REQUEST_SPAN=false)
+        litellm_spans = self._get_spans_by_name("litellm_request")
+        self.assertEqual(
+            len(litellm_spans),
+            0,
+            "Should NOT have litellm_request spans when USE_OTEL_LITELLM_REQUEST_SPAN=false"
+        )
+
+        # Verify raw_gen_ai_request spans are direct children of external span
+        for raw_span in raw_spans:
+            self.assertEqual(
+                raw_span.parent.span_id if raw_span.parent else None,
+                parent_span_id,
+                f"raw_gen_ai_request should be direct child of external_parent_span"
+            )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "true"}, clear=False)
+    def test_external_span_not_closed_with_use_otel_litellm_request_span_true(self):
+        """
+        Test that external spans are not closed when USE_OTEL_LITELLM_REQUEST_SPAN=true.
+
+        Expected behavior:
+        - External span remains open (is_recording = True)
+        - litellm_request spans are created as children of external span
+        - raw_gen_ai_request spans are children of litellm_request spans
+        - Correct hierarchy: external_parent → litellm_request → raw_gen_ai_request
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+            parent_span_id = parent_ctx.span_id
+
+            # First completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after first completion"
+            )
+
+            # Second completion call
+            start_time2 = end_time
+            end_time2 = start_time2 + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time2, end_time2)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording after second completion"
+            )
+
+        # After exiting context, verify spans
+        spans = self.span_exporter.get_finished_spans()
+
+        # All spans should have the same trace_id
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                f"Span {span.name} should have same trace_id as parent"
+            )
+
+        # Should have litellm_request spans (USE_OTEL_LITELLM_REQUEST_SPAN=true)
+        litellm_spans = self._get_spans_by_name("litellm_request")
+        self.assertEqual(
+            len(litellm_spans),
+            2,
+            "Should have 2 litellm_request spans when USE_OTEL_LITELLM_REQUEST_SPAN=true"
+        )
+
+        # Verify litellm_request spans are children of external span
+        for litellm_span in litellm_spans:
+            self.assertEqual(
+                litellm_span.parent.span_id if litellm_span.parent else None,
+                parent_span_id,
+                "litellm_request should be child of external_parent_span"
+            )
+
+        # Verify raw_gen_ai_request spans (if present) are children of litellm_request
+        raw_spans = self._get_spans_by_name("raw_gen_ai_request")
+        if raw_spans:
+            litellm_span_ids = {s.context.span_id for s in litellm_spans}
+            for raw_span in raw_spans:
+                self.assertIn(
+                    raw_span.parent.span_id if raw_span.parent else None,
+                    litellm_span_ids,
+                    "raw_gen_ai_request should be child of litellm_request"
+                )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_with_multiple_completions(self):
+        """
+        Test that multiple completion calls work correctly within external span context.
+
+        Expected behavior:
+        - Both completion calls succeed
+        - All spans belong to the same trace
+        - External span remains open throughout
+        - No errors or warnings about "ended span"
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+
+            # Make multiple completion calls
+            for i in range(3):
+                start_time = datetime.utcnow()
+                end_time = start_time + timedelta(seconds=1)
+
+                # This should not raise any exceptions
+                otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+                # Verify parent span is still recording after each call
+                self.assertTrue(
+                    parent_span.is_recording(),
+                    f"External span should still be recording after completion #{i+1}"
+                )
+
+        # Verify all spans have the same trace_id
+        spans = self.span_exporter.get_finished_spans()
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                f"All spans should belong to the same trace"
+            )
+
+        # Should have the external parent span
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
+
+        # Verify LiteLLM set attributes on external parent span
+        parent_span_finished = parent_spans[0]
+        self.assertIn(
+            "gen_ai.request.model",
+            parent_span_finished.attributes,
+            "Parent span should have model attribute from LiteLLM"
+        )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_from_global_context(self):
+        """
+        Test external span detection from global context (Priority 3 in _get_span_context).
+
+        This simulates the case where a span is set in the global context
+        (e.g., by user code or Langfuse SDK) and LiteLLM detects it via
+        trace.get_current_span().
+
+        Expected behavior:
+        - LiteLLM detects the span from global context
+        - External span is not closed
+        - Correct parent-child relationship
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span and set it as current using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_global_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+
+            # Verify the span is in global context
+            current_span = trace.get_current_span()
+            self.assertEqual(current_span, parent_span, "Span should be in global context")
+
+            # Make completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span from global context should not be closed"
+            )
+
+        # Verify trace structure
+        spans = self.span_exporter.get_finished_spans()
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                "All spans should have the same trace_id"
+            )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_hierarchy_preserved(self):
+        """
+        Test that span hierarchy is correctly preserved with external parent.
+
+        Expected behavior:
+        - Parent span IDs are correct
+        - Trace structure matches expected hierarchy
+        - Span names are correct
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+        otel.message_logging = True  # Enable message logging to get raw_gen_ai_request spans
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_span_id = parent_span.get_span_context().span_id
+
+            # Make completion call
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+            otel._handle_success(kwargs, response_obj, start_time, end_time)
+
+        # Verify hierarchy
+        spans = self.span_exporter.get_finished_spans()
+
+        # Get spans by name
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        raw_spans = self._get_spans_by_name("raw_gen_ai_request")
+
+        self.assertEqual(len(parent_spans), 1, "Should have one parent span")
+
+        # Verify parent-child relationship
+        if raw_spans:  # If message_logging is on
+            for raw_span in raw_spans:
+                self.assertEqual(
+                    raw_span.parent.span_id if raw_span.parent else None,
+                    parent_span_id,
+                    "raw_gen_ai_request should be child of external_parent_span"
+                )
+
+    @patch.dict(os.environ, {"USE_OTEL_LITELLM_REQUEST_SPAN": "false"}, clear=False)
+    def test_external_span_not_ended_on_failure(self):
+        """
+        Test that external spans are not closed even on failure.
+
+        Expected behavior:
+        - When _handle_failure is called with external span context
+        - External span remains open (is_recording = True)
+        - Error span is created correctly
+        - External span status is NOT changed by LiteLLM
+        """
+        # Initialize OpenTelemetry
+        otel = OpenTelemetry(tracer_provider=self.tracer_provider)
+
+        # Load test data
+        kwargs, response_obj = self._create_test_kwargs_and_response()
+
+        # Create external parent span using our test TracerProvider
+        tracer = self.tracer_provider.get_tracer(__name__)
+
+        with tracer.start_as_current_span("external_parent_span") as parent_span:
+            parent_ctx = parent_span.get_span_context()
+            parent_trace_id = parent_ctx.trace_id
+
+            # Simulate failure
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(seconds=1)
+
+            # Create error response object
+            error_response = {"error": "Test error"}
+
+            # Call _handle_failure
+            otel._handle_failure(kwargs, error_response, start_time, end_time)
+
+            # Verify parent span is still recording
+            self.assertTrue(
+                parent_span.is_recording(),
+                "External span should still be recording even after failure"
+            )
+
+        # Verify trace structure
+        spans = self.span_exporter.get_finished_spans()
+
+        # All spans should have the same trace_id
+        for span in spans:
+            self.assertEqual(
+                span.context.trace_id,
+                parent_trace_id,
+                "All spans should have the same trace_id even on failure"
+            )
+
+        # Should have external_parent_span
+        parent_spans = self._get_spans_by_name("external_parent_span")
+        self.assertEqual(len(parent_spans), 1, "Should have exactly one external_parent_span")
+
+        # Verify LiteLLM set attributes on external parent span even on failure
+        parent_span_finished = parent_spans[0]
+        self.assertIn(
+            "gen_ai.request.model",
+            parent_span_finished.attributes,
+            "Parent span should have model attribute from LiteLLM even on failure"
+        )
+
+
+class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
+    """
+    Test suite for OpenTelemetry 1.38 Semantic Conventions compliance.
+    
+    These tests verify that LiteLLM emits span attributes following the 
+    OpenTelemetry GenAI semantic conventions v1.38, including:
+    - gen_ai.input.messages (JSON string with parts array)
+    - gen_ai.output.messages (JSON string with parts array)
+    - gen_ai.usage.input_tokens / output_tokens (new naming)
+    - gen_ai.response.finish_reasons (JSON array)
+    
+    See: https://github.com/BerriAI/litellm/issues/17794
+    """
+
+    def test_input_messages_uses_parts_structure(self):
+        """
+        Test that gen_ai.input.messages uses the OTEL 1.38 parts array structure.
+        
+        Expected format:
+        [{"role": "user", "parts": [{"type": "text", "content": "Hello"}]}]
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello world"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hi there!"},
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Find the call that set gen_ai.input.messages
+        input_messages_calls = [
+            call for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == "gen_ai.input.messages"
+        ]
+        self.assertEqual(len(input_messages_calls), 1, "Should have exactly one gen_ai.input.messages attribute")
+        
+        input_messages_value = input_messages_calls[0][0][1]
+        parsed = json.loads(input_messages_value)
+        
+        # Verify structure
+        self.assertIsInstance(parsed, list)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["role"], "user")
+        self.assertIn("parts", parsed[0])
+        self.assertEqual(parsed[0]["parts"][0]["type"], "text")
+        self.assertEqual(parsed[0]["parts"][0]["content"], "Hello world")
+
+    def test_output_messages_uses_parts_structure(self):
+        """
+        Test that gen_ai.output.messages uses the OTEL 1.38 parts array structure.
+        
+        Expected format:
+        [{"role": "assistant", "parts": [{"type": "text", "content": "Hi!"}], "finish_reason": "stop"}]
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hello back!"},
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Find the call that set gen_ai.output.messages
+        output_messages_calls = [
+            call for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == "gen_ai.output.messages"
+        ]
+        self.assertEqual(len(output_messages_calls), 1, "Should have exactly one gen_ai.output.messages attribute")
+        
+        output_messages_value = output_messages_calls[0][0][1]
+        parsed = json.loads(output_messages_value)
+        
+        # Verify structure
+        self.assertIsInstance(parsed, list)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["role"], "assistant")
+        self.assertIn("parts", parsed[0])
+        self.assertEqual(parsed[0]["parts"][0]["type"], "text")
+        self.assertEqual(parsed[0]["parts"][0]["content"], "Hello back!")
+        self.assertEqual(parsed[0]["finish_reason"], "stop")
+
+    def test_usage_tokens_use_new_naming_convention(self):
+        """
+        Test that token usage uses the OTEL 1.38 naming convention:
+        - gen_ai.usage.input_tokens (not prompt_tokens)
+        - gen_ai.usage.output_tokens (not completion_tokens)
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Verify new naming convention is used
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 100)
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 50)
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.total_tokens", 150)
+
+    def test_finish_reasons_is_json_array(self):
+        """
+        Test that gen_ai.response.finish_reasons is a proper JSON array.
+        
+        Expected: '["stop"]' (not "['stop']")
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [
+                {"finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}},
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Find the call that set gen_ai.response.finish_reasons
+        finish_reasons_calls = [
+            call for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == "gen_ai.response.finish_reasons"
+        ]
+        self.assertEqual(len(finish_reasons_calls), 1, "Should have exactly one gen_ai.response.finish_reasons attribute")
+        
+        finish_reasons_value = finish_reasons_calls[0][0][1]
+        
+        # Verify it's valid JSON (not Python repr)
+        parsed = json.loads(finish_reasons_value)
+        self.assertEqual(parsed, ["stop"])
+
+    def test_operation_name_is_chat_for_completion(self):
+        """
+        Test that gen_ai.operation.name is 'chat' for completion calls.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call("gen_ai.operation.name", "chat")

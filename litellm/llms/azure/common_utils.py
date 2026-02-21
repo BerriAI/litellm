@@ -3,7 +3,7 @@ import os
 from typing import Any, Callable, Dict, Literal, Optional, Union, cast
 
 import httpx
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 import litellm
 from litellm._logging import verbose_logger
@@ -439,12 +439,12 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_key: Optional[str],
         api_base: Optional[str],
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None,
         litellm_params: Optional[dict] = None,
         _is_async: bool = False,
         model: Optional[str] = None,
-    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI]]:
-        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
+    ) -> Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]]:
+        openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]] = None
         client_initialization_params: dict = locals()
         client_initialization_params["is_async"] = _is_async
         if client is None:
@@ -453,9 +453,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 client_type="azure",
             )
             if cached_client:
-                if isinstance(cached_client, AzureOpenAI) or isinstance(
-                    cached_client, AsyncAzureOpenAI
-                ):
+                if isinstance(cached_client, (AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI)):
                     return cached_client
 
             azure_client_params = self.initialize_azure_sdk_client(
@@ -466,15 +464,40 @@ class BaseAzureLLM(BaseOpenAILLM):
                 api_version=api_version,
                 is_async=_is_async,
             )
-            if _is_async is True:
-                openai_client = AsyncAzureOpenAI(**azure_client_params)
+
+            # For Azure v1 API, use standard OpenAI client instead of AzureOpenAI
+            # See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
+            if self._is_azure_v1_api_version(api_version):
+                # Extract only params that OpenAI client accepts
+                # Always use /openai/v1/ regardless of whether user passed "v1", "latest", or "preview"
+                v1_params = {
+                    "api_key": azure_client_params.get("api_key"),
+                    "base_url": f"{api_base}/openai/v1/",
+                }
+                if "timeout" in azure_client_params:
+                    v1_params["timeout"] = azure_client_params["timeout"]
+                if "max_retries" in azure_client_params:
+                    v1_params["max_retries"] = azure_client_params["max_retries"]
+                if "http_client" in azure_client_params:
+                    v1_params["http_client"] = azure_client_params["http_client"]
+
+                verbose_logger.debug(f"Using Azure v1 API with base_url: {v1_params['base_url']}")
+
+                if _is_async is True:
+                    openai_client = AsyncOpenAI(**v1_params)  # type: ignore
+                else:
+                    openai_client = OpenAI(**v1_params)  # type: ignore
             else:
-                openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
+                # Traditional Azure API uses AzureOpenAI client
+                if _is_async is True:
+                    openai_client = AsyncAzureOpenAI(**azure_client_params)
+                else:
+                    openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
         else:
             openai_client = client
             if api_version is not None and isinstance(
-                openai_client._custom_query, dict
-            ):
+                openai_client, (AzureOpenAI, AsyncAzureOpenAI)
+            ) and isinstance(openai_client._custom_query, dict):
                 # set api_version to version passed by user
                 openai_client._custom_query.setdefault("api-version", api_version)
 

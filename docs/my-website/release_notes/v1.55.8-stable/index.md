@@ -53,7 +53,7 @@ Send LLM usage (spend, tokens) data to [Azure Data Lake](https://learn.microsoft
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.55.8-stable
+docker.litellm.ai/berriai/litellm:litellm_stable_release_branch-v1.55.8-stable
 ```
 
 ## Get Daily Updates

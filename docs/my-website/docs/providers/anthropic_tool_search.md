@@ -1,6 +1,16 @@
-# Anthropic Tool Search
+# Tool Search
 
 Tool search enables Claude to dynamically discover and load tools on-demand from large tool catalogs (10,000+ tools). Instead of loading all tool definitions into the context window upfront, Claude searches your tool catalog and loads only the tools it needs.
+
+## Supported Providers
+
+| Provider | Chat Completions API | Messages API |
+|----------|---------------------|--------------|
+| **Anthropic API** | ✅ | ✅ |
+| **Azure Anthropic** (Microsoft Foundry) | ✅ | ✅ |
+| **Google Cloud Vertex AI** | ✅ | ✅ |
+| **Amazon Bedrock** | ✅ (Invoke API only, Opus 4.5 only) | ✅ (Invoke API only, Opus 4.5 only) |
+
 
 ## Benefits
 
@@ -8,36 +18,29 @@ Tool search enables Claude to dynamically discover and load tools on-demand from
 - **Better tool selection**: Claude's tool selection accuracy degrades with more than 30-50 tools. Tool search maintains accuracy even with thousands of tools
 - **On-demand loading**: Tools are only loaded when Claude needs them
 
-## Supported Models
-
-Tool search is available on:
-- Claude Opus 4.5
-- Claude Sonnet 4.5
-
-## Supported Platforms
-
-- Anthropic API (direct)
-- Azure Anthropic (Microsoft Foundry)
-- Google Cloud Vertex AI
-- Amazon Bedrock (invoke API only, not converse API)
-
 ## Tool Search Variants
 
 LiteLLM supports both tool search variants:
 
 ### 1. Regex Tool Search (`tool_search_tool_regex_20251119`)
 
-Claude constructs regex patterns to search for tools.
+Claude constructs regex patterns to search for tools. Best for exact pattern matching (faster).
 
 ### 2. BM25 Tool Search (`tool_search_tool_bm25_20251119`)
 
-Claude uses natural language queries to search for tools using the BM25 algorithm.
+Claude uses natural language queries to search for tools using the BM25 algorithm. Best for natural language semantic search.
 
-## Quick Start
+**Note**: BM25 variant is not supported on Bedrock.
 
-### Basic Example with Regex Tool Search
+---
 
-```python
+## Chat Completions API
+
+### SDK Usage
+
+#### Basic Example with Regex Tool Search
+
+```python showLineNumbers title="Basic Tool Search Example"
 import litellm
 
 response = litellm.completion(
@@ -70,26 +73,6 @@ response = litellm.completion(
                 }
             },
             "defer_loading": True  # Mark for deferred loading
-        },
-        # Another deferred tool
-        {
-            "type": "function",
-            "function": {
-                "name": "search_files",
-                "description": "Search through files in the workspace",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "file_types": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        }
-                    },
-                    "required": ["query"]
-                }
-            },
-            "defer_loading": True
         }
     ]
 )
@@ -97,9 +80,9 @@ response = litellm.completion(
 print(response.choices[0].message.content)
 ```
 
-### BM25 Tool Search Example
+#### BM25 Tool Search Example
 
-```python
+```python showLineNumbers title="BM25 Tool Search"
 import litellm
 
 response = litellm.completion(
@@ -134,9 +117,9 @@ response = litellm.completion(
 )
 ```
 
-## Using with Azure Anthropic
+#### Azure Anthropic Example
 
-```python
+```python showLineNumbers title="Azure Anthropic Tool Search"
 import litellm
 
 response = litellm.completion(
@@ -170,9 +153,9 @@ response = litellm.completion(
 )
 ```
 
-## Using with Vertex AI
+#### Vertex AI Example
 
-```python
+```python showLineNumbers title="Vertex AI Tool Search"
 import litellm
 
 response = litellm.completion(
@@ -192,11 +175,9 @@ response = litellm.completion(
 )
 ```
 
-## Streaming Support
+#### Streaming Support
 
-Tool search works with streaming:
-
-```python
+```python showLineNumbers title="Streaming with Tool Search"
 import litellm
 
 response = litellm.completion(
@@ -233,13 +214,13 @@ for chunk in response:
         print(chunk.choices[0].delta.content, end="")
 ```
 
-## LiteLLM Proxy
+### AI Gateway Usage
 
-Tool search works automatically through the LiteLLM proxy:
+Tool search works automatically through the LiteLLM proxy.
 
-### Proxy Config
+#### Proxy Configuration
 
-```yaml
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: claude-sonnet
     litellm_params:
@@ -247,18 +228,19 @@ model_list:
       api_key: os.environ/ANTHROPIC_API_KEY
 ```
 
-### Client Request
+#### Client Request
 
-```python
-import openai
+```python showLineNumbers title="Client Request via Proxy"
+from anthropic import Anthropic
 
-client = openai.OpenAI(
+client = Anthropic(
     api_key="your-litellm-proxy-key",
     base_url="http://0.0.0.0:4000"
 )
 
-response = client.chat.completions.create(
+response = client.messages.create(
     model="claude-sonnet",
+    max_tokens=1024,
     messages=[
         {"role": "user", "content": "What's the weather?"}
     ],
@@ -268,17 +250,14 @@ response = client.chat.completions.create(
             "name": "tool_search_tool_regex"
         },
         {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather information",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
-                    "required": ["location"]
-                }
+            "name": "get_weather",
+            "description": "Get weather information",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
             },
             "defer_loading": True
         }
@@ -286,127 +265,278 @@ response = client.chat.completions.create(
 )
 ```
 
-## Important Notes
+---
 
-### Beta Header
+## Messages API
 
-LiteLLM automatically detects tool search tools and adds the appropriate beta header based on your provider:
+The Messages API provides native Anthropic-style tool search support via the `litellm.anthropic.messages` interface.
 
-- **Anthropic API & Microsoft Foundry**: `advanced-tool-use-2025-11-20`
-- **Google Cloud Vertex AI**: `tool-search-tool-2025-10-19`
-- **Amazon Bedrock** (Invoke API, Opus 4.5 only): `tool-search-tool-2025-10-19`
+### SDK Usage
 
-You don't need to manually specify beta headers—LiteLLM handles this automatically.
+#### Basic Example
 
-### Deferred Loading
+```python showLineNumbers title="Messages API - Basic Tool Search"
+import litellm
 
-- Tools with `defer_loading: true` are only loaded when Claude discovers them via search
-- At least one tool must be non-deferred (the tool search tool itself)
-- Keep your 3-5 most frequently used tools as non-deferred for optimal performance
-
-### Tool Descriptions
-
-Write clear, descriptive tool names and descriptions that match how users describe tasks. The search algorithm uses:
-- Tool names
-- Tool descriptions
-- Argument names
-- Argument descriptions
-
-### Usage Tracking
-
-Tool search requests are tracked in the usage object:
-
-```python
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-5-20250929",
-    messages=[{"role": "user", "content": "Search for tools"}],
-    tools=[...]
+response = await litellm.anthropic.messages.acreate(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather in San Francisco?"
+        }
+    ],
+    tools=[
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        {
+            "name": "get_weather",
+            "description": "Get the current weather for a location",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA"
+                    }
+                },
+                "required": ["location"]
+            },
+            "defer_loading": True
+        }
+    ],
+    max_tokens=1024,
+    extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}
 )
 
-# Check tool search usage
-if response.usage.server_tool_use:
-    print(f"Tool search requests: {response.usage.server_tool_use.tool_search_requests}")
+print(response)
 ```
 
-## Error Handling
+#### Azure Anthropic Messages Example
 
-### All Tools Deferred
+```python showLineNumbers title="Azure Anthropic Messages API"
+import litellm
 
-```python
-# ❌ This will fail - at least one tool must be non-deferred
-tools = [
-    {
-        "type": "function",
-        "function": {...},
-        "defer_loading": True
-    }
-]
-
-# ✅ Correct - tool search tool is non-deferred
-tools = [
-    {
-        "type": "tool_search_tool_regex_20251119",
-        "name": "tool_search_tool_regex"
-    },
-    {
-        "type": "function",
-        "function": {...},
-        "defer_loading": True
-    }
-]
+response = await litellm.anthropic.messages.acreate(
+    model="azure_anthropic/claude-sonnet-4-20250514",
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the stock price of Apple?"
+        }
+    ],
+    tools=[
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        {
+            "name": "get_stock_price",
+            "description": "Get the current stock price for a ticker symbol",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "The stock ticker symbol, e.g. AAPL"
+                    }
+                },
+                "required": ["ticker"]
+            },
+            "defer_loading": True
+        }
+    ],
+    max_tokens=1024,
+    extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}
+)
 ```
 
-### Missing Tool Definition
+#### Vertex AI Messages Example
 
-If Claude references a tool that isn't in your deferred tools list, you'll get an error. Make sure all tools that might be discovered are included in the tools parameter with `defer_loading: true`.
+```python showLineNumbers title="Vertex AI Messages API"
+import litellm
 
-## Best Practices
+response = await litellm.anthropic.messages.acreate(
+    model="vertex_ai/claude-sonnet-4@20250514",
+    messages=[
+        {
+            "role": "user",
+            "content": "Search the web for information about AI"
+        }
+    ],
+    tools=[
+        {
+            "type": "tool_search_tool_bm25_20251119",
+            "name": "tool_search_tool_bm25"
+        },
+        {
+            "name": "search_web",
+            "description": "Search the web for information",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query"
+                    }
+                },
+                "required": ["query"]
+            },
+            "defer_loading": True
+        }
+    ],
+    max_tokens=1024,
+    extra_headers={"anthropic-beta": "tool-search-tool-2025-10-19"}
+)
+```
 
-1. **Keep frequently used tools non-deferred**: Your 3-5 most common tools should not have `defer_loading: true`
+#### Bedrock Messages Example
 
-2. **Use semantic descriptions**: Tool descriptions should use natural language that matches user queries
+```python showLineNumbers title="Bedrock Messages API (Invoke)"
+import litellm
 
-3. **Choose the right variant**:
-   - Use **regex** for exact pattern matching (faster)
-   - Use **BM25** for natural language semantic search
+response = await litellm.anthropic.messages.acreate(
+    model="bedrock/invoke/anthropic.claude-opus-4-20250514-v1:0",
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather?"
+        }
+    ],
+    tools=[
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        {
+            "name": "get_weather",
+            "description": "Get weather information",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            },
+            "defer_loading": True
+        }
+    ],
+    max_tokens=1024,
+    extra_headers={"anthropic-beta": "tool-search-tool-2025-10-19"}
+)
+```
 
-4. **Monitor usage**: Track `tool_search_requests` in the usage object to understand search patterns
+#### Streaming Support
 
-5. **Optimize tool catalog**: Remove unused tools and consolidate similar functionality
+```python showLineNumbers title="Messages API - Streaming"
+import litellm
+import json
 
-## When to Use Tool Search
+response = await litellm.anthropic.messages.acreate(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather in Tokyo?"
+        }
+    ],
+    tools=[
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        {
+            "name": "get_weather",
+            "description": "Get weather information",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            },
+            "defer_loading": True
+        }
+    ],
+    max_tokens=1024,
+    stream=True,
+    extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}
+)
 
-**Good use cases:**
-- 10+ tools available in your system
-- Tool definitions consuming >10K tokens
-- Experiencing tool selection accuracy issues
-- Building systems with multiple tool categories
-- Tool library growing over time
+async for chunk in response:
+    if isinstance(chunk, bytes):
+        chunk_str = chunk.decode("utf-8")
+        for line in chunk_str.split("\n"):
+            if line.startswith("data: "):
+                try:
+                    json_data = json.loads(line[6:])
+                    print(json_data)
+                except json.JSONDecodeError:
+                    pass
+```
 
-**When traditional tool calling is better:**
-- Less than 10 tools total
-- All tools are frequently used
-- Very small tool definitions (\<100 tokens total)
+### AI Gateway Usage
 
-## Limitations
+Configure the proxy to use Messages API endpoints.
 
-- Not compatible with tool use examples
-- Requires Claude Opus 4.5 or Sonnet 4.5
-- On Bedrock, only available via invoke API (not converse API)
-- On Bedrock, only supported for Claude Opus 4.5 (not Sonnet 4.5)
-- BM25 variant (`tool_search_tool_bm25_20251119`) is not supported on Bedrock
-- Maximum 10,000 tools in catalog
-- Returns 3-5 most relevant tools per search
+#### Proxy Configuration
 
-### Bedrock-Specific Notes
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: claude-sonnet-messages
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
 
-When using Bedrock's Invoke API:
-- The regex variant (`tool_search_tool_regex_20251119`) is automatically normalized to `tool_search_tool_regex`
-- The BM25 variant (`tool_search_tool_bm25_20251119`) is automatically filtered out as it's not supported
-- Tool search is only available for Claude Opus 4.5 models
+#### Client Request
+
+```python showLineNumbers title="Client Request via Proxy (Messages API)"
+from anthropic import Anthropic
+
+client = Anthropic(
+    api_key="your-litellm-proxy-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.messages.create(
+    model="claude-sonnet-messages",
+    max_tokens=1024,
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather?"
+        }
+    ],
+    tools=[
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        {
+            "name": "get_weather",
+            "description": "Get weather information",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            },
+            "defer_loading": True
+        }
+    ],
+    extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}
+)
+
+print(response)
+```
+
+---
 
 ## Additional Resources
 
 - [Anthropic Tool Search Documentation](https://docs.anthropic.com/en/docs/build-with-claude/tool-use/tool-search)
 - [LiteLLM Tool Calling Guide](https://docs.litellm.ai/docs/completion/function_call)
-

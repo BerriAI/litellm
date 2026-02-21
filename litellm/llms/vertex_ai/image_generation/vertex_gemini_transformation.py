@@ -7,13 +7,19 @@ import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import (
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -140,11 +146,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         if not vertex_project or not vertex_location:
             raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
-        # Handle global location differently (no region prefix in URL)
-        if vertex_location == "global":
-            base_url = "https://aiplatform.googleapis.com"
-        else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+        base_url = get_vertex_base_url(vertex_location)
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:generateContent"
 
@@ -234,6 +236,27 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         
         return request_body
 
+    def _transform_image_usage(self, usage: dict) -> ImageUsage:
+        input_tokens_details = ImageUsageInputTokensDetails(
+            image_tokens=0,
+            text_tokens=0,
+        )
+        tokens_details = usage.get("promptTokensDetails", [])
+        for details in tokens_details:
+            if isinstance(details, dict) and (modality := details.get("modality")):
+                token_count = details.get("tokenCount", 0)
+                if modality == "TEXT":
+                    input_tokens_details.text_tokens += token_count
+                elif modality == "IMAGE":
+                    input_tokens_details.image_tokens += token_count
+
+        return ImageUsage(
+            input_tokens=usage.get("promptTokenCount", 0),
+            input_tokens_details=input_tokens_details,
+            output_tokens=usage.get("candidatesTokenCount", 0),
+            total_tokens=usage.get("totalTokenCount", 0),
+        )
+
     def transform_image_generation_response(
         self,
         model: str,
@@ -272,10 +295,15 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                 if "inlineData" in part:
                     inline_data = part["inlineData"]
                     if "data" in inline_data:
+                        thought_sig = part.get("thoughtSignature")
                         model_response.data.append(ImageObject(
                             b64_json=inline_data["data"],
                             url=None,
+                            provider_specific_fields={"thought_signature": thought_sig} if thought_sig else None,
                         ))
+
+        if usage_metadata := response_data.get("usageMetadata", None):
+            model_response.usage = self._transform_image_usage(usage_metadata)
         
         return model_response
 

@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import (
@@ -201,15 +200,36 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
-    litellm_params = deployment.litellm_params
-    if "tags" not in litellm_params:
-        litellm_params["tags"] = []
-    litellm_params["tags"].append(tag)
-
     try:
+        # Get current model from database to preserve encrypted fields
+        db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+            where={"model_id": deployment.model_info.id}
+        )
+
+        if db_model is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model {deployment.model_info.id} not found in database"
+            )
+
+        # Prisma returns litellm_params as dict (already parsed from JSON)
+        existing_params = db_model.litellm_params
+        if isinstance(existing_params, str):
+            # If it's a string, parse it
+            existing_params = json.loads(existing_params)
+        elif not isinstance(existing_params, dict):
+            raise Exception(f"Unexpected litellm_params type: {type(existing_params)}")
+
+        # Add tag to tags array (preserve encryption of other fields)
+        if "tags" not in existing_params:
+            existing_params["tags"] = []
+        if tag not in existing_params["tags"]:
+            existing_params["tags"].append(tag)
+
+        # Update database with modified params (keeps encrypted fields encrypted)
         await prisma_client.db.litellm_proxymodeltable.update(
             where={"model_id": deployment.model_info.id},
-            data={"litellm_params": safe_dumps(litellm_params)},
+            data={"litellm_params": json.dumps(existing_params)},
         )
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding tag to deployment: {str(e)}")

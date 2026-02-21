@@ -50,9 +50,21 @@ try:
 except Exception:
     version = "0.0.0"
 
-headers = {
-    "User-Agent": f"litellm/{version}",
-}
+def get_default_headers() -> dict:
+    """
+    Get default headers for HTTP requests.
+
+    - Default: `User-Agent: litellm/{version}`
+    - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+    """
+    user_agent = os.environ.get("LITELLM_USER_AGENT")
+    if user_agent is not None:
+        return {"User-Agent": user_agent}
+
+    return {"User-Agent": f"litellm/{version}"}
+
+# Initialize headers (User-Agent)
+headers = get_default_headers()
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
@@ -154,6 +166,45 @@ def _create_ssl_context(
     return custom_ssl_context
 
 
+def get_ssl_verify(
+    ssl_verify: Optional[Union[bool, str]] = None,
+) -> Union[bool, str]:
+    """
+    Common utility to resolve the SSL verification setting.
+    Prioritizes:
+    1. Passed-in ssl_verify
+    2. os.environ["SSL_VERIFY"]
+    3. litellm.ssl_verify
+    4. os.environ["SSL_CERT_FILE"] (if ssl_verify is True)
+
+    Returns:
+        Union[bool, str]: The resolved SSL verification setting (bool or path to CA bundle)
+    """
+    from litellm.secret_managers.main import str_to_bool
+
+    if ssl_verify is None:
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
+    # Convert string "False"/"True" to boolean if applicable
+    if isinstance(ssl_verify, str):
+        # If it's a file path, return it directly
+        if os.path.exists(ssl_verify):
+            return ssl_verify
+
+        # Otherwise, check if it's a boolean string
+        ssl_verify_bool = str_to_bool(ssl_verify)
+        if ssl_verify_bool is not None:
+            ssl_verify = ssl_verify_bool
+
+    # If SSL verification is enabled, check for SSL_CERT_FILE override
+    if ssl_verify is True:
+        ssl_cert_file = os.getenv("SSL_CERT_FILE")
+        if ssl_cert_file and os.path.exists(ssl_cert_file):
+            return ssl_cert_file
+
+    return ssl_verify if ssl_verify is not None else True
+
+
 def get_ssl_configuration(
     ssl_verify: Optional[VerifyTypes] = None,
 ) -> Union[bool, str, ssl.SSLContext]:
@@ -182,20 +233,12 @@ def get_ssl_configuration(
     Returns:
         Union[bool, str, ssl.SSLContext]: Appropriate SSL configuration
     """
-    from litellm.secret_managers.main import str_to_bool
-
     if isinstance(ssl_verify, ssl.SSLContext):
         # If ssl_verify is already an SSLContext, return it directly
         return ssl_verify
 
-    # Get ssl_verify from environment or litellm settings if not provided
-    if ssl_verify is None:
-        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
-        ssl_verify_bool = (
-            str_to_bool(ssl_verify) if isinstance(ssl_verify, str) else ssl_verify
-        )
-        if ssl_verify_bool is not None:
-            ssl_verify = ssl_verify_bool
+    # Get resolved ssl_verify
+    ssl_verify = get_ssl_verify(ssl_verify=ssl_verify)
 
     ssl_security_level = os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)
     ssl_ecdh_curve = os.getenv("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve)
@@ -340,13 +383,16 @@ class AsyncHTTPHandler:
             shared_session=shared_session,
         )
 
+        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
+        default_headers = get_default_headers()
+
         return httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
             cert=cert,
-            headers=headers,
+            headers=default_headers,
             follow_redirects=True,
         )
 
@@ -769,7 +815,7 @@ class AsyncHTTPHandler:
             connector_kwargs["ssl"] = ssl_context
         elif ssl_verify is False:
             # Priority 2: Explicitly disable SSL verification
-            connector_kwargs["verify_ssl"] = False
+            connector_kwargs["ssl"] = False
 
         return connector_kwargs
 
@@ -800,6 +846,16 @@ class AsyncHTTPHandler:
         if str_to_bool(os.getenv("AIOHTTP_TRUST_ENV", "False")) is True:
             trust_env = True
 
+        #########################################################
+        # Determine SSL config to pass to transport for per-request override
+        # This ensures ssl_verify works even with shared sessions
+        #########################################################
+        ssl_for_transport: Optional[Union[bool, ssl.SSLContext]] = None
+        if ssl_context is not None:
+            ssl_for_transport = ssl_context
+        elif ssl_verify is False:
+            ssl_for_transport = False
+
         verbose_logger.debug("Creating AiohttpTransport...")
 
         # Use shared session if provided and valid
@@ -807,7 +863,11 @@ class AsyncHTTPHandler:
             verbose_logger.debug(
                 f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})"
             )
-            return LiteLLMAiohttpTransport(client=shared_session)
+            return LiteLLMAiohttpTransport(
+                client=shared_session,
+                ssl_verify=ssl_for_transport,
+                owns_session=False,
+            )
 
         # Create new session only if none provided or existing one is invalid
         verbose_logger.debug(
@@ -822,15 +882,16 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs["limit_per_host"] = (
-                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-            )
+            transport_connector_kwargs[
+                "limit_per_host"
+            ] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
                 trust_env=trust_env,
             ),
+            ssl_verify=ssl_for_transport,
         )
 
     @staticmethod
@@ -868,6 +929,9 @@ class HTTPHandler:
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
+        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
+        default_headers = get_default_headers() if not disable_default_headers else None
+
         if client is None:
             transport = self._create_sync_transport()
 
@@ -877,7 +941,7 @@ class HTTPHandler:
                 timeout=timeout,
                 verify=ssl_config,
                 cert=cert,
-                headers=headers if not disable_default_headers else None,
+                headers=default_headers,
                 follow_redirects=True,
             )
         else:
@@ -1143,7 +1207,28 @@ def get_async_httpx_client(
     If not present, creates a new client
 
     Caches the new client and returns it.
+
+    Note: When shared_session is provided, the cache is bypassed to ensure
+    the user's session (with its trace_configs, connector settings, etc.)
+    is used for the request.
     """
+    # When shared_session is provided, bypass cache and create a new handler
+    # that uses the user's session directly. This preserves the user's
+    # session configuration including trace_configs for aiohttp tracing.
+    if shared_session is not None:
+        verbose_logger.debug(
+            f"shared_session provided (ID: {id(shared_session)}), bypassing client cache"
+        )
+        if params is not None:
+            handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+            handler_params["shared_session"] = shared_session
+            return AsyncHTTPHandler(**handler_params)
+        else:
+            return AsyncHTTPHandler(
+                timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+                shared_session=shared_session,
+            )
+
     _params_key_name = ""
     if params is not None:
         for key, value in params.items():
@@ -1153,20 +1238,30 @@ def get_async_httpx_client(
                 pass
 
     _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
-    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
+
+    # Lazily initialize the global in-memory client cache to avoid relying on
+    # litellm globals being fully populated during import time.
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is None:
+        from litellm.caching.llm_caching_handler import LLMClientCache
+
+        cache = LLMClientCache()
+        setattr(litellm, "in_memory_llm_clients_cache", cache)
+
+    _cached_client = cache.get_cache(_cache_key_name)
     if _cached_client:
         return _cached_client
 
     if params is not None:
-        params["shared_session"] = shared_session
-        _new_client = AsyncHTTPHandler(**params)
+        # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
+        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0),
-            shared_session=shared_session,
         )
 
-    litellm.in_memory_llm_clients_cache.set_cache(
+    cache.set_cache(
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
@@ -1191,16 +1286,27 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     _cache_key_name = "httpx_client" + _params_key_name
 
-    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_cache_key_name)
+    # Lazily initialize the global in-memory client cache to avoid relying on
+    # litellm globals being fully populated during import time.
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is None:
+        from litellm.caching.llm_caching_handler import LLMClientCache
+
+        cache = LLMClientCache()
+        setattr(litellm, "in_memory_llm_clients_cache", cache)
+
+    _cached_client = cache.get_cache(_cache_key_name)
     if _cached_client:
         return _cached_client
 
     if params is not None:
-        _new_client = HTTPHandler(**params)
+        # Filter out params that are only used for cache key, not for HTTPHandler.__init__
+        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        _new_client = HTTPHandler(**handler_params)
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
-    litellm.in_memory_llm_clients_cache.set_cache(
+    cache.set_cache(
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,

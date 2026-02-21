@@ -294,44 +294,65 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             self.async_log_success_event, kwargs, response_obj, start_time, end_time
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        standard_callback_dynamic_params = kwargs.get(
-            "standard_callback_dynamic_params"
-        )
-        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
-            globalLangfuseLogger=self,
-            standard_callback_dynamic_params=standard_callback_dynamic_params,
-            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
-        )
-        langfuse_logger_to_use.log_event_on_langfuse(
-            kwargs=kwargs,
-            response_obj=response_obj,
-            start_time=start_time,
-            end_time=end_time,
-            user_id=kwargs.get("user", None),
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        return run_async_function(
+            self.async_log_failure_event, kwargs, response_obj, start_time, end_time
         )
 
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            standard_callback_dynamic_params = kwargs.get(
+                "standard_callback_dynamic_params"
+            )
+            langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+                globalLangfuseLogger=self,
+                standard_callback_dynamic_params=standard_callback_dynamic_params,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+            )
+            langfuse_logger_to_use.log_event_on_langfuse(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time,
+                user_id=kwargs.get("user", None),
+            )
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            
+            verbose_logger.exception(
+                f"Langfuse Layer Error - Exception occurred while logging success event: {str(e)}"
+            )
+            self.handle_callback_failure(callback_name="langfuse")
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        standard_callback_dynamic_params = kwargs.get(
-            "standard_callback_dynamic_params"
-        )
-        langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
-            globalLangfuseLogger=self,
-            standard_callback_dynamic_params=standard_callback_dynamic_params,
-            in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
-        )
-        standard_logging_object = cast(
-            Optional[StandardLoggingPayload],
-            kwargs.get("standard_logging_object", None),
-        )
-        if standard_logging_object is None:
-            return
-        langfuse_logger_to_use.log_event_on_langfuse(
-            start_time=start_time,
-            end_time=end_time,
-            response_obj=None,
-            user_id=kwargs.get("user", None),
-            status_message=standard_logging_object["error_str"],
-            level="ERROR",
-            kwargs=kwargs,
-        )
+        try:
+            standard_callback_dynamic_params = kwargs.get(
+                "standard_callback_dynamic_params"
+            )
+            langfuse_logger_to_use = LangFuseHandler.get_langfuse_logger_for_request(
+                globalLangfuseLogger=self,
+                standard_callback_dynamic_params=standard_callback_dynamic_params,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
+            )
+            standard_logging_object = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
+            )
+            if standard_logging_object is None:
+                return
+            langfuse_logger_to_use.log_event_on_langfuse(
+                start_time=start_time,
+                end_time=end_time,
+                response_obj=None,
+                user_id=kwargs.get("user", None),
+                status_message=standard_logging_object["error_str"],
+                level="ERROR",
+                kwargs=kwargs,
+            )
+        except Exception as e:
+            from litellm._logging import verbose_logger
+            
+            verbose_logger.exception(
+                f"Langfuse Layer Error - Exception occurred while logging failure event: {str(e)}"
+            )
+            self.handle_callback_failure(callback_name="langfuse")

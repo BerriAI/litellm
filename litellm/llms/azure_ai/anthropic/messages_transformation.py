@@ -48,7 +48,12 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers = BaseAzureLLM._base_validate_azure_environment(
             headers=headers, litellm_params=litellm_params_obj
         )
-        
+
+        # Azure Anthropic uses x-api-key header (not api-key)
+        # Convert api-key to x-api-key if present
+        if "api-key" in headers and "x-api-key" not in headers:
+            headers["x-api-key"] = headers.pop("api-key")
+
         # Set anthropic-version header
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = "2023-06-01"
@@ -57,10 +62,9 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         if "content-type" not in headers:
             headers["content-type"] = "application/json"
 
-        # Update headers with optional anthropic beta features
-        headers = self._update_headers_with_optional_anthropic_beta(
+        headers = self._update_headers_with_anthropic_beta(
             headers=headers,
-            context_management=optional_params.get("context_management"),
+            optional_params=optional_params,
         )
 
         return headers, api_base

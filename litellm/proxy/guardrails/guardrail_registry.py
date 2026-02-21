@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, cast
 
 import litellm
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     Guardrail,
@@ -18,6 +20,10 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
     SupportedGuardrailIntegrations,
+)
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrail,
+    initialize_guardrail as initialize_grayswan,
 )
 
 from .guardrail_initializers import (
@@ -36,9 +42,12 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
+    SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
 }
 
-guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {}
+guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {
+    SupportedGuardrailIntegrations.GRAYSWAN.value: GraySwanGuardrail
+}
 
 
 def get_guardrail_initializer_from_hooks():
@@ -392,6 +401,7 @@ class InMemoryGuardrailHandler:
         self,
         guardrail: Guardrail,
         config_file_path: Optional[str] = None,
+        llm_router: Optional["Router"] = None,
     ) -> Optional[Guardrail]:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
@@ -440,7 +450,16 @@ class InMemoryGuardrailHandler:
         initializer = guardrail_initializer_registry.get(guardrail_type)
 
         if initializer:
-            custom_guardrail_callback = initializer(litellm_params, guardrail)
+            # Try to call with llm_router first, fall back to without if it fails
+            import inspect
+
+            sig = inspect.signature(initializer)
+            if "llm_router" in sig.parameters:
+                custom_guardrail_callback = initializer(
+                    litellm_params, guardrail, llm_router  # type: ignore
+                )
+            else:
+                custom_guardrail_callback = initializer(litellm_params, guardrail)
         elif isinstance(guardrail_type, str) and "." in guardrail_type:
             custom_guardrail_callback = self.initialize_custom_guardrail(
                 guardrail=cast(dict, guardrail),
@@ -471,7 +490,7 @@ class InMemoryGuardrailHandler:
         config_file_path: Optional[str] = None,
     ) -> Optional[CustomGuardrail]:
         """
-        Initialize a Custom Guardrail from a python file
+        Initialize a Custom Guardrail from a python file or module path
 
         This initializes it by adding it to the litellm callback manager
         """
@@ -480,26 +499,12 @@ class InMemoryGuardrailHandler:
                 "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
             )
 
-        _file_name, _class_name = guardrail_type.split(".")
         verbose_proxy_logger.debug(
-            "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
+            "Initializing custom guardrail: %s",
             guardrail_type,
-            _file_name,
-            _class_name,
         )
 
-        directory = os.path.dirname(config_file_path)
-        module_file_path = os.path.join(directory, _file_name) + ".py"
-
-        spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
-        if not spec:
-            raise ImportError(
-                f"Could not find a module specification for {module_file_path}"
-            )
-
-        module = importlib.util.module_from_spec(spec)  # type: ignore
-        spec.loader.exec_module(module)  # type: ignore
-        _guardrail_class = getattr(module, _class_name)
+        _guardrail_class = get_instance_fn(guardrail_type, config_file_path=config_file_path)
 
         mode = litellm_params.mode
         if mode is None:
@@ -508,10 +513,24 @@ class InMemoryGuardrailHandler:
             )
 
         default_on = litellm_params.default_on
+
+        # Extract additional params from litellm_params to pass to custom guardrail
+        # This matches the behavior of other guardrail initializers (e.g., initialize_lakera)
+        # and aligns with the documented behavior for custom guardrails
+        if hasattr(litellm_params, "model_dump"):
+            extra_params = litellm_params.model_dump(exclude_none=True)
+        else:
+            extra_params = dict(litellm_params) if litellm_params else {}
+
+        # Remove params that are handled explicitly or are internal
+        for key in ["guardrail", "mode", "default_on"]:
+            extra_params.pop(key, None)
+
         _guardrail_callback = _guardrail_class(
             guardrail_name=guardrail["guardrail_name"],
             event_hook=mode,
             default_on=default_on,
+            **extra_params,
         )
         litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
 

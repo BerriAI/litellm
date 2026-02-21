@@ -172,6 +172,125 @@ print(f"Results available at: {output_s3_uri}")
 
 **Note:** The actual embedding results are stored in S3. When the job is completed, download the results from the S3 location specified in `status.metadata['output_file_id']`. The results will be in JSON/JSONL format containing the embedding vectors.
 
+## Amazon Nova Multimodal Embeddings
+
+Amazon Nova supports multimodal embeddings for text, images, video, and audio. It offers flexible embedding dimensions and purposes optimized for different use cases.
+
+### Supported Features
+
+- **Modalities**: Text, Image, Video, Audio
+- **Dimensions**: 256, 384, 1024, 3072 (default: 3072)
+- **Embedding Purposes**: 
+  - `GENERIC_INDEX` (default)
+  - `GENERIC_RETRIEVAL`
+  - `TEXT_RETRIEVAL`
+  - `IMAGE_RETRIEVAL`
+  - `VIDEO_RETRIEVAL`
+  - `AUDIO_RETRIEVAL`
+  - `CLASSIFICATION`
+  - `CLUSTERING`
+
+### Text Embedding
+
+```python
+from litellm import embedding
+
+response = embedding(
+    model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+    input=["Hello, world!"],
+    aws_region_name="us-east-1",
+    dimensions=1024,  # Optional: 256, 384, 1024, or 3072
+)
+
+print(response.data[0].embedding)
+```
+
+### Image Embedding with Base64
+
+Amazon Nova accepts images in base64 format using the standard data URL format:
+
+```python
+import base64
+from litellm import embedding
+
+# Method 1: Load image from file
+with open("image.jpg", "rb") as image_file:
+    image_data = base64.b64encode(image_file.read()).decode('utf-8')
+    # Create data URL with proper format
+    image_base64 = f"data:image/jpeg;base64,{image_data}"
+
+response = embedding(
+    model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+    input=[image_base64],
+    aws_region_name="us-east-1",
+    dimensions=1024,
+)
+
+print(f"Image embedding: {response.data[0].embedding[:10]}...")  # First 10 dimensions
+```
+
+#### Supported Image Formats
+
+Nova supports the following image formats:
+- JPEG: `data:image/jpeg;base64,...`
+- PNG: `data:image/png;base64,...`
+- GIF: `data:image/gif;base64,...`
+- WebP: `data:image/webp;base64,...`
+
+#### Complete Example with Error Handling
+
+```python
+import base64
+from litellm import embedding
+
+def get_image_embedding(image_path, dimensions=1024):
+    """
+    Get embedding for an image file.
+    
+    Args:
+        image_path: Path to the image file
+        dimensions: Embedding dimension (256, 384, 1024, or 3072)
+    
+    Returns:
+        List of embedding values
+    """
+    try:
+        # Determine image format from file extension
+        if image_path.lower().endswith('.png'):
+            mime_type = "image/png"
+        elif image_path.lower().endswith(('.jpg', '.jpeg')):
+            mime_type = "image/jpeg"
+        elif image_path.lower().endswith('.gif'):
+            mime_type = "image/gif"
+        elif image_path.lower().endswith('.webp'):
+            mime_type = "image/webp"
+        else:
+            raise ValueError(f"Unsupported image format: {image_path}")
+        
+        # Read and encode image
+        with open(image_path, "rb") as image_file:
+            image_data = base64.b64encode(image_file.read()).decode('utf-8')
+            image_base64 = f"data:{mime_type};base64,{image_data}"
+        
+        # Get embedding
+        response = embedding(
+            model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+            input=[image_base64],
+            aws_region_name="us-east-1",
+            dimensions=dimensions,
+        )
+        
+        return response.data[0].embedding
+        
+    except Exception as e:
+        print(f"Error getting image embedding: {e}")
+        raise
+
+# Example usage
+image_embedding = get_image_embedding("photo.jpg", dimensions=1024)
+print(f"Got embedding with {len(image_embedding)} dimensions")
+```
+
 ### Error Handling
 
 #### Common Errors

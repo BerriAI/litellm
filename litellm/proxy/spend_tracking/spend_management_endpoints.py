@@ -3,7 +3,6 @@ import collections
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
@@ -14,15 +13,15 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,
+    _user_has_admin_view,
+)
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
-    _user_has_admin_view,
-)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -1672,11 +1671,28 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     model: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by model"
     ),
+    model_id: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by model ID (litellm model deployment id)"
+    ),
     key_alias: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by key alias"
     ),
     end_user: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by end user"
+    ),
+    error_code: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by error code (e.g., '404', '500')"
+    ),
+    error_message: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by error message (partial string match)"
+    ),
+    sort_by: str = fastapi.Query(
+        default="startTime",
+        description="Sort logs by field: spend, total_tokens, startTime, or endTime",
+    ),
+    sort_order: Optional[str] = fastapi.Query(
+        default="desc",
+        description="Sort order: asc or desc",
     ),
 ):
     """
@@ -1706,6 +1722,23 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             message="Start date and end date are required",
             type="bad_request",
             param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Validate sort_by and sort_order
+    valid_sort_fields = {"spend", "total_tokens", "startTime", "endTime"}
+    if sort_by not in valid_sort_fields:
+        raise ProxyException(
+            message=f"Invalid sort_by: {sort_by}. Must be one of: {', '.join(sorted(valid_sort_fields))}",
+            type="bad_request",
+            param="sort_by",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if sort_order is not None and sort_order.lower() not in {"asc", "desc"}:
+        raise ProxyException(
+            message=f"Invalid sort_order: {sort_order}. Must be one of: asc, desc",
+            type="bad_request",
+            param="sort_order",
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1757,12 +1790,36 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if model is not None:
             where_conditions["model"] = model
 
+        if model_id is not None:
+            where_conditions["model_id"] = model_id
+
+        # Build metadata filters
+        metadata_filters = []
         if key_alias is not None:
-            where_conditions["metadata"] = {
+            metadata_filters.append({
                 "path": ["user_api_key_alias"],
                 "string_contains": key_alias,
-            }
+            })
 
+        if error_code is not None:
+            metadata_filters.append({
+                "path": ["error_information", "error_code"],
+                "equals": f'"{error_code}"',
+            })
+
+        if error_message is not None:
+            metadata_filters.append({
+                "path": ["error_information", "error_message"],
+                "string_contains": error_message,
+            })
+
+        if metadata_filters:
+            if len(metadata_filters) == 1:
+                where_conditions["metadata"] = metadata_filters[0]
+            else:
+                where_conditions["AND"] = where_conditions.get("AND", []) + [
+                    {"metadata": filter_cond} for filter_cond in metadata_filters
+                ]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
@@ -1797,39 +1854,120 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
 
+        # Build order clause from sort_by and sort_order
+        order_column = sort_by
+        order_direction = (sort_order or "desc").lower()
+
         # Get total count of records
         total_records = await prisma_client.db.litellm_spendlogs.count(
             where=where_conditions,
         )
 
-        # Get paginated data
-        data = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={
-                "startTime": "desc",
-            },
-            skip=skip,
-            take=page_size,
-        )
+        # Build raw SQL to fetch paginated data WITHOUT heavy columns
+        # (messages, response, proxy_server_request can be hundreds of KB per row).
+        # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
+        sql_conditions: List[str] = []
+        sql_params: List[Any] = []
+        p = 1  # parameter index counter
+
+        # Date range (always present)
+        sql_conditions.append(f'"startTime" >= ${p}::timestamptz')
+        sql_params.append(start_date_obj)
+        p += 1
+        sql_conditions.append(f'"startTime" <= ${p}::timestamptz')
+        sql_params.append(end_date_obj)
+        p += 1
+
+        # Equality filters - read effective values from where_conditions (post-authorization)
+        for sql_col, wc_key in [
+            ("team_id", "team_id"),
+            ('"user"', "user"),
+            ("api_key", "api_key"),
+            ("request_id", "request_id"),
+            ("model", "model"),
+            ("model_id", "model_id"),
+            ("end_user", "end_user"),
+        ]:
+            val = where_conditions.get(wc_key)
+            if val is not None and isinstance(val, str):
+                sql_conditions.append(f"{sql_col} = ${p}")
+                sql_params.append(val)
+                p += 1
+
+        # Status filter
+        if status_filter is not None:
+            if status_filter == "success":
+                sql_conditions.append("(status = 'success' OR status IS NULL)")
+            else:
+                sql_conditions.append(f"status = ${p}")
+                sql_params.append(status_filter)
+                p += 1
+
+        # Spend range
+        if min_spend is not None:
+            sql_conditions.append(f"spend >= ${p}")
+            sql_params.append(min_spend)
+            p += 1
+        if max_spend is not None:
+            sql_conditions.append(f"spend <= ${p}")
+            sql_params.append(max_spend)
+            p += 1
+
+        # Metadata JSON filters (PostgreSQL JSONB operators)
+        if key_alias is not None:
+            sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
+            sql_params.append(f"%{key_alias}%")
+            p += 1
+        if error_code is not None:
+            sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")
+            sql_params.append(error_code)
+            p += 1
+        if error_message is not None:
+            sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
+            sql_params.append(f"%{error_message}%")
+            p += 1
+
+        # Quote column names that need quoting in SQL
+        _sql_col = f'"{order_column}"' if order_column in ("startTime", "endTime") else order_column
+        _sql_dir = "ASC" if order_direction == "asc" else "DESC"
+
+        sql_query = f"""
+            SELECT
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                "completionStartTime", model, model_id, model_group,
+                custom_llm_provider, api_base, "user", metadata,
+                cache_hit, cache_key, request_tags, team_id,
+                organization_id, end_user, requester_ip_address,
+                session_id, status, mcp_namespaced_tool_name, agent_id
+            FROM "LiteLLM_SpendLogs"
+            WHERE {" AND ".join(sql_conditions)}
+            ORDER BY {_sql_col} {_sql_dir}
+            LIMIT ${p} OFFSET ${p + 1}
+        """
+        sql_params.extend([page_size, skip])
+
+        data = await prisma_client.db.query_raw(sql_query, *sql_params)
 
         # Calculate total pages
         total_pages = (total_records + page_size - 1) // page_size
 
         verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 
-        return {
-            "data": data,
-            "total": total_records,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": total_pages,
-        }
+        return await _build_ui_spend_logs_response(
+            prisma_client,
+            data,
+            total_records,
+            page,
+            page_size,
+            total_pages,
+            enrich_session_counts=not is_v2,
+        )
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
         raise handle_exception_on_proxy(e)
 
 
-@lru_cache(maxsize=128)
 @router.get(
     "/spend/logs/ui/{request_id}",
     tags=["Budget & Spend Tracking"],
@@ -1875,6 +2013,29 @@ async def ui_view_request_response_for_request_id(
         )
         if payload is not None:
             return payload
+
+    # Fallback: fetch heavy columns directly from the database.
+    # The list endpoint (/spend/logs/ui) intentionally excludes messages,
+    # response, and proxy_server_request for performance. When no custom
+    # logger (S3, GCS, etc.) is configured, we still need to serve these
+    # fields from the DB for the detail/drawer view.
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is not None:
+        sql_query = """
+            SELECT messages, response, proxy_server_request
+            FROM "LiteLLM_SpendLogs"
+            WHERE request_id = $1
+            LIMIT 1
+        """
+        db_result = await prisma_client.db.query_raw(sql_query, request_id)
+        if db_result and len(db_result) > 0:
+            row = db_result[0]
+            return {
+                "messages": row.get("messages"),
+                "response": row.get("response"),
+                "proxy_server_request": row.get("proxy_server_request"),
+            }
 
     return None
 
@@ -1938,7 +2099,7 @@ async def view_spend_logs(  # noqa: PLR0915
 
     Example Request for specific api_key
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" \
 -H "Authorization: Bearer sk-1234"
     ```
 
@@ -3041,13 +3202,22 @@ async def ui_view_session_spend_logs(
             where=where_conditions
         )
 
-        # Query the database with pagination
-        result = await prisma_client.db.litellm_spendlogs.find_many(
-            where=where_conditions,
-            order={"startTime": "asc"},
-            skip=skip,
-            take=page_size,
-        )
+        # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
+        sql_query = """
+            SELECT
+                request_id, call_type, api_key, spend, total_tokens,
+                prompt_tokens, completion_tokens, "startTime", "endTime",
+                "completionStartTime", model, model_id, model_group,
+                custom_llm_provider, api_base, "user", metadata,
+                cache_hit, cache_key, request_tags, team_id,
+                organization_id, end_user, requester_ip_address,
+                session_id, status, mcp_namespaced_tool_name, agent_id
+            FROM "LiteLLM_SpendLogs"
+            WHERE session_id = $1
+            ORDER BY "startTime" ASC
+            LIMIT $2 OFFSET $3
+        """
+        result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip)
 
         total_pages = (total_records + page_size - 1) // page_size
 
@@ -3066,6 +3236,95 @@ async def ui_view_session_spend_logs(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e),
             )
+
+
+async def _build_ui_spend_logs_response(
+    prisma_client: "PrismaClient",
+    data: list,
+    total_records: int,
+    page: int,
+    page_size: int,
+    total_pages: int,
+    enrich_session_counts: bool = True,
+) -> dict:
+    """
+    Build the paginated response for the UI spend-logs endpoint.
+
+    When ``enrich_session_counts`` is ``True`` (the default for the v1/UI
+    endpoint), each row is enriched with ``session_total_count`` so the
+    frontend knows which sessions are expandable (multi-call sessions).
+    For every row that carries a ``session_id``, a single ``GROUP BY`` query
+    fetches the total number of logs in each referenced session.  Rows without
+    a ``session_id`` default to ``1``.
+
+    When ``enrich_session_counts`` is ``False`` (v2 endpoint), rows are
+    serialised without the extra query.
+
+    Args:
+        prisma_client: The connected Prisma client instance.
+        data: A list of Prisma model instances (must support ``.model_dump()``
+              and have a ``session_id`` attribute).
+        total_records: Total number of matching records (for pagination).
+        page: Current page number.
+        page_size: Number of items per page.
+        total_pages: Total number of pages.
+        enrich_session_counts: Whether to add ``session_total_count`` to each
+            row.  Defaults to ``True``.
+
+    Returns:
+        A dict with ``data`` (enriched rows), ``total``, ``page``,
+        ``page_size``, and ``total_pages``.
+    """
+    count_map: dict[str, int] = {}
+    if enrich_session_counts:
+        session_ids = list(
+            {
+                (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+                for row in data
+                if (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
+            }
+        )
+        if session_ids:
+            # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
+            # is bounded by page_size (typically 25-50 distinct session IDs).
+            # If performance degrades at scale, consider short-lived caching or
+            # folding the count into the main query via a window function.
+            counts = await prisma_client.db.litellm_spendlogs.group_by(
+                by=["session_id"],
+                where={"session_id": {"in": session_ids}},
+                count={"session_id": True},
+            )
+            count_map = {
+                r["session_id"]: r["_count"]["session_id"]
+                for r in counts
+                if r.get("session_id")
+            }
+
+    if enrich_session_counts:
+        enriched: List[dict] = []
+        for row in data:
+            row_dict = (
+                dict(row)
+                if isinstance(row, dict)
+                else row.model_dump()
+            )
+            sid = row_dict.get("session_id")
+            row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
+            enriched.append(row_dict)
+        response_data: list = enriched
+    else:
+        # v2 path: return raw Prisma model instances so FastAPI applies its
+        # own Pydantic-aware serialisation (preserves alias handling, custom
+        # serializers, etc.).
+        response_data = data  # type: ignore[assignment]
+
+    return {
+        "data": response_data,
+        "total": total_records,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, Any]:

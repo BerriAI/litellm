@@ -15,6 +15,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
+from litellm._version import version
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 try:
@@ -725,6 +726,7 @@ def test_embeddings_with_sync_http_handler(monkeypatch):
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
             },
             data=json.dumps(
                 {
@@ -767,6 +769,7 @@ def test_embeddings_with_async_http_handler(monkeypatch):
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
             },
             data=json.dumps(
                 {
@@ -823,6 +826,7 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkey
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
             },
             data=json.dumps(
                 {
@@ -895,6 +899,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": f"litellm/{version}",
                 },
                 data=json.dumps(
                     {
@@ -923,6 +928,7 @@ async def test_databricks_embeddings(sync_mode, monkeypatch):
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
+                    "User-Agent": f"litellm/{version}",
                 },
                 data=json.dumps(
                     {

@@ -83,6 +83,7 @@ class JavelinGuardrail(CustomGuardrail):
     async def call_javelin_guard(
         self,
         request: JavelinGuardRequest,
+        event_type: GuardrailEventHooks,
     ) -> JavelinGuardResponse:
         """
         Call the Javelin guard API.
@@ -158,6 +159,7 @@ class JavelinGuardrail(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
             )
 
     async def async_pre_call_hook(
@@ -208,7 +210,9 @@ class JavelinGuardrail(CustomGuardrail):
             config=self.config if self.config else {},
         )
 
-        javelin_response = await self.call_javelin_guard(request=javelin_guard_request)
+        javelin_response = await self.call_javelin_guard(
+            request=javelin_guard_request, event_type=GuardrailEventHooks.pre_call
+        )
 
         assessments = javelin_response.get("assessments", [])
         reject_prompt = ""

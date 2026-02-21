@@ -136,7 +136,7 @@ export const useMcpOAuthFlow = ({
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
           client_name: temporaryPayload.alias || temporaryPayload.server_name || serverId,
-          grant_types: ["authorization_code"],
+          grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"],
           token_endpoint_auth_method:
             temporaryPayload.credentials && temporaryPayload.credentials.client_secret ? "client_secret_post" : "none",
