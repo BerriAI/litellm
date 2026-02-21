@@ -173,8 +173,9 @@ async def test_pass_through_endpoint_rerank(client):
 )
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_rpm_limit(
-    client, auth, rpm_limit, requests_to_make, expected_status_codes, num_users
+    client, monkeypatch, auth, rpm_limit, requests_to_make, expected_status_codes, num_users
 ):
+    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
@@ -273,8 +274,9 @@ async def test_pass_through_endpoint_rpm_limit(
 )
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_sequential_rpm_limit(
-    client, auth, rpm_limit, requests_to_make, expected_status_codes
+    client, monkeypatch, auth, rpm_limit, requests_to_make, expected_status_codes
 ):
+    monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
