@@ -4,8 +4,13 @@ Airline-specific competitor intent: other meaning (e.g. location/travel context)
 Uses context-based disambiguation only: no hardcoded place lists. Detects travel-location
 language (prepositions, travel verbs, booking/entry nouns) vs airline context (airways,
 carrier, lounge, miles, etc.) and scores to decide OTHER_MEANING vs COMPETITOR.
+
+When competitors is not provided, loads major_airlines.json and excludes the customer's
+brand_self so all other major airlines are treated as competitors.
 """
 
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (
@@ -102,6 +107,39 @@ AIRLINE_EXPLICIT_OTHER_MEANING_MARKER = (
     r"\b(fly|travel|going|visit|layover|stopover|transit)\b.{0,12}\b(to|in|via|from)\b.{0,8}\b"
 )
 
+_MAJOR_AIRLINES_PATH = (
+    Path(__file__).resolve().parent / "major_airlines.json"
+)
+
+
+def _load_competitors_excluding_brand(brand_self: List[str]) -> List[str]:
+    """
+    Load competitor tokens from major_airlines.json (harm_toxic_abuse-style format).
+    Exclude any airline whose id or match variants overlap with brand_self.
+    Returns a flat list of match variants (pipe-separated values) from non-excluded airlines.
+    """
+    brand_set = {b.lower().strip() for b in brand_self if b}
+    if not _MAJOR_AIRLINES_PATH.exists():
+        return []
+    try:
+        with open(_MAJOR_AIRLINES_PATH, encoding="utf-8") as f:
+            airlines = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+    result: List[str] = []
+    for entry in airlines:
+        if not isinstance(entry, dict):
+            continue
+        match_str = entry.get("match") or ""
+        variants = [v.strip().lower() for v in match_str.split("|") if v.strip()]
+        words_in_match = set()
+        for v in variants:
+            words_in_match.update(v.split())
+        if brand_set & words_in_match or any(v in brand_set for v in variants):
+            continue
+        result.extend(variants)
+    return result
+
 
 class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
     """
@@ -123,6 +161,12 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
             merged["explicit_competitor_marker"] = AIRLINE_EXPLICIT_COMPETITOR_MARKER
         if not merged.get("explicit_other_meaning_marker"):
             merged["explicit_other_meaning_marker"] = AIRLINE_EXPLICIT_OTHER_MEANING_MARKER
+        if not merged.get("domain_words"):
+            merged["domain_words"] = ["airline", "airlines", "carrier"]
+        if not merged.get("competitors"):
+            merged["competitors"] = _load_competitors_excluding_brand(
+                merged.get("brand_self") or []
+            )
         super().__init__(merged)
         self._other_meaning_signals = list(merged.get("other_meaning_signals") or [])
         self._competitor_signals = list(merged.get("competitor_signals") or [])
