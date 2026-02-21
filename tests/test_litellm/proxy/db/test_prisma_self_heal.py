@@ -93,6 +93,36 @@ async def test_attempt_db_reconnect_should_skip_when_lock_timeout_expires(
 
 
 @pytest.mark.asyncio
+async def test_attempt_db_reconnect_should_not_leak_lock_on_timeout_race(
+    mock_proxy_logging,
+):
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client.db.disconnect = AsyncMock(return_value=None)
+    client.db.connect = AsyncMock(return_value=None)
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+
+    async def _fake_wait(tasks, timeout=None, return_when=None):
+        # Let the acquire task run first, then emulate a timeout response
+        # from asyncio.wait to exercise timeout-race cleanup.
+        await asyncio.sleep(0)
+        return set(), set(tasks)
+
+    with patch("litellm.proxy.utils.asyncio.wait", side_effect=_fake_wait):
+        result = await client.attempt_db_reconnect(
+            reason="unit_test_reconnect_lock_timeout_race",
+            force=True,
+            timeout_seconds=0.1,
+            lock_timeout_seconds=0.01,
+        )
+
+    assert result is False
+    assert client._db_reconnect_lock.locked() is False
+    client.db.disconnect.assert_not_called()
+    client.db.connect.assert_not_called()
+    client.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_attempt_db_reconnect_should_set_cooldown_after_attempt(mock_proxy_logging):
     client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
     client._db_last_reconnect_attempt_ts = 0.0
