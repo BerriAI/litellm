@@ -3553,30 +3553,26 @@ class PrismaClient:
     ) -> None:
         """
         Run a reconnect cycle. When timeout_seconds is set, use direct db operations
-        with per-step timeouts to avoid long retries on hot paths (e.g. auth).
+        with a single overall timeout budget to avoid long retries on hot paths
+        (e.g. auth).
         """
-        if timeout_seconds is None:
+        async def _do_direct_reconnect() -> None:
             try:
-                await self.disconnect()
+                await self.db.disconnect()
             except Exception as disconnect_err:
                 verbose_proxy_logger.debug(
                     "Prisma DB disconnect before reconnect failed (ignored): %s",
                     disconnect_err,
                 )
-            await self.connect()
-            await self.health_check()
+
+            await self.db.connect()
+            await self.db.query_raw("SELECT 1")
+
+        if timeout_seconds is None:
+            await _do_direct_reconnect()
             return
 
-        try:
-            await self.db.disconnect()
-        except Exception as disconnect_err:
-            verbose_proxy_logger.debug(
-                "Prisma DB disconnect before reconnect failed (ignored): %s",
-                disconnect_err,
-            )
-
-        await asyncio.wait_for(self.db.connect(), timeout=timeout_seconds)
-        await asyncio.wait_for(self.db.query_raw("SELECT 1"), timeout=timeout_seconds)
+        await asyncio.wait_for(_do_direct_reconnect(), timeout=timeout_seconds)
 
     async def attempt_db_reconnect(
         self,
