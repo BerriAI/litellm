@@ -80,11 +80,11 @@ DEFAULT_CREATIVE_KEYWORDS: List[str] = [
 # ─── Default Dimension Weights ───
 
 DEFAULT_DIMENSION_WEIGHTS: Dict[str, float] = {
-    "tokenCount": 0.15,
-    "codePresence": 0.20,
-    "reasoningMarkers": 0.25,
-    "technicalTerms": 0.15,
-    "simpleIndicators": 0.15,
+    "tokenCount": 0.10,        # Reduced - length is less important than content
+    "codePresence": 0.25,      # Increased - code requests need capable models
+    "reasoningMarkers": 0.25,  # High - explicit reasoning requests
+    "technicalTerms": 0.20,    # Increased - technical content matters
+    "simpleIndicators": 0.10,  # Reduced - don't over-penalize simple patterns
     "multiStepPatterns": 0.05,
     "questionComplexity": 0.05,
 }
@@ -102,29 +102,82 @@ DEFAULT_TIER_BOUNDARIES: Dict[str, float] = {
 # ─── Default Token Thresholds ───
 
 DEFAULT_TOKEN_THRESHOLDS: Dict[str, int] = {
-    "simple": 50,   # Requests under 50 tokens are likely simple
-    "complex": 500,  # Requests over 500 tokens are likely complex
+    "simple": 15,    # Only very short prompts (<15 tokens) are penalized
+    "complex": 400,  # Long prompts (>400 tokens) get complexity boost
 }
 
 
 # ─── Default Tier to Model Mapping ───
 
+# Standard defaults - best cost/performance for most users
 DEFAULT_TIER_MODELS: Dict[str, str] = {
     "SIMPLE": "gpt-4o-mini",
     "MEDIUM": "gpt-4o",
     "COMPLEX": "claude-sonnet-4-20250514",
-    "REASONING": "claude-sonnet-4-20250514",  # or o1/o3 when available
+    "REASONING": "claude-sonnet-4-20250514",
+}
+
+# Enterprise presets - for teams using specific cloud providers
+ENTERPRISE_TIER_PRESETS: Dict[str, Dict[str, str]] = {
+    # AWS Bedrock - for enterprises on AWS
+    "bedrock": {
+        "SIMPLE": "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+        "MEDIUM": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "COMPLEX": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "REASONING": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    },
+    # Google Vertex AI - for enterprises on GCP
+    "vertex": {
+        "SIMPLE": "vertex_ai/gemini-2.0-flash",
+        "MEDIUM": "vertex_ai/gemini-2.0-flash",
+        "COMPLEX": "vertex_ai/gemini-2.5-pro",
+        "REASONING": "vertex_ai/gemini-2.5-pro",
+    },
+    # Azure OpenAI - for enterprises on Azure
+    "azure": {
+        "SIMPLE": "azure/gpt-4o-mini",
+        "MEDIUM": "azure/gpt-4o",
+        "COMPLEX": "azure/gpt-4o",
+        "REASONING": "azure/o1",
+    },
+    # Direct API (OpenAI + Anthropic) - best quality, recommended for startups
+    "standard": {
+        "SIMPLE": "gpt-4o-mini",
+        "MEDIUM": "gpt-4o",
+        "COMPLEX": "claude-sonnet-4-20250514",
+        "REASONING": "claude-sonnet-4-20250514",
+    },
+    # Cost-optimized - maximum savings
+    "cost_optimized": {
+        "SIMPLE": "gemini/gemini-2.0-flash",
+        "MEDIUM": "gpt-4o-mini",
+        "COMPLEX": "claude-3-5-sonnet-20241022",
+        "REASONING": "claude-sonnet-4-20250514",
+    },
 }
 
 
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
     
+    # Preset name (bedrock, vertex, azure, standard, cost_optimized)
+    # If set, overrides 'tiers' with the preset values
+    preset: Optional[str] = Field(
+        default=None,
+        description="Preset name: bedrock, vertex, azure, standard, cost_optimized",
+    )
+    
     # Tier to model mapping
     tiers: Dict[str, str] = Field(
         default_factory=lambda: DEFAULT_TIER_MODELS.copy(),
         description="Mapping of complexity tiers to model names",
     )
+    
+    def model_post_init(self, __context) -> None:
+        """Apply preset if specified."""
+        if self.preset and self.preset in ENTERPRISE_TIER_PRESETS:
+            # Override tiers with preset values
+            self.tiers = ENTERPRISE_TIER_PRESETS[self.preset].copy()
     
     # Tier boundaries (normalized scores)
     tier_boundaries: Dict[str, float] = Field(
