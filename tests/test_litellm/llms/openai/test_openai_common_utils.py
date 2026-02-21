@@ -164,3 +164,14 @@ def test_get_openai_client_initialization_param_fields(client_type):
     assert isinstance(result, tuple)
     assert len(result) > 0
     assert "self" not in result
+
+
+@pytest.mark.parametrize("client_type", ["openai", "azure"])
+def test_get_openai_client_cache_key(client_type):
+    """Verify get_openai_client_cache_key doesn't raise on tuple + tuple concatenation."""
+    key = BaseOpenAILLM.get_openai_client_cache_key(
+        client_initialization_params={"api_key": "sk-test"},
+        client_type=client_type,
+    )
+    assert isinstance(key, str)
+    assert "api_key=sk-test" in key
