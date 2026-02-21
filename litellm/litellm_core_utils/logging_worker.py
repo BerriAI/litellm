@@ -2,18 +2,19 @@
 # for the sake of performance and scalability.
 
 import asyncio
+import atexit
 import contextvars
 from typing import Coroutine, Optional
-import atexit
+
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
+    LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
+    LOGGING_WORKER_CLEAR_PERCENTAGE,
     LOGGING_WORKER_CONCURRENCY,
     LOGGING_WORKER_MAX_QUEUE_SIZE,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
-    LOGGING_WORKER_CLEAR_PERCENTAGE,
-    LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
     MAX_ITERATIONS_TO_CLEAR_QUEUE,
     MAX_TIME_TO_CLEAR_QUEUE,
 )
@@ -424,11 +425,10 @@ class LoggingWorker:
         has_valid_handler = False
         for handler in verbose_logger.handlers:
             try:
-                if hasattr(handler, 'stream') and handler.stream and not handler.stream.closed:
-                    has_valid_handler = True
-                    break
-                elif not hasattr(handler, 'stream'):
-                    # Non-stream handlers (like NullHandler) are always valid
+                stream = getattr(handler, "stream", None)
+                if stream is None or not stream.closed:
+                    # Non-stream handlers (stream=None) are always valid;
+                    # stream handlers are valid when the stream is open.
                     has_valid_handler = True
                     break
             except (AttributeError, ValueError):
@@ -509,14 +509,39 @@ class LoggingWorker:
                 finally:
                     # Clear reference to prevent memory leaks
                     task = None
+                    # Cancel any pending tasks created by the coroutine to prevent
+                    # "Task was destroyed but it is pending!" warnings during shutdown,
+                    # which can cause the process to exit with a non-zero code.
+                    try:
+                        pending = {
+                            t
+                            for t in asyncio.all_tasks(loop)
+                            if not t.done()
+                        }
+                        if pending:
+                            for pending_task in pending:
+                                pending_task.cancel()
+                            loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True)
+                            )
+                    except Exception:
+                        pass
 
             self._safe_log(
                 "info",
                 f"[LoggingWorker] atexit: Successfully flushed {processed} events!",
             )
 
+        except Exception:
+            # Ensure atexit handler never propagates exceptions - an uncaught
+            # exception here causes Python to re-raise it after all atexit
+            # handlers run, making the process exit with a non-zero code.
+            pass
         finally:
-            loop.close()
+            try:
+                loop.close()
+            except Exception:
+                pass
 
 
 # Global instance for backward compatibility
