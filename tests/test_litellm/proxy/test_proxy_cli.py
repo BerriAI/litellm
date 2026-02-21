@@ -583,6 +583,7 @@ class TestHealthAppFactory:
         assert isinstance(health_app_2, fastapi.FastAPI)
 
     @patch("subprocess.run")
+    @patch("atexit.register")  # critical: prevents atexit handlers from closing Click's isolation streams
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
@@ -591,6 +592,7 @@ class TestHealthAppFactory:
         mock_should_update_schema,
         mock_check_schema_diff,
         mock_setup_database,
+        mock_atexit_register,
         mock_subprocess_run,
     ):
         """Test that use_prisma_db_push flag correctly controls PrismaManager.setup_database use_migrate parameter"""
