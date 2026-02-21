@@ -1136,6 +1136,7 @@ def add_system_prompt_to_messages(
     if merge_with_first_system and messages and messages[0].get("role") == "system":
         first = dict(messages[0])
         existing_content = first.get("content", "")
+        merged_content: Union[str, List[Dict[str, str]]]
         if isinstance(existing_content, str):
             merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
         elif isinstance(existing_content, list):
