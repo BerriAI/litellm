@@ -388,10 +388,10 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.project_endpoints import (
     router as project_router,
 )
-from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -901,6 +901,15 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             await prisma_client.db.stop_token_refresh_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping token refresh task: {e}")
+
+    # Shutdown event - stop Prisma DB health watchdog task
+    if prisma_client is not None and hasattr(
+        prisma_client, "stop_db_health_watchdog_task"
+    ):
+        try:
+            await prisma_client.stop_db_health_watchdog_task()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -5829,6 +5838,9 @@ class ProxyStartupEvent:
                     is not True
                 ):
                     await prisma_client.health_check()
+
+                if hasattr(prisma_client, "start_db_health_watchdog_task"):
+                    await prisma_client.start_db_health_watchdog_task()
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
@@ -11375,6 +11387,7 @@ async def get_config_list(
         "mcp_internal_ip_ranges": {"type": "List"},
         "mcp_trusted_proxy_ranges": {"type": "List"},
         "always_include_stream_usage": {"type": "Boolean"},
+        "forward_client_headers_to_llm_api": {"type": "Boolean"},
     }
 
     return_val = []

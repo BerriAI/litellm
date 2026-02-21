@@ -38,8 +38,30 @@ class PrismaDBExceptionHandler:
 
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(
+            e, (prisma.errors.ClientNotConnectedError, prisma.errors.HTTPClientClosedError)
+        ):
             return True
+        if isinstance(e, prisma.errors.PrismaError):
+            error_message = str(e).lower()
+            # Treat generic PrismaError as connection error only when its text
+            # clearly indicates transport/connectivity failure.
+            connection_keywords = (
+                "can't reach database server",
+                "cannot reach database server",
+                "can't connect",
+                "cannot connect",
+                "connection error",
+                "connection closed",
+                "timed out",
+                "timeout",
+                "connection refused",
+                "network is unreachable",
+                "no route to host",
+                "broken pipe",
+            )
+            if any(keyword in error_message for keyword in connection_keywords):
+                return True
         if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
             return True
         return False
