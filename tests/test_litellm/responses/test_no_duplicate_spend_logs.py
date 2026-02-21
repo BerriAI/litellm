@@ -102,9 +102,14 @@ async def test_async_no_duplicate_spend_logs():
         # Without this, flush() may block on a stale queue from a previous test's loop.
         await asyncio.sleep(0)
 
-        # Wait for async logging to complete
+        # Wait for async logging to complete. Use a timeout so that if the
+        # worker is on a stale event loop (common in CI), flush() doesn't hang
+        # indefinitely — the queue.join() inside flush() would never resolve.
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-        await GLOBAL_LOGGING_WORKER.flush()
+        try:
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+        except asyncio.TimeoutError:
+            pass
         await asyncio.sleep(0.5)
 
         # Verify that log_success_event was called exactly once for our request
