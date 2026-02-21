@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Union, cast
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union, cast
 
 import httpx
 from pydantic import BaseModel
@@ -150,10 +150,10 @@ class CustomStreamWrapper:
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator["ModelResponseStream"]:
         return self
 
-    def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
     def check_send_stream_usage(self, stream_options: Optional[dict]):
@@ -1704,7 +1704,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self):  # noqa: PLR0915
+    def __next__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -1878,7 +1878,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self):  # noqa: PLR0915
+    async def __anext__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
