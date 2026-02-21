@@ -1,0 +1,144 @@
+"""
+Airline-specific competitor intent: other meaning (e.g. location/travel context) vs competitor airline.
+
+Uses context-based disambiguation only: no hardcoded place lists. Detects travel-location
+language (prepositions, travel verbs, booking/entry nouns) vs airline context (airways,
+carrier, lounge, miles, etc.) and scores to decide OTHER_MEANING vs COMPETITOR.
+"""
+
+from typing import Any, Dict, List, Tuple
+
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (
+    BaseCompetitorIntentChecker, _compile_marker, _count_signals,
+    _word_boundary_match)
+
+# Location/travel context: prepositions, travel verbs, booking nouns, entry/geo nouns.
+# No place-name list; these patterns detect "destination context" generically.
+AIRLINE_OTHER_MEANING_SIGNALS = [
+    # Travel verb + preposition (e.g. "fly to", "layover in")
+    r"\b(fly|flying|travel|traveling|going|visit|visiting|transit|layover|stopover)\b.{0,12}\b(to|from|via|in|at|through|into)\b",
+    # Booking + preposition
+    r"\bflight(s)?\b.{0,10}\b(to|from|via)\b",
+    r"\bticket(s)?\b.{0,8}\b(to|for)\b",
+    r"\bfare(s)?\b.{0,8}\b(to)\b",
+    # Entry/geo/booking single words
+    r"\bvisa\b",
+    r"\bimmigration\b",
+    r"\bcustoms\b",
+    r"\bentry\b",
+    r"\bairport\b",
+    r"\bterminal\b",
+    r"\bgate\b",
+    r"\bdeparture\b",
+    r"\barrival\b",
+    r"\bitinerary\b",
+    r"\bweather\b",
+    r"\bhotel\b",
+    r"\bcity\b",
+    # Prepositions alone (weaker; often near a place)
+    r"\bto\s+",
+    r"\bfrom\s+",
+    r"\bin\s+",
+    r"\bat\s+",
+    r"\bvia\s+",
+]
+
+# Airline context: carrier/airline language, cabin, loyalty, operations.
+# If ambiguous token appears near these → treat as COMPETITOR.
+AIRLINE_COMPETITOR_SIGNALS = [
+    r"\bairways?\b",
+    r"\bairline\b",
+    r"\bcarrier\b",
+    r"\bcabin\s+crew\b",
+    r"\bflight\s+attendant\b",
+    r"\bbusiness\s+class\b",
+    r"\bfirst\s+class\b",
+    r"\beconomy\b",
+    r"\blounge\b",
+    r"\bbaggage\s+allowance\b",
+    r"\bcheck[- ]?in\b",
+    r"\bmiles\b",
+    r"\bloyalty\b",
+    r"\bstatus\b",
+    r"\bfrequent\s+flyer\b",
+    r"\bfleet\b",
+    r"\baircraft\b",
+    # Comparison/ranking
+    r"\bbetter\b",
+    r"\bbest\b",
+    r"\bgood\b",
+    r"\bas\s+good\s+as\b",
+    r"\bvs\.?\b",
+    r"\bversus\b",
+    r"\bcompare\b",
+    r"\balternative\b",
+    r"\bcompetitor\b",
+    # Brand-specific (optional; config can extend)
+    r"\bqmiles\b",
+    r"\bprivilege\s+club\b",
+]
+
+# Explicit markers: strong override when present.
+AIRLINE_EXPLICIT_COMPETITOR_MARKER = r"\b(airways?|airline|carrier)\b"
+AIRLINE_EXPLICIT_OTHER_MEANING_MARKER = (
+    r"\b(fly|travel|going|visit|layover|stopover|transit)\b.{0,12}\b(to|in|via|from)\b.{0,8}\b"
+)
+
+
+class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
+    """
+    Disambiguates other meaning (e.g. country/city/airport) vs competitor airline
+    (e.g. "Qatar" → country vs Qatar Airways). Overrides _classify_ambiguous
+    with other_meaning/competitor signals and explicit markers.
+    """
+
+    def __init__(self, config: Dict[str, Any]) -> None:
+        merged: Dict[str, Any] = dict(config)
+        if not merged.get("other_meaning_signals"):
+            merged["other_meaning_signals"] = AIRLINE_OTHER_MEANING_SIGNALS
+        if not merged.get("competitor_signals"):
+            merged["competitor_signals"] = AIRLINE_COMPETITOR_SIGNALS
+        # Optional: no default place list; config can add other_meaning_anchors for extra patterns
+        if "other_meaning_anchors" not in merged:
+            merged["other_meaning_anchors"] = []
+        if not merged.get("explicit_competitor_marker"):
+            merged["explicit_competitor_marker"] = AIRLINE_EXPLICIT_COMPETITOR_MARKER
+        if not merged.get("explicit_other_meaning_marker"):
+            merged["explicit_other_meaning_marker"] = AIRLINE_EXPLICIT_OTHER_MEANING_MARKER
+        super().__init__(merged)
+        self._other_meaning_signals = list(merged.get("other_meaning_signals") or [])
+        self._competitor_signals = list(merged.get("competitor_signals") or [])
+        self._other_meaning_anchors = list(merged.get("other_meaning_anchors") or [])
+        self._explicit_competitor_marker = _compile_marker(
+            merged.get("explicit_competitor_marker")
+        )
+        self._explicit_other_meaning_marker = _compile_marker(
+            merged.get("explicit_other_meaning_marker")
+        )
+
+    def _classify_ambiguous(self, text: str, token: str) -> Tuple[str, float]:
+        """Other meaning vs competitor using airline signals and explicit markers."""
+        text_lower = text.lower()
+        if self._explicit_competitor_marker and self._explicit_competitor_marker.search(
+            text_lower
+        ) and _word_boundary_match(text_lower, token.lower()):
+            return "COMPETITOR", 0.85
+        if self._explicit_other_meaning_marker and self._explicit_other_meaning_marker.search(
+            text_lower
+        ):
+            return "OTHER_MEANING", 0.85
+        # Score: location/travel context vs airline context (no place-name list)
+        other_count = _count_signals(text_lower, self._other_meaning_signals)
+        if self._other_meaning_anchors:
+            other_count += _count_signals(text_lower, self._other_meaning_anchors)
+        comp_count = _count_signals(text_lower, self._competitor_signals)
+        total = other_count + comp_count
+        if total == 0:
+            return "OTHER_MEANING", 0.5
+        other_ratio = other_count / total
+        comp_ratio = comp_count / total
+        if other_ratio >= 0.6:
+            return "OTHER_MEANING", min(0.9, 0.5 + 0.4 * other_ratio)
+        if comp_ratio >= 0.6:
+            return "COMPETITOR", min(0.9, 0.5 + 0.4 * comp_ratio)
+        return "OTHER_MEANING", 0.5
