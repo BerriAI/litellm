@@ -67,6 +67,32 @@ async def test_attempt_db_reconnect_should_skip_when_in_cooldown(mock_proxy_logg
 
 
 @pytest.mark.asyncio
+async def test_attempt_db_reconnect_should_skip_when_lock_timeout_expires(
+    mock_proxy_logging,
+):
+    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client.db.disconnect = AsyncMock(return_value=None)
+    client.db.connect = AsyncMock(return_value=None)
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+
+    await client._db_reconnect_lock.acquire()
+    try:
+        result = await client.attempt_db_reconnect(
+            reason="unit_test_reconnect_lock_timeout",
+            force=True,
+            timeout_seconds=0.1,
+            lock_timeout_seconds=0.01,
+        )
+    finally:
+        client._db_reconnect_lock.release()
+
+    assert result is False
+    client.db.disconnect.assert_not_called()
+    client.db.connect.assert_not_called()
+    client.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_attempt_db_reconnect_should_set_cooldown_after_attempt(mock_proxy_logging):
     client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
     client._db_last_reconnect_attempt_ts = 0.0
