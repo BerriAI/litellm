@@ -185,6 +185,76 @@ async def test_team_object_has_object_permission_id():
         assert team_object.object_permission_id == permission_id
 
 
+@pytest.mark.asyncio
+async def test_end_user_id_is_derived_from_key_user_id_when_enabled():
+    """
+    If `general_settings.use_key_user_id_as_end_user` is enabled, the proxy should
+    ignore any client-provided end-user id (e.g. request body `user`) and instead
+    derive the end-user id from the authenticated key's `user_id`.
+    """
+    import asyncio
+    import json
+    import time
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    user_key = "sk-12345678"
+    hashed_key = hash_token(user_key)
+
+    valid_token = UserAPIKeyAuth(
+        token=hashed_key,
+        user_id="real-user-id",
+        last_refreshed_at=time.time(),
+    )
+    user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
+
+    from litellm.proxy import proxy_server
+
+    initial_general_settings = getattr(proxy_server, "general_settings")
+    setattr(proxy_server, "general_settings", {"use_key_user_id_as_end_user": True})
+    setattr(proxy_server, "master_key", "sk-1234")
+    setattr(proxy_server, "prisma_client", "test-client")
+    setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    async def return_body():
+        # Client attempts to spoof end-user id
+        body = {"model": "openai/gpt-4o-mini", "user": "spoofed-user-id"}
+        return bytes(json.dumps(body), "utf-8")
+
+    request.body = return_body
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+            new_callable=AsyncMock,
+        ) as mock_get_end_user_object,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_common_checks,
+    ):
+        mock_get_end_user_object.return_value = None
+        mock_common_checks.return_value = True
+
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+
+        # Ensure end-user lookup used the key's user_id (not the spoofed request `user`)
+        assert mock_get_end_user_object.await_args is not None
+        assert mock_get_end_user_object.await_args.kwargs["end_user_id"] == "real-user-id"
+
+        # And we overwrite request `user` to prevent spoofing.
+        assert mock_common_checks.await_args is not None
+        assert mock_common_checks.await_args.kwargs["request_body"]["user"] == "real-user-id"
+
+    setattr(proxy_server, "general_settings", initial_general_settings)
+
+
 @pytest.mark.parametrize(
     "user_role, expected_role",
     [

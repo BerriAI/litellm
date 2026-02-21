@@ -734,60 +734,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     detail="'allow_user_auth' not set or set to False",
                 )
 
-        ## Check END-USER OBJECT
+        # END USER (a.k.a. "customer") identification
+        #
+        # By default, LiteLLM allows the client to pass an end-user identifier on each
+        # request (via request body / headers). This is useful for multi-tenant apps
+        # but is not safe for budget enforcement if the client is untrusted.
+        #
+        # If `general_settings.use_key_user_id_as_end_user == True`, we will derive
+        # the end-user id from the authenticated key (`valid_token.user_id`) and
+        # ignore any client-provided end-user id.
         _end_user_object = None
-        end_user_params = {}
-
-        end_user_id = get_end_user_id_from_request_body(
+        end_user_params: dict = {}
+        request_end_user_id = get_end_user_id_from_request_body(
             request_data, _safe_get_request_headers(request)
         )
-        if end_user_id:
-            try:
-                end_user_params["end_user_id"] = end_user_id
-
-                # get end-user object
-                _end_user_object = await get_end_user_object(
-                    end_user_id=end_user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    route=route,
-                )
-                if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
-                    if _end_user_object.litellm_budget_table is not None:
-                        _apply_budget_limits_to_end_user_params(
-                            end_user_params=end_user_params,
-                            budget_info=_end_user_object.litellm_budget_table,
-                            end_user_id=end_user_id,
-                        )
-                elif litellm.max_end_user_budget_id is not None:
-                    # End user doesn't exist yet, but apply default budget limits if configured
-                    from litellm.proxy.auth.auth_checks import (
-                        get_default_end_user_budget,
-                    )
-
-                    default_budget = await get_default_end_user_budget(
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                    )
-                    if default_budget is not None:
-                        _apply_budget_limits_to_end_user_params(
-                            end_user_params=end_user_params,
-                            budget_info=default_budget,
-                            end_user_id=end_user_id,
-                        )
-            except Exception as e:
-                if isinstance(e, litellm.BudgetExceededError):
-                    raise e
-                verbose_proxy_logger.debug(
-                    "Unable to find user in db. Error - {}".format(str(e))
-                )
-                pass
+        use_key_user_id_as_end_user = (
+            general_settings.get("use_key_user_id_as_end_user", False) is True
+        )
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -984,14 +947,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         abbreviated_api_key, api_key
                     )
                 raise e
-            # update end-user params on valid token
-            # These can change per request - it's important to update them here
-            valid_token.end_user_id = end_user_params.get("end_user_id")
-            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
-            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
-            valid_token.allowed_model_region = end_user_params.get(
-                "allowed_model_region"
-            )
+            # end-user params are derived later (after key is available)
             # update key budget with temp budget increase
             valid_token = _update_key_budget_with_temp_budget_increase(
                 valid_token
@@ -1267,6 +1223,69 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             user_info=call_info,
                         )
                     )
+            #########################################################
+            # Resolve end-user id + budgets
+            #########################################################
+            resolved_end_user_id: Optional[str] = None
+            if use_key_user_id_as_end_user and valid_token.user_id:
+                resolved_end_user_id = valid_token.user_id
+                # Ensure downstream hooks / spend logging that read `kwargs.get("user")`
+                # see the derived end-user id (and prevent client spoofing).
+                request_data["user"] = resolved_end_user_id
+            else:
+                resolved_end_user_id = request_end_user_id
+
+            if resolved_end_user_id:
+                try:
+                    end_user_params["end_user_id"] = resolved_end_user_id
+
+                    _end_user_object = await get_end_user_object(
+                        end_user_id=resolved_end_user_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                        route=route,
+                    )
+                    if _end_user_object is not None:
+                        end_user_params[
+                            "allowed_model_region"
+                        ] = _end_user_object.allowed_model_region
+                        if _end_user_object.litellm_budget_table is not None:
+                            _apply_budget_limits_to_end_user_params(
+                                end_user_params=end_user_params,
+                                budget_info=_end_user_object.litellm_budget_table,
+                                end_user_id=resolved_end_user_id,
+                            )
+                    elif litellm.max_end_user_budget_id is not None:
+                        # End user doesn't exist yet, but apply default budget limits if configured
+                        from litellm.proxy.auth.auth_checks import (
+                            get_default_end_user_budget,
+                        )
+
+                        default_budget = await get_default_end_user_budget(
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            parent_otel_span=parent_otel_span,
+                        )
+                        if default_budget is not None:
+                            _apply_budget_limits_to_end_user_params(
+                                end_user_params=end_user_params,
+                                budget_info=default_budget,
+                                end_user_id=resolved_end_user_id,
+                            )
+                except Exception as e:
+                    if isinstance(e, litellm.BudgetExceededError):
+                        raise e
+
+            # Attach resolved end-user information to the key auth object
+            valid_token.end_user_id = end_user_params.get("end_user_id")
+            valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
+            valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.allowed_model_region = end_user_params.get(
+                "allowed_model_region"
+            )
+
             _ = await common_checks(
                 request=request,
                 request_body=request_data,
