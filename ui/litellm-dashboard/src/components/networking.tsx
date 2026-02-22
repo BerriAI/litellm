@@ -5453,6 +5453,8 @@ export interface TestPoliciesAndGuardrailsRequest {
   inputs_list?: GuardrailInputs[] | null;
   request_data?: Record<string, unknown>;
   input_type?: "request" | "response";
+  /** When set, backend runs chat completion with this model/agent per input and includes agent_response in each result. */
+  agent_id?: string | null;
 }
 
 export interface GuardrailErrorEntry {
@@ -5460,16 +5462,24 @@ export interface GuardrailErrorEntry {
   message: string;
 }
 
+export interface TestPoliciesAndGuardrailsResultItem {
+  inputs: Record<string, unknown>;
+  guardrail_errors: GuardrailErrorEntry[];
+  /** Present when request included agent_id; serialized chat completion response. */
+  agent_response?: Record<string, unknown>;
+}
+
 export interface TestPoliciesAndGuardrailsResponse {
   inputs?: Record<string, unknown>;
   guardrail_errors?: GuardrailErrorEntry[];
   /** Present when inputs_list was used; one result per input. */
-  results?: Array<{ inputs: Record<string, unknown>; guardrail_errors: GuardrailErrorEntry[] }>;
+  results?: TestPoliciesAndGuardrailsResultItem[];
 }
 
 export const testPoliciesAndGuardrails = async (
   accessToken: string,
-  body: TestPoliciesAndGuardrailsRequest
+  body: TestPoliciesAndGuardrailsRequest,
+  signal?: AbortSignal
 ): Promise<TestPoliciesAndGuardrailsResponse> => {
   try {
     const url = proxyBaseUrl
@@ -5477,6 +5487,7 @@ export const testPoliciesAndGuardrails = async (
       : `/utils/test_policies_and_guardrails`;
     const response = await fetch(url, {
       method: "POST",
+      signal,
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
@@ -5488,6 +5499,7 @@ export const testPoliciesAndGuardrails = async (
         inputs_list: body.inputs_list ?? null,
         request_data: body.request_data ?? {},
         input_type: body.input_type ?? "request",
+        agent_id: body.agent_id ?? null,
       }),
     });
 

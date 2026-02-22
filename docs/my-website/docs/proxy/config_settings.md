@@ -574,6 +574,8 @@ router_settings:
 | DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO | Default minimal reasoning effort thinking budget for Gemini 2.5 Pro. Default is 512
 | DEFAULT_REDIS_MAJOR_VERSION | Default Redis major version to assume when version cannot be determined. Default is 7
 | DEFAULT_REDIS_SYNC_INTERVAL | Default Redis synchronization interval in seconds. Default is 1
+| DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL | Default embedding model for Semantic Guard (route-matching guardrail). Default is "text-embedding-3-small"
+| DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD | Default similarity threshold for Semantic Guard route matching. Default is 0.75
 | DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND | Default price per second for Replicate GPU. Default is 0.001400
 | DEFAULT_REPLICATE_POLLING_DELAY_SECONDS | Default delay in seconds for Replicate polling. Default is 1
 | DEFAULT_REPLICATE_POLLING_RETRIES | Default number of retries for Replicate polling. Default is 5
@@ -756,6 +758,7 @@ router_settings:
 | LITELLM_CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours
 | LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
 | LITELLM_DEPLOYMENT_ENVIRONMENT | Environment name for the deployment (e.g., "production", "staging"). Used as a fallback when OTEL_ENVIRONMENT_NAME is not set. Sets the `environment` tag in telemetry data
+| LITELLM_DETAILED_TIMING | When true, adds detailed per-phase timing headers to responses (x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms). Default is false. See [latency overhead docs](../troubleshoot/latency_overhead.md)
 | LITELLM_DD_AGENT_PORT | Port of DataDog agent for LiteLLM-specific log intake. Default is 10518
 | LITELLM_DD_LLM_OBS_PORT | Port for Datadog LLM Observability agent. Default is 8126
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
@@ -807,6 +810,7 @@ router_settings:
 | LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. Default is 50,000
 | LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. Default is 20.0
 | LOGGING_WORKER_CLEAR_PERCENTAGE | Percentage of the queue to extract when clearing. Default is 50% 
+| MAX_BASE64_LENGTH_FOR_LOGGING | Maximum number of base64 characters to keep in logging payloads. Data URIs exceeding this are replaced with a size placeholder. Set to 0 to disable truncation. Default is 64
 | MAX_COMPETITOR_NAMES | Maximum number of competitor names allowed in policy template enrichment. Default is 100
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
 | MAX_ITERATIONS_TO_CLEAR_QUEUE | Maximum number of iterations to attempt when clearing the logging worker queue during shutdown. Default is 200
@@ -830,6 +834,7 @@ router_settings:
 | MAX_LANGFUSE_INITIALIZED_CLIENTS | Maximum number of Langfuse clients to initialize on proxy. Default is 50. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
 | MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH | Maximum header length for MCP semantic filter tools. Default is 150
 | MAX_POLICY_ESTIMATE_IMPACT_ROWS | Maximum number of rows returned when estimating the impact of a policy. Default is 1000
+| MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG | Maximum payload size in bytes for full DEBUG serialization. Payloads exceeding this will be truncated in logs. Default is 102400 (100 KB)
 | MIN_NON_ZERO_TEMPERATURE | Minimum non-zero temperature value. Default is 0.0001
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
 | MISTRAL_API_BASE | Base URL for Mistral API. Default is https://api.mistral.ai
@@ -893,6 +898,13 @@ router_settings:
 | POSTHOG_API_URL | Base URL for PostHog API (defaults to https://us.i.posthog.com)
 | POSTHOG_MOCK | Enable mock mode for PostHog integration testing. When set to true, intercepts PostHog API calls and returns mock responses without making actual network calls. Default is false
 | POSTHOG_MOCK_LATENCY_MS | Mock latency in milliseconds for PostHog API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
+| PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS | Lock timeout in seconds for Prisma auth reconnection. Default is 0.1
+| PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS | Timeout in seconds for Prisma auth reconnection attempts. Default is 2.0
+| PRISMA_HEALTH_WATCHDOG_ENABLED | Enable the Prisma DB health watchdog that monitors and reconnects on connection loss. Default is true
+| PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS | Interval in seconds for Prisma health watchdog probes. Default is 30
+| PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS | Timeout in seconds for each Prisma health probe. Default is 5.0
+| PRISMA_RECONNECT_COOLDOWN_SECONDS | Cooldown in seconds between Prisma reconnection attempts. Default is 15
+| PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS | Timeout in seconds for Prisma watchdog-initiated reconnection. Default is 30.0
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
 | PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
