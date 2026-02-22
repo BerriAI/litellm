@@ -1,7 +1,5 @@
 import {
   DownloadOutlined,
-  FileTextOutlined,
-  PlayCircleOutlined,
   RiseOutlined,
   SafetyOutlined,
   SettingOutlined,
@@ -11,12 +9,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, Col, Grid, Title } from "@tremor/react";
 import { Button, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  getGuardrailsUsageOverview,
-  getPoliciesUsageOverview,
-} from "@/components/networking";
-import { formatDate } from "@/components/networking";
+import React, { useMemo, useState } from "react";
+import { getGuardrailsUsageOverview } from "@/components/networking";
 import { type PerformanceRow } from "./mockData";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "./MetricCard";
@@ -24,10 +18,11 @@ import { ScoreChart } from "./ScoreChart";
 
 interface GuardrailsOverviewProps {
   accessToken?: string | null;
+  startDate: string;
+  endDate: string;
   onSelectGuardrail: (id: string) => void;
 }
 
-type ViewMode = "guardrails" | "policies";
 type SortKey =
   | "failRate"
   | "requestsEvaluated"
@@ -58,46 +53,25 @@ function computeMetricsFromRows(data: PerformanceRow[]) {
   return { totalRequests, totalBlocked, passRate, avgLatency, count: data.length };
 }
 
-type RerunState = "idle" | "running" | "done";
-
-const defaultEnd = new Date();
-const defaultStart = new Date();
-defaultStart.setDate(defaultStart.getDate() - 7);
-
 export function GuardrailsOverview({
   accessToken = null,
+  startDate,
+  endDate,
   onSelectGuardrail,
 }: GuardrailsOverviewProps) {
-  const [viewMode, setViewMode] = useState<ViewMode>("guardrails");
   const [sortBy, setSortBy] = useState<SortKey>("failRate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [rerunState, setRerunState] = useState<RerunState>("idle");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
-  const [startDate, setStartDate] = useState<string>(() => formatDate(defaultStart));
-  const [endDate, setEndDate] = useState<string>(() => formatDate(defaultEnd));
 
   const { data: guardrailsData, isLoading: guardrailsLoading, error: guardrailsError } = useQuery({
     queryKey: ["guardrails-usage-overview", startDate, endDate],
     queryFn: () => getGuardrailsUsageOverview(accessToken!, startDate, endDate),
     enabled: !!accessToken,
   });
-  const { data: policiesData, isLoading: policiesLoading, error: policiesError } = useQuery({
-    queryKey: ["policies-usage-overview", startDate, endDate],
-    queryFn: () => getPoliciesUsageOverview(accessToken!, startDate, endDate),
-    enabled: !!accessToken,
-  });
 
-  useEffect(() => {
-    if (rerunState !== "done") return;
-    const t = setTimeout(() => setRerunState("idle"), 4000);
-    return () => clearTimeout(t);
-  }, [rerunState]);
-
-  const activeData: PerformanceRow[] = viewMode === "guardrails"
-    ? (guardrailsData?.rows ?? [])
-    : (policiesData?.rows ?? []);
+  const activeData: PerformanceRow[] = guardrailsData?.rows ?? [];
   const metrics = useMemo(() => {
-    if (viewMode === "guardrails" && guardrailsData) {
+    if (guardrailsData) {
       return {
         totalRequests: guardrailsData.totalRequests ?? 0,
         totalBlocked: guardrailsData.totalBlocked ?? 0,
@@ -106,18 +80,9 @@ export function GuardrailsOverview({
         count: activeData.length,
       };
     }
-    if (viewMode === "policies" && policiesData) {
-      return {
-        totalRequests: policiesData.totalRequests ?? 0,
-        totalBlocked: policiesData.totalBlocked ?? 0,
-        passRate: String(policiesData.passRate ?? 0),
-        avgLatency: activeData.length ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length) : 0,
-        count: activeData.length,
-      };
-    }
     return computeMetricsFromRows(activeData);
-  }, [viewMode, guardrailsData, policiesData, activeData]);
-  const chartData = viewMode === "guardrails" ? guardrailsData?.chart : policiesData?.chart;
+  }, [guardrailsData, activeData]);
+  const chartData = guardrailsData?.chart;
   const sorted = useMemo(() => {
     return [...activeData].sort((a, b) => {
       const mult = sortDir === "desc" ? -1 : 1;
@@ -126,14 +91,12 @@ export function GuardrailsOverview({
       return (Number(aVal) - Number(bVal)) * mult;
     });
   }, [activeData, sortBy, sortDir]);
-  const isLoading = viewMode === "guardrails" ? guardrailsLoading : policiesLoading;
-  const error = viewMode === "guardrails" ? guardrailsError : policiesError;
-
-  const isGuardrails = viewMode === "guardrails";
+  const isLoading = guardrailsLoading;
+  const error = guardrailsError;
 
   const columns: ColumnsType<PerformanceRow> = [
     {
-      title: isGuardrails ? "Guardrail" : "Policy",
+      title: "Guardrail",
       dataIndex: "name",
       key: "name",
       render: (name: string, row) => (
@@ -236,12 +199,6 @@ export function GuardrailsOverview({
     }
   };
 
-  const handleRerun = () => {
-    if (rerunState !== "idle") return;
-    setRerunState("running");
-    setTimeout(() => setRerunState("done"), 2500);
-  };
-
   return (
     <div>
       <div className="flex items-start justify-between mb-5">
@@ -251,48 +208,14 @@ export function GuardrailsOverview({
             <h1 className="text-xl font-semibold text-gray-900">Guardrails Monitor</h1>
           </div>
           <p className="text-sm text-gray-500">
-            {isGuardrails
-              ? "Monitor guardrail performance across all requests"
-              : "Monitor policy enforcement across all requests"}
+            Monitor guardrail performance across all requests
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-600 bg-white border border-gray-200 rounded-md px-3 py-2">
-            {startDate} – {endDate}
-          </span>
           <Button type="default" icon={<DownloadOutlined />} title="Coming soon">
             Export Data
           </Button>
         </div>
-      </div>
-
-      <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-lg w-fit mb-6">
-        <button
-          type="button"
-          onClick={() => {
-            setViewMode("guardrails");
-            setSortBy("failRate");
-            setSortDir("desc");
-          }}
-          className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
-            isGuardrails ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <SafetyOutlined /> Guardrail Performance
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setViewMode("policies");
-            setSortBy("failRate");
-            setSortDir("desc");
-          }}
-          className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
-            !isGuardrails ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <FileTextOutlined /> Policy Performance
-        </button>
       </div>
 
       <Grid numItems={2} numItemsLg={5} className="gap-4 mb-6 items-stretch">
@@ -330,7 +253,7 @@ export function GuardrailsOverview({
         </Col>
         <Col className="flex flex-col">
           <MetricCard
-            label={isGuardrails ? "Active Guardrails" : "Active Policies"}
+            label="Active Guardrails"
             value={metrics.count}
           />
         </Col>
@@ -350,12 +273,10 @@ export function GuardrailsOverview({
         <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
           <div>
             <Title className="text-base font-semibold text-gray-900">
-              {isGuardrails ? "Guardrail Performance" : "Policy Performance"}
+              Guardrail Performance
             </Title>
             <p className="text-xs text-gray-500 mt-0.5">
-              {isGuardrails
-                ? "Click a guardrail to view details, logs, and configuration"
-                : "Click a policy to view details, logs, and configuration"}
+              Click a guardrail to view details, logs, and configuration
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -365,9 +286,6 @@ export function GuardrailsOverview({
               onClick={() => setEvaluationModalOpen(true)}
               title="Evaluation settings"
             />
-            <Button type="default" icon={<PlayCircleOutlined />} title="Coming soon">
-              Re-run AI on last 100 logs
-            </Button>
           </div>
         </div>
         <Table

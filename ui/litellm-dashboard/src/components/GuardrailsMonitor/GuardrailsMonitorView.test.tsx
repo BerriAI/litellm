@@ -6,12 +6,10 @@ import * as networking from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsUsageOverview: vi.fn(),
-  getPoliciesUsageOverview: vi.fn(),
   formatDate: vi.fn((d: Date) => d.toISOString().slice(0, 10)),
 }));
 
 const mockGetGuardrailsUsageOverview = vi.mocked(networking.getGuardrailsUsageOverview);
-const mockGetPoliciesUsageOverview = vi.mocked(networking.getPoliciesUsageOverview);
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const queryClient = new QueryClient({
@@ -27,15 +25,8 @@ function wrapper({ children }: { children: React.ReactNode }) {
 }
 
 describe("GuardrailsMonitorView", () => {
-  it("should render overview and fetch guardrails and policies usage when accessToken is provided", async () => {
+  it("should render overview and fetch guardrails usage when accessToken is provided", async () => {
     mockGetGuardrailsUsageOverview.mockResolvedValue({
-      rows: [],
-      chart: [],
-      totalRequests: 0,
-      totalBlocked: 0,
-      passRate: 100,
-    });
-    mockGetPoliciesUsageOverview.mockResolvedValue({
       rows: [],
       chart: [],
       totalRequests: 0,
@@ -51,7 +42,6 @@ describe("GuardrailsMonitorView", () => {
     expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeDefined();
     await waitFor(() => {
       expect(mockGetGuardrailsUsageOverview).toHaveBeenCalled();
-      expect(mockGetPoliciesUsageOverview).toHaveBeenCalled();
     });
   });
 
