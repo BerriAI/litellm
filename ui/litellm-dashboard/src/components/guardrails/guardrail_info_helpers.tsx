@@ -105,11 +105,11 @@ const asset_logos_folder = "../ui/assets/logos/";
 
 export const guardrailLogoMap: Record<string, string> = {
   "Zscaler AI Guard": `${asset_logos_folder}zscaler.svg`,
-  "Presidio PII": `${asset_logos_folder}presidio.png`,
+  "Presidio PII": `${asset_logos_folder}microsoft_azure.svg`,
   "Bedrock Guardrail": `${asset_logos_folder}bedrock.svg`,
   Lakera: `${asset_logos_folder}lakeraai.jpeg`,
-  "Azure Content Safety Prompt Shield": `${asset_logos_folder}presidio.png`,
-  "Azure Content Safety Text Moderation": `${asset_logos_folder}presidio.png`,
+  "Azure Content Safety Prompt Shield": `${asset_logos_folder}microsoft_azure.svg`,
+  "Azure Content Safety Text Moderation": `${asset_logos_folder}microsoft_azure.svg`,
   "Aporia AI": `${asset_logos_folder}aporia.png`,
   "PANW Prisma AIRS": `${asset_logos_folder}palo_alto_networks.jpeg`,
   "Noma Security": `${asset_logos_folder}noma_security.png`,
