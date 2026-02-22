@@ -202,7 +202,6 @@ async def _find_affected_keys_by_alias(
 @router.post(
     "/policies/resolve",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyResolveResponse,
 )
 async def resolve_policies_for_context(
@@ -310,7 +309,6 @@ async def resolve_policies_for_context(
 @router.post(
     "/policies/attachments/estimate-impact",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=AttachmentImpactResponse,
 )
 async def estimate_attachment_impact(

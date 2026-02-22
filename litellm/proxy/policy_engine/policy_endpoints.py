@@ -4,24 +4,31 @@ CRUD ENDPOINTS FOR POLICIES
 Provides REST API endpoints for managing policies and policy attachments.
 """
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.policy_engine.attachment_registry import \
-    get_attachment_registry
+from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
-    GuardrailPipeline, PipelineTestRequest, PolicyAttachmentCreateRequest,
-    PolicyAttachmentDBResponse, PolicyAttachmentListResponse,
-    PolicyCreateRequest, PolicyDBResponse, PolicyListDBResponse,
-    PolicyUpdateRequest, PolicyVersionCompareResponse,
-    PolicyVersionCreateRequest, PolicyVersionListResponse,
-    PolicyVersionStatusUpdateRequest)
+    GuardrailPipeline,
+    PipelineTestRequest,
+    PolicyAttachmentCreateRequest,
+    PolicyAttachmentDBResponse,
+    PolicyAttachmentListResponse,
+    PolicyCreateRequest,
+    PolicyDBResponse,
+    PolicyListDBResponse,
+    PolicyUpdateRequest,
+    PolicyVersionCompareResponse,
+    PolicyVersionCreateRequest,
+    PolicyVersionListResponse,
+    PolicyVersionStatusUpdateRequest,
+)
 
 router = APIRouter()
 
@@ -37,7 +44,9 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyListDBResponse,
 )
-async def list_policies(version_status: Optional[str] = None):
+async def list_policies(
+    version_status: Optional[Literal["draft", "published", "production"]] = None,
+):
     """
     List all policies from the database. Optionally filter by version_status.
 
@@ -93,7 +102,6 @@ async def list_policies(version_status: Optional[str] = None):
 @router.post(
     "/policies",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyDBResponse,
 )
 async def create_policy(
@@ -187,7 +195,6 @@ async def list_policy_versions(policy_name: str):
 @router.post(
     "/policies/name/{policy_name}/versions",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyDBResponse,
 )
 async def create_policy_version(
@@ -222,7 +229,6 @@ async def create_policy_version(
 @router.put(
     "/policies/{policy_id}/status",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyDBResponse,
 )
 async def update_policy_version_status(
@@ -361,7 +367,6 @@ async def get_policy(policy_id: str):
 @router.put(
     "/policies/{policy_id}",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyDBResponse,
 )
 async def update_policy(
@@ -541,7 +546,6 @@ async def get_resolved_guardrails(policy_id: str):
 @router.post(
     "/policies/test-pipeline",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def test_pipeline(
     request: PipelineTestRequest,
@@ -656,7 +660,6 @@ async def list_policy_attachments():
 @router.post(
     "/policies/attachments",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyAttachmentDBResponse,
 )
 async def create_policy_attachment(

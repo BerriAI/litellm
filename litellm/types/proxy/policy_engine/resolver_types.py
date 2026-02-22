@@ -6,7 +6,7 @@ the final guardrails list.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -267,7 +267,7 @@ class PolicyVersionCreateRequest(BaseModel):
 class PolicyVersionStatusUpdateRequest(BaseModel):
     """Request body for updating a policy version's status."""
 
-    version_status: str = Field(
+    version_status: Literal["published", "production"] = Field(
         description="New status: 'published' or 'production'.",
     )
 
