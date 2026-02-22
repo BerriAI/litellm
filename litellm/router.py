@@ -163,11 +163,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import (
-    ModelResponseStream,
-    StandardLoggingPayload,
-    Usage,
-)
+from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -1996,12 +1992,11 @@ class Router:
         When both have tools, concatenate them (deployment tools first, then request tools).
         tool_choice: use request value if provided, else deployment's.
         """
-        dep_params = deployment.get("litellm_params", {}) or {}
-        dep_params = (
-            dep_params.model_dump(exclude_none=True)
-            if hasattr(dep_params, "model_dump")
-            else dep_params
-        )
+        dep_params_raw = deployment.get("litellm_params", {}) or {}
+        if isinstance(dep_params_raw, dict):
+            dep_params = dep_params_raw
+        else:
+            dep_params = dep_params_raw.model_dump(exclude_none=True)
         dep_tools = dep_params.get("tools") or []
         req_tools = kwargs.get("tools") or []
         if dep_tools or req_tools:
@@ -2573,6 +2568,12 @@ class Router:
 
         litellm_model = data.get("model", None)
 
+        # litellm_agent/ prefix only strips the model name, no prompt_id needed
+        is_litellm_agent_model = (
+            isinstance(litellm_model, str)
+            and litellm_model.startswith("litellm_agent/")
+        )
+
         prompt_id = kwargs.get("prompt_id") or prompt_management_deployment[
             "litellm_params"
         ].get("prompt_id", None)
@@ -2585,7 +2586,9 @@ class Router:
             "litellm_params"
         ].get("prompt_label", None)
 
-        if prompt_id is None or not isinstance(prompt_id, str):
+        if not is_litellm_agent_model and (
+            prompt_id is None or not isinstance(prompt_id, str)
+        ):
             raise ValueError(
                 f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}"
             )

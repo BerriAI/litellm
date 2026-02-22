@@ -98,6 +98,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "openmeter",
     "logfire",
     "literalai",
+    "litellm_agent",
     "dynamic_rate_limiter",
     "dynamic_rate_limiter_v3",
     "langsmith",
