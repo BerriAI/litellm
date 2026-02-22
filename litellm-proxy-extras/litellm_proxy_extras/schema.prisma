@@ -213,53 +213,6 @@ model LiteLLM_DeletedTeamTable {
     @@index([created_at])
 }
 
-// Audit table for deleted teams - preserves spend and team information for historical tracking
-model LiteLLM_DeletedTeamTable {
-    id                      String   @id @default(uuid())
-    team_id                 String   // Original team_id
-    team_alias              String?
-    organization_id         String?
-    object_permission_id    String?
-    admins                  String[]
-    members                 String[]
-    members_with_roles      Json     @default("{}")
-    metadata                Json     @default("{}")
-    max_budget              Float?
-    soft_budget             Float?
-    spend                   Float    @default(0.0)
-    models                  String[]
-    max_parallel_requests   Int?
-    tpm_limit               BigInt?
-    rpm_limit               BigInt?
-    budget_duration         String?
-    budget_reset_at         DateTime?
-    blocked                 Boolean  @default(false)
-    model_spend             Json     @default("{}")
-    model_max_budget        Json     @default("{}")
-    router_settings  Json? @default("{}")
-    team_member_permissions String[] @default([])
-    access_group_ids String[] @default([])
-    policies                String[] @default([])
-    model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
-    allow_team_guardrail_config Boolean @default(false)
-
-    // Original timestamps from team creation/updates
-    created_at              DateTime? @map("created_at")
-    updated_at              DateTime? @map("updated_at")
-    
-    // Deletion metadata
-    deleted_at              DateTime  @default(now()) @map("deleted_at")
-    deleted_by              String?   @map("deleted_by") // User who deleted the team
-    deleted_by_api_key      String?   @map("deleted_by_api_key") // API key hash that performed the deletion
-    litellm_changed_by      String?   @map("litellm_changed_by") // From litellm-changed-by header if provided
-    
-    @@index([team_id])
-    @@index([deleted_at])
-    @@index([organization_id])
-    @@index([team_alias])
-    @@index([created_at])
-}
-
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
 		user_id    String @id
@@ -320,6 +273,7 @@ model LiteLLM_MCPServerTable {
   alias        String?
   description  String?
   url          String?
+  spec_path    String?
   transport    String         @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
@@ -1009,20 +963,29 @@ model LiteLLM_SkillsTable {
   updated_by     String?
 }
 
-// Policy table for storing guardrail policies
+// Policy table for storing guardrail policies (versioned)
 model LiteLLM_PolicyTable {
-  policy_id        String    @id @default(uuid())
-  policy_name      String    @unique
-  inherit          String?   // Name of parent policy to inherit from
-  description      String?
-  guardrails_add   String[]  @default([])
-  guardrails_remove String[] @default([])
-  condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
-  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
-  created_at       DateTime  @default(now())
-  created_by       String?
-  updated_at       DateTime  @default(now()) @updatedAt
-  updated_by       String?
+  policy_id          String    @id @default(uuid())
+  policy_name        String    // No longer @unique; use @@unique([policy_name, version_number])
+  version_number     Int       @default(1)
+  version_status     String    @default("production")  // "draft" | "published" | "production"
+  parent_version_id  String?
+  is_latest          Boolean   @default(true)
+  published_at       DateTime?
+  production_at      DateTime?
+  inherit            String?   // Name of parent policy to inherit from
+  description        String?
+  guardrails_add     String[]  @default([])
+  guardrails_remove  String[]  @default([])
+  condition          Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline           Json?     // Optional guardrail pipeline (mode + steps[])
+  created_at         DateTime  @default(now())
+  created_by         String?
+  updated_at         DateTime  @default(now()) @updatedAt
+  updated_by         String?
+
+  @@unique([policy_name, version_number])
+  @@index([policy_name, version_status])
 }
 
 // Policy attachment table for defining where policies apply
