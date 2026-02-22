@@ -3871,23 +3871,26 @@ def test_vertex_ai_streaming_response_id():
 
 
 def test_vertex_ai_gemini_2_5_pro_streaming():
-    load_vertex_ai_credentials()
-    # litellm._turn_on_debug()
-    response = completion(
-        model="vertex_ai/gemini-2.5-pro",
-        messages=[{"role": "user", "content": "Hi!"}],
-        vertex_location="global",
-        stream=True,
-    )
-    has_real_content = False
-    for chunk in response:
-        print(chunk)
-        if (
-            chunk.choices[0].delta.content is not None
-            and len(chunk.choices[0].delta.content) > 0
-        ):
-            has_real_content = True
-    assert has_real_content
+    try:
+        load_vertex_ai_credentials()
+        # litellm._turn_on_debug()
+        response = completion(
+            model="vertex_ai/gemini-2.5-pro",
+            messages=[{"role": "user", "content": "Hi!"}],
+            vertex_location="global",
+            stream=True,
+        )
+        has_real_content = False
+        for chunk in response:
+            print(chunk)
+            if (
+                chunk.choices[0].delta.content is not None
+                and len(chunk.choices[0].delta.content) > 0
+            ):
+                has_real_content = True
+        assert has_real_content
+    except litellm.RateLimitError:
+        pytest.skip("Skipping due to rate limit error")
 
 
 def test_vertex_ai_gemini_audio_ogg():
