@@ -2093,7 +2093,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     chat_completion_logprobs=chat_completion_logprobs,
                     image_response=image_response,
                 )
-                model_response.choices.append(choice)
+                model_response.choices.append(choice)  # type: ignore[arg-type]
             elif isinstance(model_response, ModelResponse):
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
