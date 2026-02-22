@@ -33,7 +33,7 @@ A PR ([`#19467`](https://github.com/BerriAI/litellm/pull/19467)) accidentally re
 - **UI pages:** All UI pages returned 404 for deployments using `SERVER_ROOT_PATH`.
 - **Swagger/OpenAPI docs:** Broken when accessed through the configured root path.
 
-{/_ truncate _/}
+{/* truncate */}
 
 ---
 
