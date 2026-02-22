@@ -389,7 +389,9 @@ export GOOGLE_GEMINI_BASE_URL="http://localhost:4000/gemini"
 export GEMINI_API_KEY="sk-1234"
 
 # For Python SDK (google-genai)
-export GOOGLE_GENAI_API_KEY="sk-1234"
+# Note: The Python SDK does not support a base URL env var.
+# Configure it in code with http_options={"base_url": "..."} instead.
+export GEMINI_API_KEY="sk-1234"
 ```
 
 This is especially useful for tools built on top of the GenAI SDK (like [Gemini CLI](./litellm_gemini_cli.md)).
