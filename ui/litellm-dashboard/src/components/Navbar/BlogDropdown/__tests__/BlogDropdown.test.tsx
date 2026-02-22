@@ -72,6 +72,29 @@ describe("BlogDropdown", () => {
     });
   });
 
+  it("shows at most 5 posts", async () => {
+    const manyPosts = Array.from({ length: 8 }, (_, i) => ({
+      title: `Post ${i + 1}`,
+      description: `Description ${i + 1}`,
+      date: "2026-02-01",
+      url: `https://www.litellm.ai/blog/post-${i + 1}`,
+    }));
+
+    global.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ posts: manyPosts }),
+    });
+
+    render(<BlogDropdown />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText("Blog"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Post 1")).toBeInTheDocument();
+      expect(screen.getByText("Post 5")).toBeInTheDocument();
+      expect(screen.queryByText("Post 6")).not.toBeInTheDocument();
+    });
+  });
+
   it("shows error message and Retry button on fetch failure", async () => {
     global.fetch = vi.fn().mockRejectedValueOnce(new Error("Network error"));
 
