@@ -39,6 +39,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         """
         Initialize the LakeraAIGuardrail class.
 
+        This guardrail only supports the chat completions endpoint (/v1/chat/completions).
+        It is not supported for the Responses API, /v1/messages, MCP, A2A, or other endpoints.
+
         This calls: https://api.lakera.ai/v2/guard
 
         Args:
