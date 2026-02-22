@@ -13,7 +13,17 @@ import random
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+    cast,
+    overload,
+)
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -23,12 +33,13 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     BaseDailySpendTransaction,
-    DailyTagSpendTransaction,
-    DailyOrganizationSpendTransaction,
-    DailyTeamSpendTransaction,
-    DailyEndUserSpendTransaction,
-    DailyUserSpendTransaction,
     DailyAgentSpendTransaction,
+    DailyEndUserSpendTransaction,
+    DailyGuardrailMetricsTransaction,
+    DailyOrganizationSpendTransaction,
+    DailyTagSpendTransaction,
+    DailyTeamSpendTransaction,
+    DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
     Litellm_EntityType,
     LiteLLM_UserTable,
@@ -73,6 +84,7 @@ class DBSpendUpdateWriter:
         self.daily_agent_spend_update_queue = DailySpendUpdateQueue()
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_guardrail_metrics_update_queue = DailySpendUpdateQueue()
 
     async def update_database(
         # LiteLLM management object fields
@@ -217,6 +229,12 @@ class DBSpendUpdateWriter:
             )
             asyncio.create_task(
                 self.add_spend_log_transaction_to_daily_tag_transaction(
+                    payload=copy.deepcopy(payload),
+                    prisma_client=prisma_client,
+                )
+            )
+            asyncio.create_task(
+                self.add_spend_log_transaction_to_daily_guardrail_transaction(
                     payload=copy.deepcopy(payload),
                     prisma_client=prisma_client,
                 )
@@ -697,6 +715,20 @@ class DBSpendUpdateWriter:
             prisma_client=prisma_client,
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_agent_spend_update_transactions,
+        )
+
+        ################## Daily Guardrail Metrics Update Transactions ##################
+        # Aggregate all in memory daily guardrail metrics transactions and commit to db
+        daily_guardrail_metrics_transactions = cast(
+            Dict[str, DailyGuardrailMetricsTransaction],
+            await self.daily_guardrail_metrics_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        await DBSpendUpdateWriter.update_daily_guardrail_metrics(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_metrics_transactions=daily_guardrail_metrics_transactions,
         )
 
     async def _commit_spend_updates_to_db(  # noqa: PLR0915
@@ -1475,6 +1507,134 @@ class DBSpendUpdateWriter:
             unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
+    @staticmethod
+    async def update_daily_guardrail_metrics(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        daily_metrics_transactions: Dict[str, DailyGuardrailMetricsTransaction],
+    ):
+        """
+        Batch upsert daily guardrail metrics to database.
+
+        Uses same pattern as daily spend tables with upsert on conflict.
+        """
+        if not daily_metrics_transactions:
+            return
+
+        from litellm.proxy.utils import _raise_failed_update_spend_exception
+
+        verbose_proxy_logger.debug(
+            f"Daily Guardrail Metrics transactions: {len(daily_metrics_transactions)}"
+        )
+        BATCH_SIZE = 100
+        start_time = time.time()
+
+        try:
+            for i in range(n_retry_times + 1):
+                try:
+                    # Sort transactions to minimize deadlocks
+                    transactions_to_process = dict(
+                        sorted(
+                            daily_metrics_transactions.items(),
+                            key=lambda x: (
+                                x[1].get("date") or "",
+                                x[1].get("guardrail_name") or "",
+                                x[1].get("api_key") or "",
+                            ),
+                        )[:BATCH_SIZE]
+                    )
+
+                    if len(transactions_to_process) == 0:
+                        verbose_proxy_logger.debug(
+                            "No new transactions to process for daily guardrail metrics update"
+                        )
+                        break
+
+                    try:
+                        async with prisma_client.db.batch_() as batcher:
+                            for _, transaction in transactions_to_process.items():
+                                where_clause = {
+                                    "guardrail_daily_unique": {
+                                        "guardrail_name": transaction["guardrail_name"],
+                                        "guardrail_provider": transaction.get("guardrail_provider", "unknown"),
+                                        "guardrail_mode": transaction.get("guardrail_mode", "unknown"),
+                                        "date": transaction["date"],
+                                        "api_key": transaction["api_key"],
+                                    }
+                                }
+
+                                common_data = {
+                                    "guardrail_name": transaction["guardrail_name"],
+                                    "guardrail_provider": transaction.get("guardrail_provider"),
+                                    "guardrail_mode": transaction.get("guardrail_mode"),
+                                    "date": transaction["date"],
+                                    "api_key": transaction["api_key"],
+                                    "total_requests": transaction["total_requests"],
+                                    "success_count": transaction["success_count"],
+                                    "intervened_count": transaction["intervened_count"],
+                                    "failed_count": transaction["failed_count"],
+                                    "not_run_count": transaction["not_run_count"],
+                                    "total_latency_ms": transaction["total_latency_ms"],
+                                }
+
+                                update_data = {
+                                    "total_requests": {"increment": transaction["total_requests"]},
+                                    "success_count": {"increment": transaction["success_count"]},
+                                    "intervened_count": {"increment": transaction["intervened_count"]},
+                                    "failed_count": {"increment": transaction["failed_count"]},
+                                    "not_run_count": {"increment": transaction["not_run_count"]},
+                                    "total_latency_ms": {"increment": transaction["total_latency_ms"]},
+                                }
+
+                                batcher.litellm_dailyguardrailmetrics.upsert(
+                                    where=where_clause,
+                                    data={
+                                        "create": common_data,
+                                        "update": update_data,
+                                    },
+                                )
+                    except Exception as batch_error:
+                        verbose_proxy_logger.exception(
+                            f"Daily guardrail metrics batch upsert failed. "
+                            f"Batch size: {len(transactions_to_process)}, "
+                            f"Error: {str(batch_error)}"
+                        )
+                        raise
+
+                    verbose_proxy_logger.debug(
+                        f"Processed {len(transactions_to_process)} daily guardrail metrics transactions in {time.time() - start_time:.2f}s"
+                    )
+
+                    # Remove processed transactions
+                    for key in transactions_to_process.keys():
+                        daily_metrics_transactions.pop(key, None)
+
+                    break
+
+                except DB_CONNECTION_ERROR_TYPES as e:
+                    if i >= n_retry_times:
+                        _raise_failed_update_spend_exception(
+                            e=e,
+                            start_time=start_time,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                    verbose_proxy_logger.debug(
+                        f"Error updating daily guardrail metrics, retrying. {i + 1}/{n_retry_times + 1}"
+                    )
+                    await asyncio.sleep(0.5)
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error updating daily guardrail metrics: {e}")
+            if n_retry_times > 0:
+                await asyncio.sleep(0.5)
+                await DBSpendUpdateWriter.update_daily_guardrail_metrics(
+                    n_retry_times - 1,
+                    prisma_client,
+                    proxy_logging_obj,
+                    daily_metrics_transactions,
+                )
+
     async def _common_add_spend_log_transaction_to_daily_transaction(
         self,
         payload: Union[dict, SpendLogsPayload],
@@ -1797,3 +1957,95 @@ class DBSpendUpdateWriter:
             await self.daily_tag_spend_update_queue.add_update(
                 update={daily_transaction_key: daily_transaction}
             )
+
+    async def add_spend_log_transaction_to_daily_guardrail_transaction(
+        self,
+        payload: Union[dict, SpendLogsPayload],
+        prisma_client: Optional[PrismaClient] = None,
+    ) -> None:
+        """
+        Extract guardrail information from payload and queue for daily aggregation.
+
+        Creates separate transaction for each guardrail in the request.
+        """
+        if prisma_client is None:
+            return
+
+        try:
+            # Parse metadata
+            metadata_str = payload.get("metadata")
+            if isinstance(metadata_str, str):
+                _metadata = json.loads(metadata_str)
+            else:
+                _metadata = metadata_str or {}
+
+            guardrail_information = _metadata.get("guardrail_information")
+
+            if not guardrail_information or not isinstance(guardrail_information, list):
+                return
+
+            # Get date from startTime
+            start_time = payload.get("startTime")
+            if isinstance(start_time, datetime):
+                date = start_time.date().isoformat()
+            elif isinstance(start_time, str):
+                date = start_time.split("T")[0]
+            else:
+                return
+
+            api_key = payload.get("api_key", "")
+
+            # Process each guardrail separately
+            for guardrail in guardrail_information:
+                guardrail_name = guardrail.get("guardrail_name")
+                if not guardrail_name:
+                    continue
+
+                guardrail_provider = guardrail.get("guardrail_provider") or "unknown"
+                guardrail_mode = self._serialize_guardrail_mode(guardrail.get("guardrail_mode"))
+                guardrail_status = guardrail.get("guardrail_status", "not_run")
+
+                # Calculate status counts
+                success_count = 1 if guardrail_status == "success" else 0
+                intervened_count = 1 if guardrail_status == "guardrail_intervened" else 0
+                failed_count = 1 if guardrail_status == "guardrail_failed_to_respond" else 0
+                not_run_count = 1 if guardrail_status == "not_run" else 0
+
+                # Get guardrail execution latency in milliseconds
+                # duration = time from guardrail start_time to end_time (guardrail overhead only)
+                duration = guardrail.get("duration") or 0
+                duration_ms = float(duration) * 1000  # convert seconds to ms
+
+                # Create unique transaction key
+                transaction_key = f"{guardrail_name}_{guardrail_provider}_{guardrail_mode}_{date}_{api_key}"
+
+                daily_transaction = DailyGuardrailMetricsTransaction(
+                    guardrail_name=guardrail_name,
+                    guardrail_provider=guardrail_provider,
+                    guardrail_mode=guardrail_mode,
+                    date=date,
+                    api_key=api_key,
+                    total_requests=1,
+                    success_count=success_count,
+                    intervened_count=intervened_count,
+                    failed_count=failed_count,
+                    not_run_count=not_run_count,
+                    total_latency_ms=duration_ms,
+                )
+
+                await self.daily_guardrail_metrics_update_queue.add_update(
+                    update={transaction_key: daily_transaction}  # type: ignore
+                )
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error adding guardrail transaction: {e}")
+
+    @staticmethod
+    def _serialize_guardrail_mode(mode) -> str:
+        """Convert guardrail_mode to string for storage."""
+        if isinstance(mode, str):
+            return mode
+        elif isinstance(mode, list):
+            return json.dumps(mode)
+        else:
+            return str(mode) if mode else "unknown"
