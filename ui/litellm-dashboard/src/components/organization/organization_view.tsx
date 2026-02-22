@@ -371,6 +371,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   onAddMember={() => setIsAddMemberModalVisible(true)}
                   roleColumnTitle="Organization Role"
                   extraColumns={orgExtraColumns}
+                  emptyText="No members found"
                 />
               </div>
             ),
