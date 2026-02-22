@@ -36,6 +36,7 @@ from litellm.proxy.auth.auth_checks import (
     common_checks,
     get_end_user_object,
     get_key_object,
+    get_project_object,
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
@@ -76,6 +77,9 @@ except ImportError as e:
     enterprise_custom_auth = None
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
+
+# Pre-computed constants to avoid repeated enum attribute access
+_PUBLIC_ROUTES = LiteLLMRoutes.public_routes.value
 
 custom_litellm_key_header = APIKeyHeader(
     name=SpecialHeaders.custom_litellm_api_key.value,
@@ -120,12 +124,12 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
-        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
             api_key = match.group(1)
         else:
             # If no Bearer token found in Credential, try to extract just the credential value
-            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            match = re.search(r"Credential=([^/\s,]+)", api_key)
             if match:
                 api_key = match.group(1)
 
@@ -145,12 +149,12 @@ def _get_bearer_token(
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
-        match = re.search(r'Credential=Bearer\s+([^/\s,]+)', api_key)
+        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
             api_key = match.group(1)
         else:
             # If no Bearer token found in Credential, try to extract just the credential value
-            match = re.search(r'Credential=([^/\s,]+)', api_key)
+            match = re.search(r"Credential=([^/\s,]+)", api_key)
             if match:
                 api_key = match.group(1)
             else:
@@ -274,7 +278,9 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+    if (
+        litellm.max_budget > 0 and prisma_client is not None
+    ):  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
         cache_key = "{}:spend".format(litellm_proxy_admin_name)
         global_proxy_spend = await _fetch_global_spend_with_event_coordination(
@@ -355,15 +361,6 @@ def get_api_key(
         google_auth_key: str = _safe_get_request_query_params(request).get("key") or ""
         passed_in_key = google_auth_key
         api_key = google_auth_key
-    elif pass_through_endpoints is not None:
-        for endpoint in pass_through_endpoints:
-            if endpoint.get("path", "") == route:
-                headers: Optional[dict] = endpoint.get("headers", None)
-                if headers is not None:
-                    header_key: str = headers.get("litellm_user_api_key", "")
-                    if request.headers.get(header_key) is not None:
-                        api_key = request.headers.get(header_key) or ""
-                        passed_in_key = api_key
     return api_key, passed_in_key
 
 
@@ -373,29 +370,22 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     pass_through_endpoints: Optional[List[dict]],
     api_key: str,
 ) -> Union[UserAPIKeyAuth, str]:
-    is_mapped_pass_through_route: bool = False
-    for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:  # type: ignore
-        if route.startswith(mapped_route):
-            is_mapped_pass_through_route = True
-    if is_mapped_pass_through_route:
-        if request.headers.get("litellm_user_api_key") is not None:
-            api_key = request.headers.get("litellm_user_api_key") or ""
+    # Fast path: nothing to check
+    is_mapped = route.startswith(MAPPED_PASS_THROUGH_PREFIXES)
+    if not is_mapped and pass_through_endpoints is None:
+        return api_key
+
+    if is_mapped:
+        value = request.headers.get("litellm_user_api_key")
+        if value is not None:
+            api_key = value
+
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
-                ## IF AUTH DISABLED
                 if endpoint.get("auth") is not True:
                     return UserAPIKeyAuth()
-                ## IF AUTH ENABLED
-                ### IF CUSTOM PARSER REQUIRED
-                if (
-                    endpoint.get("custom_auth_parser") is not None
-                    and endpoint.get("custom_auth_parser") == "langfuse"
-                ):
-                    """
-                    - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
-                    - check the langfuse public key if it contains the litellm api key
-                    """
+                if endpoint.get("custom_auth_parser") == "langfuse":
                     import base64
 
                     api_key = api_key.replace("Basic ", "").strip()
@@ -406,11 +396,10 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                     headers = endpoint.get("headers", None)
                     if headers is not None:
                         header_key = headers.get("litellm_user_api_key", "")
-                        if (
-                            isinstance(request.headers, dict)
-                            and request.headers.get(key=header_key) is not None  # type: ignore
-                        ):
-                            api_key = request.headers.get(key=header_key)  # type: ignore
+                        value = request.headers.get(header_key)
+                        if value is not None:
+                            api_key = value
+                break  # found matching endpoint, stop looping
     return api_key
 
 
@@ -423,6 +412,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
     azure_apim_header: Optional[str],
     request_data: dict,
     custom_litellm_key_header: Optional[str] = None,
+    route: Optional[str] = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -441,7 +431,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
     parent_otel_span: Optional[Span] = None
     start_time = datetime.now()
-    route: str = get_request_route(request=request)
+    if route is None:
+        route = get_request_route(request=request)
     valid_token: Optional[UserAPIKeyAuth] = None
     custom_auth_api_key: bool = False
 
@@ -480,7 +471,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             parent_otel_span = (
                 open_telemetry_logger.create_litellm_proxy_request_started_span(
                     start_time=start_time,
-                    headers=dict(request.headers),
+                    headers=_safe_get_request_headers(request),
                 )
             )
 
@@ -512,7 +503,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
         if (
-            route in LiteLLMRoutes.public_routes.value  # type: ignore
+            route in _PUBLIC_ROUTES
             or route_in_additonal_public_routes(current_route=route)
         ):
             # check if public endpoint
@@ -644,13 +635,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if team_object is not None
                     else None,
                 )
-                
+
                 # Check if model has zero cost - if so, skip all budget checks
                 model = get_model_from_request(request_data, route)
                 skip_budget_checks = False
                 if model is not None and llm_router is not None:
                     from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                    
+
                     skip_budget_checks = _is_model_cost_zero(
                         model=model, llm_router=llm_router
                     )
@@ -658,7 +649,17 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         verbose_proxy_logger.info(
                             f"Skipping all budget checks for zero-cost model: {model}"
                         )
-                
+
+                # Fetch project object for JWT path if project_id is set
+                _jwt_project_obj = None
+                if valid_token.project_id is not None:
+                    _jwt_project_obj = await get_project_object(
+                        project_id=valid_token.project_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+
                 # run through common checks
                 _ = await common_checks(
                     request=request,
@@ -673,6 +674,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
                     skip_budget_checks=skip_budget_checks,
+                    project_object=_jwt_project_obj,
                 )
 
                 # return UserAPIKeyAuth object
@@ -831,6 +833,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token=valid_token, end_user_params=end_user_params
             )
             valid_token.parent_otel_span = parent_otel_span
+            if _end_user_object is not None:
+                valid_token.end_user_object_permission = _end_user_object.object_permission
 
             return valid_token
 
@@ -1070,7 +1074,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             skip_budget_checks = False
             if model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                
+
                 skip_budget_checks = _is_model_cost_zero(
                     model=model, llm_router=llm_router
                 )
@@ -1215,6 +1219,16 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 key=valid_token.team_id, value=_team_obj
             )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
 
+            # Fetch project object if key belongs to a project
+            _project_obj = None
+            if valid_token.project_id is not None:
+                _project_obj = await get_project_object(
+                    project_id=valid_token.project_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
             global_proxy_spend = None
             if (
                 litellm.max_budget > 0 and prisma_client is not None
@@ -1254,6 +1268,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 proxy_logging_obj=proxy_logging_obj,
                 valid_token=valid_token,
                 skip_budget_checks=skip_budget_checks,
+                project_object=_project_obj,
             )
             # Token passed all checks
             if valid_token is None:
@@ -1277,6 +1292,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
+                valid_token_dict["end_user_object_permission"] = (
+                    _end_user_object.object_permission
+                )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
@@ -1341,6 +1359,7 @@ async def user_api_key_auth(
         azure_apim_header=azure_apim_header,
         request_data=request_data,
         custom_litellm_key_header=custom_litellm_key_header,
+        route=route,
     )
 
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##

@@ -1,4 +1,4 @@
-import { Button, Form, Input, Modal, Select, Steps, Tag, Typography } from "antd";
+import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
@@ -15,13 +15,10 @@ import {
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
-import ToolPermissionRulesEditor, {
-  ToolPermissionConfig,
-} from "./tool_permission/ToolPermissionRulesEditor";
+import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
-const { Step } = Steps;
 
 // Define human-friendly descriptions for each mode
 const modeDescriptions = {
@@ -33,11 +30,20 @@ const modeDescriptions = {
   during_mcp_call: "During MCP Tool Call - Runs in parallel with MCP tool execution for monitoring",
 };
 
+interface GuardrailPreset {
+  provider: string;
+  categoryName?: string;
+  guardrailNameSuggestion: string;
+  mode: string;
+  defaultOn: boolean;
+}
+
 interface AddGuardrailFormProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+  preset?: GuardrailPreset;
 }
 
 interface GuardrailSettings {
@@ -90,7 +96,7 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
-const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, preset }) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -110,6 +116,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const [blockedWords, setBlockedWords] = useState<any[]>([]);
   const [selectedContentCategories, setSelectedContentCategories] = useState<any[]>([]);
   const [pendingCategorySelection, setPendingCategorySelection] = useState<string>("");
+  const [competitorIntentEnabled, setCompetitorIntentEnabled] = useState(false);
+  const [competitorIntentConfig, setCompetitorIntentConfig] = useState<any>(null);
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>({
     rules: [],
     default_action: "deny",
@@ -152,6 +160,38 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     fetchData();
   }, [accessToken]);
 
+  // Apply preset when settings are loaded and form becomes visible
+  useEffect(() => {
+    if (!preset || !visible || !guardrailSettings) return;
+
+    // Set provider
+    setSelectedProvider(preset.provider);
+    form.setFieldsValue({
+      provider: preset.provider,
+      guardrail_name: preset.guardrailNameSuggestion,
+      mode: preset.mode,
+      default_on: preset.defaultOn,
+    });
+
+    // Pre-select content category if specified
+    if (preset.categoryName && guardrailSettings.content_filter_settings?.content_categories) {
+      const category = guardrailSettings.content_filter_settings.content_categories.find(
+        (c: any) => c.name === preset.categoryName,
+      );
+      if (category) {
+        setSelectedContentCategories([
+          {
+            id: `category-${Date.now()}`,
+            category: category.name,
+            display_name: category.display_name,
+            action: category.default_action as "BLOCK" | "MASK",
+            severity_threshold: "medium",
+          },
+        ]);
+      }
+    }
+  }, [preset, visible, guardrailSettings]);
+
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
@@ -175,6 +215,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setBlockedWords([]);
     setSelectedContentCategories([]);
     setPendingCategorySelection("");
+    setCompetitorIntentEnabled(false);
+    setCompetitorIntentConfig(null);
 
     setToolPermissionConfig({
       rules: [],
@@ -254,7 +296,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     setCurrentStep(currentStep - 1);
   };
 
-  const handleAddAndContinue = () => {
+  const handleAddAndContinue = (competitorIntentOnly?: boolean) => {
+    // Competitor intent only: just advance to next step (no category to add)
+    if (competitorIntentOnly) {
+      setCurrentStep(currentStep + 1);
+      return;
+    }
+
     if (!pendingCategorySelection || !guardrailSettings) return;
 
     const contentFilterSettings = guardrailSettings.content_filter_settings;
@@ -363,12 +411,18 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         }
       }
 
-      // For Content Filter, add patterns, blocked words, and categories
+      // For Content Filter, add patterns, blocked words, categories, and optionally competitor intent
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
         // Validate that at least one content filter setting is configured
-        if (selectedPatterns.length === 0 && blockedWords.length === 0 && selectedContentCategories.length === 0) {
+        const hasCompetitorIntent = competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0;
+        if (
+          selectedPatterns.length === 0 &&
+          blockedWords.length === 0 &&
+          selectedContentCategories.length === 0 &&
+          !hasCompetitorIntent
+        ) {
           NotificationsManager.fromBackend(
-            "Please configure at least one content filter setting (category, pattern, or keyword)"
+            "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)",
           );
           setLoading(false);
           return;
@@ -397,6 +451,22 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             action: c.action,
             severity_threshold: c.severity_threshold || "medium",
           }));
+        }
+        if (competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0) {
+          guardrailData.litellm_params.competitor_intent_config = {
+            competitor_intent_type: competitorIntentConfig.competitor_intent_type ?? "airline",
+            brand_self: competitorIntentConfig.brand_self,
+            locations: competitorIntentConfig.locations?.length > 0 ? competitorIntentConfig.locations : undefined,
+            competitors:
+              competitorIntentConfig.competitor_intent_type === "generic" &&
+              competitorIntentConfig.competitors?.length > 0
+                ? competitorIntentConfig.competitors
+                : undefined,
+            policy: competitorIntentConfig.policy,
+            threshold_high: competitorIntentConfig.threshold_high,
+            threshold_medium: competitorIntentConfig.threshold_medium,
+            threshold_low: competitorIntentConfig.threshold_low,
+          };
         }
       }
       // Add config values to the guardrail_info if provided
@@ -596,41 +666,41 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 </div>
               </Option>
             )) || (
-                <>
-                  <Option value="pre_call" label="pre_call">
+              <>
+                <Option value="pre_call" label="pre_call">
+                  <div>
                     <div>
-                      <div>
-                        <strong>pre_call</strong> <Tag color="green">Recommended</Tag>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.pre_call}</div>
+                      <strong>pre_call</strong> <Tag color="green">Recommended</Tag>
                     </div>
-                  </Option>
-                  <Option value="during_call" label="during_call">
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.pre_call}</div>
+                  </div>
+                </Option>
+                <Option value="during_call" label="during_call">
+                  <div>
                     <div>
-                      <div>
-                        <strong>during_call</strong>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.during_call}</div>
+                      <strong>during_call</strong>
                     </div>
-                  </Option>
-                  <Option value="post_call" label="post_call">
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.during_call}</div>
+                  </div>
+                </Option>
+                <Option value="post_call" label="post_call">
+                  <div>
                     <div>
-                      <div>
-                        <strong>post_call</strong>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.post_call}</div>
+                      <strong>post_call</strong>
                     </div>
-                  </Option>
-                  <Option value="logging_only" label="logging_only">
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.post_call}</div>
+                  </div>
+                </Option>
+                <Option value="logging_only" label="logging_only">
+                  <div>
                     <div>
-                      <div>
-                        <strong>logging_only</strong>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.logging_only}</div>
+                      <strong>logging_only</strong>
                     </div>
-                  </Option>
-                </>
-              )}
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.logging_only}</div>
+                  </div>
+                </Option>
+              </>
+            )}
           </Select>
         </Form.Item>
 
@@ -688,30 +758,34 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         onPatternAdd={(pattern) => setSelectedPatterns([...selectedPatterns, pattern])}
         onPatternRemove={(id) => setSelectedPatterns(selectedPatterns.filter((p) => p.id !== id))}
         onPatternActionChange={(id, action) => {
-          setSelectedPatterns(
-            selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p))
-          );
+          setSelectedPatterns(selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p)));
         }}
         onBlockedWordAdd={(word) => setBlockedWords([...blockedWords, word])}
         onBlockedWordRemove={(id) => setBlockedWords(blockedWords.filter((w) => w.id !== id))}
         onBlockedWordUpdate={(id, field, value) => {
-          setBlockedWords(
-            blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w))
-          );
+          setBlockedWords(blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w)));
         }}
         contentCategories={contentFilterSettings.content_categories || []}
         selectedContentCategories={selectedContentCategories}
         onContentCategoryAdd={(category) => setSelectedContentCategories([...selectedContentCategories, category])}
-        onContentCategoryRemove={(id) => setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))}
+        onContentCategoryRemove={(id) =>
+          setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))
+        }
         onContentCategoryUpdate={(id, field, value) => {
           setSelectedContentCategories(
-            selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c))
+            selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
           );
         }}
         pendingCategorySelection={pendingCategorySelection}
         onPendingCategorySelectionChange={setPendingCategorySelection}
         accessToken={accessToken}
         showStep={step}
+        competitorIntentEnabled={competitorIntentEnabled}
+        competitorIntentConfig={competitorIntentConfig}
+        onCompetitorIntentChange={(enabled, config) => {
+          setCompetitorIntentEnabled(enabled);
+          setCompetitorIntentConfig(config);
+        }}
       />
     );
   };
@@ -720,12 +794,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     if (!selectedProvider) return null;
 
     if (isToolPermissionProvider) {
-      return (
-        <ToolPermissionRulesEditor
-          value={toolPermissionConfig}
-          onChange={setToolPermissionConfig}
-        />
-      );
+      return <ToolPermissionRulesEditor value={toolPermissionConfig} onChange={setToolPermissionConfig} />;
     }
 
     if (!providerParams) {
@@ -774,31 +843,30 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     const isLastStep = currentStep === totalSteps - 1;
     const isCategoriesStep = shouldRenderContentFilterConfigSettings(selectedProvider) && currentStep === 1;
     const hasPendingCategory = pendingCategorySelection !== "";
+    const hasCompetitorIntentConfigured =
+      competitorIntentEnabled && (competitorIntentConfig?.brand_self?.length ?? 0) > 0;
+    const canContinueFromCategoriesStep = hasPendingCategory || hasCompetitorIntentConfigured;
 
     return (
       <div className="flex justify-end space-x-2 mt-4">
-        {currentStep > 0 && (
-          <Button onClick={prevStep}>
-            Previous
-          </Button>
-        )}
+        {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
         {isCategoriesStep ? (
           <>
-            <Button onClick={nextStep}>
-              Skip
-            </Button>
-            <Button 
-              type="primary" 
-              onClick={handleAddAndContinue}
-              disabled={!hasPendingCategory}
+            <Button onClick={nextStep}>Skip</Button>
+            <Button
+              type="primary"
+              onClick={() => handleAddAndContinue(hasCompetitorIntentConfigured)}
+              disabled={!canContinueFromCategoriesStep}
             >
-              Add & Continue →
+              {hasPendingCategory ? "Add & Continue →" : "Continue →"}
             </Button>
           </>
         ) : (
           <>
             {!isLastStep && (
-              <Button type="primary" onClick={nextStep}>Next</Button>
+              <Button type="primary" onClick={nextStep}>
+                Next
+              </Button>
             )}
             {isLastStep && (
               <Button type="primary" onClick={handleSubmit} loading={loading}>
@@ -807,45 +875,146 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             )}
           </>
         )}
-        <Button onClick={handleClose}>
-          Cancel
-        </Button>
+        <Button onClick={handleClose}>Cancel</Button>
       </div>
     );
   };
 
-  return (
-    <Modal title="Add Guardrail" open={visible} onCancel={handleClose} footer={null} width={800}>
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          mode: "pre_call",
-          default_on: false,
-        }}
-      >
-        <Steps current={currentStep} className="mb-6" style={{ overflow: "visible" }}>
-          <Step title="Basic Info" />
-          <Step
-            title={
-              shouldRenderPIIConfigSettings(selectedProvider)
-                ? "PII Configuration"
-                : shouldRenderContentFilterConfigSettings(selectedProvider)
-                  ? "Default Categories"
-                  : "Provider Configuration"
-            }
-          />
-          {shouldRenderContentFilterConfigSettings(selectedProvider) && (
-            <>
-              <Step title="Patterns" />
-              <Step title="Keywords" />
-            </>
-          )}
-        </Steps>
+  const getStepConfigs = () => {
+    if (shouldRenderContentFilterConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "Default Categories", optional: false },
+        { title: "Patterns", optional: false },
+        { title: "Keywords", optional: false },
+      ];
+    }
+    if (shouldRenderPIIConfigSettings(selectedProvider)) {
+      return [
+        { title: "Basic Info", optional: false },
+        { title: "PII Configuration", optional: false },
+      ];
+    }
+    return [
+      { title: "Basic Info", optional: false },
+      { title: "Provider Configuration", optional: false },
+    ];
+  };
 
-        {renderStepContent()}
-        {renderStepButtons()}
-      </Form>
+  const stepConfigs = getStepConfigs();
+
+  return (
+    <Modal
+      title={null}
+      open={visible}
+      onCancel={handleClose}
+      footer={null}
+      width={1000}
+      closable={false}
+      className="top-8"
+      styles={{
+        body: { padding: 0 },
+      }}
+    >
+      <div className="flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <h3 className="text-base font-semibold text-gray-900 m-0">Create guardrail</h3>
+          <button
+            onClick={handleClose}
+            className="text-gray-400 hover:text-gray-600 bg-transparent border-none cursor-pointer text-base leading-none p-1"
+          >
+            &#x2715;
+          </button>
+        </div>
+
+        {/* Scrollable content - inline vertical stepper */}
+        <div className="overflow-auto px-6 py-4" style={{ maxHeight: "calc(80vh - 120px)" }}>
+          <Form
+            form={form}
+            layout="vertical"
+            initialValues={{
+              mode: "pre_call",
+              default_on: false,
+            }}
+          >
+            {stepConfigs.map((step, index) => {
+              const isDone = index < currentStep;
+              const isCurrent = index === currentStep;
+              const isLast = index === stepConfigs.length - 1;
+              return (
+                <div key={index} className="relative flex gap-4" style={{ paddingBottom: isLast ? 0 : 8 }}>
+                  {/* Vertical line + step indicator */}
+                  <div className="flex flex-col items-center flex-shrink-0" style={{ width: 24 }}>
+                    <div
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0"
+                      style={{
+                        background: isDone ? "#4f46e5" : isCurrent ? "#fff" : "#f8fafc",
+                        color: isDone ? "#fff" : isCurrent ? "#4f46e5" : "#94a3b8",
+                        border: isCurrent ? "2px solid #4f46e5" : isDone ? "none" : "1px solid #e2e8f0",
+                      }}
+                    >
+                      {isDone ? "\u2713" : index + 1}
+                    </div>
+                    {!isLast && (
+                      <div
+                        className="flex-1"
+                        style={{
+                          width: 1,
+                          background: isDone ? "#4f46e5" : "#e2e8f0",
+                          minHeight: 16,
+                        }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Step content */}
+                  <div className="flex-1 min-w-0" style={{ paddingBottom: isLast ? 0 : 16 }}>
+                    {/* Step header - clickable for completed steps */}
+                    <div
+                      className={`flex items-center gap-2 ${isDone ? "cursor-pointer" : ""}`}
+                      onClick={() => {
+                        if (isDone) setCurrentStep(index);
+                      }}
+                      style={{ minHeight: 24 }}
+                    >
+                      <span
+                        className="text-sm"
+                        style={{
+                          fontWeight: isCurrent ? 600 : 500,
+                          color: isCurrent ? "#1e293b" : isDone ? "#4f46e5" : "#94a3b8",
+                        }}
+                      >
+                        {step.title}
+                      </span>
+                      {step.optional && !isCurrent && <span className="text-[11px] text-slate-400">optional</span>}
+                      {isDone && <span className="text-[11px] text-indigo-500 hover:underline">Edit</span>}
+                    </div>
+
+                    {/* Expanded form content for current step */}
+                    {isCurrent && <div className="mt-3">{renderStepContent()}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </Form>
+        </div>
+
+        {/* Bottom bar */}
+        <div className="flex items-center justify-end space-x-3 px-6 py-3 border-t border-gray-200">
+          <Button onClick={handleClose}>Cancel</Button>
+          {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
+          {currentStep < stepConfigs.length - 1 ? (
+            <Button type="primary" onClick={nextStep}>
+              Next
+            </Button>
+          ) : (
+            <Button type="primary" onClick={handleSubmit} loading={loading}>
+              Create Guardrail
+            </Button>
+          )}
+        </div>
+      </div>
     </Modal>
   );
 };

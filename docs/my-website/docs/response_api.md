@@ -887,7 +887,8 @@ router = litellm.Router(
     # `responses_api_deployment_check` ensures Requests with `previous_response_id`
     # are routed to the same deployment. `deployment_affinity` adds sticky sessions
     # for requests without `previous_response_id` (useful for implicit caching).
-    optional_pre_call_checks=["responses_api_deployment_check", "deployment_affinity"],
+    # `session_affinity` adds sticky sessions based on `session_id` metadata.
+    optional_pre_call_checks=["responses_api_deployment_check", "deployment_affinity", "session_affinity"],
     # Optional (default is 3600 seconds / 1 hour)
     deployment_affinity_ttl_seconds=3600,
 )
@@ -919,10 +920,12 @@ follow_up = await router.aresponses(
 To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks` in your proxy config.yaml.
 
 - `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
+- `session_affinity`: sticky sessions based on session id (takes priority over `deployment_affinity`)
 - `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
 
 Notes:
 - User-key affinity is keyed on `metadata.user_api_key_hash` (the API key hash). The OpenAI `user` request parameter is an end-user identifier and is intentionally not used for deployment affinity.
+- Session-ID affinity is keyed on `metadata.session_id`. For proxy requests, this can be passed via the `x-litellm-session-id` HTTP header. For Python SDK requests, you can pass it via `litellm_metadata={"session_id": "value"}` in request args.
 - `user_api_key_hash` is already SHA-256, and is used as-is (no double hashing).
 - Affinity is scoped by a stable model identifier (the model-map key, e.g. `model_map_information.model_map_key`) so model aliases map to the same stickiness bucket.
 - The mapping TTL is controlled by `deployment_affinity_ttl_seconds` (configured on Router init / proxy startup).
@@ -945,6 +948,7 @@ model_list:
 router_settings:
   optional_pre_call_checks:
     - responses_api_deployment_check
+    - session_affinity
     - deployment_affinity
   # Optional (default is 3600 seconds / 1 hour)
   deployment_affinity_ttl_seconds: 3600
@@ -1046,6 +1050,8 @@ curl http://localhost:4000/v1/responses \
 For long-running conversations, you can enable **server-side compaction** so that when the rendered context size crosses a threshold, the server automatically runs compaction in-stream and emits a compaction item—no separate `POST /v1/responses/compact` call is required.
 
 Supported on the OpenAI Responses API when using the `openai` or `azure` provider. Pass `context_management` with a compaction entry and `compact_threshold` (token count; minimum 1000). When the context crosses the threshold, the server compacts in-stream and continues. Chain turns with `previous_response_id` or by appending output items to your next input array. See [OpenAI Compaction guide](https://developers.openai.com/api/docs/guides/compaction) for details.
+
+> **Note:** You can use openai `context_management` format with Anthropic models via LiteLLM via responses API. LiteLLM will automatically translate this format for Anthropic and handle context management for you.
 
 For explicit control over when compaction runs, use the standalone compact endpoint (`POST /v1/responses/compact`) instead.
 

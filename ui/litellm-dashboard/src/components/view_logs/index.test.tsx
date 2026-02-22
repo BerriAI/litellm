@@ -123,6 +123,55 @@ describe("Request Viewer", () => {
 
     expect(screen.queryByText("LiteLLM Overhead:")).not.toBeInTheDocument();
   });
+
+  it("should display retry count when attempted_retries > 0 in metadata", () => {
+    render(
+      <RequestViewer
+        row={createRow({
+          metadata: {
+            status: "success",
+            attempted_retries: 2,
+            max_retries: 3,
+            additional_usage_values: {
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Retries:")).toBeInTheDocument();
+    expect(screen.getByText("2 / 3")).toBeInTheDocument();
+  });
+
+  it("should display green 'None' tag when attempted_retries is 0", () => {
+    render(
+      <RequestViewer
+        row={createRow({
+          metadata: {
+            status: "success",
+            attempted_retries: 0,
+            max_retries: 3,
+            additional_usage_values: {
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Retries:")).toBeInTheDocument();
+    expect(screen.getByText("None")).toBeInTheDocument();
+  });
+
+  it("should display '-' for Retries when attempted_retries is not present in metadata", () => {
+    render(<RequestViewer row={createRow()} />);
+
+    expect(screen.getByText("Retries:")).toBeInTheDocument();
+    expect(screen.getByText("-")).toBeInTheDocument();
+  });
 });
 
 describe("SpendLogsTable", () => {

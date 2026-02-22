@@ -49,6 +49,19 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 
+# Maximum number of base64 characters to keep in logging payloads.
+# Data URIs exceeding this are replaced with a size placeholder.
+# Set to 0 to disable truncation.
+MAX_BASE64_LENGTH_FOR_LOGGING = int(
+    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
+)
+
+# When true, adds detailed per-phase timing breakdown headers to responses.
+# Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
+LITELLM_DETAILED_TIMING = (
+    os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
+)
+
 # Model cost map validation constants
 MODEL_COST_MAP_MIN_MODEL_COUNT = int(
     os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
@@ -89,6 +102,14 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
     os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
+# Semantic Guard Defaults
+DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75)
 )
 
 # MCP OAuth2 Client Credentials Defaults
@@ -578,11 +599,11 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
     "service_tier",
-    "store",
     "prompt_cache_key",
     "prompt_cache_retention",
     "safety_identifier",
     "verbosity",
+    "store",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -644,6 +665,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "prompt_cache_retention": None,
     "store": None,
     "metadata": None,
+    "context_management": None,
 }
 
 openai_compatible_endpoints: List = [
@@ -1474,3 +1496,14 @@ MICROSOFT_USER_FIRST_NAME_ATTRIBUTE = str(
 MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "surname")
 )
+
+# Maximum payload size (in bytes) to fully serialize for DEBUG logging.
+# Payloads larger than this are truncated to avoid multi-second json.dumps blocking the response.
+MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
+    os.getenv("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400)
+)  # 100 KB
+
+# Policy template enrichment
+MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
+COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
+DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
