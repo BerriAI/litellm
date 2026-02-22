@@ -25,6 +25,15 @@ SAMPLE_RESPONSE = {
 }
 
 
+@pytest.fixture(autouse=True)
+def reset_blog_posts_cache():
+    GetBlogPosts._cached_posts = None
+    GetBlogPosts._last_fetch_time = 0.0
+    yield
+    GetBlogPosts._cached_posts = None
+    GetBlogPosts._last_fetch_time = 0.0
+
+
 def test_load_local_blog_posts_returns_list():
     posts = GetBlogPosts.load_local_blog_posts()
     assert isinstance(posts, list)
@@ -52,12 +61,8 @@ def test_validate_blog_posts_not_dict():
     assert GetBlogPosts.validate_blog_posts("not a dict") is False
 
 
-def test_get_blog_posts_success(monkeypatch):
+def test_get_blog_posts_success():
     """Fetches from remote on first call."""
-    # Reset class cache state
-    GetBlogPosts._cached_posts = None
-    GetBlogPosts._last_fetch_time = 0.0
-
     mock_response = MagicMock()
     mock_response.json.return_value = SAMPLE_RESPONSE
     mock_response.raise_for_status = MagicMock()
@@ -69,11 +74,8 @@ def test_get_blog_posts_success(monkeypatch):
     assert posts[0]["title"] == "Test Post"
 
 
-def test_get_blog_posts_network_error_falls_back_to_local(monkeypatch):
+def test_get_blog_posts_network_error_falls_back_to_local():
     """Falls back to local backup on network error."""
-    GetBlogPosts._cached_posts = None
-    GetBlogPosts._last_fetch_time = 0.0
-
     with patch(
         "litellm.litellm_core_utils.get_blog_posts.httpx.get",
         side_effect=Exception("Network error"),
@@ -84,11 +86,8 @@ def test_get_blog_posts_network_error_falls_back_to_local(monkeypatch):
     assert len(posts) > 0
 
 
-def test_get_blog_posts_invalid_json_falls_back_to_local(monkeypatch):
+def test_get_blog_posts_invalid_json_falls_back_to_local():
     """Falls back when remote returns non-dict."""
-    GetBlogPosts._cached_posts = None
-    GetBlogPosts._last_fetch_time = 0.0
-
     mock_response = MagicMock()
     mock_response.json.return_value = "not a dict"
     mock_response.raise_for_status = MagicMock()
@@ -100,7 +99,7 @@ def test_get_blog_posts_invalid_json_falls_back_to_local(monkeypatch):
     assert len(posts) > 0
 
 
-def test_get_blog_posts_ttl_cache_not_refetched(monkeypatch):
+def test_get_blog_posts_ttl_cache_not_refetched():
     """Within TTL window, does not re-fetch."""
     GetBlogPosts._cached_posts = SAMPLE_RESPONSE["posts"]
     GetBlogPosts._last_fetch_time = time.time()  # just now
@@ -122,7 +121,7 @@ def test_get_blog_posts_ttl_cache_not_refetched(monkeypatch):
     assert len(posts) == 1
 
 
-def test_get_blog_posts_ttl_expired_refetches(monkeypatch):
+def test_get_blog_posts_ttl_expired_refetches():
     """After TTL window, re-fetches from remote."""
     GetBlogPosts._cached_posts = SAMPLE_RESPONSE["posts"]
     GetBlogPosts._last_fetch_time = time.time() - 7200  # 2 hours ago
@@ -138,6 +137,15 @@ def test_get_blog_posts_ttl_expired_refetches(monkeypatch):
 
     mock_get.assert_called_once()
     assert len(posts) == 1
+
+
+def test_get_blog_posts_local_env_var_skips_remote(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_BLOG_POSTS", "true")
+    with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get") as mock_get:
+        posts = get_blog_posts()
+    mock_get.assert_not_called()
+    assert isinstance(posts, list)
+    assert len(posts) > 0
 
 
 def test_blog_post_pydantic_model():
