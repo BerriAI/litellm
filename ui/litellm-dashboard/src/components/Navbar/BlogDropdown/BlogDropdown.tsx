@@ -47,6 +47,9 @@ export const BlogDropdown: React.FC = () => {
     queryKey: ["blogPosts"],
     queryFn: fetchBlogPosts,
     staleTime: 60 * 60 * 1000, // 1 hour — matches server-side TTL
+    retry: 1,
+    retryDelay: 0,
+    enabled: !disableShowBlog,
   });
 
   if (disableShowBlog) {
@@ -77,9 +80,9 @@ export const BlogDropdown: React.FC = () => {
 
     return (
       <div style={{ minWidth: 280, maxWidth: 360 }}>
-        {data.posts.slice(0, 5).map((post, index) => (
+        {data.posts.slice(0, 5).map((post) => (
           <a
-            key={index}
+            key={post.url}
             href={post.url}
             target="_blank"
             rel="noopener noreferrer"
