@@ -423,6 +423,11 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_output_tokens": 10}
 
+    # Test that audio param is supported for TTS (fixes #21702)
+    assert "audio" in VertexGeminiConfig().get_supported_openai_params(
+        model="gemini-2.5-flash-preview-tts"
+    )
+
 
 def test_anthropic_web_search_in_model_info():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
