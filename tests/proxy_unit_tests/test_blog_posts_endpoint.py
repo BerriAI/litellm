@@ -77,3 +77,4 @@ def test_get_blog_posts_returns_local_backup_on_failure(client):
     # Should not 500 — returns local backup
     assert response.status_code == 200
     assert "posts" in response.json()
+    assert len(response.json()["posts"]) > 0

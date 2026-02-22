@@ -4,6 +4,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
     BlogPost,
     BlogPostsResponse,
@@ -213,7 +214,10 @@ async def get_litellm_blog_posts():
     """
     try:
         posts_data = get_blog_posts()
-    except Exception:
+    except Exception as e:
+        verbose_logger.warning(
+            "LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e)
+        )
         posts_data = GetBlogPosts.load_local_blog_posts()
 
     posts = [BlogPost(**p) for p in posts_data[:5]]
