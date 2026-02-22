@@ -161,6 +161,7 @@ const sidebars = {
           ]
         },
         "tutorials/opencode_integration",
+        "tutorials/openclaw_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
