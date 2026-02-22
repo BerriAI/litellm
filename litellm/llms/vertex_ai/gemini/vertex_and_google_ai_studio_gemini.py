@@ -2104,7 +2104,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                 )
-                model_response.choices.append(choice)
+                model_response.choices.append(choice)  # type: ignore[arg-type]
 
         return (
             grounding_metadata,
