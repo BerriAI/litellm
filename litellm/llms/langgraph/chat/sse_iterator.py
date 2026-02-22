@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Optional
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     pass
@@ -139,9 +139,9 @@ class LangGraphSSEStreamIterator:
                 return self._create_final_chunk()
         return None
 
-    def _create_content_chunk(self, text: str) -> ModelResponse:
-        """Create a ModelResponse chunk with content."""
-        chunk = ModelResponse(
+    def _create_content_chunk(self, text: str) -> ModelResponseStream:
+        """Create a ModelResponseStream chunk with content."""
+        chunk = ModelResponseStream(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=0,
             model=self.model,
@@ -158,9 +158,9 @@ class LangGraphSSEStreamIterator:
 
         return chunk
 
-    def _create_final_chunk(self) -> ModelResponse:
-        """Create a final ModelResponse chunk with finish_reason."""
-        chunk = ModelResponse(
+    def _create_final_chunk(self) -> ModelResponseStream:
+        """Create a final ModelResponseStream chunk with finish_reason."""
+        chunk = ModelResponseStream(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=0,
             model=self.model,
