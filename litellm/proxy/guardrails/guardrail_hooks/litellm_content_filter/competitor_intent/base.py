@@ -7,8 +7,11 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Pattern, Set, Tuple, cast
 
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
-    CompetitorActionHint, CompetitorIntentEvidenceEntry,
-    CompetitorIntentResult)
+    CompetitorActionHint,
+    CompetitorIntentEvidenceEntry,
+    CompetitorIntentResult,
+    CompetitorIntentType,
+)
 
 ZERO_WIDTH = re.compile(r"[\u200b-\u200d\u2060\ufeff]")
 LEET = {"@": "a", "4": "a", "0": "o", "3": "e", "1": "i", "5": "s", "7": "t"}
@@ -253,20 +256,20 @@ class BaseCompetitorIntentChecker:
         else:
             intent = "other"
 
-        action_hint: CompetitorActionHint = cast(
+        resolved_action_hint: CompetitorActionHint = cast(
             CompetitorActionHint, self.policy.get(intent, "allow")
         )
         if intent == "log_only":
-            action_hint = "log_only"
+            resolved_action_hint = "log_only"
         if intent == "other":
-            action_hint = "allow"
+            resolved_action_hint = "allow"
 
         return {
-            "intent": intent,
+            "intent": cast(CompetitorIntentType, intent),
             "confidence": round(confidence, 2),
             "entities": entities,
             "signals": ["competitor_resolved"]
             + (["comparison"] if has_comparison else []),
-            "action_hint": action_hint,
+            "action_hint": resolved_action_hint,
             "evidence": evidence,
         }

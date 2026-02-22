@@ -2149,6 +2149,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
     )
+    forward_client_headers_to_llm_api: Optional[bool] = Field(
+        None,
+        description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -3668,6 +3672,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     spend_logs_metadata: Optional[dict]
     agent_id: Optional[str]
     trace_id: Optional[str]
+    session_id: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):

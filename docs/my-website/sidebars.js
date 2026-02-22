@@ -161,6 +161,7 @@ const sidebars = {
           ]
         },
         "tutorials/opencode_integration",
+        "tutorials/openclaw_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
@@ -334,6 +335,7 @@ const sidebars = {
                 "proxy/ui_credentials",
                 "proxy/ai_hub",
                 "proxy/model_compare_ui",
+                "proxy/ui_store_model_db_setting",
               ]
             },
             {

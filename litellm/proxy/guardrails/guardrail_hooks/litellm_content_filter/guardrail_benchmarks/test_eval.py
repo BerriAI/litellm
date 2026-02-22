@@ -20,7 +20,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, Dict, List
 
 import pytest
 from fastapi import HTTPException
@@ -59,7 +59,7 @@ def _run(checker, text: str) -> dict:
         return {"decision": "ALLOW", "score": 0.0, "matched_topic": None}
     except HTTPException as e:
         if e.status_code == 403:
-            detail = e.detail if isinstance(e.detail, dict) else {}
+            detail: Dict[str, Any] = e.detail if isinstance(e.detail, dict) else {}
             return {
                 "decision": "BLOCK",
                 "score": detail.get("score", 1.0),
@@ -67,6 +67,67 @@ def _run(checker, text: str) -> dict:
                 "match_type": detail.get("match_type"),
             }
         raise
+
+
+def _print_confusion_report(label: str, metrics: dict, wrong: list) -> None:
+    """Print the confusion matrix report to stdout."""
+    print("\n")  # noqa: T201
+    print("=" * 70)  # noqa: T201
+    print(f"  {label}")  # noqa: T201
+    print("=" * 70)  # noqa: T201
+    print(f"  Total cases:  {metrics['total']}")  # noqa: T201
+    print(f"  Correct:      {metrics['tp'] + metrics['tn']}")  # noqa: T201
+    print(f"  Wrong:        {metrics['fp'] + metrics['fn']}")  # noqa: T201
+    print()  # noqa: T201
+    print(f"  TP (correctly blocked):  {metrics['tp']}")  # noqa: T201
+    print(f"  TN (correctly allowed):  {metrics['tn']}")  # noqa: T201
+    print(f"  FP (wrongly blocked):    {metrics['fp']}")  # noqa: T201
+    print(f"  FN (wrongly allowed):    {metrics['fn']}")  # noqa: T201
+    print()  # noqa: T201
+    print(f"  Precision:  {metrics['precision']:.1%}")  # noqa: T201
+    print(f"  Recall:     {metrics['recall']:.1%}")  # noqa: T201
+    print(f"  F1:         {metrics['f1']:.1%}")  # noqa: T201
+    print(f"  Accuracy:   {metrics['accuracy']:.1%}")  # noqa: T201
+    print()  # noqa: T201
+    print(f"  Latency p50:  {metrics['p50']:.1f}ms")  # noqa: T201
+    print(f"  Latency p95:  {metrics['p95']:.1f}ms")  # noqa: T201
+    print(f"  Latency avg:  {metrics['avg_lat']:.1f}ms")  # noqa: T201
+    print()  # noqa: T201
+    if wrong:
+        print("WRONG ANSWERS:")  # noqa: T201
+        for line in wrong:
+            print(line)  # noqa: T201
+    else:
+        print("ALL CASES CORRECT")  # noqa: T201
+    print("=" * 70)  # noqa: T201
+
+
+def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) -> dict:
+    """Save confusion matrix results to a JSON file and return the result dict."""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    safe_label = label.lower().replace(" ", "_").replace("—", "-")
+    result = {
+        "label": label,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "total": metrics["total"],
+        "tp": metrics["tp"],
+        "tn": metrics["tn"],
+        "fp": metrics["fp"],
+        "fn": metrics["fn"],
+        "precision": round(metrics["precision"], 4),
+        "recall": round(metrics["recall"], 4),
+        "f1": round(metrics["f1"], 4),
+        "accuracy": round(metrics["accuracy"], 4),
+        "latency_p50_ms": round(metrics["p50"], 3),
+        "latency_p95_ms": round(metrics["p95"], 3),
+        "latency_avg_ms": round(metrics["avg_lat"], 3),
+        "wrong": wrong,
+        "rows": rows,
+    }
+    result_path = os.path.join(RESULTS_DIR, f"{safe_label}.json")
+    with open(result_path, "w") as f:
+        json.dump(result, f, indent=2)
+    return result
 
 
 def _confusion_matrix(checker, cases: List[dict], label: str):
@@ -131,62 +192,13 @@ def _confusion_matrix(checker, cases: List[dict], label: str):
     p95 = sorted_lat[int(len(sorted_lat) * 0.95)] if sorted_lat else 0
     avg_lat = sum(latencies) / len(latencies) if latencies else 0
 
-    # Print confusion matrix (noqa: T201 — intentional eval output)
-    print("\n")  # noqa: T201
-    print("=" * 70)  # noqa: T201
-    print(f"  {label}")  # noqa: T201
-    print("=" * 70)  # noqa: T201
-    print(f"  Total cases:  {total}")  # noqa: T201
-    print(f"  Correct:      {tp + tn}")  # noqa: T201
-    print(f"  Wrong:        {fp + fn}")  # noqa: T201
-    print()  # noqa: T201
-    print(f"  TP (correctly blocked):  {tp}")  # noqa: T201
-    print(f"  TN (correctly allowed):  {tn}")  # noqa: T201
-    print(f"  FP (wrongly blocked):    {fp}")  # noqa: T201
-    print(f"  FN (wrongly allowed):    {fn}")  # noqa: T201
-    print()  # noqa: T201
-    print(f"  Precision:  {precision:.1%}")  # noqa: T201
-    print(f"  Recall:     {recall:.1%}")  # noqa: T201
-    print(f"  F1:         {f1:.1%}")  # noqa: T201
-    print(f"  Accuracy:   {accuracy:.1%}")  # noqa: T201
-    print()  # noqa: T201
-    print(f"  Latency p50:  {p50:.1f}ms")  # noqa: T201
-    print(f"  Latency p95:  {p95:.1f}ms")  # noqa: T201
-    print(f"  Latency avg:  {avg_lat:.1f}ms")  # noqa: T201
-    print()  # noqa: T201
-    if wrong:
-        print("WRONG ANSWERS:")  # noqa: T201
-        for line in wrong:
-            print(line)  # noqa: T201
-    else:
-        print("ALL CASES CORRECT")  # noqa: T201
-    print("=" * 70)  # noqa: T201
-
-    # Save results
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    safe_label = label.lower().replace(" ", "_").replace("—", "-")
-    result = {
-        "label": label,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "total": total,
-        "tp": tp,
-        "tn": tn,
-        "fp": fp,
-        "fn": fn,
-        "precision": round(precision, 4),
-        "recall": round(recall, 4),
-        "f1": round(f1, 4),
-        "accuracy": round(accuracy, 4),
-        "latency_p50_ms": round(p50, 3),
-        "latency_p95_ms": round(p95, 3),
-        "latency_avg_ms": round(avg_lat, 3),
-        "wrong": wrong,
-        "rows": rows,
+    metrics = {
+        "total": total, "tp": tp, "tn": tn, "fp": fp, "fn": fn,
+        "precision": precision, "recall": recall, "f1": f1, "accuracy": accuracy,
+        "p50": p50, "p95": p95, "avg_lat": avg_lat,
     }
-    result_path = os.path.join(RESULTS_DIR, f"{safe_label}.json")
-    with open(result_path, "w") as f:
-        json.dump(result, f, indent=2)
-
+    _print_confusion_report(label, metrics, wrong)
+    result = _save_confusion_results(label, metrics, wrong, rows)
     return result
 
 
@@ -216,8 +228,8 @@ def _content_filter(category: str):
 
     guardrail = ContentFilterGuardrail(
         guardrail_name=f"{category}_eval",
-        categories=[  # type: ignore[arg-type]
-            {
+        categories=[
+            {  # type: ignore[list-item]
                 "category": category,
                 "enabled": True,
                 "action": "BLOCK",

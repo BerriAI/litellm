@@ -1,5 +1,4 @@
-import { Form, Input, Modal, Select, Tag, Typography } from "antd";
-import { Button } from "@tremor/react";
+import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
@@ -16,9 +15,7 @@ import {
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
-import ToolPermissionRulesEditor, {
-  ToolPermissionConfig,
-} from "./tool_permission/ToolPermissionRulesEditor";
+import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -179,16 +176,18 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     // Pre-select content category if specified
     if (preset.categoryName && guardrailSettings.content_filter_settings?.content_categories) {
       const category = guardrailSettings.content_filter_settings.content_categories.find(
-        (c: any) => c.name === preset.categoryName
+        (c: any) => c.name === preset.categoryName,
       );
       if (category) {
-        setSelectedContentCategories([{
-          id: `category-${Date.now()}`,
-          category: category.name,
-          display_name: category.display_name,
-          action: category.default_action as "BLOCK" | "MASK",
-          severity_threshold: "medium",
-        }]);
+        setSelectedContentCategories([
+          {
+            id: `category-${Date.now()}`,
+            category: category.name,
+            display_name: category.display_name,
+            action: category.default_action as "BLOCK" | "MASK",
+            severity_threshold: "medium",
+          },
+        ]);
       }
     }
   }, [preset, visible, guardrailSettings]);
@@ -415,9 +414,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       // For Content Filter, add patterns, blocked words, categories, and optionally competitor intent
       if (shouldRenderContentFilterConfigSettings(values.provider)) {
         // Validate that at least one content filter setting is configured
-        const hasCompetitorIntent =
-          competitorIntentEnabled &&
-          competitorIntentConfig?.brand_self?.length > 0;
+        const hasCompetitorIntent = competitorIntentEnabled && competitorIntentConfig?.brand_self?.length > 0;
         if (
           selectedPatterns.length === 0 &&
           blockedWords.length === 0 &&
@@ -425,7 +422,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           !hasCompetitorIntent
         ) {
           NotificationsManager.fromBackend(
-            "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)"
+            "Please configure at least one content filter setting (category, pattern, keyword, or competitor intent)",
           );
           setLoading(false);
           return;
@@ -459,10 +456,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           guardrailData.litellm_params.competitor_intent_config = {
             competitor_intent_type: competitorIntentConfig.competitor_intent_type ?? "airline",
             brand_self: competitorIntentConfig.brand_self,
-            locations:
-              competitorIntentConfig.locations?.length > 0
-                ? competitorIntentConfig.locations
-                : undefined,
+            locations: competitorIntentConfig.locations?.length > 0 ? competitorIntentConfig.locations : undefined,
             competitors:
               competitorIntentConfig.competitor_intent_type === "generic" &&
               competitorIntentConfig.competitors?.length > 0
@@ -672,41 +666,41 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                 </div>
               </Option>
             )) || (
-                <>
-                  <Option value="pre_call" label="pre_call">
+              <>
+                <Option value="pre_call" label="pre_call">
+                  <div>
                     <div>
-                      <div>
-                        <strong>pre_call</strong> <Tag color="green">Recommended</Tag>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.pre_call}</div>
+                      <strong>pre_call</strong> <Tag color="green">Recommended</Tag>
                     </div>
-                  </Option>
-                  <Option value="during_call" label="during_call">
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.pre_call}</div>
+                  </div>
+                </Option>
+                <Option value="during_call" label="during_call">
+                  <div>
                     <div>
-                      <div>
-                        <strong>during_call</strong>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.during_call}</div>
+                      <strong>during_call</strong>
                     </div>
-                  </Option>
-                  <Option value="post_call" label="post_call">
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.during_call}</div>
+                  </div>
+                </Option>
+                <Option value="post_call" label="post_call">
+                  <div>
                     <div>
-                      <div>
-                        <strong>post_call</strong>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.post_call}</div>
+                      <strong>post_call</strong>
                     </div>
-                  </Option>
-                  <Option value="logging_only" label="logging_only">
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.post_call}</div>
+                  </div>
+                </Option>
+                <Option value="logging_only" label="logging_only">
+                  <div>
                     <div>
-                      <div>
-                        <strong>logging_only</strong>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.logging_only}</div>
+                      <strong>logging_only</strong>
                     </div>
-                  </Option>
-                </>
-              )}
+                    <div style={{ fontSize: "12px", color: "#888" }}>{modeDescriptions.logging_only}</div>
+                  </div>
+                </Option>
+              </>
+            )}
           </Select>
         </Form.Item>
 
@@ -764,24 +758,22 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         onPatternAdd={(pattern) => setSelectedPatterns([...selectedPatterns, pattern])}
         onPatternRemove={(id) => setSelectedPatterns(selectedPatterns.filter((p) => p.id !== id))}
         onPatternActionChange={(id, action) => {
-          setSelectedPatterns(
-            selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p))
-          );
+          setSelectedPatterns(selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p)));
         }}
         onBlockedWordAdd={(word) => setBlockedWords([...blockedWords, word])}
         onBlockedWordRemove={(id) => setBlockedWords(blockedWords.filter((w) => w.id !== id))}
         onBlockedWordUpdate={(id, field, value) => {
-          setBlockedWords(
-            blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w))
-          );
+          setBlockedWords(blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w)));
         }}
         contentCategories={contentFilterSettings.content_categories || []}
         selectedContentCategories={selectedContentCategories}
         onContentCategoryAdd={(category) => setSelectedContentCategories([...selectedContentCategories, category])}
-        onContentCategoryRemove={(id) => setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))}
+        onContentCategoryRemove={(id) =>
+          setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))
+        }
         onContentCategoryUpdate={(id, field, value) => {
           setSelectedContentCategories(
-            selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c))
+            selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
           );
         }}
         pendingCategorySelection={pendingCategorySelection}
@@ -802,12 +794,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     if (!selectedProvider) return null;
 
     if (isToolPermissionProvider) {
-      return (
-        <ToolPermissionRulesEditor
-          value={toolPermissionConfig}
-          onChange={setToolPermissionConfig}
-        />
-      );
+      return <ToolPermissionRulesEditor value={toolPermissionConfig} onChange={setToolPermissionConfig} />;
     }
 
     if (!providerParams) {
@@ -862,16 +849,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
     return (
       <div className="flex justify-end space-x-2 mt-4">
-        {currentStep > 0 && (
-          <Button onClick={prevStep}>
-            Previous
-          </Button>
-        )}
+        {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
         {isCategoriesStep ? (
           <>
-            <Button onClick={nextStep}>
-              Skip
-            </Button>
+            <Button onClick={nextStep}>Skip</Button>
             <Button
               type="primary"
               onClick={() => handleAddAndContinue(hasCompetitorIntentConfigured)}
@@ -883,7 +864,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         ) : (
           <>
             {!isLastStep && (
-              <Button type="primary" onClick={nextStep}>Next</Button>
+              <Button type="primary" onClick={nextStep}>
+                Next
+              </Button>
             )}
             {isLastStep && (
               <Button type="primary" onClick={handleSubmit} loading={loading}>
@@ -892,9 +875,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             )}
           </>
         )}
-        <Button onClick={handleClose}>
-          Cancel
-        </Button>
+        <Button onClick={handleClose}>Cancel</Button>
       </div>
     );
   };
@@ -992,7 +973,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                     {/* Step header - clickable for completed steps */}
                     <div
                       className={`flex items-center gap-2 ${isDone ? "cursor-pointer" : ""}`}
-                      onClick={() => { if (isDone) setCurrentStep(index); }}
+                      onClick={() => {
+                        if (isDone) setCurrentStep(index);
+                      }}
                       style={{ minHeight: 24 }}
                     >
                       <span
@@ -1004,20 +987,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                       >
                         {step.title}
                       </span>
-                      {step.optional && !isCurrent && (
-                        <span className="text-[11px] text-slate-400">optional</span>
-                      )}
-                      {isDone && (
-                        <span className="text-[11px] text-indigo-500 hover:underline">Edit</span>
-                      )}
+                      {step.optional && !isCurrent && <span className="text-[11px] text-slate-400">optional</span>}
+                      {isDone && <span className="text-[11px] text-indigo-500 hover:underline">Edit</span>}
                     </div>
 
                     {/* Expanded form content for current step */}
-                    {isCurrent && (
-                      <div className="mt-3">
-                        {renderStepContent()}
-                      </div>
-                    )}
+                    {isCurrent && <div className="mt-3">{renderStepContent()}</div>}
                   </div>
                 </div>
               );
@@ -1027,20 +1002,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
         {/* Bottom bar */}
         <div className="flex items-center justify-end space-x-3 px-6 py-3 border-t border-gray-200">
-          <Button variant="secondary" onClick={handleClose}>
-            Cancel
-          </Button>
-          {currentStep > 0 && (
-            <Button variant="secondary" onClick={prevStep}>
-              Previous
-            </Button>
-          )}
+          <Button onClick={handleClose}>Cancel</Button>
+          {currentStep > 0 && <Button onClick={prevStep}>Previous</Button>}
           {currentStep < stepConfigs.length - 1 ? (
-            <Button variant="primary" onClick={nextStep}>
+            <Button type="primary" onClick={nextStep}>
               Next
             </Button>
           ) : (
-            <Button variant="primary" onClick={handleSubmit} loading={loading}>
+            <Button type="primary" onClick={handleSubmit} loading={loading}>
               Create Guardrail
             </Button>
           )}

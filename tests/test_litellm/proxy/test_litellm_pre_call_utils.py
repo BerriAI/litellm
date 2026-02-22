@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
@@ -11,15 +11,11 @@ from fastapi import Request
 import litellm
 from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
-    KeyAndTeamLoggingSettings,
-    LiteLLMProxyRequestSetup,
-    _get_dynamic_logging_metadata,
-    _get_enforced_params,
-    _update_model_if_key_alias_exists,
-    add_guardrails_from_policy_engine,
-    add_litellm_data_to_request,
-    check_if_token_is_service_account,
-)
+    KeyAndTeamLoggingSettings, LiteLLMProxyRequestSetup,
+    _get_dynamic_logging_metadata, _get_enforced_params,
+    _get_metadata_variable_name, _update_model_if_key_alias_exists,
+    add_guardrails_from_policy_engine, add_litellm_data_to_request,
+    check_if_token_is_service_account)
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -45,6 +41,47 @@ def test_check_if_token_is_service_account():
         api_key="test-key", metadata={"user_id": "test-user"}
     )
     assert check_if_token_is_service_account(other_metadata_token) == False
+
+
+class TestGetMetadataVariableName:
+    """Tests for _get_metadata_variable_name()"""
+
+    def _make_request(self, path: str) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.url.path = path
+        return request
+
+    def test_returns_litellm_metadata_for_thread_routes(self):
+        request = self._make_request("/v1/threads/thread_123/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_assistant_routes(self):
+        request = self._make_request("/v1/assistants/asst_123")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_batches_route(self):
+        request = self._make_request("/v1/batches")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_messages_route(self):
+        request = self._make_request("/v1/messages")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_litellm_metadata_for_files_route(self):
+        request = self._make_request("/v1/files")
+        assert _get_metadata_variable_name(request) == "litellm_metadata"
+
+    def test_returns_metadata_for_chat_completions(self):
+        request = self._make_request("/chat/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_completions(self):
+        request = self._make_request("/v1/completions")
+        assert _get_metadata_variable_name(request) == "metadata"
+
+    def test_returns_metadata_for_embeddings(self):
+        request = self._make_request("/v1/embeddings")
+        assert _get_metadata_variable_name(request) == "metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -117,7 +154,8 @@ def test_get_enforced_params(
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_parses_string_metadata():
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup
     request_mock = MagicMock(spec=Request)
@@ -163,7 +201,8 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_user_spend_and_budget():
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/completions"
@@ -201,7 +240,8 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_audio_transcription_multipart():
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup request mock for /v1/audio/transcriptions
     request_mock = MagicMock(spec=Request)
@@ -266,7 +306,8 @@ async def test_add_litellm_data_to_request_disabled_callbacks():
     """
     Test that litellm_disabled_callbacks from key metadata is properly added to the request data.
     """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup mock request
     request_mock = MagicMock(spec=Request)
@@ -319,7 +360,8 @@ async def test_add_litellm_data_to_request_disabled_callbacks_empty():
     """
     Test that litellm_disabled_callbacks is not added when it's empty.
     """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup mock request
     request_mock = MagicMock(spec=Request)
@@ -371,7 +413,8 @@ async def test_add_litellm_data_to_request_disabled_callbacks_not_present():
     """
     Test that litellm_disabled_callbacks is not added when it's not present in metadata.
     """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup mock request
     request_mock = MagicMock(spec=Request)
@@ -423,7 +466,8 @@ async def test_add_litellm_data_to_request_disabled_callbacks_invalid_type():
     """
     Test that litellm_disabled_callbacks is not added when it's not a list.
     """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup mock request
     request_mock = MagicMock(spec=Request)
@@ -475,7 +519,8 @@ async def test_add_litellm_data_to_request_disabled_callbacks_with_logging_setti
     """
     Test that litellm_disabled_callbacks works correctly alongside logging settings.
     """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup mock request
     request_mock = MagicMock(spec=Request)
@@ -985,7 +1030,8 @@ from unittest.mock import AsyncMock
 from fastapi.responses import Response
 
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import \
+    ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.utils import StandardLoggingPayload
 
@@ -1361,7 +1407,8 @@ async def test_embedding_header_forwarding_with_model_group():
     importlib.reload(pre_call_utils_module)
 
     # Re-import the function after reload to get the fresh version
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.litellm_pre_call_utils import \
+        add_litellm_data_to_request
 
     # Setup mock request for embeddings
     request_mock = MagicMock(spec=Request)
@@ -1489,18 +1536,17 @@ async def test_embedding_header_forwarding_without_model_group_config():
         litellm.model_group_settings = original_model_group_settings
 
 
-def test_add_guardrails_from_policy_engine():
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine():
     """
     Test that add_guardrails_from_policy_engine adds guardrails from matching policies
     and tracks applied policies in metadata.
     """
-    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.attachment_registry import \
+        get_attachment_registry
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-    from litellm.types.proxy.policy_engine import (
-        Policy,
-        PolicyAttachment,
-        PolicyGuardrails,
-    )
+    from litellm.types.proxy.policy_engine import (Policy, PolicyAttachment,
+                                                   PolicyGuardrails)
 
     # Setup test data
     data = {
@@ -1536,7 +1582,7 @@ def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = True
 
     # Call the function
-    add_guardrails_from_policy_engine(
+    await add_guardrails_from_policy_engine(
         data=data,
         metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
@@ -1559,11 +1605,12 @@ def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = False
 
 
-def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
     """
     Test that add_guardrails_from_policy_engine accepts dynamic 'policies' from the request body
     and removes them to prevent forwarding to the LLM provider.
-    
+
     This is critical because 'policies' is a LiteLLM proxy-specific parameter that should
     not be sent to the actual LLM API (e.g., OpenAI, Anthropic, etc.).
     """
@@ -1589,7 +1636,7 @@ def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_fro
     policy_registry._initialized = False
 
     # Call the function - should accept dynamic policies and not raise an error
-    add_guardrails_from_policy_engine(
+    await add_guardrails_from_policy_engine(
         data=data,
         metadata_variable_name="metadata",
         user_api_key_dict=user_api_key_dict,
@@ -1604,3 +1651,65 @@ def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_fro
     assert "messages" in data
     assert data["messages"] == [{"role": "user", "content": "Hello"}]
     assert "metadata" in data
+
+
+@pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_policy_version_by_id():
+    """
+    Test that add_guardrails_from_policy_engine executes a specific policy version
+    when policy_<uuid> is passed in the request body.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import \
+        get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails
+
+    policy_version_uuid = "12345678-1234-5678-1234-567812345678"
+    policy_version_ref = f"policy_{policy_version_uuid}"
+
+    # Policy from the specific version (e.g. published) - different guardrail than production
+    published_version_policy = Policy(
+        guardrails=PolicyGuardrails(add=["published_version_guardrail"]),
+    )
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "policies": [policy_version_ref],
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_alias="test-team",
+        key_alias="test-key",
+    )
+
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {}
+    policy_registry._initialized = True
+
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = []
+    attachment_registry._initialized = True
+
+    with patch.object(
+        policy_registry,
+        "get_policy_by_id_for_request",
+        return_value=("test-policy-from-version", published_version_policy),
+    ):
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    # Verify guardrails from the specific version were applied
+    assert "metadata" in data
+    assert "guardrails" in data["metadata"]
+    assert "published_version_guardrail" in data["metadata"]["guardrails"]
+    assert "policies" not in data
+
+    # Clean up
+    policy_registry._policies = {}
+    policy_registry._initialized = False
