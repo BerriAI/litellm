@@ -847,8 +847,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
     ##########################################################
-    # Track arrival time for queue time metric
-    arrival_time = time.time()
+    # Track arrival time for queue time metric. Preserve from earlier in the
+    # request flow if set (e.g. by common_processing_pre_call_logic for accurate
+    # litellm_request_queue_time_seconds Prometheus metric).
+    existing_proxy = data.get("proxy_server_request") or {}
+    arrival_time = existing_proxy.get("arrival_time") or time.time()
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
