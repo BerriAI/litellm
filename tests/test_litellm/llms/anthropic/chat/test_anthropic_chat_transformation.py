@@ -2924,3 +2924,23 @@ def test_fast_mode_parameter_mapping():
 
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_map_openai_params_max_tokens_normalized_to_int():
+    """
+    Test that map_openai_params normalizes max_tokens to an integer (e.g. 0.7 -> 1).
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {"max_tokens": 0.7}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-3-5-sonnet-20241022",
+        drop_params=False,
+    )
+
+    assert "max_tokens" in result
+    assert result["max_tokens"] == 1
