@@ -674,6 +674,7 @@ class CustomGuardrail(CustomLogger):
             return True
         if (
             type(e).__name__ == "HTTPException"
+            and type(e).__module__.startswith(("fastapi", "starlette"))
             and getattr(e, "status_code", None) == 400
         ):
             return True

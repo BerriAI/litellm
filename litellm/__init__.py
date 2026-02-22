@@ -452,7 +452,7 @@ if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() != "true":
                 fetched_map=remote,
                 backup_model_count=len(model_cost),
             ):
-                globals()["model_cost"] = {**model_cost, **remote}
+                globals()["model_cost"] = {**globals()["model_cost"], **remote}
                 try:
                     from litellm.utils import _invalidate_model_cost_lowercase_map
                     _invalidate_model_cost_lowercase_map()
