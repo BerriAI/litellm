@@ -269,7 +269,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "logprobs",
             "top_logprobs",
             "modalities",
-            "audio",
             "parallel_tool_calls",
             "web_search_options",
         ]
@@ -281,6 +280,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+
+        # Add audio param for TTS models (consistent with GoogleAIStudioGeminiConfig)
+        if "tts" in model:
+            supported_params.append("audio")
+
         return supported_params
 
     def map_tool_choice_values(
