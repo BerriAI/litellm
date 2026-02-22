@@ -340,7 +340,7 @@ class GoogleGenAIAdapter:
                         function_chunk["description"] = func_decl["description"]
                     if "parametersJsonSchema" in func_decl:
                         params = func_decl["parametersJsonSchema"]
-                        # Anthropic requires 'type': 'object' for input_schema
+                    # Anthropic requires 'type': 'object' for input_schema.
                     # Especially if 'anyOf' is present but 'type' is missing at top level
                     if isinstance(params, dict) and "type" not in params:
                         params["type"] = "object"
