@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Optional
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import Delta, ModelResponse, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     pass
