@@ -12,6 +12,7 @@ import {
 import { Switch, Tag } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
+import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
 
@@ -146,6 +147,7 @@ const Navbar: React.FC<NavbarProps> = ({
             >
               Docs
             </a>
+            <BlogDropdown />
 
             {!isPublicPage && (
               <UserDropdown onLogout={handleLogout} />
