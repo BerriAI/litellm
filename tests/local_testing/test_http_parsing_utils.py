@@ -19,6 +19,9 @@ async def test_read_request_body_valid_json():
     """Test the function with a valid JSON payload."""
 
     class MockRequest:
+        def __init__(self):
+            self.state = type("State", (), {})()
+
         async def body(self):
             return b'{"key": "value"}'
 
@@ -32,6 +35,9 @@ async def test_read_request_body_empty_body():
     """Test the function with an empty body."""
 
     class MockRequest:
+        def __init__(self):
+            self.state = type("State", (), {})()
+
         async def body(self):
             return b""
 
@@ -45,6 +51,9 @@ async def test_read_request_body_invalid_json():
     """Test the function with an invalid JSON payload."""
 
     class MockRequest:
+        def __init__(self):
+            self.state = type("State", (), {})()
+
         async def body(self):
             return b'{"key": value}'  # Missing quotes around `value`
 
@@ -59,6 +68,9 @@ async def test_read_request_body_large_payload():
     large_payload = '{"key":' + '"a"' * 10**6 + "}"  # Large payload
 
     class MockRequest:
+        def __init__(self):
+            self.state = type("State", (), {})()
+
         async def body(self):
             return large_payload.encode()
 
@@ -72,6 +84,9 @@ async def test_read_request_body_unexpected_error():
     """Test the function when an unexpected error occurs."""
 
     class MockRequest:
+        def __init__(self):
+            self.state = type("State", (), {})()
+
         async def body(self):
             raise ValueError("Unexpected error")
 
