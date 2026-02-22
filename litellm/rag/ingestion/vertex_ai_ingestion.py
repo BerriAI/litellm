@@ -10,7 +10,7 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (

@@ -214,9 +214,9 @@ class LicenseChecker:
         try:
             with open(requirements_file) as f:
                 requirements = [
-                    Requirement(line.strip())
+                    Requirement(line.split("#")[0].strip())
                     for line in f
-                    if line.strip() and not line.startswith("#")
+                    if line.split("#")[0].strip() and not line.startswith("#")
                 ]
         except Exception as e:
             print(f"Error parsing {requirements_file}: {str(e)}")

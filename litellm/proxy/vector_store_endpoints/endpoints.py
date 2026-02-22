@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -230,7 +230,7 @@ async def vector_store_create(
             )
         
         # Get managed vector stores hook
-        managed_vector_stores = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
+        managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         if managed_vector_stores is None:
             raise HTTPException(
                 status_code=500,

@@ -16,8 +16,6 @@ Policy templates provide pre-configured guardrail policies that you can use as a
 6. Review and customize the pre-filled policy form
 7. Click **"Create Policy"** to save
 
-![Policy Templates UI](/img/policy_templates_ui.png)
-
 ### Workflow
 
 ```

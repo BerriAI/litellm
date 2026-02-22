@@ -107,7 +107,8 @@ const sidebars = {
       items: [
         "proxy/alerting",
         "proxy/pagerduty",
-        "proxy/prometheus"
+        "proxy/prometheus",
+        "proxy/pyroscope_profiling"
       ]
     },
     {
@@ -119,6 +120,13 @@ const sidebars = {
       type: "category",
       label: "[Beta] Prompt Management",
       items: [
+        {
+          type: "category",
+          label: "Contributing to Prompt Management",
+          items: [
+            "adding_provider/generic_prompt_management_api",
+          ]
+        },
         "proxy/litellm_prompt_management",
         "proxy/custom_prompt_management",
         "proxy/native_litellm_prompt",
@@ -175,6 +183,7 @@ const sidebars = {
         "tutorials/copilotkit_sdk",
         "tutorials/google_adk",
         "tutorials/livekit_xai_realtime",
+        "projects/openai-agents"
       ]
     },
 
@@ -401,6 +410,7 @@ const sidebars = {
           items: [
             "proxy/users",
             "proxy/team_budgets",
+            "proxy/project_management",
             "proxy/ui_team_soft_budget_alerts",
             "proxy/tag_budgets",
             "proxy/customers",
@@ -466,6 +476,7 @@ const sidebars = {
             "proxy/model_access_guide",
             "proxy/model_access",
             "proxy/model_access_groups",
+            "proxy/access_groups",
             "proxy/team_model_add"
           ]
         },
@@ -570,6 +581,7 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
+        "evals_api",
         "generateContent",
         "apply_guardrail",
         "bedrock_invoke",
@@ -770,13 +782,13 @@ const sidebars = {
             "providers/bedrock_batches",
             "providers/bedrock_realtime_with_audio",
             "providers/aws_polly",
-        "providers/bedrock_vector_store",
-      ]
-    },
-    "providers/litellm_proxy",
-    "providers/abliteration",
-    "providers/ai21",
-    "providers/aiml",
+            "providers/bedrock_vector_store",
+          ]
+        },
+        "providers/litellm_proxy",
+        "providers/abliteration",
+        "providers/ai21",
+        "providers/aiml",
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
@@ -933,6 +945,7 @@ const sidebars = {
         "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
+        "completion/message_sanitization",
         "completion/model_alias",
         "completion/mock_requests",
         "completion/predict_outputs",
@@ -1109,6 +1122,7 @@ const sidebars = {
           type: "category",
           label: "Performance / Latency",
           items: [
+            "troubleshoot/latency_overhead",
             "troubleshoot/cpu_issues",
             "troubleshoot/memory_issues",
             "troubleshoot/spend_queue_warnings",
@@ -1116,6 +1130,7 @@ const sidebars = {
             "troubleshoot/prisma_migrations",
           ],
         },
+        "troubleshoot/rollback",
         "troubleshoot",
       ],
     },
@@ -1123,6 +1138,11 @@ const sidebars = {
       type: "category",
       label: "Blog",
       items: [
+        {
+          type: "link",
+          label: "Day 0 Support: Claude Sonnet 4.6",
+          href: "/blog/claude_sonnet_4_6",
+        },
         {
           type: "link",
           label: "Incident: Broken Model Cost Map",

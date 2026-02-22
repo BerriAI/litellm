@@ -358,7 +358,8 @@ router_settings:
 | redis_url | str | URL for Redis server. **Known performance issue with Redis URL.** |
 | cache_responses | boolean | Flag to enable caching LLM Responses, if cache set under `router_settings`. If true, caches responses. Defaults to False. |
 | router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
-| optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Currently supported: 'router_budget_limiting', 'prompt_caching' |
+| optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Supported: `router_budget_limiting`, `prompt_caching`, `responses_api_deployment_check`, `deployment_affinity`, `forward_client_headers_by_model_group` |
+| deployment_affinity_ttl_seconds | int | TTL (seconds) for user-key → deployment affinity mapping when `deployment_affinity` is enabled (configured at Router init / proxy startup). Defaults to `3600` (1 hour). |
 | ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
 | search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search.md) |
 | guardrail_list | List[GuardrailTypedDict] | List of guardrail configurations for guardrail load balancing. Enables load balancing across multiple guardrail deployments with the same guardrail_name. [Further Docs](./guardrails/guardrail_load_balancing.md) |
@@ -450,6 +451,7 @@ router_settings:
 | BATCH_STATUS_POLL_INTERVAL_SECONDS | Interval in seconds for polling batch status. Default is 3600 (1 hour)
 | BATCH_STATUS_POLL_MAX_ATTEMPTS | Maximum number of attempts for polling batch status. Default is 24 (for 24 hours)
 | BEDROCK_MAX_POLICY_SIZE | Maximum size for Bedrock policy. Default is 75
+| BEDROCK_MIN_THINKING_BUDGET_TOKENS | Minimum thinking budget in tokens for Bedrock reasoning models. Bedrock returns a 400 error if budget_tokens is below this value. Requests with lower values are clamped to this minimum. Default is 1024
 | BERRISPEND_ACCOUNT_ID | Account ID for BerriSpend service
 | BRAINTRUST_API_KEY | API key for Braintrust integration
 | BRAINTRUST_API_BASE | Base URL for Braintrust API. Default is https://api.braintrustdata.com/v1
@@ -483,6 +485,7 @@ router_settings:
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
 | COHERE_API_BASE | Base URL for Cohere API. Default is https://api.cohere.com
+| COMPETITOR_LLM_TEMPERATURE | Temperature setting for the LLM used in competitor discovery. Default is 0.3
 | DATABASE_HOST | Hostname for the database server
 | DATABASE_NAME | Name of the database
 | DATABASE_PASSWORD | Password for the database user
@@ -492,6 +495,7 @@ router_settings:
 | DATABASE_USER | Username for database connection
 | DATABASE_USERNAME | Alias for database user
 | DATABRICKS_API_BASE | Base URL for Databricks API
+| DATABRICKS_API_KEY | API key (Personal Access Token) for Databricks API authentication
 | DATABRICKS_CLIENT_ID | Client ID for Databricks OAuth M2M authentication (Service Principal application ID)
 | DATABRICKS_CLIENT_SECRET | Client secret for Databricks OAuth M2M authentication
 | DATABRICKS_USER_AGENT | Custom user agent string for Databricks API requests. Used for partner telemetry attribution
@@ -520,6 +524,7 @@ router_settings:
 | DEBUG_OTEL | Enable debug mode for OpenTelemetry
 | DEFAULT_ALLOWED_FAILS | Maximum failures allowed before cooling down a model. Default is 3
 | DEFAULT_A2A_AGENT_TIMEOUT | Default timeout in seconds for A2A (Agent-to-Agent) protocol requests. Default is 6000
+| DEFAULT_ACCESS_GROUP_CACHE_TTL | Time-to-live in seconds for cached access group information. Default is 600 (10 minutes)
 | DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS | Default maximum tokens for Anthropic chat completions. Default is 4096
 | DEFAULT_BATCH_SIZE | Default batch size for operations. Default is 512
 | DEFAULT_CHUNK_OVERLAP | Default chunk overlap for RAG text splitters. Default is 200
@@ -538,7 +543,7 @@ router_settings:
 | DEFAULT_IMAGE_WIDTH | Default width for images. Default is 300
 | DEFAULT_IN_MEMORY_TTL | Default time-to-live for in-memory cache in seconds. Default is 5
 | DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL | Default time-to-live in seconds for management objects (User, Team, Key, Organization) in memory cache. Default is 60 seconds.
-| DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 16
+| DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 64
 | DEFAULT_MAX_RECURSE_DEPTH | Default maximum recursion depth. Default is 100
 | DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER | Default maximum recursion depth for sensitive data masker. Default is 10
 | DEFAULT_MAX_RETRIES | Default maximum retry attempts. Default is 2
@@ -548,6 +553,7 @@ router_settings:
 | DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL | Default embedding model for MCP semantic tool filtering. Default is "text-embedding-3-small"
 | DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD | Default similarity threshold for MCP semantic tool filtering. Default is 0.3
 | DEFAULT_MCP_SEMANTIC_FILTER_TOP_K | Default number of top results to return for MCP semantic tool filtering. Default is 10
+| MCP_NPM_CACHE_DIR | Directory for npm cache used by STDIO MCP servers. In containers the default (~/.npm) may not exist or be read-only. Default is `/tmp/.npm_mcp_cache`
 | MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL | Default TTL in seconds for MCP OAuth2 token cache. Default is 3600
 | MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE | Maximum number of entries in MCP OAuth2 token cache. Default is 200
 | MCP_OAUTH2_TOKEN_CACHE_MIN_TTL | Minimum TTL in seconds for MCP OAuth2 token cache. Default is 10
@@ -568,6 +574,8 @@ router_settings:
 | DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO | Default minimal reasoning effort thinking budget for Gemini 2.5 Pro. Default is 512
 | DEFAULT_REDIS_MAJOR_VERSION | Default Redis major version to assume when version cannot be determined. Default is 7
 | DEFAULT_REDIS_SYNC_INTERVAL | Default Redis synchronization interval in seconds. Default is 1
+| DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL | Default embedding model for Semantic Guard (route-matching guardrail). Default is "text-embedding-3-small"
+| DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD | Default similarity threshold for Semantic Guard route matching. Default is 0.75
 | DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND | Default price per second for Replicate GPU. Default is 0.001400
 | DEFAULT_REPLICATE_POLLING_DELAY_SECONDS | Default delay in seconds for Replicate polling. Default is 1
 | DEFAULT_REPLICATE_POLLING_RETRIES | Default number of retries for Replicate polling. Default is 5
@@ -600,7 +608,6 @@ router_settings:
 | EMAIL_BUDGET_ALERT_TTL | Time-to-live for budget alert deduplication in seconds. Default is 86400 (24 hours)
 | ENKRYPTAI_API_BASE | Base URL for EnkryptAI Guardrails API. **Default is https://api.enkryptai.com**
 | ENKRYPTAI_API_KEY | API key for EnkryptAI Guardrails service
-| EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
 | FIREWORKS_AI_4_B | Size parameter for Fireworks AI 4B model. Default is 4
 | FIREWORKS_AI_16_B | Size parameter for Fireworks AI 16B model. Default is 16
 | FIREWORKS_AI_56_B_MOE | Size parameter for Fireworks AI 56B MOE model. Default is 56
@@ -745,10 +752,13 @@ router_settings:
 | LITERAL_API_KEY | API key for Literal integration
 | LITERAL_API_URL | API URL for Literal service
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
+| LITELLM_ANTHROPIC_BETA_HEADERS_URL | Custom URL for fetching Anthropic beta headers configuration. Default is the GitHub main branch URL
 | LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
 | LITELLM_ASSETS_PATH | Path to directory for UI assets and logos. Used when running with read-only filesystem (e.g., Kubernetes). Default is `/var/lib/litellm/assets` in Docker.
 | LITELLM_CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours
 | LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
+| LITELLM_DEPLOYMENT_ENVIRONMENT | Environment name for the deployment (e.g., "production", "staging"). Used as a fallback when OTEL_ENVIRONMENT_NAME is not set. Sets the `environment` tag in telemetry data
+| LITELLM_DETAILED_TIMING | When true, adds detailed per-phase timing headers to responses (x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms). Default is false. See [latency overhead docs](../troubleshoot/latency_overhead.md)
 | LITELLM_DD_AGENT_PORT | Port of DataDog agent for LiteLLM-specific log intake. Default is 10518
 | LITELLM_DD_LLM_OBS_PORT | Port for Datadog LLM Observability agent. Default is 8126
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
@@ -765,7 +775,9 @@ router_settings:
 | LITELM_ENVIRONMENT | Environment of LiteLLM Instance, used by logging services. Currently only used by DeepEval.
 | LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
 | LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
+| LITELLM_KEY_ROTATION_GRACE_PERIOD | Duration to keep old key valid after rotation (e.g. "24h", "2d"). Default is empty (immediate revoke). Used for scheduled rotations and as fallback when not specified in regenerate request.
 | LITELLM_LICENSE | License key for LiteLLM usage
+| LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS | Set to `True` to use the local bundled Anthropic beta headers config only, disabling remote fetching. Default is `False`
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOCAL_POLICY_TEMPLATES | When set to "true", uses local backup policy templates instead of fetching from GitHub. Policy templates are fetched from https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json by default, with automatic fallback to local backup on failure
 | LITELLM_LOG | Enable detailed logging for LiteLLM
@@ -775,6 +787,10 @@ router_settings:
 | LITELLM_METER_NAME | Name for OTEL Meter 
 | LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS | Optionally enable semantic logs for OTEL
 | LITELLM_OTEL_INTEGRATION_ENABLE_METRICS | Optionally enable emantic metrics for OTEL
+| LITELLM_ENABLE_PYROSCOPE | If true, enables Pyroscope CPU profiling. Profiles are sent to PYROSCOPE_SERVER_ADDRESS. Off by default. See [Pyroscope profiling](/proxy/pyroscope_profiling).
+| PYROSCOPE_APP_NAME | Application name reported to Pyroscope. Required when LITELLM_ENABLE_PYROSCOPE is true. No default.
+| PYROSCOPE_SERVER_ADDRESS | Pyroscope server URL to send profiles to. Required when LITELLM_ENABLE_PYROSCOPE is true. No default.
+| PYROSCOPE_SAMPLE_RATE | Optional. Sample rate for Pyroscope profiling (integer). No default; when unset, the pyroscope-io library default is used.
 | LITELLM_MASTER_KEY | Master key for proxy authentication
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
 | LITELLM_NON_ROOT | Flag to run LiteLLM in non-root mode for enhanced security in Docker containers
@@ -794,6 +810,8 @@ router_settings:
 | LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. Default is 50,000
 | LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. Default is 20.0
 | LOGGING_WORKER_CLEAR_PERCENTAGE | Percentage of the queue to extract when clearing. Default is 50% 
+| MAX_BASE64_LENGTH_FOR_LOGGING | Maximum number of base64 characters to keep in logging payloads. Data URIs exceeding this are replaced with a size placeholder. Set to 0 to disable truncation. Default is 64
+| MAX_COMPETITOR_NAMES | Maximum number of competitor names allowed in policy template enrichment. Default is 100
 | MAX_EXCEPTION_MESSAGE_LENGTH | Maximum length for exception messages. Default is 2000
 | MAX_ITERATIONS_TO_CLEAR_QUEUE | Maximum number of iterations to attempt when clearing the logging worker queue during shutdown. Default is 200
 | MAX_TIME_TO_CLEAR_QUEUE | Maximum time in seconds to spend clearing the logging worker queue during shutdown. Default is 5.0
@@ -816,6 +834,7 @@ router_settings:
 | MAX_LANGFUSE_INITIALIZED_CLIENTS | Maximum number of Langfuse clients to initialize on proxy. Default is 50. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
 | MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH | Maximum header length for MCP semantic filter tools. Default is 150
 | MAX_POLICY_ESTIMATE_IMPACT_ROWS | Maximum number of rows returned when estimating the impact of a policy. Default is 1000
+| MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG | Maximum payload size in bytes for full DEBUG serialization. Payloads exceeding this will be truncated in logs. Default is 102400 (100 KB)
 | MIN_NON_ZERO_TEMPERATURE | Minimum non-zero temperature value. Default is 0.0001
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
 | MISTRAL_API_BASE | Base URL for Mistral API. Default is https://api.mistral.ai
@@ -879,6 +898,13 @@ router_settings:
 | POSTHOG_API_URL | Base URL for PostHog API (defaults to https://us.i.posthog.com)
 | POSTHOG_MOCK | Enable mock mode for PostHog integration testing. When set to true, intercepts PostHog API calls and returns mock responses without making actual network calls. Default is false
 | POSTHOG_MOCK_LATENCY_MS | Mock latency in milliseconds for PostHog API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
+| PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS | Lock timeout in seconds for Prisma auth reconnection. Default is 0.1
+| PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS | Timeout in seconds for Prisma auth reconnection attempts. Default is 2.0
+| PRISMA_HEALTH_WATCHDOG_ENABLED | Enable the Prisma DB health watchdog that monitors and reconnects on connection loss. Default is true
+| PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS | Interval in seconds for Prisma health watchdog probes. Default is 30
+| PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS | Timeout in seconds for each Prisma health probe. Default is 5.0
+| PRISMA_RECONNECT_COOLDOWN_SECONDS | Cooldown in seconds between Prisma reconnection attempts. Default is 15
+| PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS | Timeout in seconds for Prisma watchdog-initiated reconnection. Default is 30.0
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
 | PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
