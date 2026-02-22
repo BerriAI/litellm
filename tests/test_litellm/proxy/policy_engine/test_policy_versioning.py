@@ -249,6 +249,12 @@ class TestCreateNewVersion:
     async def test_create_new_version_from_production_increments_version(self):
         registry = PolicyRegistry()
         prisma = MagicMock()
+        # create_new_version uses an interactive transaction
+        tx = MagicMock()
+        prisma.db.tx = MagicMock()
+        prisma.db.tx.return_value.__aenter__ = AsyncMock(return_value=tx)
+        prisma.db.tx.return_value.__aexit__ = AsyncMock(return_value=None)
+
         prod = _make_row(
             policy_id="prod-1",
             policy_name="foo",
@@ -259,15 +265,13 @@ class TestCreateNewVersion:
             inherit=None,
             pipeline={"mode": "pre_call", "steps": []},
         )
-        # find_first for production
-        prisma.db.litellm_policytable.find_first = AsyncMock(return_value=prod)
-        # find_first for latest version number
-        prisma.db.litellm_policytable.find_first.side_effect = [
+        # find_first for production + latest version number
+        tx.litellm_policytable.find_first = AsyncMock(side_effect=[
             prod,  # production lookup
             prod,  # latest version_number lookup
-        ]
+        ])
         # update_many for is_latest=False
-        prisma.db.litellm_policytable.update_many = AsyncMock()
+        tx.litellm_policytable.update_many = AsyncMock()
         new_row = _make_row(
             policy_id="new-id",
             policy_name="foo",
@@ -279,7 +283,7 @@ class TestCreateNewVersion:
             description="base",
             pipeline={"mode": "pre_call", "steps": []},
         )
-        prisma.db.litellm_policytable.create = AsyncMock(return_value=new_row)
+        tx.litellm_policytable.create = AsyncMock(return_value=new_row)
 
         result = await registry.create_new_version(
             policy_name="foo",
@@ -293,7 +297,7 @@ class TestCreateNewVersion:
         assert result.parent_version_id == "prod-1"
         assert result.guardrails_add == ["g1"]
         assert result.description == "base"
-        create_call = prisma.db.litellm_policytable.create.call_args[1]["data"]
+        create_call = tx.litellm_policytable.create.call_args[1]["data"]
         assert create_call["version_number"] == 2
         assert create_call["version_status"] == "draft"
         assert create_call["parent_version_id"] == "prod-1"
@@ -351,6 +355,11 @@ class TestUpdateVersionStatus:
             policy_name="foo",
             version_status="published",
         )
+        old_prod = _make_row(
+            policy_id="prod-1",
+            policy_name="foo",
+            version_status="production",
+        )
         updated_row = _make_row(
             policy_id="pub-1",
             policy_name="foo",
@@ -358,6 +367,7 @@ class TestUpdateVersionStatus:
             production_at=datetime.now(timezone.utc),
         )
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=published_row)
+        prisma.db.litellm_policytable.find_first = AsyncMock(return_value=old_prod)
         prisma.db.litellm_policytable.update_many = AsyncMock()
         prisma.db.litellm_policytable.update = AsyncMock(return_value=updated_row)
 
