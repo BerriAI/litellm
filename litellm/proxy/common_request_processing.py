@@ -280,7 +280,7 @@ def _override_openai_response_model(
         response_obj["model"] = stripped
     else:
         try:
-            response_obj.model = stripped
+            setattr(response_obj, "model", stripped)
         except Exception:
             pass
 

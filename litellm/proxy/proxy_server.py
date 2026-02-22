@@ -5264,7 +5264,7 @@ def _restamp_streaming_chunk_model(
         chunk["model"] = stripped
     else:
         try:
-            chunk.model = stripped
+            setattr(chunk, "model", stripped)
         except Exception:
             pass
 
