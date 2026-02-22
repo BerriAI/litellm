@@ -241,6 +241,27 @@ class TestDeletePolicyFromDb:
         assert "warning" not in result
         assert registry.has_policy("my-policy")
 
+    @pytest.mark.asyncio
+    async def test_delete_draft_removes_from_policies_by_id_cache(self):
+        registry = PolicyRegistry()
+        dummy_policy = MagicMock()
+        registry._policies_by_id["draft-1"] = ("my-policy", dummy_policy)
+        prisma = MagicMock()
+        draft_row = _make_row(
+            policy_id="draft-1",
+            policy_name="my-policy",
+            version_status="draft",
+        )
+        prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=draft_row)
+        prisma.db.litellm_policytable.delete = AsyncMock()
+
+        await registry.delete_policy_from_db(
+            policy_id="draft-1",
+            prisma_client=prisma,
+        )
+
+        assert "draft-1" not in registry._policies_by_id
+
 
 class TestCreateNewVersion:
     """Test create_new_version copies all fields and sets draft."""
@@ -362,8 +383,14 @@ class TestUpdateVersionStatus:
             production_at=datetime.now(timezone.utc),
         )
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=published_row)
-        prisma.db.litellm_policytable.update_many = AsyncMock()
-        prisma.db.litellm_policytable.update = AsyncMock(return_value=updated_row)
+
+        tx_mock = MagicMock()
+        tx_mock.litellm_policytable.update_many = AsyncMock()
+        tx_mock.litellm_policytable.update = AsyncMock(return_value=updated_row)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=tx_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        prisma.db.tx = MagicMock(return_value=ctx)
 
         result = await registry.update_version_status(
             policy_id="pub-1",
@@ -372,10 +399,71 @@ class TestUpdateVersionStatus:
         )
 
         assert result.version_status == "production"
-        # update_many should have been called to demote current production
-        assert prisma.db.litellm_policytable.update_many.called
-        # Registry should have been updated with new production
+        assert tx_mock.litellm_policytable.update_many.called
         assert registry.has_policy("foo")
+
+    @pytest.mark.asyncio
+    async def test_published_to_production_removes_from_policies_by_id(self):
+        registry = PolicyRegistry()
+        dummy_policy = MagicMock()
+        registry._policies_by_id["pub-1"] = ("foo", dummy_policy)
+
+        prisma = MagicMock()
+        published_row = _make_row(
+            policy_id="pub-1",
+            policy_name="foo",
+            version_status="published",
+        )
+        updated_row = _make_row(
+            policy_id="pub-1",
+            policy_name="foo",
+            version_status="production",
+            production_at=datetime.now(timezone.utc),
+        )
+        prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=published_row)
+
+        tx_mock = MagicMock()
+        tx_mock.litellm_policytable.update_many = AsyncMock()
+        tx_mock.litellm_policytable.update = AsyncMock(return_value=updated_row)
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=tx_mock)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        prisma.db.tx = MagicMock(return_value=ctx)
+
+        await registry.update_version_status(
+            policy_id="pub-1",
+            new_status="production",
+            prisma_client=prisma,
+        )
+
+        assert "pub-1" not in registry._policies_by_id
+
+
+class TestDeleteAllVersions:
+    """Test delete_all_versions cleans up all caches."""
+
+    @pytest.mark.asyncio
+    async def test_delete_all_versions_cleans_policies_by_id_cache(self):
+        registry = PolicyRegistry()
+        registry.add_policy("my-policy", MagicMock())
+        dummy = MagicMock()
+        registry._policies_by_id["draft-1"] = ("my-policy", dummy)
+        registry._policies_by_id["pub-1"] = ("my-policy", dummy)
+        registry._policies_by_id["other-1"] = ("other-policy", dummy)
+
+        prisma = MagicMock()
+        prisma.db.litellm_policytable.delete_many = AsyncMock()
+
+        result = await registry.delete_all_versions(
+            policy_name="my-policy",
+            prisma_client=prisma,
+        )
+
+        assert "deleted successfully" in result["message"]
+        assert not registry.has_policy("my-policy")
+        assert "draft-1" not in registry._policies_by_id
+        assert "pub-1" not in registry._policies_by_id
+        assert "other-1" in registry._policies_by_id
 
 
 class TestCompareVersions:

@@ -427,13 +427,14 @@ class PolicyRegistry:
                 "message": f"Policy {policy_id} deleted successfully"
             }
 
-            # Remove from in-memory registry only if this was the production version
             if version_status == "production":
                 self.remove_policy(policy_name)
                 result["warning"] = (
                     "Production version was deleted. No other version was promoted. "
                     "Promote another version to production if this policy should remain active."
                 )
+            else:
+                self._policies_by_id.pop(policy_id, None)
 
             return result
         except Exception as e:
@@ -784,10 +785,13 @@ class PolicyRegistry:
         """
         Update a policy version's status. Valid transitions:
         - draft -> published (sets published_at)
-        - published -> production (sets production_at, demotes current production to published, updates in-memory)
-        - production -> published (demotes, removes from in-memory)
+        - published -> production (sets production_at, demotes current production
+          to published, updates in-memory registry)
+
+        Invalid transitions:
         - draft -> production: NOT allowed (must publish first)
         - published -> draft: NOT allowed
+        - production -> published: NOT allowed (use delete or create a new version)
 
         Args:
             policy_id: The policy version ID
@@ -842,29 +846,30 @@ class PolicyRegistry:
                     "Cannot promote draft directly to production. Publish the version first."
                 )
 
-            # Demote current production to published
-            await prisma_client.db.litellm_policytable.update_many(
-                where={
-                    "policy_name": policy_name,
-                    "version_status": "production",
-                },
-                data={
-                    "version_status": "published",
-                    "updated_at": now,
-                    "updated_by": updated_by,
-                },
-            )
+            async with prisma_client.db.tx() as tx:
+                # Demote current production to published
+                await tx.litellm_policytable.update_many(
+                    where={
+                        "policy_name": policy_name,
+                        "version_status": "production",
+                    },
+                    data={
+                        "version_status": "published",
+                        "updated_at": now,
+                        "updated_by": updated_by,
+                    },
+                )
 
-            # Promote this version to production
-            updated = await prisma_client.db.litellm_policytable.update(
-                where={"policy_id": policy_id},
-                data={
-                    "version_status": "production",
-                    "production_at": now,
-                    "updated_at": now,
-                    "updated_by": updated_by,
-                },
-            )
+                # Promote this version to production
+                updated = await tx.litellm_policytable.update(
+                    where={"policy_id": policy_id},
+                    data={
+                        "version_status": "production",
+                        "production_at": now,
+                        "updated_at": now,
+                        "updated_by": updated_by,
+                    },
+                )
 
             # Update in-memory registry: remove old production (by name), add this one
             self.remove_policy(policy_name)
@@ -968,6 +973,13 @@ class PolicyRegistry:
                 where={"policy_name": policy_name}
             )
             self.remove_policy(policy_name)
+            stale_ids = [
+                pid
+                for pid, (pname, _) in self._policies_by_id.items()
+                if pname == policy_name
+            ]
+            for pid in stale_ids:
+                del self._policies_by_id[pid]
             return {
                 "message": f"All versions of policy '{policy_name}' deleted successfully"
             }
