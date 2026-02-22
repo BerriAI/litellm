@@ -99,6 +99,7 @@ const mockKey: KeyResponse = {
   created_at: "2024-11-01T10:00:00Z",
   created_by: "user-1",
   updated_at: "2024-11-15T10:00:00Z",
+  last_active: "2024-11-20T14:30:00Z",
   team_spend: 5.5,
   team_alias: "Test Team",
   team_tpm_limit: 5000,
@@ -623,5 +624,80 @@ it("should render table without crashing when models is undefined", async () => 
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+});
+
+it("should render Last Active column header with info icon", () => {
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  expect(screen.getByText("Last Active")).toBeInTheDocument();
+});
+
+it("should display formatted date for last_active when value exists", async () => {
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    const expectedDate = new Date("2024-11-20T14:30:00Z").toLocaleDateString();
+    expect(screen.getByText(expectedDate)).toBeInTheDocument();
+  });
+});
+
+it("should display 'Unknown' for last_active when value is null", async () => {
+  const keyWithNullLastActive = {
+    ...mockKey,
+    last_active: null,
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithNullLastActive],
+    allKeyAliases: ["test-key-alias"],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
   });
 });

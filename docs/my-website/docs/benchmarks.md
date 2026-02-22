@@ -5,6 +5,13 @@ import Image from '@theme/IdealImage';
 
 Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpoint.
 
+## Setting Up a Fake OpenAI Endpoint
+
+For load testing and benchmarking, you can use a fake OpenAI proxy server. LiteLLM provides:
+
+1. **Hosted endpoint**: Use our free hosted fake endpoint at `https://exampleopenaiendpoint-production.up.railway.app/`
+2. **Self-hosted**: Set up your own fake OpenAI proxy server using [github.com/BerriAI/example_openai_endpoint](https://github.com/BerriAI/example_openai_endpoint)
+
 Use this config for testing:
 
 ```yaml
@@ -12,7 +19,7 @@ model_list:
   - model_name: "fake-openai-endpoint"
     litellm_params:
       model: openai/any
-      api_base: https://your-fake-openai-endpoint.com/chat/completions
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/  # or your self-hosted endpoint
       api_key: "test"
 ```
 

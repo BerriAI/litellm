@@ -16,6 +16,7 @@ from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import (
     get_litellm_web_search_tool,
+    get_litellm_web_search_tool_openai,
     is_web_search_tool,
     is_web_search_tool_chat_completion,
 )
@@ -77,7 +78,13 @@ class WebSearchInterceptionLogger(CustomLogger):
         that we can intercept and execute ourselves.
         """
         # Check if this is for an enabled provider
-        custom_llm_provider = kwargs.get("litellm_params", {}).get("custom_llm_provider", "")
+        # Try top-level kwargs first, then nested litellm_params, then derive from model name
+        custom_llm_provider = kwargs.get("custom_llm_provider", "") or kwargs.get("litellm_params", {}).get("custom_llm_provider", "")
+        if not custom_llm_provider:
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=kwargs.get("model", ""))
+            except Exception:
+                custom_llm_provider = ""
         if custom_llm_provider not in self.enabled_providers:
             return None
 
@@ -101,7 +108,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool in tools:
             if is_web_search_tool(tool):
                 # Convert to LiteLLM standard web search tool
-                converted_tool = get_litellm_web_search_tool()
+                converted_tool = get_litellm_web_search_tool_openai()
                 converted_tools.append(converted_tool)
                 verbose_logger.debug(
                     f"WebSearchInterception: Converted {tool.get('name', 'unknown')} "
@@ -111,8 +118,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # Keep other tools as-is
                 converted_tools.append(tool)
 
-        # Return modified kwargs with converted tools
-        return {"tools": converted_tools}
+        # Update tools in-place and return full kwargs
+        kwargs["tools"] = converted_tools
+        return kwargs
 
     @classmethod
     def from_config_yaml(

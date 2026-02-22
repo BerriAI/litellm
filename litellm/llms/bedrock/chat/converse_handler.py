@@ -13,7 +13,9 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
-
+from litellm.anthropic_beta_headers_manager import (
+            update_headers_with_filtered_beta,
+        )
 from ..base_aws_llm import BaseAWSLLM, Credentials
 from ..common_utils import BedrockError
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
@@ -270,7 +272,18 @@ class BedrockConverseLLM(BaseAWSLLM):
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
         else:
-            modelId = self.encode_model_id(model_id=model)
+            # Strip nova spec prefixes before encoding model ID for API URL
+            _model_for_id = model
+            _stripped = _model_for_id
+            for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
+                if _stripped.startswith(rp):
+                    _stripped = _stripped[len(rp):]
+                    break
+            for _nova_prefix in ["nova-2/", "nova/"]:
+                if _stripped.startswith(_nova_prefix):
+                    _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
+                    break
+            modelId = self.encode_model_id(model_id=_model_for_id)
 
         fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
             fake_stream=fake_stream,
@@ -337,7 +350,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-
+        
+        # Filter beta headers in HTTP headers before making the request
+        headers = update_headers_with_filtered_beta(
+            headers=headers, provider="bedrock_converse"
+        )
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             if isinstance(client, HTTPHandler):

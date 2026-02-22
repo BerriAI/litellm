@@ -81,6 +81,19 @@ class PolicyMatcher:
         if not PolicyMatcher.matches_pattern(context.model, scope.get_models()):
             return False
 
+        # Check tags (only if scope specifies tags)
+        # Unlike teams/keys/models, empty tags means "do not check" rather than "match all"
+        scope_tags = scope.get_tags()
+        if scope_tags:
+            if not context.tags:
+                return False
+            # Match if ANY context tag matches ANY scope tag pattern
+            if not any(
+                PolicyMatcher.matches_pattern(tag, scope_tags)
+                for tag in context.tags
+            ):
+                return False
+
         return True
 
     @staticmethod

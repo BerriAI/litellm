@@ -24,8 +24,9 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Skeleton, Tooltip } from "antd";
-import React, { useEffect, useState } from "react";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Popover, Skeleton, Tooltip } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -112,7 +113,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     }
   }, [refetch]);
 
-  const columns: ColumnDef<KeyResponse>[] = [
+  const columns: ColumnDef<KeyResponse>[] = useMemo(() => [
     {
       id: "expander",
       header: () => null,
@@ -293,6 +294,33 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       },
     },
     {
+      id: "last_active",
+      accessorKey: "last_active",
+      header: () => (
+        <span className="flex items-center gap-1">
+          Last Active
+          <Popover
+            content="This is a new field and is not backfilled. Only new key usage will update this value."
+            trigger="hover"
+          >
+            <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
+          </Popover>
+        </span>
+      ),
+      size: 130,
+      enableSorting: false,
+      cell: (info) => {
+        const value = info.getValue();
+        if (!value) return "Unknown";
+        const date = new Date(value as string);
+        return (
+          <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
+            <span>{date.toLocaleDateString()}</span>
+          </Tooltip>
+        );
+      },
+    },
+    {
       id: "expires",
       accessorKey: "expires",
       header: "Expires",
@@ -437,7 +465,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         );
       },
     },
-  ];
+  ], []);
 
   const filterOptions: FilterOption[] = [
     {

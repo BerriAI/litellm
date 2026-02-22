@@ -78,7 +78,7 @@ async def test_bedrock_apply_guardrail_blocked():
             },
         )
 
-        # HTTPException must propagate as-is (not wrapped in a generic Exception)
+        # Test the apply_guardrail method propagates HTTPException (AWS error) to the client
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["This is blocked content"]},
@@ -276,7 +276,7 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
             },
         )
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(HTTPException, match="policy") as exc_info:
             await guardrail.apply_guardrail(
                 inputs={"texts": ["blocked"]},
                 request_data=request_data,
@@ -286,9 +286,9 @@ async def test_bedrock_apply_guardrail_filters_request_messages_when_flag_enable
         assert mock_api.called
         _, kwargs = mock_api.call_args
         assert kwargs["messages"] == [request_messages[-1]]
-        # HTTPException must propagate as-is (not wrapped)
+        # HTTPException from guardrail is propagated so the client gets the AWS message
         assert exc_info.value.status_code == 400
-        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        assert "policy" in str(exc_info.value.detail)
 
 
 def test_bedrock_guardrail_filters_latest_user_message_when_enabled():

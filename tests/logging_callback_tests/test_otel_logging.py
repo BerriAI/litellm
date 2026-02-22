@@ -263,9 +263,17 @@ async def test_arize_phoenix_adds_openinference_kind_and_avoids_duplicate_litell
     Ensure Arize Phoenix spans include OpenInference span kind and do not create
     a duplicate litellm_request span when a proxy parent span is already active.
     """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
     exporter.clear()
     litellm.logging_callback_manager._reset_all_callbacks()
+
+    # Set up a global TracerProvider so we can create valid spans
+    # This simulates the proxy server's TracerProvider
+    global_provider = TracerProvider()
+    global_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(global_provider)
 
     otel_logger = ArizePhoenixLogger(config=OpenTelemetryConfig(exporter=exporter))
     litellm.callbacks = [otel_logger]

@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, LoadingOutlined, UserOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
@@ -21,13 +21,15 @@ import {
   Text,
   Title
 } from "@tremor/react";
-import { Alert, Segmented, Tooltip } from "antd";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Segmented, Select, Tooltip, Typography } from "antd";
+import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import React, { useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { Button } from "@tremor/react";
 import { all_admin_roles } from "../../../utils/roles";
@@ -81,13 +83,67 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: currentUser } = useCurrentUser();
   console.log(`currentUser: ${JSON.stringify(currentUser)}`);
   console.log(`currentUser max budget: ${currentUser?.max_budget}`);
+  const isAdmin = all_admin_roles.includes(userRole || "");
+
+  // Debounced search for user selector
+  const [userSearchInput, setUserSearchInput] = useState("");
+  const [debouncedUserSearch, setDebouncedUserSearch] = useDebouncedState("", {
+    wait: 300,
+  });
+
+  const {
+    data: usersInfiniteData,
+    fetchNextPage: fetchNextUsersPage,
+    hasNextPage: hasNextUsersPage,
+    isFetchingNextPage: isFetchingNextUsersPage,
+    isLoading: isLoadingUsers,
+  } = useInfiniteUsers(50, debouncedUserSearch || undefined);
+
+  const userOptions = useMemo(() => {
+    if (!usersInfiniteData?.pages) return [];
+    const seen = new Set<string>();
+    const result: { value: string; label: string }[] = [];
+    for (const page of usersInfiniteData.pages) {
+      for (const user of page.users) {
+        if (seen.has(user.user_id)) continue;
+        seen.add(user.user_id);
+        result.push({
+          value: user.user_id,
+          label: user.user_alias
+            ? `${user.user_alias} (${user.user_id})`
+            : user.user_email
+              ? `${user.user_email} (${user.user_id})`
+              : user.user_id,
+        });
+      }
+    }
+    return result;
+  }, [usersInfiniteData]);
+
+  const handleUserSearchChange = (value: string) => {
+    setUserSearchInput(value);
+    setDebouncedUserSearch(value);
+  };
+
+  const handleUserPopupScroll = (e: UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const scrollRatio =
+      (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    if (scrollRatio >= 0.8 && hasNextUsersPage && !isFetchingNextUsersPage) {
+      fetchNextUsersPage();
+    }
+  };
+
+  // For admins: null means global view (all users), a string means filter by that user
+  // For non-admins: always set to their own user ID
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(
+    isAdmin ? null : (userID || null)
+  );
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [showOrganizationBanner, setShowOrganizationBanner] = useState(true);
-  const [showCustomerBanner, setShowCustomerBanner] = useState(true);
   const [usageView, setUsageView] = useState<UsageOption>("global");
-  const [showAgentBanner, setShowAgentBanner] = useState(true);
+  const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const getAllTags = async () => {
@@ -106,6 +162,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   useEffect(() => {
     getAllTags();
   }, [accessToken]);
+
+  // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
+  useEffect(() => {
+    if (!isAdmin && userID) {
+      setSelectedUserId(userID);
+    }
+  }, [isAdmin, userID]);
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -301,6 +364,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const fetchUserSpendData = useCallback(async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
 
+    // For non-admins, always pass their own user_id
+    const effectiveUserId = isAdmin ? selectedUserId : (userID || null);
+
     setLoading(true);
 
     // Create new Date objects to avoid mutating the original dates
@@ -310,14 +376,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     try {
       // Prefer aggregated endpoint to avoid many page requests
       try {
-        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime);
+        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId);
         setUserSpendData(aggregated);
         return;
       } catch (e) {
         // Fallback to paginated calls if aggregated endpoint is unavailable
       }
 
-      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime);
+      const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId);
 
       if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
@@ -328,7 +394,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       const aggregatedMetadata = { ...firstPageData.metadata };
 
       for (let page = 2; page <= firstPageData.metadata.total_pages; page++) {
-        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page);
+        const pageData = await userDailyActivityCall(accessToken, startTime, endTime, page, effectiveUserId);
         allResults.push(...pageData.results);
         if (pageData.metadata) {
           aggregatedMetadata.total_spend += pageData.metadata.total_spend || 0;
@@ -349,7 +415,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       setLoading(false);
       setIsDateChanging(false);
     }
-  }, [accessToken, dateValue.from, dateValue.to]);
+  }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID]);
 
   // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
@@ -423,12 +489,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <UsageViewSelect
               value={usageView}
               onChange={(value) => setUsageView(value)}
-              isAdmin={all_admin_roles.includes(userRole || "")}
+              isAdmin={isAdmin}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
           {/* Your Usage Panel */}
           {usageView === "global" && (
+            <>
             <TabGroup>
               <div className="flex justify-between items-center">
                 <TabList variant="solid" className="mt-1">
@@ -460,24 +527,61 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <Grid numItems={2} className="gap-2 w-full">
                     {/* Total Spend Card */}
                     <Col numColSpan={2}>
-                      <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
-                        Project Spend{" "}
-                        {dateValue.from && dateValue.to && (
-                          <>
-                            {dateValue.from.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
-                            })}
-                            {" - "}
-                            {dateValue.to.toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            })}
-                          </>
+                      <div className="flex items-center gap-4 mt-2 mb-2">
+                        <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content text-lg">
+                          Project Spend{" "}
+                          {dateValue.from && dateValue.to && (
+                            <>
+                              {dateValue.from.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
+                              })}
+                              {" - "}
+                              {dateValue.to.toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })}
+                            </>
+                          )}
+                        </Text>
+                        {isAdmin && (
+                          <div className="flex items-center gap-2">
+                            <UserOutlined style={{ fontSize: "14px", color: "#6b7280" }} />
+                            <Select
+                              showSearch
+                              allowClear
+                              style={{ width: 300 }}
+                              placeholder="All Users (Global View)"
+                              value={selectedUserId}
+                              onChange={(value) => setSelectedUserId(value ?? null)}
+                              filterOption={false}
+                              onSearch={handleUserSearchChange}
+                              searchValue={userSearchInput}
+                              onPopupScroll={handleUserPopupScroll}
+                              loading={isLoadingUsers}
+                              notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
+                              options={userOptions}
+                              popupRender={(menu) => (
+                                <>
+                                  {menu}
+                                  {isFetchingNextUsersPage && (
+                                    <div style={{ textAlign: "center", padding: 8 }}>
+                                      <LoadingOutlined spin />
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            />
+                            {selectedUserId && (
+                              <span className="text-xs text-gray-500">
+                                Filtering by user
+                              </span>
+                            )}
+                          </div>
                         )}
-                      </Text>
+                      </div>
 
                       <ViewUserSpend
                         userSpend={totalSpend}
@@ -694,37 +798,25 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 </TabPanel>
               </TabPanels>
             </TabGroup>
+            </>
           )}
           {/* Organization Usage Panel */}
 
           {usageView === "organization" && (
-            <>
-              {showOrganizationBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Organization usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowOrganizationBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="organization"
-                userID={userID}
-                userRole={userRole}
-                dateValue={dateValue}
-                entityList={
-                  organizations?.map((organization) => ({
-                    label: organization.organization_alias,
-                    value: organization.organization_id,
-                  })) || null
-                }
-                premiumUser={premiumUser}
-              />
-            </>
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="organization"
+              userID={userID}
+              userRole={userRole}
+              dateValue={dateValue}
+              entityList={
+                organizations?.map((organization) => ({
+                  label: organization.organization_alias,
+                  value: organization.organization_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+            />
           )}
 
           {/* Team Usage Panel */}
@@ -747,71 +839,64 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
           {/* Customer Usage Panel */}
           {usageView === "customer" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="customer"
+              userID={userID}
+              userRole={userRole}
+              entityList={
+                customers?.map((customer) => ({
+                  label: customer.alias || customer.user_id,
+                  value: customer.user_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
+          )}
+          {/* Tag Usage Panel */}
+          {usageView === "tag" && (
             <>
-              {showCustomerBanner && (
+              {showCredentialBanner && (
                 <Alert
                   banner
                   type="info"
-                  message="Customer usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
+                  message="Reusable credentials are automatically tracked as tags"
+                  description={
+                    <Typography.Text>
+                      When a reusable credential is used, it will appear as a tag prefixed with{" "}
+                      <Typography.Text code>Credential: </Typography.Text>
+                      in this view.
+                    </Typography.Text>
+                  }
                   closable
-                  onClose={() => setShowCustomerBanner(false)}
+                  onClose={() => setShowCredentialBanner(false)}
                   className="mb-5"
                 />
               )}
               <EntityUsage
                 accessToken={accessToken}
-                entityType="customer"
+                entityType="tag"
                 userID={userID}
                 userRole={userRole}
-                entityList={
-                  customers?.map((customer) => ({
-                    label: customer.alias || customer.user_id,
-                    value: customer.user_id,
-                  })) || null
-                }
+                entityList={allTags}
                 premiumUser={premiumUser}
                 dateValue={dateValue}
               />
             </>
           )}
-          {/* Tag Usage Panel */}
-          {usageView === "tag" && (
+          {usageView === "agent" && (
             <EntityUsage
               accessToken={accessToken}
-              entityType="tag"
+              entityType="agent"
               userID={userID}
               userRole={userRole}
-              entityList={allTags}
+              entityList={
+                agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
+              }
               premiumUser={premiumUser}
               dateValue={dateValue}
             />
-          )}
-          {usageView === "agent" && (
-            <>
-              {showAgentBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Agent usage (A2A) is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowAgentBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="agent"
-                userID={userID}
-                userRole={userRole}
-                entityList={
-                  agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
-                }
-                premiumUser={premiumUser}
-                dateValue={dateValue}
-              />{" "}
-            </>
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (

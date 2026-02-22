@@ -123,12 +123,6 @@ class BaseResponsesAPIStreamingIterator:
                     )
                     setattr(openai_responses_api_chunk, "response", response)
 
-                # Allow callbacks to modify chunk before returning
-                openai_responses_api_chunk = run_async_function(
-                    async_function=self._call_post_streaming_deployment_hook,
-                    chunk=openai_responses_api_chunk,
-                )
-
                 # Store the completed response
                 if (
                     openai_responses_api_chunk
@@ -376,6 +370,11 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopAsyncIteration
                 elif result is not None:
+                    # Await hook directly instead of run_async_function
+                    # (which spawns a thread + event loop per call)
+                    result = await self._call_post_streaming_deployment_hook(
+                        chunk=result,
+                    )
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -474,6 +473,11 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopIteration
                 elif result is not None:
+                    # Sync path: use run_async_function for the hook
+                    result = run_async_function(
+                        async_function=self._call_post_streaming_deployment_hook,
+                        chunk=result,
+                    )
                     return result
                 # If result is None, continue the loop to get the next chunk
 

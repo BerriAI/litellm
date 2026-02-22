@@ -13,10 +13,14 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm._version import version as litellm_version
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
+)
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
+    _HEADER_PRESENT_PLACEHOLDER,
 )
 from litellm.types.utils import Choices, Message
 
@@ -351,6 +355,58 @@ class TestMetadataExtraction:
             # Should be empty dict
             assert request_metadata == {}
 
+    @pytest.mark.asyncio
+    async def test_inbound_headers_and_litellm_version_forwarded_and_sanitized(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """
+        Ensure inbound proxy request headers are forwarded in JSON payload with allowlist:
+        allowed headers show their value; all other headers show presence only ([present]).
+        """
+        # Add proxy_server_request headers as they exist in proxy request context
+        request_data = dict(mock_request_data_input)
+        request_data["proxy_server_request"] = {
+            "headers": {
+                "User-Agent": "OpenAI/Python 2.17.0",
+                "Authorization": "Bearer should-not-forward",
+                "Cookie": "session=should-not-forward",
+                "X-Request-Id": "req_123",
+            }
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+
+            # New fields should exist
+            assert json_payload["litellm_version"] == litellm_version
+            assert "request_headers" in json_payload
+            assert isinstance(json_payload["request_headers"], dict)
+            req_headers = json_payload["request_headers"]
+
+            # Allowed: value forwarded
+            assert req_headers.get("User-Agent") == "OpenAI/Python 2.17.0"
+
+            # Not on allowlist: key present, value is placeholder only
+            assert req_headers.get("Authorization") == _HEADER_PRESENT_PLACEHOLDER
+            assert req_headers.get("Cookie") == _HEADER_PRESENT_PLACEHOLDER
+            assert req_headers.get("X-Request-Id") == _HEADER_PRESENT_PLACEHOLDER
+
 
 class TestGuardrailActions:
     """Test different guardrail action responses"""
@@ -647,6 +703,104 @@ class TestErrorHandling:
                 )
 
             assert "Generic Guardrail API failed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_network_error_defaults_to_fail_closed_when_unreachable_fallback_not_set(
+        self, mock_request_data_input
+    ):
+        """Test default behavior is fail_closed when unreachable_fallback is omitted"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs={"texts": ["test"]},
+                    request_data=mock_request_data_input,
+                    input_type="request",
+                )
+
+            assert "Generic Guardrail API failed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_network_error_fail_open_allows_flow(self, mock_request_data_input):
+        """Test network error handling allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_503_fail_open_allows_flow(self, mock_request_data_input):
+        """Test HTTP 503 allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.HTTPStatusError(
+                "Service Unavailable",
+                request=MagicMock(),
+                response=MagicMock(status_code=503),
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
+
+    @pytest.mark.asyncio
+    async def test_timeout_fail_open_allows_flow(self, mock_request_data_input):
+        """Test litellm.Timeout allows flow when unreachable_fallback=fail_open"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            headers={"Authorization": "Bearer test-key"},
+            unreachable_fallback="fail_open",
+        )
+
+        with patch.object(
+            guardrail.async_handler,
+            "post",
+            side_effect=Timeout(
+                message="Connection timed out",
+                model="default-model-name",
+                llm_provider="litellm-httpx-handler",
+            ),
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            assert result.get("texts") == ["test"]
 
 
 class TestMultimodalSupport:

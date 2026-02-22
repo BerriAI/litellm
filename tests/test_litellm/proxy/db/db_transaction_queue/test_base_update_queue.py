@@ -21,8 +21,11 @@ async def test_queue_flush_limit():
     """
     # Arrange
     queue = BaseUpdateQueue()
-    # Add more items than the max flush count
+    # Override maxsize so the queue can hold all test items without blocking.
+    # The default LITELLM_ASYNCIO_QUEUE_MAXSIZE (1000) equals MAX_IN_MEMORY_QUEUE_FLUSH_COUNT,
+    # so adding more items than that would cause `await queue.put()` to block forever.
     items_to_add = MAX_IN_MEMORY_QUEUE_FLUSH_COUNT + 100
+    queue.update_queue = asyncio.Queue(maxsize=items_to_add + 1)
 
     for i in range(items_to_add):
         await queue.add_update(f"test_update_{i}")

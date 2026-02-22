@@ -74,6 +74,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -118,6 +119,42 @@ if TYPE_CHECKING:
 else:
     LitellmLoggingObject = Any
 
+# Pre-resolved CallTypes enum values for fast membership checks
+_A2A_CALL_TYPES = frozenset({
+    CallTypes.asend_message.value,
+    CallTypes.send_message.value,
+})
+
+_VIDEO_CALL_TYPES = frozenset({
+    CallTypes.create_video.value,
+    CallTypes.acreate_video.value,
+    CallTypes.video_remix.value,
+    CallTypes.avideo_remix.value,
+})
+
+_SPEECH_CALL_TYPES = frozenset({
+    CallTypes.speech.value,
+    CallTypes.aspeech.value,
+})
+
+_TRANSCRIPTION_CALL_TYPES = frozenset({
+    CallTypes.atranscription.value,
+    CallTypes.transcription.value,
+})
+
+_RERANK_CALL_TYPES = frozenset({
+    CallTypes.rerank.value,
+    CallTypes.arerank.value,
+})
+
+_SEARCH_CALL_TYPES = frozenset({
+    CallTypes.search.value,
+    CallTypes.asearch.value,
+})
+
+_AREALTIME_CALL_TYPE = CallTypes.arealtime.value
+_MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
+
 
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
@@ -150,32 +187,33 @@ def _get_additional_costs(
 ) -> Optional[dict]:
     """
     Calculate additional costs beyond standard token costs.
-    
+
     This function delegates to provider-specific config classes to calculate
     any additional costs like routing fees, infrastructure costs, etc.
-    
+
     Args:
         model: The model name
         custom_llm_provider: The provider name (optional)
         prompt_tokens: Number of prompt tokens
         completion_tokens: Number of completion tokens
-        
+
     Returns:
         Optional dictionary with cost names and amounts, or None if no additional costs
     """
     if not custom_llm_provider:
         return None
-        
+
     try:
         config_class = None
         if custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
             config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
         # Add more providers here as needed
         # elif custom_llm_provider == "other_provider":
         #     config_class = get_other_provider_config(model)
-        
-        if config_class and hasattr(config_class, 'calculate_additional_costs'):
+
+        if config_class and hasattr(config_class, "calculate_additional_costs"):
             return config_class.calculate_additional_costs(
                 model=model,
                 prompt_tokens=prompt_tokens,
@@ -183,7 +221,7 @@ def _get_additional_costs(
             )
     except Exception as e:
         verbose_logger.debug(f"Error calculating additional costs: {e}")
-    
+
     return None
 
 
@@ -446,7 +484,9 @@ def cost_per_token(  # noqa: PLR0915
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "bedrock":
-        return bedrock_cost_per_token(model=model, usage=usage_block)
+        return bedrock_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
@@ -748,6 +788,8 @@ def _infer_call_type(
         return "image_generation"
     elif isinstance(completion_response, TextCompletionResponse):
         return "text_completion"
+    elif isinstance(completion_response, LiteLLMSendMessageResponse):
+        return "send_message"
 
     return call_type
 
@@ -1037,9 +1079,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1115,10 +1157,7 @@ def completion_cost(  # noqa: PLR0915
                     completion_tokens = token_counter(model=model, text=completion)
 
                 # Handle A2A calls before model check - A2A doesn't require a model
-                if call_type in (
-                    CallTypes.asend_message.value,
-                    CallTypes.send_message.value,
-                ):
+                if call_type in _A2A_CALL_TYPES:
                     from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 
                     return A2ACostCalculator.calculate_a2a_cost(
@@ -1154,12 +1193,7 @@ def completion_cost(  # noqa: PLR0915
                         optional_params=optional_params,
                         call_type=call_type,
                     )
-                elif (
-                    call_type == CallTypes.create_video.value
-                    or call_type == CallTypes.acreate_video.value
-                    or call_type == CallTypes.video_remix.value
-                    or call_type == CallTypes.avideo_remix.value
-                ):
+                elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
                     usage_obj = getattr(completion_response, "usage", None)
                     if completion_response is not None and usage_obj:
@@ -1188,22 +1222,13 @@ def completion_cost(  # noqa: PLR0915
                         duration_seconds=0.0,  # Default to 0 if no duration available
                         custom_llm_provider=custom_llm_provider,
                     )
-                elif (
-                    call_type == CallTypes.speech.value
-                    or call_type == CallTypes.aspeech.value
-                ):
+                elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
-                elif (
-                    call_type == CallTypes.atranscription.value
-                    or call_type == CallTypes.transcription.value
-                ):
+                elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     audio_transcription_file_duration = getattr(
                         completion_response, "duration", 0.0
                     )
-                elif (
-                    call_type == CallTypes.rerank.value
-                    or call_type == CallTypes.arerank.value
-                ):
+                elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(
                         completion_response, RerankResponse
                     ):
@@ -1222,10 +1247,7 @@ def completion_cost(  # noqa: PLR0915
                             billed_units.get("search_units") or 1
                         )  # cohere charges per request by default.
                         completion_tokens = search_units
-                elif (
-                    call_type == CallTypes.search.value
-                    or call_type == CallTypes.asearch.value
-                ):
+                elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
 
                     # Extract number_of_queries from optional_params or default to 1
@@ -1294,7 +1316,7 @@ def completion_cost(  # noqa: PLR0915
                     )
 
                     return _final_cost
-                elif call_type == CallTypes.arealtime.value and isinstance(
+                elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
                     if (
@@ -1313,7 +1335,7 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                     )
-                elif call_type == CallTypes.call_mcp_tool.value:
+                elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
@@ -1387,21 +1409,26 @@ def completion_cost(  # noqa: PLR0915
                     cache_creation_input_tokens=cache_creation_input_tokens,
                     cache_read_input_tokens=cache_read_input_tokens,
                     usage_object=cost_per_token_usage_object,
-                    call_type=cast(CallTypesLiteral, call_type),
+                    call_type=call_type,
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
                     response=completion_response,
                 )
-                
+
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                additional_costs = _get_additional_costs(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                )
-                
+                # Only azure_ai implements additional costs
+                if custom_llm_provider == "azure_ai":
+                    additional_costs = _get_additional_costs(
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
+                else:
+                    additional_costs = None
+
+
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
@@ -1892,9 +1919,16 @@ def batch_cost_calculator(
     usage: Usage,
     model: str,
     custom_llm_provider: Optional[str] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> Tuple[float, float]:
     """
-    Calculate the cost of a batch job
+    Calculate the cost of a batch job.
+
+    Args:
+        model_info: Optional deployment-level model info containing custom
+            batch pricing (e.g. input_cost_per_token_batches). When provided,
+            skips the global litellm.get_model_info() lookup so that
+            deployment-specific pricing is used.
     """
 
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1907,12 +1941,13 @@ def batch_cost_calculator(
         custom_llm_provider,
     )
 
-    try:
-        model_info: Optional[ModelInfo] = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-    except Exception:
-        model_info = None
+    if model_info is None:
+        try:
+            model_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception:
+            model_info = None
 
     if not model_info:
         return 0.0, 0.0
@@ -2133,5 +2168,4 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
-
 

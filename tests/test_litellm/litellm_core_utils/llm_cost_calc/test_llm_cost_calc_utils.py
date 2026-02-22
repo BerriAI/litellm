@@ -23,6 +23,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _calculate_input_cost,
+    PromptTokensDetailsResult,
     calculate_cache_writing_cost,
     generic_cost_per_token,
 )
@@ -559,6 +561,48 @@ def test_calculate_cache_writing_cost():
     assert result_zero == 0.0
 
 
+def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
+    """
+    Regression test: when cache_creation_tokens is 0 but cache_creation_token_details
+    has non-zero ephemeral tokens, the cost must still be calculated.
+    This ensures the guard in _calculate_input_cost doesn't skip
+    calculate_cache_writing_cost when only ephemeral token details are present.
+    """
+    cache_creation_cost = 3.75e-06
+    cache_creation_cost_above_1hr = 6e-06
+
+    prompt_tokens_details: PromptTokensDetailsResult = {
+        "cache_hit_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cache_creation_token_details": CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=100,
+            ephemeral_1h_input_tokens=200,
+        ),
+        "text_tokens": 0,
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "character_count": 0,
+        "image_count": 0,
+        "video_length_seconds": 0.0,
+    }
+
+    model_info: ModelInfo = {}
+
+    result = _calculate_input_cost(
+        prompt_tokens_details=prompt_tokens_details,
+        model_info=model_info,
+        prompt_base_cost=0.0,
+        cache_read_cost=0.0,
+        cache_creation_cost=cache_creation_cost,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+    )
+
+    # Expected: (100 * 3.75e-06) + (200 * 6e-06) = 0.000375 + 0.0012 = 0.001575
+    expected = (100 * cache_creation_cost) + (200 * cache_creation_cost_above_1hr)
+    assert result > 0, "Cost should not be zero when ephemeral token details are present"
+    assert round(result, 6) == round(expected, 6)
+
+
 def test_service_tier_flex_pricing():
     """Test that flex service tier uses correct pricing (approximately 50% of standard)."""
     # Set up environment for local model cost map
@@ -862,3 +906,42 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
     wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
     assert abs(completion_cost - wrong_cost) > 1e-6, \
         "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
+
+
+def test_image_count_prevents_text_tokens_fallback():
+    """
+    Test that the text_tokens fallback in generic_cost_per_token does not
+    override text_tokens=0 when image_count > 0.
+
+    Regression test for: Bedrock image embedding double-charging bug.
+    When image_count > 0, text_tokens=0 is intentional (image-only request),
+    not "text_tokens not set by provider."
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Simulate Nova image-only embedding: prompt_tokens estimated from
+    # embedding dimensions (768 for 3072-dim), image_count=1
+    usage = Usage(
+        prompt_tokens=768,
+        completion_tokens=0,
+        total_tokens=768,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_count=1,
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="amazon.nova-2-multimodal-embeddings-v1:0",
+        usage=usage,
+        custom_llm_provider="bedrock",
+    )
+
+    # Cost should be 1 * input_cost_per_image ($6e-05) = $0.00006
+    # NOT 768 * input_cost_per_token ($1.35e-07) + $0.00006 = $0.000164
+    expected_image_cost = 1 * 6e-05
+    assert prompt_cost == expected_image_cost, (
+        f"Expected prompt_cost={expected_image_cost} (image-only), "
+        f"got {prompt_cost}. text_tokens fallback may be double-charging."
+    )
+    assert completion_cost == 0.0
