@@ -80,7 +80,6 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
-    ModelResponseStream,
     PromptTokensDetailsWrapper,
     TopLogprob,
     Usage,
@@ -1932,7 +1931,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _process_candidates(  # noqa: PLR0915
         _candidates: List[Candidates],
-        model_response: Union[ModelResponse, ModelResponseStream],
+        model_response: Union[ModelResponse, "ModelResponseStream"],
         standard_optional_params: dict,
         cumulative_tool_call_index: int = 0,
     ) -> Tuple[List[dict], List[dict], List, List, int]:
@@ -2094,7 +2093,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     chat_completion_logprobs=chat_completion_logprobs,
                     image_response=image_response,
                 )
-                model_response.choices.append(choice)
+                model_response.choices.append(choice)  # type: ignore[arg-type]
             elif isinstance(model_response, ModelResponse):
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
@@ -2105,7 +2104,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                 )
-                model_response.choices.append(choice)
+                model_response.choices.append(choice)  # type: ignore[arg-type]
 
         return (
             grounding_metadata,
