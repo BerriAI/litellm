@@ -1232,3 +1232,32 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
         metadata.get("max_retries") is None
     ), "max_retries should be None when not provided"
 
+
+
+def test_sanitize_value_strips_null_bytes_for_postgresql():
+        """Test that _sanitize_value strips null bytes that PostgreSQL cannot store (error 22P05)"""
+        from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_value
+
+    # Test 1: Raw null byte \x00 in payload values
+        payload_with_raw_null = {"messages": "hello\x00world", "model": "gpt-4"}
+    result = _sanitize_value(payload_with_raw_null["messages"])
+    assert "\x00" not in result, "Raw null byte should be stripped"
+    assert result == "helloworld"
+
+    # Test 2: Escaped \u0000 in string values
+    payload_with_escaped_null = "prefix\u0000suffix"
+    result2 = _sanitize_value(payload_with_escaped_null)
+    assert "\u0000" not in result2, "Escaped null byte should be stripped"
+    assert result2 == "prefixsuffix"
+
+    # Test 3: Clean strings pass through unchanged
+    clean_string = "This is a normal string with no null bytes"
+    result3 = _sanitize_value(clean_string)
+    assert result3 == clean_string, "Clean strings should pass through unchanged"
+
+    # Test 4: Mixed content with both null byte forms
+    mixed = "start\x00middle\u0000end"
+    result4 = _sanitize_value(mixed)
+    assert "\x00" not in result4
+    assert "\u0000" not in result4
+    assert result4 == "startmiddleend"
