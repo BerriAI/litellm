@@ -84,6 +84,10 @@ interface ChatUIProps {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
   };
+  /** When true, hide configuration sidebar and use fixedModel only (e.g. embedded in Agent Builder). */
+  simplified?: boolean;
+  /** When simplified is true, use this as the model and do not show model selector. */
+  fixedModel?: string;
 }
 
 const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
@@ -99,6 +103,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userID,
   disabledPersonalKeyCreation,
   proxySettings,
+  simplified = false,
+  fixedModel,
 }) => {
   const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>(() => {
@@ -140,6 +146,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   );
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
+    if (simplified) return [];
     try {
       const saved = sessionStorage.getItem("chatHistory");
       return saved ? JSON.parse(saved) : [];
@@ -148,7 +155,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
+  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
@@ -252,6 +259,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   };
 
+  // When simplified, keep selectedModel and endpointType in sync with fixedModel / chat-only
+  useEffect(() => {
+    if (simplified && fixedModel) {
+      setSelectedModel(fixedModel);
+      setEndpointType(EndpointType.CHAT);
+    }
+  }, [simplified, fixedModel]);
+
   // Fetch tools for a specific server
   const loadServerTools = async (serverId: string) => {
     const userApiKey = apiKeySource === "session" ? accessToken : apiKey;
@@ -312,6 +327,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
+    if (simplified) return; // Do not persist chat history in simplified (embedded) mode
     const handler = setTimeout(() => {
       sessionStorage.setItem("chatHistory", JSON.stringify(chatHistory));
     }, 500); // Debounce by 500ms
@@ -319,7 +335,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return () => {
       clearTimeout(handler);
     };
-  }, [chatHistory]);
+  }, [chatHistory, simplified]);
 
   useEffect(() => {
     sessionStorage.setItem("apiKeySource", JSON.stringify(apiKeySource));
@@ -334,10 +350,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.setItem("selectedVoice", selectedVoice);
     sessionStorage.removeItem("selectedMCPTools"); // Clean up old key
 
-    if (selectedModel) {
-      sessionStorage.setItem("selectedModel", selectedModel);
-    } else {
-      sessionStorage.removeItem("selectedModel");
+    if (!simplified) {
+      if (selectedModel) {
+        sessionStorage.setItem("selectedModel", selectedModel);
+      } else {
+        sessionStorage.removeItem("selectedModel");
+      }
     }
     if (messageTraceId) {
       sessionStorage.setItem("messageTraceId", messageTraceId);
@@ -352,6 +370,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.setItem("useApiSessionManagement", JSON.stringify(useApiSessionManagement));
     // Note: codeInterpreterEnabled and selectedContainerId are persisted by useCodeInterpreter hook
   }, [
+    simplified,
     apiKeySource,
     apiKey,
     selectedModel,
@@ -375,7 +394,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    // Fetch model info and set the default selected model
+    // Fetch model info and set the default selected model (skip in simplified mode; we use fixedModel)
     const loadModels = async () => {
       try {
         if (!userApiKey) {
@@ -400,9 +419,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
       }
     };
 
-    loadModels();
+    if (!simplified) {
+      loadModels();
+    }
     loadMCPServers();
-  }, [accessToken, userID, userRole, apiKeySource, apiKey, token]);
+  }, [accessToken, userID, userRole, apiKeySource, apiKey, token, simplified]);
 
   // Load tools when MCP direct mode has a server selected
   useEffect(() => {
@@ -868,7 +889,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return;
     }
 
-    const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
+    const effectiveApiKey = simplified ? accessToken : apiKeySource === "session" ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
       NotificationsManager.fromBackend("Please provide a Virtual Key or select Current UI Session");
@@ -959,6 +980,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             newUserMessage,
           ];
 
+          const requestProxyBaseUrl =
+            simplified && proxySettings
+              ? (proxySettings.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings.PROXY_BASE_URL ?? undefined)
+              : (customProxyBaseUrl || undefined);
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
             (chunk, model) => updateTextUI("assistant", chunk, model),
@@ -979,7 +1004,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             useAdvancedParams ? temperature : undefined,
             useAdvancedParams ? maxTokens : undefined,
             updateTotalLatency,
-            customProxyBaseUrl || undefined,
+            requestProxyBaseUrl,
             mcpServers,
             mcpServerToolRestrictions,
             handleMCPEvent,
@@ -1207,9 +1232,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     handleRemoveResponsesImage(); // Clear any uploaded images for responses
     handleRemoveChatImage(); // Clear any uploaded images for chat completions
     handleRemoveAudio(); // Clear any uploaded audio for transcription
-    sessionStorage.removeItem("chatHistory");
-    sessionStorage.removeItem("messageTraceId");
-    sessionStorage.removeItem("responsesSessionId");
+    if (!simplified) {
+      sessionStorage.removeItem("chatHistory");
+      sessionStorage.removeItem("messageTraceId");
+      sessionStorage.removeItem("responsesSessionId");
+    }
     NotificationsManager.success("Chat history cleared.");
   };
 
@@ -1246,10 +1273,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
 
   return (
-    <div className="w-full p-4 pb-0 bg-white">
-      <Card className="w-full rounded-xl shadow-md overflow-hidden">
-        <div className="flex h-[80vh] w-full gap-4">
-          {/* Left Sidebar with Controls */}
+    <div className={`w-full bg-white ${simplified ? "h-full flex flex-col" : "p-4 pb-0"}`}>
+      <Card className={`w-full rounded-xl shadow-md overflow-hidden ${simplified ? "h-full flex flex-col" : ""}`}>
+        <div className={`flex w-full gap-4 ${simplified ? "h-full" : "h-[80vh]"}`}>
+          {/* Left Sidebar with Controls - hidden in simplified mode */}
+          {!simplified && (
           <div className="w-1/4 p-4 bg-gray-50 overflow-y-auto">
             <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
             <div className="space-y-4">
@@ -1794,11 +1822,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
               )}
             </div>
           </div>
+          )}
 
           {/* Main Chat Area */}
-          <div className="w-3/4 flex flex-col bg-white">
+          <div className={`flex flex-col bg-white ${simplified ? "flex-1 w-full" : "w-3/4"}`}>
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Title className="text-xl font-semibold mb-0">Test Key</Title>
+              <Title className="text-xl font-semibold mb-0">{simplified ? "Chat" : "Test Key"}</Title>
               <div className="flex gap-2">
                 <TremorButton
                   onClick={clearChatHistory}
@@ -1807,6 +1836,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 >
                   Clear Chat
                 </TremorButton>
+                {!simplified && (
                 <TremorButton
                   onClick={() => setIsGetCodeModalVisible(true)}
                   className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
@@ -1814,6 +1844,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 >
                   Get Code
                 </TremorButton>
+                )}
               </div>
             </div>
             <div className="flex-1 overflow-auto p-4 pb-0">

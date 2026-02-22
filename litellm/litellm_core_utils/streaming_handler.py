@@ -8,6 +8,7 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Union, cast
 
+import anyio
 import httpx
 from pydantic import BaseModel
 
@@ -155,6 +156,27 @@ class CustomStreamWrapper:
 
     def __aiter__(self):
         return self
+
+    async def aclose(self):
+        if self.completion_stream is not None:
+            stream_to_close = self.completion_stream
+            self.completion_stream = None
+            # Shield from anyio cancellation so cleanup awaits can complete.
+            # Without this, CancelledError is thrown into every await during
+            # task group cancellation, preventing HTTP connection release.
+            with anyio.CancelScope(shield=True):
+                try:
+                    if hasattr(stream_to_close, "aclose"):
+                        await stream_to_close.aclose()
+                    elif hasattr(stream_to_close, "close"):
+                        result = stream_to_close.close()
+                        if result is not None:
+                            await result
+                except BaseException as e:
+                    verbose_logger.debug(
+                        "CustomStreamWrapper.aclose: error closing completion_stream: %s",
+                        e,
+                    )
 
     def check_send_stream_usage(self, stream_options: Optional[dict]):
         return (
