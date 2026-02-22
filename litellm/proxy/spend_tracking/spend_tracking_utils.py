@@ -610,6 +610,9 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
+                    # Strip null bytes (\x00) and their JSON representations (\u0000)
+                    # PostgreSQL cannot store these in text/jsonb columns (error 22P05)
+                    value = value.replace("\x00", "").replace("\u0000", "")
             if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
                 # This split ensures we keep more context from the end of conversations
