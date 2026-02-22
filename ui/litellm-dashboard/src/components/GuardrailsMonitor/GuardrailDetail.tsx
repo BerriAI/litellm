@@ -1,17 +1,14 @@
 import {
   ArrowLeftOutlined,
-  BellOutlined,
-  PlayCircleOutlined,
   SafetyOutlined,
   SettingOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Card, Col, Grid, Title } from "@tremor/react";
+import { Col, Grid } from "@tremor/react";
 import { Button, Spin, Tabs } from "antd";
 import React, { useMemo, useState } from "react";
 import {
-  formatDate,
   getGuardrailsUsageDetail,
   getGuardrailsUsageLogs,
 } from "@/components/networking";
@@ -24,6 +21,8 @@ interface GuardrailDetailProps {
   guardrailId: string;
   onBack: () => void;
   accessToken?: string | null;
+  startDate: string;
+  endDate: string;
 }
 
 const statusColors: Record<
@@ -35,19 +34,15 @@ const statusColors: Record<
   critical: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
 };
 
-const defaultEnd = new Date();
-const defaultStart = new Date();
-defaultStart.setDate(defaultStart.getDate() - 7);
-
 export function GuardrailDetail({
   guardrailId,
   onBack,
   accessToken = null,
+  startDate,
+  endDate,
 }: GuardrailDetailProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
-  const [startDate] = useState(() => formatDate(defaultStart));
-  const [endDate] = useState(() => formatDate(defaultEnd));
   const [logsPage, setLogsPage] = useState(1);
   const logsPageSize = 50;
 
@@ -156,23 +151,12 @@ export function GuardrailDetail({
             <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
               {data.provider}
             </span>
-            <Button type="default" icon={<PlayCircleOutlined />} title="Coming soon">
-              Re-run AI
-            </Button>
             <Button
               type="default"
               icon={<SettingOutlined />}
               onClick={() => setEvaluationModalOpen(true)}
               title="Evaluation settings"
             />
-            <Button
-              type="default"
-              icon={<BellOutlined />}
-              title="Coming soon"
-              className="opacity-75"
-            >
-              Notify
-            </Button>
           </div>
         </div>
       </div>
@@ -222,52 +206,6 @@ export function GuardrailDetail({
               />
             </Col>
           </Grid>
-
-          <Card className="bg-white border border-gray-200 rounded-lg p-6">
-            <Title className="text-base font-semibold text-gray-900 mb-1">
-              Root Cause Analysis
-            </Title>
-            <p className="text-xs text-gray-500 mb-4">Common patterns in failing requests</p>
-            <div className="space-y-3">
-              <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg border border-red-100">
-                <WarningOutlined className="text-red-500 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-red-800">
-                    High sensitivity to medical terminology
-                  </p>
-                  <p className="text-xs text-red-600 mt-0.5">
-                    34% of blocked requests contain common medical terms (e.g., &quot;symptoms&quot;,
-                    &quot;treatment&quot;, &quot;medication&quot;) that are benign in context.
-                    Consider adding an allowlist or relaxing sensitivity for these categories.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-lg border border-amber-100">
-                <WarningOutlined className="text-amber-500 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-amber-800">
-                    False positives on educational content
-                  </p>
-                  <p className="text-xs text-amber-600 mt-0.5">
-                    22% of blocked requests are educational queries about safety topics. The guardrail
-                    is flagging the topic itself rather than harmful intent.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                <WarningOutlined className="text-gray-400 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-gray-800">
-                    Sensitivity may be too aggressive
-                  </p>
-                  <p className="text-xs text-gray-600 mt-0.5">
-                    Many blocked requests may be false positives. Consider relaxing sensitivity or
-                    adding allowlisted patterns to reduce blocks by ~40% while maintaining safety.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </Card>
 
           <LogViewer
             guardrailName={data.name}

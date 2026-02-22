@@ -106,9 +106,7 @@ def _aggregate_daily_metrics(metrics: Any, id_attr: str) -> Dict[str, Dict[str, 
     return agg
 
 
-def _prev_fail_rates(
-    metrics_prev: Any, id_attr: str
-) -> Dict[str, float]:
+def _prev_fail_rates(metrics_prev: Any, id_attr: str) -> Dict[str, float]:
     prev_agg_raw: Dict[str, Dict[str, int]] = {}
     for m in metrics_prev:
         gid = getattr(m, id_attr)
@@ -137,15 +135,34 @@ def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
     ]
 
 
+def _get_guardrail_attrs(g: Any) -> tuple[Any, str]:
+    """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
+    gid = getattr(g, "guardrail_id", None) or (
+        g.get("guardrail_id") if isinstance(g, dict) else None
+    )
+    name = getattr(g, "guardrail_name", None) or (
+        g.get("guardrail_name") if isinstance(g, dict) else None
+    )
+    return gid, (name or gid or "")
+
+
 def _guardrail_overview_rows(
     guardrails: Any,
     agg: Dict[str, Dict[str, Any]],
     prev_agg: Dict[str, float],
 ) -> List[UsageOverviewRow]:
     rows: List[UsageOverviewRow] = []
+    covered_keys: set = set()
     for g in guardrails:
-        gid = g.guardrail_id
-        a = agg.get(gid, {"requests": 0, "passed": 0, "blocked": 0, "flagged": 0})
+        gid, display_name = _get_guardrail_attrs(g)
+        # Metrics are keyed by logical name from spend log metadata; guardrails table uses UUID
+        lookup_keys = [k for k in (display_name, gid) if k]
+        covered_keys.update(lookup_keys)
+        a = {"requests": 0, "passed": 0, "blocked": 0, "flagged": 0}
+        for k in lookup_keys:
+            if k in agg:
+                a = agg[k]
+                break
         req, blocked = a["requests"], a["blocked"]
         fail_rate = (100.0 * blocked / req) if req else 0.0
         litellm_params = (
@@ -156,18 +173,40 @@ def _guardrail_overview_rows(
             (g.guardrail_info or {}) if isinstance(g.guardrail_info, dict) else {}
         )
         gtype = str(guardrail_info.get("type", "Guardrail"))
-        prev_fail = (
-            prev_agg.get(gid, 0.0)
-            if isinstance(prev_agg.get(gid), (int, float))
-            else 0.0
-        )
+        prev_fail = 0.0
+        for k in lookup_keys:
+            if k in prev_agg:
+                prev_fail = float(prev_agg.get(k, 0.0) or 0.0)
+                break
         trend = _trend_from_comparison(fail_rate, prev_fail)
         rows.append(
             UsageOverviewRow(
                 id=gid,
-                name=g.guardrail_name or gid,
+                name=display_name or str(gid),
                 type=gtype,
                 provider=provider,
+                requestsEvaluated=req,
+                failRate=round(fail_rate, 1),
+                avgScore=None,
+                avgLatency=None,
+                status=_status_from_fail_rate(fail_rate),
+                trend=trend,
+            )
+        )
+    # Add rows for guardrails with metrics but not in guardrails table (e.g. MCP, config)
+    for agg_key, a in agg.items():
+        if agg_key in covered_keys or a["requests"] == 0:
+            continue
+        req, blocked = a["requests"], a["blocked"]
+        fail_rate = (100.0 * blocked / req) if req else 0.0
+        prev_fail = float(prev_agg.get(agg_key, 0.0) or 0.0)
+        trend = _trend_from_comparison(fail_rate, prev_fail)
+        rows.append(
+            UsageOverviewRow(
+                id=agg_key,
+                name=agg_key,
+                type="Guardrail",
+                provider="Custom",
                 requestsEvaluated=req,
                 failRate=round(fail_rate, 1),
                 avgScore=None,
@@ -411,9 +450,9 @@ def _usage_log_entry_from_row(
         duration = entry_for_guardrail.get("duration")
         if duration is not None:
             latency_val = round(float(duration) * 1000, 0)
-        score_val = entry_for_guardrail.get("confidence_score") or entry_for_guardrail.get(
-            "risk_score"
-        )
+        score_val = entry_for_guardrail.get(
+            "confidence_score"
+        ) or entry_for_guardrail.get("risk_score")
         if score_val is not None:
             score_val = round(float(score_val), 2)
         resp = entry_for_guardrail.get("guardrail_response")
@@ -486,9 +525,7 @@ async def guardrails_usage_logs(
         return UsageLogsResponse(logs=[], total=0, page=page, page_size=page_size)
 
     try:
-        where = _build_usage_logs_where(
-            guardrail_id, policy_id, start_date, end_date
-        )
+        where = _build_usage_logs_where(guardrail_id, policy_id, start_date, end_date)
         index_rows = await prisma_client.db.litellm_spendlogguardrailindex.find_many(
             where=where,
             order={"start_time": "desc"},
