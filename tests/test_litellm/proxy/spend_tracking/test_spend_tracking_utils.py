@@ -1230,7 +1230,7 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
     ), "attempted_retries should be None when not provided"
     assert (
         metadata.get("max_retries") is None
-    ), "max_retries should be None when not provided
+    ), "max_retries should be None when not provided"
 
 def test_sanitize_value_strips_null_bytes_for_postgresql():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_value
