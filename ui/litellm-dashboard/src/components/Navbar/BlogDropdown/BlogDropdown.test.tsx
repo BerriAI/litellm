@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { BlogDropdown } from "../BlogDropdown";
+import { BlogDropdown } from "./BlogDropdown";
 import { useDisableShowBlog } from "@/app/(dashboard)/hooks/useDisableShowBlog";
 
 // Mock hooks
@@ -33,7 +33,7 @@ const SAMPLE_POSTS = {
 
 function createWrapper() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
   });
   return ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -96,7 +96,10 @@ describe("BlogDropdown", () => {
   });
 
   it("shows error message and Retry button on fetch failure", async () => {
-    global.fetch = vi.fn().mockRejectedValueOnce(new Error("Network error"));
+    global.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network error"))
+      .mockRejectedValueOnce(new Error("Network error"));
 
     render(<BlogDropdown />, { wrapper: createWrapper() });
     fireEvent.click(screen.getByText("Blog"));
@@ -110,6 +113,7 @@ describe("BlogDropdown", () => {
   it("calls refetch when Retry is clicked", async () => {
     global.fetch = vi
       .fn()
+      .mockRejectedValueOnce(new Error("Network error"))
       .mockRejectedValueOnce(new Error("Network error"))
       .mockResolvedValueOnce({ ok: true, json: async () => SAMPLE_POSTS });
 
