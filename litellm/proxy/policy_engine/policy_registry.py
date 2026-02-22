@@ -110,7 +110,9 @@ class PolicyRegistry:
             )
         else:
             # Handle legacy format where guardrails might be a list
-            guardrails = PolicyGuardrails(add=guardrails_data if guardrails_data else None)
+            guardrails = PolicyGuardrails(
+                add=guardrails_data if guardrails_data else None
+            )
 
         # Parse condition (simple model-based condition)
         condition = None
@@ -130,7 +132,9 @@ class PolicyRegistry:
         )
 
     @staticmethod
-    def _parse_pipeline(pipeline_data: Optional[Dict[str, Any]]) -> Optional[GuardrailPipeline]:
+    def _parse_pipeline(
+        pipeline_data: Optional[Dict[str, Any]],
+    ) -> Optional[GuardrailPipeline]:
         """Parse a pipeline configuration from raw data."""
         if pipeline_data is None:
             return None
@@ -295,9 +299,11 @@ class PolicyRegistry:
                         "add": policy_request.guardrails_add,
                         "remove": policy_request.guardrails_remove,
                     },
-                    "condition": policy_request.condition.model_dump()
-                    if policy_request.condition
-                    else None,
+                    "condition": (
+                        policy_request.condition.model_dump()
+                        if policy_request.condition
+                        else None
+                    ),
                     "pipeline": policy_request.pipeline,
                 },
             )
@@ -359,7 +365,9 @@ class PolicyRegistry:
             if policy_request.guardrails_remove is not None:
                 update_data["guardrails_remove"] = policy_request.guardrails_remove
             if policy_request.condition is not None:
-                update_data["condition"] = json.dumps(policy_request.condition.model_dump())
+                update_data["condition"] = json.dumps(
+                    policy_request.condition.model_dump()
+                )
             if policy_request.pipeline is not None:
                 validated_pipeline = GuardrailPipeline(**policy_request.pipeline)
                 update_data["pipeline"] = json.dumps(validated_pipeline.model_dump())
@@ -410,7 +418,9 @@ class PolicyRegistry:
                 where={"policy_id": policy_id}
             )
 
-            result: Dict[str, Any] = {"message": f"Policy {policy_id} deleted successfully"}
+            result: Dict[str, Any] = {
+                "message": f"Policy {policy_id} deleted successfully"
+            }
 
             # Remove from in-memory registry only if this was the production version
             if version_status == "production":
@@ -531,13 +541,13 @@ class PolicyRegistry:
     ) -> List[str]:
         """
         Resolve all guardrails for a policy from the database.
-        
+
         Uses the existing PolicyResolver to handle inheritance chain resolution.
-        
+
         Args:
             policy_name: Name of the policy to resolve
             prisma_client: The Prisma client instance
-            
+
         Returns:
             List of resolved guardrail names
         """
@@ -566,14 +576,14 @@ class PolicyRegistry:
                     },
                 )
                 temp_policies[policy_response.policy_name] = policy
-            
+
             # Use the existing PolicyResolver to resolve guardrails
             resolved_policy = PolicyResolver.resolve_policy_guardrails(
                 policy_name=policy_name,
                 policies=temp_policies,
                 context=None,  # No context needed for simple resolution
             )
-            
+
             return sorted(resolved_policy.guardrails)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error resolving guardrails from DB: {e}")
@@ -680,13 +690,24 @@ class PolicyRegistry:
                 "description": source.description,
                 "guardrails_add": source.guardrails_add or [],
                 "guardrails_remove": source.guardrails_remove or [],
-                "condition": source.condition,
-                "pipeline": source.pipeline,
                 "created_at": now,
                 "updated_at": now,
                 "created_by": created_by,
                 "updated_by": created_by,
             }
+            # Prisma expects Json fields as JSON strings on create (same as add_policy_to_db)
+            if source.condition is not None:
+                data["condition"] = (
+                    json.dumps(source.condition)
+                    if isinstance(source.condition, dict)
+                    else source.condition
+                )
+            if source.pipeline is not None:
+                data["pipeline"] = (
+                    json.dumps(source.pipeline)
+                    if isinstance(source.pipeline, dict)
+                    else source.pipeline
+                )
 
             created = await prisma_client.db.litellm_policytable.create(data=data)
             return _row_to_policy_db_response(created)
@@ -720,7 +741,9 @@ class PolicyRegistry:
         """
         try:
             if new_status not in ("published", "production"):
-                raise Exception(f"Invalid status '{new_status}'. Use 'published' or 'production'.")
+                raise Exception(
+                    f"Invalid status '{new_status}'. Use 'published' or 'production'."
+                )
 
             row = await prisma_client.db.litellm_policytable.find_unique(
                 where={"policy_id": policy_id}
@@ -882,7 +905,9 @@ class PolicyRegistry:
                 where={"policy_name": policy_name}
             )
             self.remove_policy(policy_name)
-            return {"message": f"All versions of policy '{policy_name}' deleted successfully"}
+            return {
+                "message": f"All versions of policy '{policy_name}' deleted successfully"
+            }
         except Exception as e:
             verbose_proxy_logger.exception(f"Error deleting all versions: {e}")
             raise Exception(f"Error deleting all versions: {str(e)}")
