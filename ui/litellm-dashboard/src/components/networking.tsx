@@ -5408,6 +5408,128 @@ export const getGuardrailsList = async (accessToken: string) => {
   }
 };
 
+// Guardrails / Policies usage (dashboard)
+export const getGuardrailsUsageOverview = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/overview` : `/guardrails/usage/overview`;
+    const params = new URLSearchParams();
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get guardrails usage overview:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailsUsageDetail = async (
+  accessToken: string,
+  guardrailId: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/detail/${encodeURIComponent(guardrailId)}` : `/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`;
+    const params = new URLSearchParams();
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get guardrails usage detail:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailsUsageLogs = async (
+  accessToken: string,
+  options: { guardrailId?: string; policyId?: string; page?: number; pageSize?: number; action?: string; startDate?: string; endDate?: string }
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/logs` : `/guardrails/usage/logs`;
+    const params = new URLSearchParams();
+    if (options.guardrailId) params.append("guardrail_id", options.guardrailId);
+    if (options.policyId) params.append("policy_id", options.policyId);
+    if (options.page != null) params.append("page", String(options.page));
+    if (options.pageSize != null) params.append("page_size", String(options.pageSize));
+    if (options.action) params.append("action", options.action);
+    if (options.startDate) params.append("start_date", options.startDate);
+    if (options.endDate) params.append("end_date", options.endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get guardrails usage logs:", error);
+    throw error;
+  }
+};
+
+export const getPoliciesUsageOverview = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/policies/usage/overview` : `/policies/usage/overview`;
+    const params = new URLSearchParams();
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get policies usage overview:", error);
+    throw error;
+  }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Policy CRUD API Calls
 // ─────────────────────────────────────────────────────────────────────────────
