@@ -160,7 +160,7 @@ def _setup_timezone(
     except Exception:
         verbose_logger.warning(
             "Failed to load timezone '%s', falling back to UTC. "
-            "Install 'tzdata' package for full timezone support.",
+            "Check that the timezone is valid and that the 'tzdata' package is installed.",
             timezone_str,
         )
         tz = timezone.utc
