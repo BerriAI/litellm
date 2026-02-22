@@ -67,6 +67,7 @@ class PolicyRegistry:
 
     def __init__(self):
         self._policies: Dict[str, Policy] = {}
+        self._policies_by_id: Dict[str, Tuple[str, Policy]] = {}
         self._initialized: bool = False
 
     def load_policies(self, policies_config: Dict[str, Any]) -> None:
@@ -78,6 +79,7 @@ class PolicyRegistry:
                             This is the raw config from the YAML file.
         """
         self._policies = {}
+        self._policies_by_id = {}
 
         for policy_name, policy_data in policies_config.items():
             try:
@@ -466,43 +468,21 @@ class PolicyRegistry:
             verbose_proxy_logger.exception(f"Error getting policy from DB: {e}")
             raise Exception(f"Error getting policy from DB: {str(e)}")
 
-    async def get_policy_by_id_for_request(
-        self,
-        policy_id: str,
-        prisma_client: "PrismaClient",
-    ) -> Optional[Tuple[str, Policy]]:
+    def get_policy_by_id_for_request(self, policy_id: str) -> Optional[Tuple[str, Policy]]:
         """
-        Fetch a policy version by ID from the DB and convert to Policy for resolution.
+        Return a policy version by ID from in-memory cache (no DB access).
 
         Used when the request body specifies policy_<uuid> to execute a specific version
-        (e.g. published or draft) instead of production.
+        (e.g. published or draft). The cache is populated by sync_policies_from_db,
+        which loads draft and published versions keyed by policy_id.
 
         Args:
             policy_id: The policy version ID (raw UUID, no prefix)
-            prisma_client: The Prisma client instance
 
         Returns:
             (policy_name, Policy) if found, None otherwise
         """
-        response = await self.get_policy_by_id_from_db(
-            policy_id=policy_id, prisma_client=prisma_client
-        )
-        if response is None:
-            return None
-        policy = self._parse_policy(
-            response.policy_name,
-            {
-                "inherit": response.inherit,
-                "description": response.description,
-                "guardrails": {
-                    "add": response.guardrails_add,
-                    "remove": response.guardrails_remove,
-                },
-                "condition": response.condition,
-                "pipeline": response.pipeline,
-            },
-        )
-        return (response.policy_name, policy)
+        return self._policies_by_id.get(policy_id)
 
     async def get_all_policies_from_db(
         self,
@@ -541,17 +521,16 @@ class PolicyRegistry:
     ) -> None:
         """
         Sync policies from the database to in-memory registry.
-        Only production versions are loaded.
-
-        Args:
-            prisma_client: The Prisma client instance
+        - Production versions are loaded into _policies (by policy name) for resolution.
+        - Draft and published versions are loaded into _policies_by_id so request-body
+          policy_<uuid> overrides can be resolved without DB access in the hot path.
         """
         try:
-            policies = await self.get_all_policies_from_db(
+            self._policies = {}
+            production = await self.get_all_policies_from_db(
                 prisma_client, version_status="production"
             )
-
-            for policy_response in policies:
+            for policy_response in production:
                 policy = self._parse_policy(
                     policy_response.policy_name,
                     {
@@ -567,9 +546,31 @@ class PolicyRegistry:
                 )
                 self.add_policy(policy_response.policy_name, policy)
 
+            self._policies_by_id = {}
+            non_production = await prisma_client.db.litellm_policytable.find_many(
+                where={"version_status": {"in": ["draft", "published"]}},
+                order={"created_at": "desc"},
+            )
+            for row in non_production:
+                policy = self._parse_policy(
+                    row.policy_name,
+                    {
+                        "inherit": row.inherit,
+                        "description": row.description,
+                        "guardrails": {
+                            "add": row.guardrails_add or [],
+                            "remove": row.guardrails_remove or [],
+                        },
+                        "condition": row.condition,
+                        "pipeline": row.pipeline,
+                    },
+                )
+                self._policies_by_id[row.policy_id] = (row.policy_name, policy)
+
             self._initialized = True
             verbose_proxy_logger.info(
-                f"Synced {len(policies)} policies from DB to in-memory registry"
+                f"Synced {len(production)} production policies and {len(non_production)} "
+                "draft/published (by ID) from DB to in-memory registry"
             )
         except Exception as e:
             verbose_proxy_logger.exception(f"Error syncing policies from DB: {e}")

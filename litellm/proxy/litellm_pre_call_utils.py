@@ -1767,33 +1767,21 @@ async def add_guardrails_from_policy_engine(
             else:
                 request_body_names.append(item)
 
-    # Fetch policy versions by ID from DB
+    # Resolve policy versions by ID from in-memory cache (populated by sync job; no DB in hot path)
     merged_policies: Dict[str, Any] = dict(registry.get_all_policies())
     fetched_policy_names: List[str] = []
-    if request_body_version_ids:
-        try:
-            from litellm.proxy.proxy_server import prisma_client
-
-            if prisma_client is not None:
-                for policy_id in request_body_version_ids:
-                    result = await registry.get_policy_by_id_for_request(
-                        policy_id=policy_id,
-                        prisma_client=prisma_client,
-                    )
-                    if result is not None:
-                        pname, policy = result
-                        merged_policies[pname] = policy
-                        fetched_policy_names.append(pname)
-                        verbose_proxy_logger.debug(
-                            f"Policy engine: loaded version by ID policy_{policy_id} -> {pname}"
-                        )
-                    else:
-                        verbose_proxy_logger.debug(
-                            f"Policy engine: policy version {policy_id} not found, skipping"
-                        )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Policy engine: failed to fetch policy versions by ID: {e}"
+    for policy_id in request_body_version_ids:
+        result = registry.get_policy_by_id_for_request(policy_id=policy_id)
+        if result is not None:
+            pname, policy = result
+            merged_policies[pname] = policy
+            fetched_policy_names.append(pname)
+            verbose_proxy_logger.debug(
+                f"Policy engine: loaded version by ID policy_{policy_id} -> {pname}"
+            )
+        else:
+            verbose_proxy_logger.debug(
+                f"Policy engine: policy version {policy_id} not found in cache, skipping"
             )
 
     # Build request body list: names + policy names from fetched versions

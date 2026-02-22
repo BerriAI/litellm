@@ -1693,20 +1693,16 @@ async def test_add_guardrails_from_policy_engine_policy_version_by_id():
     attachment_registry._attachments = []
     attachment_registry._initialized = True
 
-    mock_prisma = MagicMock()
-
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
-        with patch.object(
-            policy_registry,
-            "get_policy_by_id_for_request",
-            new_callable=AsyncMock,
-            return_value=("test-policy-from-version", published_version_policy),
-        ):
-            await add_guardrails_from_policy_engine(
-                data=data,
-                metadata_variable_name="metadata",
-                user_api_key_dict=user_api_key_dict,
-            )
+    with patch.object(
+        policy_registry,
+        "get_policy_by_id_for_request",
+        return_value=("test-policy-from-version", published_version_policy),
+    ):
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
 
     # Verify guardrails from the specific version were applied
     assert "metadata" in data
