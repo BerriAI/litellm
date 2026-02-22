@@ -11,6 +11,7 @@ import {
   getPoliciesList,
   testPoliciesAndGuardrails,
 } from "@/components/networking";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import {
   AlertTriangle,
   BarChart3,
@@ -38,6 +39,7 @@ import {
   Send,
   Shield,
   Smile,
+  Square,
   Trash2,
   TrendingDown,
   Upload,
@@ -110,11 +112,23 @@ interface GuardrailOption {
 interface ComplianceUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation?: boolean;
+  /** When "chat_completions", use /chat/completions with fixedModel instead of test_policies_and_guardrails. */
+  backendMode?: "policies" | "chat_completions";
+  /** Required when backendMode is "chat_completions"; model name for chat completions (e.g. selected agent). */
+  fixedModel?: string;
+  /** Used when backendMode is "chat_completions" for the request base URL. */
+  proxySettings?: {
+    PROXY_BASE_URL?: string;
+    LITELLM_UI_API_DOC_BASE_URL?: string | null;
+  };
 }
 
 export default function ComplianceUI({
   accessToken,
   disabledPersonalKeyCreation,
+  backendMode = "policies",
+  fixedModel,
+  proxySettings,
 }: ComplianceUIProps) {
   const frameworks = getFrameworks();
 
@@ -148,6 +162,7 @@ export default function ComplianceUI({
   const [isRunning, setIsRunning] = useState(false);
   const [resultFilter, setResultFilter] = useState<ResultFilter>("all");
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
+  const batchAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -432,6 +447,9 @@ export default function ComplianceUI({
     if (csvInputRef.current) csvInputRef.current.value = "";
   };
 
+  const requestProxyBaseUrl =
+    proxySettings?.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings?.PROXY_BASE_URL ?? undefined;
+
   const runQuickTest = useCallback(async () => {
     if (!quickTestInput.trim() || !accessToken) return;
     const text = quickTestInput.trim();
@@ -445,44 +463,82 @@ export default function ComplianceUI({
     setQuickTestInput("");
     setIsQuickTesting(true);
     try {
-      const { inputs, guardrail_errors = [] } = await testPoliciesAndGuardrails(
-        accessToken,
-        {
-          policy_names:
-            selectedPolicies.length > 0 ? selectedPolicies : undefined,
-          guardrail_names:
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-          inputs: { texts: [text] },
-          request_data: {},
-          input_type: "request",
-        }
-      );
-      const result: "blocked" | "allowed" =
-        guardrail_errors.length > 0 ? "blocked" : "allowed";
-      const triggeredBy =
-        guardrail_errors.length > 0
-          ? guardrail_errors
-              .map((e) => `${e.guardrail_name}: ${e.message}`)
-              .join("; ")
-          : undefined;
-      const returnedText =
-        Array.isArray(inputs?.texts) && inputs.texts.length > 0
-          ? inputs.texts[0]
-          : undefined;
-      const displayText =
-        result === "blocked"
-          ? `Blocked — ${triggeredBy ?? "content filter"}`
-          : "Allowed — no policy or guardrail violations detected.";
-      const sysMsg: QuickTestMessage = {
-        id: `msg-${Date.now()}-sys`,
-        type: "system",
-        text: displayText,
-        result,
-        triggeredBy,
-        returnedText,
-        timestamp: new Date(),
-      };
-      setQuickTestMessages((prev) => [...prev, sysMsg]);
+      if (backendMode === "chat_completions" && fixedModel) {
+        let fullResponse = "";
+        await makeOpenAIChatCompletionRequest(
+          [{ role: "user", content: text }],
+          (chunk: string) => {
+            fullResponse += chunk;
+          },
+          fixedModel,
+          accessToken,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined, // vector_store_ids (param 11)
+          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          selectedPolicies.length > 0 ? selectedPolicies : undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          requestProxyBaseUrl,
+          undefined
+        );
+        const sysMsg: QuickTestMessage = {
+          id: `msg-${Date.now()}-sys`,
+          type: "system",
+          text: "Allowed — model response received.",
+          result: "allowed",
+          returnedText: fullResponse,
+          timestamp: new Date(),
+        };
+        setQuickTestMessages((prev) => [...prev, sysMsg]);
+      } else {
+        const { inputs, guardrail_errors = [] } = await testPoliciesAndGuardrails(
+          accessToken,
+          {
+            policy_names:
+              selectedPolicies.length > 0 ? selectedPolicies : undefined,
+            guardrail_names:
+              selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            inputs: { texts: [text] },
+            request_data: {},
+            input_type: "request",
+          }
+        );
+        const result: "blocked" | "allowed" =
+          guardrail_errors.length > 0 ? "blocked" : "allowed";
+        const triggeredBy =
+          guardrail_errors.length > 0
+            ? guardrail_errors
+                .map((e) => `${e.guardrail_name}: ${e.message}`)
+                .join("; ")
+            : undefined;
+        const returnedText =
+          Array.isArray(inputs?.texts) && inputs.texts.length > 0
+            ? inputs.texts[0]
+            : undefined;
+        const displayText =
+          result === "blocked"
+            ? `Blocked — ${triggeredBy ?? "content filter"}`
+            : "Allowed — no policy or guardrail violations detected.";
+        const sysMsg: QuickTestMessage = {
+          id: `msg-${Date.now()}-sys`,
+          type: "system",
+          text: displayText,
+          result,
+          triggeredBy,
+          returnedText,
+          timestamp: new Date(),
+        };
+        setQuickTestMessages((prev) => [...prev, sysMsg]);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const sysMsg: QuickTestMessage = {
@@ -502,6 +558,9 @@ export default function ComplianceUI({
     quickTestInput,
     selectedPolicies,
     selectedGuardrails,
+    backendMode,
+    fixedModel,
+    requestProxyBaseUrl,
   ]);
 
   const handleQuickTestKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -513,6 +572,9 @@ export default function ComplianceUI({
 
   const runTests = useCallback(async () => {
     if (selectedPromptIds.size === 0 || !accessToken) return;
+    const controller = new AbortController();
+    batchAbortControllerRef.current = controller;
+    const signal = controller.signal;
     setIsRunning(true);
     setResultFilter("all");
     setRightTab("batch-results");
@@ -533,16 +595,21 @@ export default function ComplianceUI({
     }));
     setTestResults(pendingResults);
     try {
-      const inputsList = allTexts.map((text) => ({ texts: [text] }));
-      const response = await testPoliciesAndGuardrails(accessToken, {
-        policy_names:
-          selectedPolicies.length > 0 ? selectedPolicies : undefined,
-        guardrail_names:
-          selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-        inputs_list: inputsList,
-        request_data: {},
-        input_type: "request",
-      });
+      const useAgentId = backendMode === "chat_completions" && fixedModel;
+      const response = await testPoliciesAndGuardrails(
+        accessToken,
+        {
+          policy_names:
+            selectedPolicies.length > 0 ? selectedPolicies : undefined,
+          guardrail_names:
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          inputs_list: allTexts.map((text) => ({ texts: [text] })),
+          request_data: {},
+          input_type: "request",
+          ...(useAgentId ? { agent_id: fixedModel } : {}),
+        },
+        signal
+      );
       const results = response.results ?? [];
       setTestResults(
         pendingResults.map((row, index) => {
@@ -556,10 +623,17 @@ export default function ComplianceUI({
                   .map((e) => `${e.guardrail_name}: ${e.message}`)
                   .join("; ")
               : undefined;
-          const returnedText =
-            Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0
-              ? item.inputs.texts[0]
-              : undefined;
+          let returnedText: string | undefined;
+          if (item?.agent_response != null) {
+            const choices = (item.agent_response as { choices?: Array<{ message?: { content?: string } }> }).choices;
+            returnedText =
+              Array.isArray(choices) && choices[0]?.message?.content != null
+                ? String(choices[0].message.content)
+                : undefined;
+          }
+          if (returnedText === undefined && Array.isArray(item?.inputs?.texts) && item.inputs.texts.length > 0) {
+            returnedText = item.inputs.texts[0] as string;
+          }
           return {
             ...row,
             actualResult,
@@ -573,6 +647,10 @@ export default function ComplianceUI({
         })
       );
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        // Stopped by user; leave partial results as-is (already set in loop)
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       setTestResults(
         pendingResults.map((row) => ({
@@ -583,14 +661,19 @@ export default function ComplianceUI({
           status: "complete" as const,
         }))
       );
+    } finally {
+      setIsRunning(false);
+      batchAbortControllerRef.current = null;
     }
-    setIsRunning(false);
   }, [
     accessToken,
     selectedPromptIds,
     selectedPolicies,
     selectedGuardrails,
     allFrameworks,
+    backendMode,
+    fixedModel,
+    requestProxyBaseUrl,
   ]);
 
   const completedResults = testResults.filter((r) => r.status === "complete");
@@ -845,23 +928,30 @@ export default function ComplianceUI({
           </div>
 
           <div className="flex flex-col gap-1.5 pt-6 flex-shrink-0">
-            <button
-              type="button"
-              onClick={runTests}
-              disabled={selectedPromptIds.size === 0 || isRunning || disabledPersonalKeyCreation}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || isRunning || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
-            >
-              {isRunning ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Running...
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5" /> Simulate (
-                  {selectedPromptIds.size})
-                </>
-              )}
-            </button>
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={() => batchAbortControllerRef.current?.abort()}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap bg-red-600 text-white hover:bg-red-700"
+              >
+                <Square className="w-3.5 h-3.5" /> Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={runTests}
+                disabled={selectedPromptIds.size === 0 || disabledPersonalKeyCreation}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${selectedPromptIds.size === 0 || disabledPersonalKeyCreation ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-blue-600 text-white hover:bg-blue-700"}`}
+              >
+                <Play className="w-3.5 h-3.5" /> Simulate (
+                {selectedPromptIds.size})
+              </button>
+            )}
+            {isRunning && (
+              <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" /> Running...
+              </span>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1624,6 +1714,16 @@ export default function ComplianceUI({
                                         : "False positive — incorrectly blocked"}
                                   </span>
                                 </div>
+                                {result.returnedText != null && result.returnedText !== "" && (
+                                  <div className="mt-1.5">
+                                    <span className="text-gray-400 block mb-0.5">
+                                      LLM response:
+                                    </span>
+                                    <div className="text-gray-700 bg-gray-50 rounded px-2 py-1.5 border border-gray-100 max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+                                      {result.returnedText}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
