@@ -63,7 +63,7 @@ class GetBlogPosts:
         return content.get("posts", [])
 
     @staticmethod
-    def fetch_remote_blog_posts(url: str, timeout: int = 5) -> Any:
+    def fetch_remote_blog_posts(url: str, timeout: int = 5) -> dict:
         """
         Fetch blog posts JSON from a remote URL.
 
