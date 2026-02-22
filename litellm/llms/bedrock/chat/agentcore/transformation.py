@@ -601,7 +601,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         self,
         response: httpx.Response,
         model: str,
-    ) -> AsyncGenerator[ModelResponse, None]:
+    ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Internal async generator that parses SSE and yields ModelResponse chunks.
         """
