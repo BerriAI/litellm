@@ -13,8 +13,6 @@ from email.mime.text import MIMEText
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Coroutine,
     Dict,
     List,
     Literal,
@@ -3890,6 +3888,46 @@ class PrismaClient:
 
             await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
 
+    async def _attempt_reconnect_inside_lock(
+        self,
+        force: bool,
+        reason: str,
+        timeout_seconds: Optional[float],
+    ) -> bool:
+        now = time.time()
+        if (
+            force is False
+            and now - self._db_last_reconnect_attempt_ts
+            < self._db_reconnect_cooldown_seconds
+        ):
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
+                reason,
+            )
+            return False
+
+        verbose_proxy_logger.warning(
+            "Attempting Prisma DB reconnect. reason=%s", reason
+        )
+
+        reconnect_succeeded = False
+        try:
+            await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
+            reconnect_succeeded = True
+            verbose_proxy_logger.info(
+                "Prisma DB reconnect succeeded. reason=%s", reason
+            )
+        except Exception as reconnect_err:
+            verbose_proxy_logger.error(
+                "Prisma DB reconnect failed. reason=%s error=%s",
+                reason,
+                reconnect_err,
+            )
+        finally:
+            self._db_last_reconnect_attempt_ts = time.time()
+
+        return reconnect_succeeded
+
     async def attempt_db_reconnect(
         self,
         reason: str,
@@ -3915,45 +3953,9 @@ class PrismaClient:
             )
             return False
 
-        async def _attempt_reconnect_inside_lock() -> bool:
-            now = time.time()
-            if (
-                force is False
-                and now - self._db_last_reconnect_attempt_ts
-                < self._db_reconnect_cooldown_seconds
-            ):
-                verbose_proxy_logger.debug(
-                    "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
-                    reason,
-                )
-                return False
-
-            verbose_proxy_logger.warning(
-                "Attempting Prisma DB reconnect. reason=%s", reason
-            )
-
-            reconnect_succeeded = False
-            try:
-                await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
-                reconnect_succeeded = True
-                verbose_proxy_logger.info(
-                    "Prisma DB reconnect succeeded. reason=%s", reason
-                )
-            except Exception as reconnect_err:
-                verbose_proxy_logger.error(
-                    "Prisma DB reconnect failed. reason=%s error=%s",
-                    reason,
-                    reconnect_err,
-                )
-            finally:
-                # Start cooldown after reconnect attempt has completed.
-                self._db_last_reconnect_attempt_ts = time.time()
-
-            return reconnect_succeeded
-
         if lock_timeout_seconds is None:
             async with self._db_reconnect_lock:
-                return await _attempt_reconnect_inside_lock()
+                return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
 
         lock_acquired_by_timeout_task = False
 
@@ -4002,7 +4004,7 @@ class PrismaClient:
             return False
 
         try:
-            return await _attempt_reconnect_inside_lock()
+            return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
         finally:
             self._db_reconnect_lock.release()
 
