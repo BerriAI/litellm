@@ -1300,10 +1300,10 @@ def test_gemini_convert_messages_to_gemini_contents_basic():
     assert result[2] == {"role": "user", "parts": [{"text": "How are you?"}]}
 
 
-def test_gemini_convert_messages_system_role_maps_to_user():
+def test_gemini_convert_messages_system_role_skipped():
     """
-    Test that system messages are mapped to the 'user' role since Gemini
-    does not have a dedicated system role in the countTokens API.
+    Test that system messages are skipped since the Gemini API handles
+    them via a separate system_instruction field, not as conversation contents.
     """
     from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
 
@@ -1314,15 +1314,17 @@ def test_gemini_convert_messages_system_role_maps_to_user():
 
     result = GoogleAIStudioTokenCounter._convert_messages_to_gemini_contents(messages)
 
+    # System message is skipped, only the user message remains
+    assert len(result) == 1
     assert result[0]["role"] == "user"
-    assert result[0]["parts"] == [{"text": "You are a helpful assistant."}]
-    assert result[1]["role"] == "user"
+    assert result[0]["parts"] == [{"text": "Hi"}]
 
 
 def test_gemini_convert_messages_list_content():
     """
-    Test conversion when message content is a list (multimodal format),
-    including text-type parts and plain string parts.
+    Test conversion when message content is a list (multimodal format).
+    Text parts are extracted; non-text parts (image_url etc.) are filtered
+    out since Gemini expects its own inline_data format for multimodal.
     """
     from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
 
@@ -1341,11 +1343,9 @@ def test_gemini_convert_messages_list_content():
     assert len(result) == 1
     assert result[0]["role"] == "user"
     parts = result[0]["parts"]
-    assert len(parts) == 2
-    # text part gets extracted
+    # Only text parts are kept; image_url is filtered out
+    assert len(parts) == 1
     assert parts[0] == {"text": "What is in this image?"}
-    # non-text part is passed through as-is
-    assert parts[1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
 
 def test_gemini_convert_messages_empty_and_missing_content():

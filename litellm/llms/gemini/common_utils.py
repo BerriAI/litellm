@@ -165,14 +165,29 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
     ) -> List[Dict[str, Any]]:
         """Convert OpenAI-format messages to Gemini-format contents.
 
-        Handles the role mapping (assistant -> model, system -> user) and
-        wraps string content in the ``{"parts": [{"text": ...}]}`` structure
-        that the Gemini countTokens API expects.
+        Handles the role mapping (assistant -> model) and wraps string content
+        in the ``{"parts": [{"text": ...}]}`` structure that the Gemini
+        countTokens API expects.
+
+        System messages are skipped because the Gemini API handles them via a
+        separate ``system_instruction`` field rather than as conversation
+        contents.  For token-counting purposes this means the system prompt
+        tokens are not included — callers that need exact counts should pass
+        pre-formatted ``contents`` instead.
+
+        Non-text parts (e.g. ``image_url``) are filtered out because the
+        Gemini API expects its own multimodal format (``inline_data``), not
+        the OpenAI format.  Text-only token counting is unaffected.
         """
-        role_map = {"assistant": "model", "system": "user"}
+        role_map = {"assistant": "model"}
         contents: List[Dict[str, Any]] = []
         for msg in messages:
-            role = role_map.get(msg.get("role", "user"), msg.get("role", "user"))
+            msg_role = msg.get("role", "user")
+            # System messages are handled via system_instruction in Gemini,
+            # not as conversation contents.
+            if msg_role == "system":
+                continue
+            role = role_map.get(msg_role, msg_role)
             content = msg.get("content", "")
             if isinstance(content, str):
                 parts = [{"text": content}]
@@ -183,11 +198,12 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                         parts.append({"text": part})
                     elif isinstance(part, dict) and part.get("type") == "text":
                         parts.append({"text": part.get("text", "")})
-                    else:
-                        parts.append(part)
+                    # Skip non-text parts (image_url, etc.) — Gemini expects
+                    # its own inline_data format for multimodal content.
             else:
                 parts = [{"text": str(content)}]
-            contents.append({"role": role, "parts": parts})
+            if parts:
+                contents.append({"role": role, "parts": parts})
         return contents
 
     async def count_tokens(
