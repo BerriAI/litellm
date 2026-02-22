@@ -1239,7 +1239,7 @@ def test_sanitize_value_strips_null_bytes_for_postgresql():
         from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_value
 
     # Test 1: Raw null byte \x00 in payload values
-        payload_with_raw_null = {"messages": "hello\x00world", "model": "gpt-4"}
+    payload_with_raw_null = {"messages": "hello\x00world", "model": "gpt-4"}
     result = _sanitize_value(payload_with_raw_null["messages"])
     assert "\x00" not in result, "Raw null byte should be stripped"
     assert result == "helloworld"
