@@ -334,7 +334,6 @@ const sidebars = {
                 "proxy/ui_credentials",
                 "proxy/ai_hub",
                 "proxy/model_compare_ui",
-                "proxy/ui_store_model_db_setting",
               ]
             },
             {

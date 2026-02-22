@@ -16,7 +16,7 @@ export interface GuardrailCardInfo {
   providerKey?: string;
 }
 
-const ASSET_PREFIX = "../ui/assets/logos/";
+const ASSET_PREFIX = "../assets/logos/";
 
 export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {
@@ -32,22 +32,6 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
       precision: 100.0,
       recall: 100.0,
       testCases: 207,
-      latency: "<0.1ms",
-    },
-  },
-  {
-    id: "cf_denied_insults",
-    name: "Insults & Personal Attacks",
-    description: "Detects insults, name-calling, and personal attacks directed at the chatbot, staff, or other people.",
-    category: "litellm",
-    subcategory: "Content Category",
-    logo: `${ASSET_PREFIX}litellm_logo.jpg`,
-    tags: ["Content Category", "Topic Blocker"],
-    eval: {
-      f1: 100.0,
-      precision: 100.0,
-      recall: 100.0,
-      testCases: 299,
       latency: "<0.1ms",
     },
   },
@@ -187,6 +171,22 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
     tags: ["Content Category", "Prompt Injection"],
   },
   {
+    id: "cf_denied_insults",
+    name: "Insults & Personal Attacks",
+    description: "Detects insults, name-calling, and personal attacks directed at the chatbot, staff, or other people.",
+    category: "litellm",
+    subcategory: "Content Category",
+    logo: `${ASSET_PREFIX}litellm_logo.jpg`,
+    tags: ["Content Category", "Topic Blocker"],
+    eval: {
+      f1: 100.0,
+      precision: 100.0,
+      recall: 100.0,
+      testCases: 299,
+      latency: "<0.1ms",
+    },
+  },
+  {
     id: "cf_toxic_abuse",
     name: "Toxic & Abusive Language",
     description: "Detects toxic, abusive, and hateful language across multiple languages (EN, AU, DE, ES, FR).",
@@ -221,7 +221,7 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     name: "Presidio PII",
     description: "Microsoft Presidio for PII detection and anonymization. Supports 30+ entity types with configurable actions.",
     category: "partner",
-    logo: `${ASSET_PREFIX}microsoft_azure.svg`,
+    logo: `${ASSET_PREFIX}presidio.png`,
     tags: ["PII", "Microsoft"],
     providerKey: "PresidioPII",
   },
