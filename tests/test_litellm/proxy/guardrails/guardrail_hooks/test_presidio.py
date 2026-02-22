@@ -1821,6 +1821,57 @@ async def test_anonymize_output_parse_pii_applies_non_replace_operators():
     assert masked_entity_count == {"PHONE_NUMBER": 1}
 
 
+@pytest.mark.asyncio
+async def test_anonymize_output_parse_pii_multiple_replace_items_offset_safe():
+    """
+    Multiple replacements should be offset-safe when output_parse_pii=True.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    guardrail.presidio_anonymizer_api_base = "http://mock-presidio/"
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        {
+            "text": "<PERSON> and <PERSON>",
+            # Deliberately ascending by start to catch offset-shift bugs.
+            "items": [
+                {
+                    "start": 0,
+                    "end": 5,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                },
+                {
+                    "start": 10,
+                    "end": 13,
+                    "text": "<PERSON>",
+                    "operator": "replace",
+                    "entity_type": "PERSON",
+                },
+            ],
+        }
+    )
+    pii_tokens = {}
+    masked_entity_count = {}
+
+    result = await guardrail.anonymize_text(
+        text="Alice and Bob",
+        analyze_results=[
+            {"entity_type": "PERSON", "score": 0.99, "start": 0, "end": 5},
+            {"entity_type": "PERSON", "score": 0.99, "start": 10, "end": 13},
+        ],
+        output_parse_pii=True,
+        masked_entity_count=masked_entity_count,
+        pii_tokens=pii_tokens,
+    )
+
+    assert "Alice" not in result
+    assert "Bob" not in result
+    assert " and " in result
+    assert len(pii_tokens) == 2
+    assert set(pii_tokens.values()) == {"Alice", "Bob"}
+    assert masked_entity_count == {"PERSON": 2}
+
+
 def test_blocking_respects_threshold_filter():
     """
     Entities filtered out by score should not trigger blocking, but high-score detections should.

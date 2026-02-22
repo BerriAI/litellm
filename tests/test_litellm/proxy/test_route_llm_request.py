@@ -363,3 +363,26 @@ async def test_route_request_batch_with_router_does_not_forward_model_kwarg():
     call_kwargs = llm_router.abatch_completion.call_args[1]
     assert call_kwargs["models"] == ["gpt-4o-mini", "claude-3-haiku"]
     assert "model" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_route_request_evals_path_strips_internal_keys():
+    import litellm
+
+    data = {
+        "name": "eval-test",
+        "_presidio_pii_tokens": {"guardrail": {"<PERSON>": "Alice"}},
+    }
+    llm_router = MagicMock()
+
+    original_func = litellm.acreate_eval
+    mock_create_eval = MagicMock(return_value={"ok": True})
+    litellm.acreate_eval = mock_create_eval
+    try:
+        response = await route_request(data, llm_router, None, "acreate_eval")
+        assert response == {"ok": True}
+        call_kwargs = mock_create_eval.call_args[1]
+        assert "_presidio_pii_tokens" not in call_kwargs
+        assert call_kwargs["name"] == "eval-test"
+    finally:
+        litellm.acreate_eval = original_func

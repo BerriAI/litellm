@@ -351,7 +351,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                     # If we can't get deployment creds, continue without them
                     pass
 
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**_kwargs_for_llm(data))
         # Skip model-based routing for container operations
         if route_type in [
             "acreate_container",

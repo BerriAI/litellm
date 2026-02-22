@@ -464,7 +464,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             new_text = text
             if redacted_text is not None:
                 verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
-                for item in redacted_text["items"]:
+                items = redacted_text["items"]
+                if output_parse_pii:
+                    # Presidio offsets are based on the original text. Apply
+                    # replacements from right-to-left so earlier offsets don't shift.
+                    items = sorted(items, key=lambda i: i["start"], reverse=True)
+
+                for item in items:
                     start = item["start"]
                     end = item["end"]
                     replacement = item["text"]  # replacement token
@@ -474,7 +480,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         if replacement in token_store:
                             replacement = replacement + str(uuid.uuid4())
 
-                        token_store[replacement] = new_text[start:end]  # get replaced text
+                        token_store[replacement] = text[start:end]  # original replaced text
 
                     # With output_parse_pii enabled we still need to apply non-replace
                     # operators (e.g. mask/hash/redact) to avoid leaking raw PII to the LLM.
