@@ -8,9 +8,10 @@ import {
 } from "@/data/compliancePrompts";
 import {
   getGuardrailsList,
-  getPoliciesList,
   testPoliciesAndGuardrails,
 } from "@/components/networking";
+import PolicySelector, { getPolicyOptionEntries } from "@/components/policies/PolicySelector";
+import { Policy } from "@/components/policies/types";
 import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
 import {
   AlertTriangle,
@@ -98,11 +99,6 @@ interface QuickTestMessage {
 type ResultFilter = "all" | "matches" | "mismatches" | "pending";
 type RightPanelTab = "quick-test" | "batch-results";
 
-interface PolicyOption {
-  id: string;
-  name: string;
-}
-
 interface GuardrailOption {
   id: string;
   name: string;
@@ -132,11 +128,10 @@ export default function ComplianceUI({
 }: ComplianceUIProps) {
   const frameworks = getFrameworks();
 
-  const [policyOptions, setPolicyOptions] = useState<PolicyOption[]>([]);
+  const [policyValueToLabel, setPolicyValueToLabel] = useState<Map<string, string>>(new Map());
   const [guardrailOptions, setGuardrailOptions] = useState<GuardrailOption[]>([]);
   const [selectedPolicies, setSelectedPolicies] = useState<string[]>([]);
   const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
-  const [showPolicyDropdown, setShowPolicyDropdown] = useState(false);
   const [showGuardrailDropdown, setShowGuardrailDropdown] = useState(false);
 
   const [selectedPromptIds, setSelectedPromptIds] = useState<Set<string>>(new Set());
@@ -164,20 +159,16 @@ export default function ComplianceUI({
   const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
   const batchAbortControllerRef = useRef<AbortController | null>(null);
 
+  const handlePoliciesLoaded = useCallback((policies: Policy[]) => {
+    const entries = getPolicyOptionEntries(policies);
+    setPolicyValueToLabel(new Map(entries.map((e) => [e.value, e.label])));
+  }, []);
+
   useEffect(() => {
     if (!accessToken) return;
-    const fetchOptions = async () => {
+    const fetchGuardrails = async () => {
       try {
-        const [policiesRes, guardrailsRes] = await Promise.all([
-          getPoliciesList(accessToken).catch(() => ({ policies: [] })),
-          getGuardrailsList(accessToken).catch(() => ({ guardrails: [] })),
-        ]);
-        setPolicyOptions(
-          (policiesRes.policies || []).map((p: { policy_name: string; policy_id?: string }) => ({
-            id: p.policy_id ?? p.policy_name,
-            name: p.policy_name,
-          }))
-        );
+        const guardrailsRes = await getGuardrailsList(accessToken).catch(() => ({ guardrails: [] }));
         setGuardrailOptions(
           (guardrailsRes.guardrails || []).map((g: { guardrail_name: string }) => ({
             id: g.guardrail_name,
@@ -186,11 +177,10 @@ export default function ComplianceUI({
           }))
         );
       } catch {
-        setPolicyOptions([]);
         setGuardrailOptions([]);
       }
     };
-    fetchOptions();
+    fetchGuardrails();
   }, [accessToken]);
 
   useEffect(() => {
@@ -281,12 +271,6 @@ export default function ComplianceUI({
   };
 
   const deselectAll = () => setSelectedPromptIds(new Set());
-
-  const togglePolicy = (id: string) => {
-    setSelectedPolicies((prev) =>
-      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
-    );
-  };
 
   const toggleGuardrail = (id: string) => {
     setSelectedGuardrails((prev) =>
@@ -766,76 +750,13 @@ export default function ComplianceUI({
             <label className="text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5 block">
               Policies
             </label>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowPolicyDropdown(!showPolicyDropdown);
-                  setShowGuardrailDropdown(false);
-                }}
-                className="w-full flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2 text-sm text-left hover:border-gray-300 transition-colors"
-              >
-                <span
-                  className={
-                    selectedPolicies.length > 0 ? "text-gray-700" : "text-gray-400"
-                  }
-                >
-                  {selectedPolicies.length > 0
-                    ? `${selectedPolicies.length} selected`
-                    : "None selected"}
-                </span>
-                <ChevronDown className="w-4 h-4 text-gray-400" />
-              </button>
-              {showPolicyDropdown && (
-                <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-52 overflow-y-auto">
-                  {policyOptions.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-gray-500">
-                      No policies available. Create policies in the Policies page.
-                    </div>
-                  ) : (
-                    policyOptions.map((policy) => (
-                      <button
-                        key={policy.id}
-                        type="button"
-                        onClick={() => togglePolicy(policy.id)}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left hover:bg-gray-50"
-                      >
-                        <div
-                          className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${selectedPolicies.includes(policy.id) ? "bg-blue-500 border-blue-500" : "border-gray-300"}`}
-                        >
-                          {selectedPolicies.includes(policy.id) && (
-                            <Check className="w-3 h-3 text-white" />
-                          )}
-                        </div>
-                        <span className="text-gray-700">{policy.name}</span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-            {selectedPolicies.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {selectedPolicies.map((id) => {
-                  const p = policyOptions.find((x) => x.id === id);
-                  return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 text-[11px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-medium"
-                    >
-                      {p?.name}
-                      <button
-                        type="button"
-                        onClick={() => togglePolicy(id)}
-                        className="hover:text-blue-900"
-                        aria-label="Remove"
-                      >
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </span>
-                  );
-                })}
-              </div>
+            {accessToken && (
+              <PolicySelector
+                value={selectedPolicies}
+                onChange={setSelectedPolicies}
+                accessToken={accessToken}
+                onPoliciesLoaded={handlePoliciesLoaded}
+              />
             )}
           </div>
 
@@ -852,10 +773,7 @@ export default function ComplianceUI({
             <div className="relative">
               <button
                 type="button"
-                onClick={() => {
-                  setShowGuardrailDropdown(!showGuardrailDropdown);
-                  setShowPolicyDropdown(false);
-                }}
+                onClick={() => setShowGuardrailDropdown(!showGuardrailDropdown)}
                 className="w-full flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2 text-sm text-left hover:border-gray-300 transition-colors"
               >
                 <span
@@ -1342,17 +1260,14 @@ export default function ComplianceUI({
                     <span className="text-[11px] font-medium text-gray-500">
                       Testing against:
                     </span>
-                    {selectedPolicies.map((id) => {
-                      const p = policyOptions.find((x) => x.id === id);
-                      return (
-                        <span
-                          key={id}
-                          className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-medium"
-                        >
-                          {p?.name}
-                        </span>
-                      );
-                    })}
+                    {selectedPolicies.map((id) => (
+                      <span
+                        key={id}
+                        className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-medium"
+                      >
+                        {policyValueToLabel.get(id) ?? id}
+                      </span>
+                    ))}
                     {selectedGuardrails.map((id) => {
                       const g = guardrailOptions.find((x) => x.id === id);
                       return (
