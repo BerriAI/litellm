@@ -17,6 +17,7 @@ export interface MemberTableProps {
   roleTooltip?: string;
   extraColumns?: ColumnsType<Member>;
   showDeleteForMember?: (member: Member) => boolean;
+  emptyText?: string;
 }
 
 export default function MemberTable({
@@ -29,6 +30,7 @@ export default function MemberTable({
   roleTooltip,
   extraColumns = [],
   showDeleteForMember,
+  emptyText,
 }: MemberTableProps) {
   const baseColumns: ColumnsType<Member> = [
     {
@@ -109,6 +111,7 @@ export default function MemberTable({
         pagination={false}
         size="small"
         scroll={{ x: "max-content" }}
+        locale={emptyText ? { emptyText } : undefined}
       />
       {onAddMember && canEdit && (
         <Button icon={<UserAddOutlined />} type="primary" onClick={onAddMember}>
