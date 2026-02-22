@@ -5812,6 +5812,102 @@ export const updatePolicyCall = async (accessToken: string, policyId: string, po
   }
 };
 
+export const listPolicyVersions = async (
+  accessToken: string,
+  policyName: string
+): Promise<{ policy_name: string; versions: any[]; total_count: number }> => {
+  try {
+    const encodedName = encodeURIComponent(policyName);
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/name/${encodedName}/versions`
+      : `/policies/name/${encodedName}/versions`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to list policy versions:", error);
+    throw error;
+  }
+};
+
+export const createPolicyVersion = async (
+  accessToken: string,
+  policyName: string,
+  sourcePolicyId?: string | null
+): Promise<any> => {
+  try {
+    const encodedName = encodeURIComponent(policyName);
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/name/${encodedName}/versions`
+      : `/policies/name/${encodedName}/versions`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ source_policy_id: sourcePolicyId ?? undefined }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to create policy version:", error);
+    throw error;
+  }
+};
+
+export const updatePolicyVersionStatus = async (
+  accessToken: string,
+  policyId: string,
+  versionStatus: "published" | "production"
+): Promise<any> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policies/${policyId}/status`
+      : `/policies/${policyId}/status`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ version_status: versionStatus }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to update policy version status:", error);
+    throw error;
+  }
+};
+
 export const deletePolicyCall = async (accessToken: string, policyId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
