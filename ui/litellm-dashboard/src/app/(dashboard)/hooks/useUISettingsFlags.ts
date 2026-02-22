@@ -16,9 +16,9 @@ async function fetchUISettings(): Promise<UISettingsData> {
   return data.values as UISettingsData;
 }
 
-export function useUISettings() {
+export function useUISettingsFlags() {
   return useQuery<UISettingsData>({
-    queryKey: ["uiSettings"],
+    queryKey: ["uiSettingsFlags"],
     queryFn: fetchUISettings,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000,
