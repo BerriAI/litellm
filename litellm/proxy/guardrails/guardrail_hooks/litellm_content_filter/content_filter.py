@@ -1158,9 +1158,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 pattern_name=pattern_name.upper()
             )
             text = self._mask_spans(text, spans, redaction_tag)
-            verbose_proxy_logger.info(
-                f"Masked all {pattern_name} matches in content"
-            )
+            verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
 
         return text
 
@@ -1398,13 +1396,20 @@ class ContentFilterGuardrail(CustomGuardrail):
         """Build match_details list from content filter detections."""
         match_details: List[dict] = []
         for detection in detections:
-            detail: dict = {"type": detection["type"], "action_taken": detection["action"]}
+            detail: dict = {
+                "type": detection["type"],
+                "action_taken": detection["action"],
+            }
             if detection["type"] == "pattern":
                 detail["detection_method"] = "regex"
-                detail["snippet"] = cast(PatternDetection, detection).get("pattern_name", "")
+                detail["snippet"] = cast(PatternDetection, detection).get(
+                    "pattern_name", ""
+                )
             elif detection["type"] == "blocked_word":
                 detail["detection_method"] = "keyword"
-                detail["snippet"] = cast(BlockedWordDetection, detection).get("keyword", "")
+                detail["snippet"] = cast(BlockedWordDetection, detection).get(
+                    "keyword", ""
+                )
             elif detection["type"] == "category_keyword":
                 detail["detection_method"] = "keyword"
                 cat_det = cast(CategoryKeywordDetection, detection)
@@ -1425,13 +1430,20 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     def _get_patterns_checked_count(self) -> int:
         """Get total number of patterns and keywords that were evaluated."""
-        return len(self.compiled_patterns) + len(self.blocked_words) + len(self.category_keywords)
+        return (
+            len(self.compiled_patterns)
+            + len(self.blocked_words)
+            + len(self.category_keywords)
+        )
 
     def _get_policy_templates(self) -> Optional[str]:
         """Get comma-separated policy template names from loaded categories."""
         if not self.loaded_categories:
             return None
-        names = [cat.description or cat.category_name for cat in self.loaded_categories.values()]
+        names = [
+            cat.description or cat.category_name
+            for cat in self.loaded_categories.values()
+        ]
         return ", ".join(names) if names else None
 
     def _compute_risk_score(
@@ -1511,11 +1523,18 @@ class ContentFilterGuardrail(CustomGuardrail):
             masked_entity_count=masked_entity_count,
             tracing_detail=GuardrailTracingDetail(
                 guardrail_id=self.config_guardrail_id or self.guardrail_name,
-                policy_template=self.config_policy_template or self._get_policy_templates(),
-                detection_method=self._get_detection_methods(detections) if detections else None,
-                match_details=self._build_match_details(detections) if detections else None,
+                policy_template=self.config_policy_template
+                or self._get_policy_templates(),
+                detection_method=(
+                    self._get_detection_methods(detections) if detections else None
+                ),
+                match_details=(
+                    self._build_match_details(detections) if detections else None
+                ),
                 patterns_checked=self._get_patterns_checked_count(),
-                risk_score=self._compute_risk_score(detections, masked_entity_count, status),
+                risk_score=self._compute_risk_score(
+                    detections, masked_entity_count, status
+                ),
             ),
         )
 

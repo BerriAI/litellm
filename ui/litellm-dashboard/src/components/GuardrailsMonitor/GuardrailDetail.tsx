@@ -1,20 +1,24 @@
 import {
   ArrowLeftOutlined,
   BellOutlined,
-  CheckOutlined,
-  CloseOutlined,
   PlayCircleOutlined,
   SafetyOutlined,
   SettingOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import { Card, Col, Grid, Title } from "@tremor/react";
-import { Button, Input, Tabs } from "antd";
-import React, { useState } from "react";
-import { getGuardrailDetailOrDefault } from "./mockData";
+import { Button, Spin, Tabs } from "antd";
+import React, { useMemo, useState } from "react";
+import {
+  formatDate,
+  getGuardrailsUsageDetail,
+  getGuardrailsUsageLogs,
+} from "@/components/networking";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { LogViewer } from "./LogViewer";
 import { MetricCard } from "./MetricCard";
+import type { LogEntry } from "./mockData";
 
 interface GuardrailDetailProps {
   guardrailId: string;
@@ -31,30 +35,96 @@ const statusColors: Record<
   critical: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
 };
 
+const defaultEnd = new Date();
+const defaultStart = new Date();
+defaultStart.setDate(defaultStart.getDate() - 7);
+
 export function GuardrailDetail({
   guardrailId,
   onBack,
   accessToken = null,
 }: GuardrailDetailProps) {
   const [activeTab, setActiveTab] = useState("overview");
-  const [showNotifyPanel, setShowNotifyPanel] = useState(false);
-  const [notifySaved, setNotifySaved] = useState(false);
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
-  const [notifyConfig, setNotifyConfig] = useState({
-    failRateThreshold: "",
-    apiErrorThreshold: "",
-    webhookUrl: "",
+  const [startDate] = useState(() => formatDate(defaultStart));
+  const [endDate] = useState(() => formatDate(defaultEnd));
+  const [logsPage, setLogsPage] = useState(1);
+  const logsPageSize = 50;
+
+  const { data: detailData, isLoading: detailLoading, error: detailError } = useQuery({
+    queryKey: ["guardrails-usage-detail", guardrailId, startDate, endDate],
+    queryFn: () => getGuardrailsUsageDetail(accessToken!, guardrailId, startDate, endDate),
+    enabled: !!accessToken && !!guardrailId,
   });
-  const data = getGuardrailDetailOrDefault(guardrailId);
+  const { data: logsData, isLoading: logsLoading } = useQuery({
+    queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize],
+    queryFn: () =>
+      getGuardrailsUsageLogs(accessToken!, {
+        guardrailId,
+        page: logsPage,
+        pageSize: logsPageSize,
+        startDate,
+        endDate,
+      }),
+    enabled: !!accessToken && !!guardrailId,
+  });
+
+  const logs: LogEntry[] = useMemo(() => {
+    const list = logsData?.logs ?? [];
+    return list.map((l: Record<string, unknown>) => ({
+      id: l.id as string,
+      timestamp: l.timestamp as string,
+      action: l.action as "blocked" | "passed" | "flagged",
+      score: l.score as number | undefined,
+      model: l.model as string | undefined,
+      input_snippet: l.input_snippet as string | undefined,
+      output_snippet: l.output_snippet as string | undefined,
+      reason: l.reason as string | undefined,
+    }));
+  }, [logsData?.logs]);
+
+  const data = detailData
+    ? {
+        name: detailData.guardrail_name,
+        description: detailData.description ?? "",
+        status: detailData.status,
+        provider: detailData.provider,
+        type: detailData.type,
+        requestsEvaluated: detailData.requestsEvaluated,
+        failRate: detailData.failRate,
+        avgScore: detailData.avgScore,
+        avgLatency: detailData.avgLatency,
+      }
+    : {
+        name: guardrailId,
+        description: "",
+        status: "healthy",
+        provider: "—",
+        type: "—",
+        requestsEvaluated: 0,
+        failRate: 0,
+        avgScore: undefined as number | undefined,
+        avgLatency: undefined as number | undefined,
+      };
   const statusStyle = statusColors[data.status] ?? statusColors.healthy;
 
-  const handleSaveNotify = () => {
-    setNotifySaved(true);
-    setTimeout(() => {
-      setNotifySaved(false);
-      setShowNotifyPanel(false);
-    }, 1500);
-  };
+  if (detailLoading && !detailData) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Spin size="large" />
+      </div>
+    );
+  }
+  if (detailError && !detailData) {
+    return (
+      <div>
+        <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
+          Back to Overview
+        </Button>
+        <p className="text-red-600">Failed to load guardrail details.</p>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -86,7 +156,7 @@ export function GuardrailDetail({
             <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
               {data.provider}
             </span>
-            <Button type="default" icon={<PlayCircleOutlined />}>
+            <Button type="default" icon={<PlayCircleOutlined />} title="Coming soon">
               Re-run AI
             </Button>
             <Button
@@ -95,108 +165,14 @@ export function GuardrailDetail({
               onClick={() => setEvaluationModalOpen(true)}
               title="Evaluation settings"
             />
-            <div className="relative">
-              <Button
-                type={showNotifyPanel ? "primary" : "default"}
-                icon={<BellOutlined />}
-                onClick={() => setShowNotifyPanel(!showNotifyPanel)}
-                className={showNotifyPanel ? "bg-indigo-100 text-indigo-700 border-indigo-200" : ""}
-              >
-                Notify
-              </Button>
-              {showNotifyPanel && (
-                <div className="absolute right-0 top-full mt-2 w-96 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
-                  <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                    <div>
-                      <h4 className="text-sm font-semibold text-gray-900">Configure Alerts</h4>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        Get notified via webhook (Slack, Teams, etc.)
-                      </p>
-                    </div>
-                    <Button
-                      type="text"
-                      icon={<CloseOutlined />}
-                      onClick={() => setShowNotifyPanel(false)}
-                      className="text-gray-400 hover:text-gray-600"
-                    />
-                  </div>
-                  <div className="p-5 space-y-4">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                        Fail Rate Threshold
-                      </label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        placeholder="e.g. 15"
-                        value={notifyConfig.failRateThreshold}
-                        onChange={(e) =>
-                          setNotifyConfig((prev) => ({
-                            ...prev,
-                            failRateThreshold: e.target.value,
-                          }))
-                        }
-                        addonAfter="%"
-                      />
-                      <p className="text-xs text-gray-400 mt-1">Alert when fail rate exceeds this value</p>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                        API Error Threshold
-                      </label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={100}
-                        placeholder="e.g. 5"
-                        value={notifyConfig.apiErrorThreshold}
-                        onChange={(e) =>
-                          setNotifyConfig((prev) => ({
-                            ...prev,
-                            apiErrorThreshold: e.target.value,
-                          }))
-                        }
-                        addonAfter="%"
-                      />
-                      <p className="text-xs text-gray-400 mt-1">
-                        Alert when guardrail API errors exceed this value
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1.5">
-                        Webhook URL
-                      </label>
-                      <Input
-                        type="url"
-                        placeholder="https://hooks.slack.com/services/..."
-                        value={notifyConfig.webhookUrl}
-                        onChange={(e) =>
-                          setNotifyConfig((prev) => ({
-                            ...prev,
-                            webhookUrl: e.target.value,
-                          }))
-                        }
-                      />
-                      <p className="text-xs text-gray-400 mt-1">
-                        Works with Slack, Microsoft Teams, Discord, or any webhook endpoint
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50 rounded-b-lg">
-                    <Button onClick={() => setShowNotifyPanel(false)}>Cancel</Button>
-                    <Button
-                      type="primary"
-                      onClick={handleSaveNotify}
-                      disabled={notifySaved}
-                      icon={notifySaved ? <CheckOutlined /> : undefined}
-                    >
-                      {notifySaved ? "Saved" : "Save Alert"}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <Button
+              type="default"
+              icon={<BellOutlined />}
+              title="Coming soon"
+              className="opacity-75"
+            >
+              Notify
+            </Button>
           </div>
         </div>
       </div>
@@ -229,54 +205,20 @@ export function GuardrailDetail({
             </Col>
             <Col>
               <MetricCard
-                label="False Positives"
-                value={`${data.falsePositiveRate}%`}
-                valueColor={
-                  data.falsePositiveRate > 20
-                    ? "text-red-600"
-                    : data.falsePositiveRate > 10
-                      ? "text-amber-600"
-                      : "text-green-600"
-                }
-                subtitle={`${data.falsePositiveCount} of last 100 logs`}
-                icon={
-                  data.falsePositiveRate > 20 ? (
-                    <WarningOutlined className="text-red-400" />
-                  ) : undefined
-                }
-              />
-            </Col>
-            <Col>
-              <MetricCard
-                label="False Negatives"
-                value={`${data.falseNegativeRate}%`}
-                valueColor={
-                  data.falseNegativeRate > 5
-                    ? "text-red-600"
-                    : data.falseNegativeRate > 2
-                      ? "text-amber-600"
-                      : "text-green-600"
-                }
-                subtitle={`${data.falseNegativeCount} of last 100 logs`}
-                icon={
-                  data.falseNegativeRate > 5 ? (
-                    <WarningOutlined className="text-red-400" />
-                  ) : undefined
-                }
-              />
-            </Col>
-            <Col>
-              <MetricCard
                 label="Avg. latency added"
-                value={`${data.avgLatency}ms`}
-                valueColor={
-                  data.avgLatency > 150
-                    ? "text-red-600"
-                    : data.avgLatency > 50
-                      ? "text-amber-600"
-                      : "text-green-600"
+                value={
+                  data.avgLatency != null ? `${Math.round(data.avgLatency)}ms` : "—"
                 }
-                subtitle={`p95: ${data.p95Latency}ms`}
+                valueColor={
+                  data.avgLatency != null
+                    ? data.avgLatency > 150
+                      ? "text-red-600"
+                      : data.avgLatency > 50
+                        ? "text-amber-600"
+                        : "text-green-600"
+                    : "text-gray-500"
+                }
+                subtitle={data.avgLatency != null ? "Per request (avg)" : "No data"}
               />
             </Col>
           </Grid>
@@ -327,13 +269,24 @@ export function GuardrailDetail({
             </div>
           </Card>
 
-          <LogViewer guardrailName={data.name} filterAction="blocked" />
+          <LogViewer
+            guardrailName={data.name}
+            filterAction="blocked"
+            logs={logs}
+            logsLoading={logsLoading}
+            totalLogs={logsData?.total ?? 0}
+          />
         </div>
       )}
 
       {activeTab === "logs" && (
         <div className="mt-4">
-          <LogViewer guardrailName={data.name} />
+          <LogViewer
+            guardrailName={data.name}
+            logs={logs}
+            logsLoading={logsLoading}
+            totalLogs={logsData?.total ?? 0}
+          />
         </div>
       )}
 

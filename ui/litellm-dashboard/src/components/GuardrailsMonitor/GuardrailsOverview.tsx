@@ -1,5 +1,4 @@
 import {
-  CheckCircleOutlined,
   DownloadOutlined,
   FileTextOutlined,
   PlayCircleOutlined,
@@ -8,15 +7,17 @@ import {
   SettingOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import { Card, Col, Grid, Title } from "@tremor/react";
 import { Button, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  guardrailsTable,
-  policiesTable,
-  type PerformanceRow,
-} from "./mockData";
+  getGuardrailsUsageOverview,
+  getPoliciesUsageOverview,
+} from "@/components/networking";
+import { formatDate } from "@/components/networking";
+import { type PerformanceRow } from "./mockData";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "./MetricCard";
 import { ScoreChart } from "./ScoreChart";
@@ -41,7 +42,7 @@ const providerColors: Record<string, string> = {
   Custom: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
-function computeMetrics(data: PerformanceRow[]) {
+function computeMetricsFromRows(data: PerformanceRow[]) {
   const totalRequests = data.reduce((sum, r) => sum + r.requestsEvaluated, 0);
   const totalBlocked = data.reduce(
     (sum, r) => sum + Math.round((r.requestsEvaluated * r.failRate) / 100),
@@ -49,18 +50,19 @@ function computeMetrics(data: PerformanceRow[]) {
   );
   const passRate =
     totalRequests > 0 ? ((1 - totalBlocked / totalRequests) * 100).toFixed(1) : "0";
+  const withLat = data.filter((r) => r.avgLatency != null);
   const avgLatency =
-    data.length > 0
-      ? Math.round(data.reduce((sum, r) => sum + r.avgLatency, 0) / data.length)
+    withLat.length > 0
+      ? Math.round(withLat.reduce((sum, r) => sum + (r.avgLatency ?? 0), 0) / withLat.length)
       : 0;
-  const p95Latency =
-    data.length > 0
-      ? Math.round(data.reduce((sum, r) => sum + r.p95Latency, 0) / data.length)
-      : 0;
-  return { totalRequests, totalBlocked, passRate, avgLatency, p95Latency, count: data.length };
+  return { totalRequests, totalBlocked, passRate, avgLatency, count: data.length };
 }
 
 type RerunState = "idle" | "running" | "done";
+
+const defaultEnd = new Date();
+const defaultStart = new Date();
+defaultStart.setDate(defaultStart.getDate() - 7);
 
 export function GuardrailsOverview({
   accessToken = null,
@@ -71,6 +73,19 @@ export function GuardrailsOverview({
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [rerunState, setRerunState] = useState<RerunState>("idle");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
+  const [startDate, setStartDate] = useState<string>(() => formatDate(defaultStart));
+  const [endDate, setEndDate] = useState<string>(() => formatDate(defaultEnd));
+
+  const { data: guardrailsData, isLoading: guardrailsLoading, error: guardrailsError } = useQuery({
+    queryKey: ["guardrails-usage-overview", startDate, endDate],
+    queryFn: () => getGuardrailsUsageOverview(accessToken!, startDate, endDate),
+    enabled: !!accessToken,
+  });
+  const { data: policiesData, isLoading: policiesLoading, error: policiesError } = useQuery({
+    queryKey: ["policies-usage-overview", startDate, endDate],
+    queryFn: () => getPoliciesUsageOverview(accessToken!, startDate, endDate),
+    enabled: !!accessToken,
+  });
 
   useEffect(() => {
     if (rerunState !== "done") return;
@@ -78,14 +93,41 @@ export function GuardrailsOverview({
     return () => clearTimeout(t);
   }, [rerunState]);
 
-  const activeData = viewMode === "guardrails" ? guardrailsTable : policiesTable;
-  const metrics = useMemo(() => computeMetrics(activeData), [activeData]);
+  const activeData: PerformanceRow[] = viewMode === "guardrails"
+    ? (guardrailsData?.rows ?? [])
+    : (policiesData?.rows ?? []);
+  const metrics = useMemo(() => {
+    if (viewMode === "guardrails" && guardrailsData) {
+      return {
+        totalRequests: guardrailsData.totalRequests ?? 0,
+        totalBlocked: guardrailsData.totalBlocked ?? 0,
+        passRate: String(guardrailsData.passRate ?? 0),
+        avgLatency: activeData.length ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length) : 0,
+        count: activeData.length,
+      };
+    }
+    if (viewMode === "policies" && policiesData) {
+      return {
+        totalRequests: policiesData.totalRequests ?? 0,
+        totalBlocked: policiesData.totalBlocked ?? 0,
+        passRate: String(policiesData.passRate ?? 0),
+        avgLatency: activeData.length ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length) : 0,
+        count: activeData.length,
+      };
+    }
+    return computeMetricsFromRows(activeData);
+  }, [viewMode, guardrailsData, policiesData, activeData]);
+  const chartData = viewMode === "guardrails" ? guardrailsData?.chart : policiesData?.chart;
   const sorted = useMemo(() => {
     return [...activeData].sort((a, b) => {
       const mult = sortDir === "desc" ? -1 : 1;
-      return (a[sortBy] - b[sortBy]) * mult;
+      const aVal = a[sortBy] ?? 0;
+      const bVal = b[sortBy] ?? 0;
+      return (Number(aVal) - Number(bVal)) * mult;
     });
   }, [activeData, sortBy, sortDir]);
+  const isLoading = viewMode === "guardrails" ? guardrailsLoading : policiesLoading;
+  const error = viewMode === "guardrails" ? guardrailsError : policiesError;
 
   const isGuardrails = viewMode === "guardrails";
 
@@ -153,60 +195,13 @@ export function GuardrailsOverview({
       align: "right",
       sorter: true,
       sortOrder: sortBy === "avgLatency" ? (sortDir === "desc" ? "descend" : "ascend") : null,
-      render: (v: number, row: PerformanceRow) => (
-        <span>
-          <span
-            className={
-              v > 150 ? "text-red-600" : v > 50 ? "text-amber-600" : "text-green-600"
-            }
-          >
-            {v}ms
-          </span>
-          <span className="block text-xs text-gray-500">p95: {row.p95Latency}ms</span>
-        </span>
-      ),
-    },
-    {
-      title: "False Pos %",
-      dataIndex: "falsePositiveRate",
-      key: "falsePositiveRate",
-      align: "right",
-      sorter: true,
-      sortOrder:
-        sortBy === "falsePositiveRate"
-          ? sortDir === "desc"
-            ? "descend"
-            : "ascend"
-          : null,
-      render: (v: number) => (
+      render: (v?: number) => (
         <span
           className={
-            v > 20 ? "text-red-600" : v > 10 ? "text-amber-600" : "text-green-600"
+            v == null ? "text-gray-400" : v > 150 ? "text-red-600" : v > 50 ? "text-amber-600" : "text-green-600"
           }
         >
-          {v}%
-        </span>
-      ),
-    },
-    {
-      title: "False Neg %",
-      dataIndex: "falseNegativeRate",
-      key: "falseNegativeRate",
-      align: "right",
-      sorter: true,
-      sortOrder:
-        sortBy === "falseNegativeRate"
-          ? sortDir === "desc"
-            ? "descend"
-            : "ascend"
-          : null,
-      render: (v: number) => (
-        <span
-          className={
-            v > 5 ? "text-red-600" : v > 2 ? "text-amber-600" : "text-green-600"
-          }
-        >
-          {v}%
+          {v != null ? `${v}ms` : "—"}
         </span>
       ),
     },
@@ -232,13 +227,7 @@ export function GuardrailsOverview({
     },
   ];
 
-  const sortableKeys: SortKey[] = [
-    "failRate",
-    "requestsEvaluated",
-    "avgLatency",
-    "falsePositiveRate",
-    "falseNegativeRate",
-  ];
+  const sortableKeys: SortKey[] = ["failRate", "requestsEvaluated", "avgLatency"];
   const handleTableChange = (_pagination: unknown, _filters: unknown, sorter: unknown) => {
     const s = sorter as { field?: keyof PerformanceRow; order?: string };
     if (s?.field && sortableKeys.includes(s.field as SortKey)) {
@@ -269,9 +258,9 @@ export function GuardrailsOverview({
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-600 bg-white border border-gray-200 rounded-md px-3 py-2">
-            12 Feb, 12:07 – 19 Feb, 12:07
+            {startDate} – {endDate}
           </span>
-          <Button type="primary" icon={<DownloadOutlined />}>
+          <Button type="default" icon={<DownloadOutlined />} title="Coming soon">
             Export Data
           </Button>
         </div>
@@ -337,7 +326,6 @@ export function GuardrailsOverview({
                   ? "text-amber-600"
                   : "text-green-600"
             }
-            subtitle={`p95: ${metrics.p95Latency}ms`}
           />
         </Col>
         <Col className="flex flex-col">
@@ -349,10 +337,16 @@ export function GuardrailsOverview({
       </Grid>
 
       <div className="mb-6">
-        <ScoreChart />
+        <ScoreChart data={chartData} />
       </div>
 
       <Card className="bg-white border border-gray-200 rounded-lg">
+        {(isLoading || error) && (
+          <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
+            {isLoading && <Spin size="small" />}
+            {error && <span className="text-sm text-red-600">Failed to load data. Try again.</span>}
+          </div>
+        )}
         <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
           <div>
             <Title className="text-base font-semibold text-gray-900">
@@ -371,25 +365,8 @@ export function GuardrailsOverview({
               onClick={() => setEvaluationModalOpen(true)}
               title="Evaluation settings"
             />
-            <Button
-              type="default"
-              icon={
-                rerunState === "idle" ? (
-                  <PlayCircleOutlined />
-                ) : rerunState === "done" ? (
-                  <CheckCircleOutlined className="text-green-600" />
-                ) : (
-                  <Spin size="small" />
-                )
-              }
-              disabled={rerunState === "running"}
-              onClick={handleRerun}
-            >
-              {rerunState === "idle"
-                ? "Re-run AI on last 100 logs"
-                : rerunState === "running"
-                  ? "Re-running on 100 logs…"
-                  : "Re-run complete"}
+            <Button type="default" icon={<PlayCircleOutlined />} title="Coming soon">
+              Re-run AI on last 100 logs
             </Button>
           </div>
         </div>
@@ -398,7 +375,9 @@ export function GuardrailsOverview({
           dataSource={sorted}
           rowKey="id"
           pagination={false}
+          loading={isLoading}
           onChange={handleTableChange}
+          locale={activeData.length === 0 && !isLoading ? { emptyText: "No data for this period" } : undefined}
           onRow={(row) => ({
             onClick: () => onSelectGuardrail(row.id),
             style: { cursor: "pointer" },
