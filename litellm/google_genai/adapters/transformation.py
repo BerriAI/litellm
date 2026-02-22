@@ -342,9 +342,9 @@ class GoogleGenAIAdapter:
                         params = func_decl["parametersJsonSchema"]
                     # Anthropic requires 'type': 'object' for input_schema.
                     # Especially if 'anyOf' is present but 'type' is missing at top level
-                    if isinstance(params, dict) and "type" not in params:
-                        params["type"] = "object"
-                    function_chunk["parameters"] = params
+                        if isinstance(params, dict) and "type" not in params:
+                            params["type"] = "object"
+                        function_chunk["parameters"] = params
 
                     openai_tool = {"type": "function", "function": function_chunk}
                     openai_tools.append(openai_tool)
