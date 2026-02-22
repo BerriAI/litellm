@@ -458,8 +458,8 @@ if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() != "true":
                     _invalidate_model_cost_lowercase_map()
                 except Exception as e:
                     verbose_logger.debug("failed to invalidate model cost cache: %s", e)
-        except Exception:
-            pass  # local backup already loaded
+        except Exception as e:
+            verbose_logger.debug("background model cost fetch failed: %s", e)
 
     threading.Thread(target=_fetch_remote_model_cost_map, daemon=True).start()
 cost_discount_config: Dict[str, float] = (
