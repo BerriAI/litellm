@@ -165,6 +165,7 @@ const sidebars = {
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
+        "tutorials/google_genai_sdk",
         "tutorials/litellm_qwen_code_cli",
         "tutorials/openai_codex"
       ]
