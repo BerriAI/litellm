@@ -5560,12 +5560,23 @@ export const getPoliciesList = async (accessToken: string) => {
   }
 };
 
+export interface GuardrailInputs {
+  texts?: string[];
+  images?: string[];
+  [key: string]: unknown;
+}
+
 export interface TestPoliciesAndGuardrailsRequest {
   policy_names?: string[] | null;
   guardrail_names?: string[] | null;
-  inputs: { texts?: string[]; images?: string[]; [key: string]: unknown };
+  /** Single input (legacy). Use inputs_list for per-input batch processing. */
+  inputs?: GuardrailInputs | null;
+  /** List of inputs; each processed separately for batch compliance testing. */
+  inputs_list?: GuardrailInputs[] | null;
   request_data?: Record<string, unknown>;
   input_type?: "request" | "response";
+  /** When set, backend runs chat completion with this model/agent per input and includes agent_response in each result. */
+  agent_id?: string | null;
 }
 
 export interface GuardrailErrorEntry {
@@ -5573,14 +5584,24 @@ export interface GuardrailErrorEntry {
   message: string;
 }
 
-export interface TestPoliciesAndGuardrailsResponse {
+export interface TestPoliciesAndGuardrailsResultItem {
   inputs: Record<string, unknown>;
   guardrail_errors: GuardrailErrorEntry[];
+  /** Present when request included agent_id; serialized chat completion response. */
+  agent_response?: Record<string, unknown>;
+}
+
+export interface TestPoliciesAndGuardrailsResponse {
+  inputs?: Record<string, unknown>;
+  guardrail_errors?: GuardrailErrorEntry[];
+  /** Present when inputs_list was used; one result per input. */
+  results?: TestPoliciesAndGuardrailsResultItem[];
 }
 
 export const testPoliciesAndGuardrails = async (
   accessToken: string,
-  body: TestPoliciesAndGuardrailsRequest
+  body: TestPoliciesAndGuardrailsRequest,
+  signal?: AbortSignal
 ): Promise<TestPoliciesAndGuardrailsResponse> => {
   try {
     const url = proxyBaseUrl
@@ -5588,6 +5609,7 @@ export const testPoliciesAndGuardrails = async (
       : `/utils/test_policies_and_guardrails`;
     const response = await fetch(url, {
       method: "POST",
+      signal,
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
@@ -5595,9 +5617,11 @@ export const testPoliciesAndGuardrails = async (
       body: JSON.stringify({
         policy_names: body.policy_names ?? null,
         guardrail_names: body.guardrail_names ?? null,
-        inputs: body.inputs,
+        inputs: body.inputs ?? null,
+        inputs_list: body.inputs_list ?? null,
         request_data: body.request_data ?? {},
         input_type: body.input_type ?? "request",
+        agent_id: body.agent_id ?? null,
       }),
     });
 
@@ -5745,6 +5769,41 @@ export const suggestPolicyTemplates = async (
     return response.json();
   } catch (error) {
     console.error("Failed to suggest policy templates:", error);
+    throw error;
+  }
+};
+
+export const testPolicyTemplate = async (
+  accessToken: string,
+  guardrailDefinitions: any[],
+  text: string
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/policy/templates/test`
+      : `/policy/templates/test`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        guardrail_definitions: guardrailDefinitions,
+        text,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error("Failed to test policy template:", error);
     throw error;
   }
 };
@@ -7888,6 +7947,38 @@ export const getCategoryYaml = async (accessToken: string, categoryName: string)
     return data;
   } catch (error) {
     console.error("Failed to get category YAML:", error);
+    throw error;
+  }
+};
+
+export const getMajorAirlines = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/ui/major_airlines`
+      : `/guardrails/ui/major_airlines`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(
+        `Failed to get major airlines. Status: ${response.status}, Error:`,
+        errorData
+      );
+      handleError(errorData);
+      throw new Error(`Failed to get major airlines: ${response.status} ${errorData}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get major airlines:", error);
     throw error;
   }
 };

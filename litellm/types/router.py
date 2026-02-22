@@ -202,6 +202,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     auto_router_default_model: Optional[str] = None
     auto_router_embedding_model: Optional[str] = None
 
+    # complexity-router params
+    complexity_router_config: Optional[Dict] = None
+    complexity_router_default_model: Optional[str] = None
+
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
     s3_encryption_key_id: Optional[str] = None
@@ -260,6 +264,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         auto_router_config: Optional[str] = None,
         auto_router_default_model: Optional[str] = None,
         auto_router_embedding_model: Optional[str] = None,
+        # complexity-router params
+        complexity_router_config: Optional[Dict] = None,
+        complexity_router_default_model: Optional[str] = None,
         # Batch/File API Params
         s3_bucket_name: Optional[str] = None,
         s3_encryption_key_id: Optional[str] = None,
@@ -803,6 +810,7 @@ OptionalPreCallChecks = List[
         "router_budget_limiting",
         "responses_api_deployment_check",
         "deployment_affinity",
+        "session_affinity",
         "forward_client_headers_by_model_group",
         "enforce_model_rate_limits",
     ]

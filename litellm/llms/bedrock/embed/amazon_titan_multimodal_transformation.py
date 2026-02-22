@@ -6,14 +6,14 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
 """
 
-from typing import List
+from typing import List, Optional
 
 from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingConfig,
     AmazonTitanMultimodalEmbeddingRequest,
     AmazonTitanMultimodalEmbeddingResponse,
 )
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import get_base64_str, is_base64_encoded
 
 
@@ -56,7 +56,10 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         return transformed_request
 
     def _transform_response(
-        self, response_list: List[dict], model: str
+        self,
+        response_list: List[dict],
+        model: str,
+        batch_data: Optional[List[dict]] = None,
     ) -> EmbeddingResponse:
         total_prompt_tokens = 0
         transformed_responses: List[Embedding] = []
@@ -71,9 +74,23 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             )
             total_prompt_tokens += _parsed_response["inputTextTokenCount"]
 
+        # Count images from original requests for cost calculation
+        image_count = 0
+        if batch_data:
+            for request_data in batch_data:
+                if "inputImage" in request_data:
+                    image_count += 1
+
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        if image_count > 0:
+            prompt_tokens_details = PromptTokensDetailsWrapper(
+                image_count=image_count,
+            )
+
         usage = Usage(
             prompt_tokens=total_prompt_tokens,
             completion_tokens=0,
             total_tokens=total_prompt_tokens,
+            prompt_tokens_details=prompt_tokens_details,
         )
         return EmbeddingResponse(model=model, usage=usage, data=transformed_responses)

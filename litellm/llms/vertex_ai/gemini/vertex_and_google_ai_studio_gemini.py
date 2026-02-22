@@ -759,6 +759,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "gemini-3-flash-preview" in model.lower()
             or "gemini-3-flash" in model.lower()
         )
+        is_gemini31pro = model and (
+            "gemini-3.1-pro-preview" in model.lower()
+        )
         if reasoning_effort == "minimal":
             if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
@@ -767,7 +770,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
+            if is_gemini31pro or is_gemini3flash:
                 return {"thinkingLevel": "medium", "includeThoughts": True}
+            else:
+                return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":

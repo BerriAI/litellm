@@ -273,6 +273,7 @@ model LiteLLM_MCPServerTable {
   alias        String?
   description  String?
   url          String?
+  spec_path    String?
   transport    String         @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
@@ -613,7 +614,7 @@ model LiteLLM_DailyUserSpend {
 
   @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([user_id])
+  @@index([user_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -644,7 +645,7 @@ model LiteLLM_DailyOrganizationSpend {
 
   @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([organization_id])
+  @@index([organization_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -674,7 +675,7 @@ model LiteLLM_DailyEndUserSpend {
   updated_at          DateTime @updatedAt
   @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([end_user_id])
+  @@index([end_user_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -704,7 +705,7 @@ model LiteLLM_DailyAgentSpend {
   updated_at          DateTime @updatedAt
   @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([agent_id])
+  @@index([agent_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -735,7 +736,7 @@ model LiteLLM_DailyTeamSpend {
 
   @@unique([team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([team_id])
+  @@index([team_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -767,7 +768,7 @@ model LiteLLM_DailyTagSpend {
 
   @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([tag])
+  @@index([tag, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])

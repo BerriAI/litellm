@@ -86,6 +86,8 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            attempted_retries=None,
+            max_retries=None,
             cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
@@ -96,9 +98,8 @@ def _get_spend_logs_metadata(
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
-            key: metadata[key]
+            key: metadata.get(key)
             for key in SpendLogsMetadata.__annotations__.keys()
-            if key in metadata
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails

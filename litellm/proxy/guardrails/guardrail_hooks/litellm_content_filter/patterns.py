@@ -162,8 +162,8 @@ def get_available_content_categories() -> List[Dict[str, str]]:
                     category_data = yaml.safe_load(f)
 
                 if category_data and "category_name" in category_data:
-                    # Create display name from category name (convert harmful_self_harm -> Harmful Self Harm)
-                    display_name = (
+                    # Use explicit display_name if provided, otherwise auto-generate from category_name
+                    display_name = category_data.get("display_name") or (
                         category_data["category_name"].replace("_", " ").title()
                     )
 

@@ -104,6 +104,14 @@ MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
     os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
 )
 
+# Semantic Guard Defaults
+DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75)
+)
+
 # MCP OAuth2 Client Credentials Defaults
 MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS = int(
     os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
@@ -595,6 +603,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "prompt_cache_retention",
     "safety_identifier",
     "verbosity",
+    "store",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
