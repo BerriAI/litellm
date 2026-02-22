@@ -2149,6 +2149,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
     )
+    forward_client_headers_to_llm_api: Optional[bool] = Field(
+        None,
+        description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -2437,8 +2441,18 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
         Any
     ] = None  # You might want to replace 'Any' with a more specific type if available
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    user_email: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="after")
+    def populate_user_email(self) -> "LiteLLM_OrganizationMembershipTable":
+        if self.user_email is None and self.user is not None:
+            if isinstance(self.user, dict):
+                self.user_email = self.user.get("user_email")
+            else:
+                self.user_email = getattr(self.user, "user_email", None)
+        return self
 
 
 class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
@@ -3044,6 +3058,8 @@ class SpendLogsMetadata(TypedDict):
         str
     ]  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: Optional[float]  # LiteLLM overhead time in milliseconds
+    attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
+    max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
@@ -3656,6 +3672,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     spend_logs_metadata: Optional[dict]
     agent_id: Optional[str]
     trace_id: Optional[str]
+    session_id: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):

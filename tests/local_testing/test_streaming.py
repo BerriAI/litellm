@@ -1387,7 +1387,7 @@ def test_bedrock_claude_3_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-3-7-sonnet-20250219",
+        "claude-4-sonnet-20250514",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
     ],
@@ -2883,7 +2883,7 @@ def test_completion_claude_3_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="claude-3-7-sonnet-20250219",
+            model="claude-4-sonnet-20250514",
             messages=messages,
             tools=tools,
             tool_choice="required",

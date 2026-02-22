@@ -26,6 +26,12 @@ Example custom code (async with HTTP):
             if response["success"] and response["body"].get("flagged"):
                 return block("Content flagged by moderation API")
         return allow()
+
+Example: block when response rejects the user (input_type response only):
+
+    Use RESPONSE_REJECTION_GUARDRAIL_CODE from .response_rejection_code — it
+    checks response texts for phrases like "That's not something I can help with"
+    and returns block() so the guardrail raises a block error.
 """
 
 import asyncio
@@ -35,18 +41,18 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import (CustomGuardrail,
+                                                   log_guardrail_information)
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.base import \
+    GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .primitives import get_custom_code_primitives
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
 
 
 class CustomCodeGuardrailError(Exception):

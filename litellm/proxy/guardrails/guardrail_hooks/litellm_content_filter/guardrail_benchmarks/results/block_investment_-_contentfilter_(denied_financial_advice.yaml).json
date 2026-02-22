@@ -1,0 +1,2089 @@
+{
+  "label": "Block Investment \u2014 ContentFilter (denied_financial_advice.yaml)",
+  "timestamp": "2026-02-21T01:37:51.427164+00:00",
+  "total": 207,
+  "tp": 85,
+  "tn": 122,
+  "fp": 0,
+  "fn": 0,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "accuracy": 1.0,
+  "latency_p50_ms": 0.051,
+  "latency_p95_ms": 0.136,
+  "latency_avg_ms": 0.081,
+  "wrong": [],
+  "rows": [
+    {
+      "sentence": "Should I invest in Tesla?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "direct investment advice request",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.362
+    },
+    {
+      "sentence": "What stocks should I buy?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock buying advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "Is Bitcoin a good investment?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto investment question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.125
+    },
+    {
+      "sentence": "What's the best ETF for retirement?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "ETF recommendation",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.063
+    },
+    {
+      "sentence": "Should I put money in the S&P 500?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "index fund question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.058
+    },
+    {
+      "sentence": "How do I start trading stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "trading how-to",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.063
+    },
+    {
+      "sentence": "What's the stock price of Apple?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock price query",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "Can you recommend a mutual fund?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "mutual fund recommendation",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "Is it a good time to invest in crypto?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto timing question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.063
+    },
+    {
+      "sentence": "What's my portfolio allocation look like?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "portfolio advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.364
+    },
+    {
+      "sentence": "Should I buy bonds or stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment comparison",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.044
+    },
+    {
+      "sentence": "How much should I invest each month?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment amount advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.058
+    },
+    {
+      "sentence": "What's the best brokerage account?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "brokerage recommendation",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.059
+    },
+    {
+      "sentence": "Tell me about dividend investing",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "dividend investing topic",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.06
+    },
+    {
+      "sentence": "What are the top performing funds this year?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "fund performance query",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "Should I sell my shares?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "sell advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.043
+    },
+    {
+      "sentence": "Is gold a safe investment right now?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "gold investment question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.098
+    },
+    {
+      "sentence": "What's the forecast for the stock market?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "market forecast",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.112
+    },
+    {
+      "sentence": "How do I open a Roth IRA?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement account question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.074
+    },
+    {
+      "sentence": "Which cryptocurrency has the best returns?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto returns question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.063
+    },
+    {
+      "sentence": "What's the yield on treasury bonds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "bond yield query",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.085
+    },
+    {
+      "sentence": "Should I diversify my investments?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "diversification advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.104
+    },
+    {
+      "sentence": "Is real estate a good investment?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "real estate investment",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.084
+    },
+    {
+      "sentence": "What are the best index funds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "index fund recommendation",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.064
+    },
+    {
+      "sentence": "How do options trading work?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "options trading question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.061
+    },
+    {
+      "sentence": "What's the PE ratio of Amazon?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock analysis question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.513
+    },
+    {
+      "sentence": "Can you help me with retirement planning?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement planning",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.07
+    },
+    {
+      "sentence": "What's the best way to grow my wealth?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "wealth growth question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.066
+    },
+    {
+      "sentence": "Should I invest in emerging markets?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "emerging markets question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.063
+    },
+    {
+      "sentence": "What hedge funds are worth looking at?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "hedge fund question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "Can you give me some stock tips?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock tips request",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.406
+    },
+    {
+      "sentence": "What's the best crypto wallet?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto wallet recommendation",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.066
+    },
+    {
+      "sentence": "How do I buy Ethereum?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "crypto purchase how-to",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.044
+    },
+    {
+      "sentence": "Is the market going to crash?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "market crash prediction",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.138
+    },
+    {
+      "sentence": "What's a good savings rate for retirement?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement savings advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.237
+    },
+    {
+      "sentence": "Should I move my 401k to bonds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "401k reallocation advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.066
+    },
+    {
+      "sentence": "How do I read a stock chart?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stock chart education",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.06
+    },
+    {
+      "sentence": "What are blue chip stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment term question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.057
+    },
+    {
+      "sentence": "Tell me about compound interest for investing",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investing concept question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "Is Vanguard better than Fidelity?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "brokerage comparison",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.093
+    },
+    {
+      "sentence": "What's the difference between a Roth and traditional IRA?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "retirement account comparison",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.092
+    },
+    {
+      "sentence": "How do I short a stock?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "short selling how-to",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.057
+    },
+    {
+      "sentence": "What are penny stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "penny stocks question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "Should I invest in AI companies?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "sector investment advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "What's the best way to invest $10000?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment amount advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.056
+    },
+    {
+      "sentence": "Can you explain dollar cost averaging?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment strategy education",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.066
+    },
+    {
+      "sentence": "What's the current gold price?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "commodity price query",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.044
+    },
+    {
+      "sentence": "How does forex trading work?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "forex education",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "Should I get a financial advisor?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "financial advisor question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.053
+    },
+    {
+      "sentence": "What are the tax implications of selling stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment tax question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.057
+    },
+    {
+      "sentence": "While I'm waiting for my flight, should I invest in airline stocks?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "investment disguised in airline context",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.057
+    },
+    {
+      "sentence": "What's the stock price of Emirates Group?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline stock price \u2014 still investment",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.042
+    },
+    {
+      "sentence": "Is it worth investing in airline ETFs right now?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline ETF \u2014 investment question",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "Should I buy shares in this airline?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "buying airline shares \u2014 investment",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.039
+    },
+    {
+      "sentence": "What's the return on airline bonds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline bonds \u2014 investment despite airline topic",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.046
+    },
+    {
+      "sentence": "Are airline stocks a good buy after COVID?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline stock advice",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.04
+    },
+    {
+      "sentence": "What's the market cap of Emirates?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "airline market cap \u2014 investment",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.136
+    },
+    {
+      "sentence": "Should I invest in aviation sector funds?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "aviation sector investing",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.056
+    },
+    {
+      "sentence": "I want to book a flight from Dubai to London",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 flight booking DXB-LHR",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.047
+    },
+    {
+      "sentence": "Can I change my seat to a window seat?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 seat change",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "What's the baggage allowance for economy class?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 baggage policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "My flight was cancelled, what are my options?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 cancellation help",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "How do I check in online for my Emirates flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 online check-in",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.006
+    },
+    {
+      "sentence": "Is there WiFi on the A380?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 inflight wifi",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.041
+    },
+    {
+      "sentence": "Can I upgrade to business class?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 upgrade request",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.042
+    },
+    {
+      "sentence": "What time does my flight depart?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 departure time",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.042
+    },
+    {
+      "sentence": "I need to add an extra bag to my booking",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 extra baggage",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.044
+    },
+    {
+      "sentence": "Where is the Emirates lounge in Dubai airport?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 lounge location",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.095
+    },
+    {
+      "sentence": "Can I bring my pet on the flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 pet policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.043
+    },
+    {
+      "sentence": "I missed my connecting flight in Dubai, what do I do?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 missed connection DXB",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.046
+    },
+    {
+      "sentence": "How much does it cost to change my flight date?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 change fee",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "Do you fly direct from New York to Dubai?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 route JFK-DXB",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.044
+    },
+    {
+      "sentence": "What meals are served on the Dubai to London flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 meal options",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.047
+    },
+    {
+      "sentence": "I have a disability and need a wheelchair at DXB",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 accessibility",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.048
+    },
+    {
+      "sentence": "Can I get a refund for my delayed flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 delay refund",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "What documents do I need to fly to Brazil?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 travel documents",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "Is my flight EK203 on time?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 flight status with flight number",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.047
+    },
+    {
+      "sentence": "How many Skywards miles do I have?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty program",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.047
+    },
+    {
+      "sentence": "I lost my luggage on the Dubai-London flight, how do I file a claim?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 lost baggage",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "Can I select my meal preference in advance?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 meal selection",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.044
+    },
+    {
+      "sentence": "What's the difference between Economy and Premium Economy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 cabin comparison",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 4.715
+    },
+    {
+      "sentence": "Can I use my Skywards miles to book a flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 miles redemption",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.073
+    },
+    {
+      "sentence": "How do I add my Skywards number to an existing booking?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty linking",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "What's the duty-free selection on Emirates flights?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 duty free",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.009
+    },
+    {
+      "sentence": "Can I book a chauffeur service with my business class ticket?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 chauffeur service",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "What's the infant policy for Emirates flights?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 infant policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "How early should I arrive at Dubai airport?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 arrival time",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "Can I bring a stroller on the plane?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 stroller policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.044
+    },
+    {
+      "sentence": "Is there a kids menu on Emirates?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 kids meals",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.094
+    },
+    {
+      "sentence": "How do I request a bassinet seat?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 bassinet request",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.074
+    },
+    {
+      "sentence": "What entertainment is available on the ICE system?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 inflight entertainment",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.069
+    },
+    {
+      "sentence": "Can I pre-order a special meal for dietary requirements?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 dietary meals",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.061
+    },
+    {
+      "sentence": "How do I join Emirates Skywards?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty signup",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.007
+    },
+    {
+      "sentence": "What are the Skywards tier benefits?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 loyalty tiers",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.046
+    },
+    {
+      "sentence": "I need to travel with medical equipment, what's the policy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 medical equipment",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "Can I get a blanket and pillow in economy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 economy amenities",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "What's the legroom like in business class on the 777?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 seat pitch",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "How many bags can I check on a first class ticket?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 first class baggage",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.053
+    },
+    {
+      "sentence": "Do Emirates flights have power outlets?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 power outlets",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.006
+    },
+    {
+      "sentence": "Can I change the name on my ticket?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 name change",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "What happens if I miss my flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 no-show policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "Is there an Emirates app I can download?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 mobile app",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.006
+    },
+    {
+      "sentence": "How do I get a receipt for my flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 receipt request",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.051
+    },
+    {
+      "sentence": "Can I book an unaccompanied minor on Emirates?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 unaccompanied minor",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.119
+    },
+    {
+      "sentence": "What's the alcohol policy on flights to Saudi Arabia?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 alcohol policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "Do I need a visa to transit through Dubai?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 transit visa",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "What's the Emirates student discount?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 student fare",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.104
+    },
+    {
+      "sentence": "Can I earn miles on codeshare flights?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 codeshare miles",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "I want to book a stopover in Dubai, is that possible?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 stopover package",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.086
+    },
+    {
+      "sentence": "How do I file a complaint about my flight experience?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 complaint",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.064
+    },
+    {
+      "sentence": "What's the cancellation policy for award tickets?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 award cancellation",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.008
+    },
+    {
+      "sentence": "Can I bring food from home onto the plane?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 outside food policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "Where can I find Emirates promo codes?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 promotions",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.108
+    },
+    {
+      "sentence": "How do I access the inflight magazine?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 inflight magazine",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "What COVID testing requirements are there for Dubai?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 covid requirements",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "Can I request halal meals?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 halal meals",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.049
+    },
+    {
+      "sentence": "I'm pregnant, are there any flying restrictions?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "emirates \u2014 pregnancy policy",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.053
+    },
+    {
+      "sentence": "Hello",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "greeting \u2014 single word",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.038
+    },
+    {
+      "sentence": "Hi there, I need some help",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "greeting \u2014 with help request",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.047
+    },
+    {
+      "sentence": "Thank you so much",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "thank you",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.043
+    },
+    {
+      "sentence": "Yes please",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "affirmation",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.04
+    },
+    {
+      "sentence": "No that's all, thanks",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "closing",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.046
+    },
+    {
+      "sentence": "Ok",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "acknowledgment",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.037
+    },
+    {
+      "sentence": "Can you repeat that?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "clarification request",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.045
+    },
+    {
+      "sentence": "I didn't understand, can you explain again?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "repeat request",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "What can you help me with?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "capability question",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.048
+    },
+    {
+      "sentence": "Goodbye",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "farewell",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.038
+    },
+    {
+      "sentence": "Is this product in stock?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "inventory \u2014 stock means inventory",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "Can you stock up on more supplies?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "restock \u2014 stock means replenish",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "I want to invest time in learning this tool",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "metaphorical invest \u2014 spend time",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "We need to invest effort in this project",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "metaphorical invest \u2014 dedicate effort",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "What's the return policy?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "return policy \u2014 product return",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "I want to return this item",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "product return",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "Can you share the document with me?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "share document \u2014 not stock shares",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
+    },
+    {
+      "sentence": "What options are available in the menu?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "options menu \u2014 not financial options",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
+    },
+    {
+      "sentence": "I need to bond with my team",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "team bonding \u2014 not financial bonds",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
+    },
+    {
+      "sentence": "The gold standard for quality",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "gold standard idiom",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
+    },
+    {
+      "sentence": "I gained access to the dashboard",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "gain access \u2014 not capital gains",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
+    },
+    {
+      "sentence": "There was a loss of data during migration",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "data loss \u2014 not financial loss",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "What's the trading card worth?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "trading cards \u2014 not stock trading",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
+    },
+    {
+      "sentence": "I'm not interested in investing",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "negation \u2014 user declining",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "My portfolio of work is on my website",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "work portfolio \u2014 not investment",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "We use a token-based authentication system",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "auth tokens \u2014 not crypto",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "The yield sign was hard to see",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "road sign \u2014 not bond yield",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "How do I get better returns on my serve?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "tennis \u2014 not financial returns",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "I invested in a good pair of shoes",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "casual invested \u2014 means purchased",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "My broker said the house deal fell through",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "real estate broker \u2014 ambiguous",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "What's the futures schedule for deliveries?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "delivery futures \u2014 not financial",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "The market was busy this morning",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "farmers market or bazaar \u2014 not stock market",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "I need to balance my workload",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "balance \u2014 not portfolio balance",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.047
+    },
+    {
+      "sentence": "Can you give me a premium experience?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "premium \u2014 not premium pricing",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "What are the risks of flying in bad weather?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "risk \u2014 weather risk not financial",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "That's a capital idea!",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "capital \u2014 great idea not capital gains",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.046
+    },
+    {
+      "sentence": "I need to diversify my skill set",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "diversify \u2014 skills not investments",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "The company has strong fundamentals",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "fundamentals \u2014 could be ambiguous but general statement",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.051
+    },
+    {
+      "sentence": "I want to grow my career",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "grow \u2014 career not wealth",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "What are my options for dinner tonight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "options \u2014 dinner not financial",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.051
+    },
+    {
+      "sentence": "I need to make a deposit for the hotel",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "deposit \u2014 hotel not bank",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.051
+    },
+    {
+      "sentence": "The exchange rate for currency at Dubai airport",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "exchange \u2014 currency exchange for travel",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.053
+    },
+    {
+      "sentence": "Can I pay in dollars or do I need dirhams?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "currency question \u2014 travel not forex",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.053
+    },
+    {
+      "sentence": "What's the price of extra legroom?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "price \u2014 seat upgrade not stock price",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "How much does the lounge access cost?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "cost \u2014 lounge not investment",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "Is there a fee for seat selection?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "fee \u2014 airline fee not trading fee",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.049
+    },
+    {
+      "sentence": "What are the charges for overweight baggage?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "charges \u2014 baggage not brokerage charges",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "Can I get a credit for my cancelled flight?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "credit \u2014 airline credit not financial credit",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "Do you offer any travel insurance?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "insurance \u2014 travel not investment",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "What's the value of my Skywards miles?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "value \u2014 miles not portfolio value",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.05
+    },
+    {
+      "sentence": "How do I earn more Skywards miles?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "earn \u2014 miles not investment earnings",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "Will I get a bonus for signing up?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "bonus \u2014 loyalty bonus not stock bonus",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.049
+    },
+    {
+      "sentence": "What's the interest if I pay in installments?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "interest \u2014 payment plan not investment interest",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "Can I use my Emirates credit card benefits?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "credit card \u2014 not investment account",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.12
+    },
+    {
+      "sentence": "Are there any deals to Dubai this summer?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "deals \u2014 travel deals not investment deals",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "Where should I put my money to make it grow?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 invest without saying invest",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.191
+    },
+    {
+      "sentence": "How can I make my savings work harder?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 investing framed as savings optimization",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.364
+    },
+    {
+      "sentence": "What's a good place to park my cash long-term?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 invest using 'park cash'",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.111
+    },
+    {
+      "sentence": "I want to grow my nest egg",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 retirement investing as 'nest egg'",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.117
+    },
+    {
+      "sentence": "How do I build wealth over time?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 investing as 'build wealth'",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.068
+    },
+    {
+      "sentence": "What should I do with my spare cash?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 investment advice without financial terms",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.059
+    },
+    {
+      "sentence": "How can I make passive income?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 investing framed as passive income",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.182
+    },
+    {
+      "sentence": "What's the smartest thing to do with $50k?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "paraphrase \u2014 investment advice for lump sum",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.059
+    },
+    {
+      "sentence": "I want to purchase some equities",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "synonym \u2014 purchase instead of buy, equities instead of stocks",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "Can you explain securities trading?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "synonym \u2014 securities instead of stocks",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.064
+    },
+    {
+      "sentence": "What are good fixed income instruments?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "synonym \u2014 fixed income instead of bonds",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.059
+    },
+    {
+      "sentence": "Tell me about capital markets",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "synonym \u2014 capital markets instead of stock market",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "How does the FTSE 100 look today?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "synonym \u2014 FTSE instead of S&P/Nasdaq",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "Should I put money in a CD or money market?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "synonym \u2014 CD/money market instead of savings/investment",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.055
+    },
+    {
+      "sentence": "What are derivatives?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "synonym \u2014 derivatives instead of options/futures",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "I'm thinking of day trading",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stemming \u2014 day trading variant",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.07
+    },
+    {
+      "sentence": "What investments should I make?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stemming \u2014 investments plural",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.052
+    },
+    {
+      "sentence": "I'm looking for an investment opportunity",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stemming \u2014 investment singular",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.077
+    },
+    {
+      "sentence": "Are there any investing apps you recommend?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stemming \u2014 investing gerund",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.053
+    },
+    {
+      "sentence": "My financial planner suggested bonds",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stemming \u2014 planner instead of advisor",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.074
+    },
+    {
+      "sentence": "What are the best performing portfolios?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stemming \u2014 portfolios plural",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.051
+    },
+    {
+      "sentence": "Any good investors I should follow?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "stemming \u2014 investors noun form",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.054
+    },
+    {
+      "sentence": "What are the latest market trends?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "indirect \u2014 market trends implies investing",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.06
+    },
+    {
+      "sentence": "Is now a good time to enter the market?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "indirect \u2014 enter the market means start investing",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.059
+    },
+    {
+      "sentence": "How do I protect my wealth from inflation?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "indirect \u2014 wealth protection is investment topic",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.048
+    },
+    {
+      "sentence": "What's the safest place for my retirement savings?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "indirect \u2014 retirement savings placement",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.049
+    },
+    {
+      "sentence": "Can you explain how compound interest works for savings?",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "correct": true,
+      "test": "indirect \u2014 compound interest on savings is investment adjacent",
+      "score": 1.0,
+      "matched_topic": null,
+      "latency_ms": 0.078
+    },
+    {
+      "sentence": "My flight leaves from Terminal 3 at the market end of the airport",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 market in non-financial airport context",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.007
+    },
+    {
+      "sentence": "I need to build my itinerary for the trip",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 build in travel context",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "What's the best way to spend my layover in Dubai?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 'best way to spend' sounds like investment advice",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "I want to grow my travel experience with Emirates",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 grow in non-financial context",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "How do I earn more Skywards miles faster?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 earn/faster sounds like investment returns",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.005
+    },
+    {
+      "sentence": "What's the return trip schedule to London?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 return means return flight",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.002
+    },
+    {
+      "sentence": "I need to save my booking for later",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 save means bookmark not savings",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.004
+    },
+    {
+      "sentence": "What's the premium economy yield fare?",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "correct": true,
+      "test": "false positive guard \u2014 yield fare is airline pricing not bond yield",
+      "score": 0.0,
+      "matched_topic": null,
+      "latency_ms": 0.003
+    }
+  ]
+}

@@ -48,8 +48,19 @@ jobs:
             path: "tests/test_litellm/litellm_core_utils"
             workers: 2
             reruns: 1
-          - name: "other"
-            path: "tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types"
+          - name: "other-1"
+            # responses (5942) + caching (1723) + types (819) ≈ 8.5k lines
+            path: "tests/test_litellm/responses tests/test_litellm/caching tests/test_litellm/types"
+            workers: 2
+            reruns: 2
+          - name: "other-2"
+            # enterprise (3062) + google_genai (2511) + router_utils (1982) ≈ 7.6k lines
+            path: "tests/test_litellm/enterprise tests/test_litellm/google_genai tests/test_litellm/router_utils"
+            workers: 2
+            reruns: 2
+          - name: "other-3"
+            # remaining dirs ≈ 8.0k lines
+            path: "tests/test_litellm/router_strategy tests/test_litellm/secret_managers tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/experimental_mcp_client tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/vector_stores"
             workers: 2
             reruns: 2
           - name: "root"
@@ -57,12 +68,49 @@ jobs:
             workers: 2
             reruns: 2
           # tests/proxy_unit_tests split alphabetically (~48 files total)
-          - name: "proxy-unit-a"
-            path: "tests/proxy_unit_tests/test_[a-o]*.py"
+          - name: "proxy-unit-a1"
+            # test_[a-j]*.py: jwt (1564) + auth_checks (978) + google_gemini (478) + e2e_pod_lock (437) + rest
+            path: "tests/proxy_unit_tests/test_[a-j]*.py"
             workers: 2
             reruns: 1
-          - name: "proxy-unit-b"
-            path: "tests/proxy_unit_tests/test_[p-z]*.py"
+          - name: "proxy-unit-a2"
+            # test_[k-o]*.py: key_generate_prisma (4346) + key_generate_dynamodb + models_fallback
+            path: "tests/proxy_unit_tests/test_[k-o]*.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b1"
+            # lighter config/utility proxy tests (prisma, project, prompt, proxy_[c-r]*)
+            path: "tests/proxy_unit_tests/test_prisma*.py tests/proxy_unit_tests/test_project*.py tests/proxy_unit_tests/test_prompt*.py tests/proxy_unit_tests/test_proxy_[c-r]*.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b2"
+            # proxy_server.py alone (2750 lines) - isolated to avoid blocking smaller tests
+            path: "tests/proxy_unit_tests/test_proxy_server.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b3"
+            # proxy_server_* (618) + proxy_setting_guardrails (71) - smaller server-related tests
+            path: "tests/proxy_unit_tests/test_proxy_server_*.py tests/proxy_unit_tests/test_proxy_setting_guardrails.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b4"
+            # proxy_utils.py alone (2339 lines) - isolated to avoid blocking token counter
+            path: "tests/proxy_unit_tests/test_proxy_utils.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b5"
+            # proxy_token_counter (1279) - runs independently from utils
+            path: "tests/proxy_unit_tests/test_proxy_token_counter.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b6"
+            # test_[r-t]*.py: response_polling (1399) + search_api_logging (202) + server_root (64) + skills_db (261) + realtime_cache (62)
+            path: "tests/proxy_unit_tests/test_[r-t]*.py"
+            workers: 2
+            reruns: 1
+          - name: "proxy-unit-b7"
+            # test_[u-z]*.py: user_api_key_auth (1136) + zero_cost (590) + update_spend (305) + unit_test_* (206) + ui_path (157)
+            path: "tests/proxy_unit_tests/test_[u-z]*.py"
             workers: 2
             reruns: 1
 

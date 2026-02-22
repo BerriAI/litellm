@@ -1,9 +1,8 @@
 from typing import TYPE_CHECKING, Optional
 
 import litellm
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
-    ContentFilterGuardrail,
-)
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
+    ContentFilterGuardrail
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 if TYPE_CHECKING:
@@ -44,6 +43,9 @@ def initialize_guardrail(
         severity_threshold=getattr(litellm_params, "severity_threshold", "medium"),
         llm_router=llm_router,
         image_model=getattr(litellm_params, "image_model", None),
+        competitor_intent_config=getattr(
+            litellm_params, "competitor_intent_config", None
+        ),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(content_filter_guardrail)

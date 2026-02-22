@@ -2205,6 +2205,7 @@ async def test_proxy_server_prisma_setup():
         mock_client._set_spend_logs_row_count_in_proxy_state = (
             AsyncMock()
         )  # Mock the _set_spend_logs_row_count_in_proxy_state method
+        mock_client.start_db_health_watchdog_task = AsyncMock()
         # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
         mock_db = MagicMock()
         mock_db.start_token_refresh_task = AsyncMock()
