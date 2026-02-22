@@ -48,13 +48,53 @@ class PolicyVersionStatus(str, Enum):
     Status of a policy version in the version workflow.
 
     - DRAFT: Policy is being edited, not yet published
-    - PUBLISHED: Policy is ready for testing
+    - PUBLISHED: Policy is ready for testing/mirroring
     - PRODUCTION: Policy is active and applied to matching requests
     """
 
     DRAFT = "draft"
     PUBLISHED = "published"
     PRODUCTION = "production"
+
+
+class SilentMirroringConfig(BaseModel):
+    """
+    Configuration for silent/shadow testing of policy versions.
+
+    Silent mirroring executes a policy version on a percentage of traffic
+    without blocking requests, allowing safe testing before promotion.
+
+    Example usage:
+    - Test new policy on 10% of traffic
+    - Limit to 1000 test executions
+    - Log all results for analysis
+    - Automatically expire after testing period
+    """
+
+    traffic_percentage: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Percentage of traffic to mirror (0.0-100.0)",
+    )
+    max_requests: Optional[int] = Field(
+        default=None,
+        description="Maximum number of requests to mirror (optional limit)",
+    )
+    fail_silently: bool = Field(
+        default=True,
+        description="Continue request processing if mirroring fails",
+    )
+    log_results: bool = Field(
+        default=True,
+        description="Store execution results in mirror logs",
+    )
+    expires_at: Optional[datetime] = Field(
+        default=None,
+        description="Optional expiration time for mirroring",
+    )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -208,6 +248,7 @@ class Policy(BaseModel):
     - Policies support version workflow: draft → published → production
     - Multiple versions of the same policy can coexist
     - Only production versions are applied to requests by default
+    - Published versions can be tested via silent mirroring
 
     Example configuration:
     ```yaml
@@ -289,6 +330,10 @@ class Policy(BaseModel):
     production_at: Optional[datetime] = Field(
         default=None,
         description="When this version was promoted to production",
+    )
+    silent_mirroring: Optional[SilentMirroringConfig] = Field(
+        default=None,
+        description="Silent mirroring configuration (for testing)",
     )
 
     model_config = ConfigDict(extra="forbid")
