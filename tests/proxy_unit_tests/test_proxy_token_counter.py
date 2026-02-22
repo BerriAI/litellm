@@ -1277,3 +1277,172 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         proxy_server.token_counter = original_token_counter
 
 
+def test_gemini_convert_messages_to_gemini_contents_basic():
+    """
+    Test that _convert_messages_to_gemini_contents converts OpenAI-format
+    messages to the Gemini contents structure expected by the countTokens API.
+    """
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    result = GoogleAIStudioTokenCounter._convert_messages_to_gemini_contents(messages)
+
+    assert len(result) == 3
+    # user stays as user
+    assert result[0] == {"role": "user", "parts": [{"text": "Hello"}]}
+    # assistant maps to model
+    assert result[1] == {"role": "model", "parts": [{"text": "Hi there!"}]}
+    assert result[2] == {"role": "user", "parts": [{"text": "How are you?"}]}
+
+
+def test_gemini_convert_messages_system_role_maps_to_user():
+    """
+    Test that system messages are mapped to the 'user' role since Gemini
+    does not have a dedicated system role in the countTokens API.
+    """
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hi"},
+    ]
+
+    result = GoogleAIStudioTokenCounter._convert_messages_to_gemini_contents(messages)
+
+    assert result[0]["role"] == "user"
+    assert result[0]["parts"] == [{"text": "You are a helpful assistant."}]
+    assert result[1]["role"] == "user"
+
+
+def test_gemini_convert_messages_list_content():
+    """
+    Test conversion when message content is a list (multimodal format),
+    including text-type parts and plain string parts.
+    """
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            ],
+        },
+    ]
+
+    result = GoogleAIStudioTokenCounter._convert_messages_to_gemini_contents(messages)
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    parts = result[0]["parts"]
+    assert len(parts) == 2
+    # text part gets extracted
+    assert parts[0] == {"text": "What is in this image?"}
+    # non-text part is passed through as-is
+    assert parts[1] == {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+
+
+def test_gemini_convert_messages_empty_and_missing_content():
+    """
+    Test edge cases: missing content field defaults to empty string,
+    non-string/non-list content is stringified.
+    """
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
+
+    messages = [
+        {"role": "user"},  # no content key
+        {"role": "user", "content": 42},  # numeric content
+    ]
+
+    result = GoogleAIStudioTokenCounter._convert_messages_to_gemini_contents(messages)
+
+    assert result[0]["parts"] == [{"text": ""}]
+    assert result[1]["parts"] == [{"text": "42"}]
+
+
+@pytest.mark.asyncio
+async def test_gemini_count_tokens_converts_messages_when_contents_is_none():
+    """
+    Test that GoogleAIStudioTokenCounter.count_tokens() converts OpenAI-format
+    messages to Gemini contents when contents is None. This is the core fix for
+    https://github.com/BerriAI/litellm/issues/21748
+    """
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
+
+    counter = GoogleAIStudioTokenCounter()
+
+    messages = [
+        {"role": "user", "content": "Hello, count my tokens!"},
+    ]
+
+    captured_contents = {}
+
+    # Mock the handler's acount_tokens to capture what gets passed
+    async def mock_acount_tokens(contents, model, **kwargs):
+        captured_contents["contents"] = contents
+        return {"totalTokens": 7}
+
+    with patch(
+        "litellm.llms.gemini.count_tokens.handler.GoogleAIStudioTokenCounter.acount_tokens",
+        side_effect=mock_acount_tokens,
+    ):
+        result = await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=messages,
+            contents=None,  # <-- the bug scenario: contents is None
+        )
+
+    # The handler should have received properly converted contents
+    assert captured_contents["contents"] is not None
+    assert len(captured_contents["contents"]) == 1
+    assert captured_contents["contents"][0]["role"] == "user"
+    assert captured_contents["contents"][0]["parts"] == [{"text": "Hello, count my tokens!"}]
+
+    # The result should be a proper TokenCountResponse
+    assert result is not None
+    assert result.total_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_gemini_count_tokens_passes_contents_through_when_provided():
+    """
+    Test that when contents is already provided (non-None), count_tokens
+    passes it through without modification instead of converting messages.
+    """
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
+
+    counter = GoogleAIStudioTokenCounter()
+
+    # Pre-formatted Gemini contents
+    gemini_contents = [
+        {"role": "user", "parts": [{"text": "Already in Gemini format"}]}
+    ]
+
+    captured_contents = {}
+
+    async def mock_acount_tokens(contents, model, **kwargs):
+        captured_contents["contents"] = contents
+        return {"totalTokens": 5}
+
+    with patch(
+        "litellm.llms.gemini.count_tokens.handler.GoogleAIStudioTokenCounter.acount_tokens",
+        side_effect=mock_acount_tokens,
+    ):
+        result = await counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "This should be ignored"}],
+            contents=gemini_contents,
+        )
+
+    # Should pass through the original contents, not convert messages
+    assert captured_contents["contents"] == gemini_contents
+    assert result is not None
+    assert result.total_tokens == 5
+
+

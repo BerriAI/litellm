@@ -153,12 +153,43 @@ def get_api_key_from_env() -> Optional[str]:
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
     def should_use_token_counting_api(
-        self, 
+        self,
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         from litellm.types.utils import LlmProviders
         return custom_llm_provider == LlmProviders.GEMINI.value
-    
+
+    @staticmethod
+    def _convert_messages_to_gemini_contents(
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Convert OpenAI-format messages to Gemini-format contents.
+
+        Handles the role mapping (assistant -> model, system -> user) and
+        wraps string content in the ``{"parts": [{"text": ...}]}`` structure
+        that the Gemini countTokens API expects.
+        """
+        role_map = {"assistant": "model", "system": "user"}
+        contents: List[Dict[str, Any]] = []
+        for msg in messages:
+            role = role_map.get(msg.get("role", "user"), msg.get("role", "user"))
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                parts = [{"text": content}]
+            elif isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, str):
+                        parts.append({"text": part})
+                    elif isinstance(part, dict) and part.get("type") == "text":
+                        parts.append({"text": part.get("text", "")})
+                    else:
+                        parts.append(part)
+            else:
+                parts = [{"text": str(content)}]
+            contents.append({"role": role, "parts": parts})
+        return contents
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -170,6 +201,13 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+
+        # When called from the Anthropic /v1/messages/count_tokens endpoint,
+        # contents is None and messages holds the OpenAI-format payload.
+        # Convert messages to Gemini contents so the API gets what it needs.
+        if contents is None and messages:
+            contents = self._convert_messages_to_gemini_contents(messages)
+
         deployment = deployment or {}
         count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
         count_tokens_params = {
@@ -180,7 +218,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         result = await GoogleAIStudioTokenCounter().acount_tokens(
             **count_tokens_params_request,
         )
-        
+
         if result is not None:
             return TokenCountResponse(
                 total_tokens=result.get("totalTokens", 0),
@@ -189,5 +227,5 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                 tokenizer_type=result.get("tokenizer_used", ""),
                 original_response=result,
             )
-        
+
         return None
