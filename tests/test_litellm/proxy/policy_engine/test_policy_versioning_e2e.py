@@ -99,9 +99,15 @@ async def test_full_lifecycle_create_draft_edit_publish_promote():
         guardrails_add=["g1", "g2"],
         description="Draft v2",
     )
-    prisma.db.litellm_policytable.find_first = AsyncMock(return_value=created_v1)
-    prisma.db.litellm_policytable.update_many = AsyncMock()
-    prisma.db.litellm_policytable.create = AsyncMock(return_value=v2_row)
+    # create_new_version uses an interactive transaction
+    tx = MagicMock()
+    prisma.db.tx = MagicMock()
+    prisma.db.tx.return_value.__aenter__ = AsyncMock(return_value=tx)
+    prisma.db.tx.return_value.__aexit__ = AsyncMock(return_value=None)
+    # find_first for (1) production lookup and (2) latest version lookup
+    tx.litellm_policytable.find_first = AsyncMock(side_effect=[created_v1, created_v1])
+    tx.litellm_policytable.update_many = AsyncMock()
+    tx.litellm_policytable.create = AsyncMock(return_value=v2_row)
 
     draft_v2 = await registry.create_new_version(
         policy_name="lifecycle-policy",
@@ -164,6 +170,7 @@ async def test_full_lifecycle_create_draft_edit_publish_promote():
 
     # 5) Promote v2 to production (demote v1 to published, update registry)
     prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=v2_published)
+    prisma.db.litellm_policytable.find_first = AsyncMock(return_value=created_v1)
     prisma.db.litellm_policytable.update_many = AsyncMock()
     v2_production = _make_row(
         policy_id="v2-id",
