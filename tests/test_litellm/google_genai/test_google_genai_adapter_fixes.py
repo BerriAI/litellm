@@ -354,3 +354,69 @@ def test_extra_headers_not_present():
     # Verify metadata is still forwarded
     assert "metadata" in completion_kwargs
     assert completion_kwargs["metadata"]["user_id"] == "test-user"
+
+def test_parameters_json_schema_anyof_adds_type_object():
+    """Test that parametersJsonSchema with anyOf gets type:object added (fixes #21584).
+
+    When Gemini CLI sends tools with parametersJsonSchema using anyOf at the top level
+    without a 'type' field, the fix adds 'type': 'object' so downstream providers
+    like Anthropic don't reject it with: tools.1.custom.input_schema.type: Field required
+    """
+    adapter = GoogleGenAIAdapter()
+
+    # Case 1: anyOf at top level without 'type' - should get type:object added
+    tools_anyof = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_data",
+                    "description": "Get some data",
+                    "parametersJsonSchema": {
+                        "anyOf": [
+                            {"type": "object", "properties": {"key": {"type": "string"}}},
+                            {"type": "null"}
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+    openai_tools = adapter._transform_google_genai_tools_to_openai(tools_anyof)
+    assert len(openai_tools) == 1
+    params = openai_tools[0]["function"]["parameters"]
+    assert "type" in params, "type should be added when anyOf present at top level"
+    assert params["type"] == "object"
+    assert "anyOf" in params, "anyOf should be preserved"
+
+    # Case 2: schema already has 'type' - should NOT be overwritten
+    tools_with_type = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parametersJsonSchema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}}
+                    }
+                }
+            ]
+        }
+    ]
+    openai_tools2 = adapter._transform_google_genai_tools_to_openai(tools_with_type)
+    assert openai_tools2[0]["function"]["parameters"]["type"] == "object"
+
+    # Case 3: function without parametersJsonSchema - should not crash
+    tools_no_schema = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "no_params_func",
+                    "description": "A function with no parameters"
+                }
+            ]
+        }
+    ]
+    openai_tools3 = adapter._transform_google_genai_tools_to_openai(tools_no_schema)
+    assert len(openai_tools3) == 1
+    assert openai_tools3[0]["function"]["name"] == "no_params_func"
