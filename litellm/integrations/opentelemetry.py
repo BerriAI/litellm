@@ -1234,6 +1234,15 @@ class OpenTelemetry(CustomLogger):
         )
         _parent_context, parent_otel_span = self._get_span_context(kwargs)
 
+        # CRITICAL FIX: For langfuse_otel, ALWAYS create primary spans
+        # Don't use parent spans from other providers as they cause trace corruption
+        is_langfuse_otel = (
+            hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
+        )
+        if is_langfuse_otel:
+            parent_otel_span = None  # Ignore parent spans from other providers
+            _parent_context = None
+
         # Decide whether to create a primary span
         # Always create if no parent span exists (backward compatibility)
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
@@ -1274,6 +1283,7 @@ class OpenTelemetry(CustomLogger):
         # However, proxy-created spans should be closed here
         if (
             parent_otel_span is not None
+            and hasattr(parent_otel_span, "name")
             and parent_otel_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
         ):
             parent_otel_span.end(end_time=self._to_ns(end_time))
