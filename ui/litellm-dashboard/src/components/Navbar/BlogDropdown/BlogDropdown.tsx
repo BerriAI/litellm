@@ -77,7 +77,7 @@ export const BlogDropdown: React.FC = () => {
 
     return (
       <div style={{ minWidth: 280, maxWidth: 360 }}>
-        {data.posts.map((post, index) => (
+        {data.posts.slice(0, 5).map((post, index) => (
           <a
             key={index}
             href={post.url}
