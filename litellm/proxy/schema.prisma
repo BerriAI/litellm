@@ -987,9 +987,6 @@ model LiteLLM_PolicyTable {
   updated_at       DateTime  @default(now()) @updatedAt
   updated_by       String?
 
-  // Relations
-  mirroring_configs LiteLLM_PolicyMirroringTable[]
-
   @@unique([policy_name, version_number])
   @@index([policy_name, version_status])
   @@index([version_status])
@@ -1008,53 +1005,6 @@ model LiteLLM_PolicyAttachmentTable {
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
   updated_by       String?
-}
-
-// Policy mirroring configuration for silent/shadow testing
-model LiteLLM_PolicyMirroringTable {
-  mirroring_id      String    @id @default(uuid())
-  policy_id         String    // References LiteLLM_PolicyTable.policy_id
-  traffic_percentage Float    @default(0.0) // 0.0-100.0
-  max_requests      Int?      // Optional limit on total mirrored requests
-  current_requests  Int       @default(0)
-  enabled           Boolean   @default(true)
-  fail_silently     Boolean   @default(true) // Don't block requests if mirroring fails
-  log_results       Boolean   @default(true) // Store results in mirror logs
-  started_at        DateTime  @default(now())
-  expires_at        DateTime? // Optional expiration time for mirroring
-  created_at        DateTime  @default(now())
-  created_by        String?
-  updated_at        DateTime  @default(now()) @updatedAt
-  updated_by        String?
-
-  // Relations
-  policy            LiteLLM_PolicyTable @relation(fields: [policy_id], references: [policy_id])
-  mirror_logs       LiteLLM_PolicyMirrorLogs[]
-
-  @@index([policy_id, enabled])
-  @@index([expires_at])
-}
-
-// Policy mirroring execution logs
-model LiteLLM_PolicyMirrorLogs {
-  log_id            String    @id @default(uuid())
-  mirroring_id      String    // References LiteLLM_PolicyMirroringTable.mirroring_id
-  request_id        String?   // Original request ID if available
-  executed_at       DateTime  @default(now())
-  execution_time_ms Float?    // How long the mirrored policy execution took
-  result            String    // "pass", "fail", "error"
-  terminal_action   String?   // Final action taken by policy (allow/block/modify)
-  step_results      Json?     // Detailed step-by-step results
-  error_message     String?   // Error details if result = "error"
-  metadata          Json?     @default("{}")
-  created_at        DateTime  @default(now())
-
-  // Relations
-  mirroring_config  LiteLLM_PolicyMirroringTable @relation(fields: [mirroring_id], references: [mirroring_id])
-
-  @@index([mirroring_id, executed_at])
-  @@index([result])
-  @@index([executed_at])
 }
 
 //Unified Access Groups table for storing unified access groups
