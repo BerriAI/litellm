@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    add_system_prompt_to_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     split_concatenated_json_objects,
@@ -126,6 +127,60 @@ def test_handle_any_messages_to_chat_completion_str_messages_conversion_complex(
     result = handle_any_messages_to_chat_completion_str_messages_conversion(message)
     assert len(result) == 1
     assert result[0]["input"] == json.dumps(message)
+
+
+def test_add_system_prompt_to_messages_prepend():
+    """Adds system prompt at beginning when no system message exists."""
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
+    result = add_system_prompt_to_messages(messages, "You are a helpful assistant.")
+    assert result == [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
+
+
+def test_add_system_prompt_to_messages_empty_prompt_unchanged():
+    """Returns messages unchanged when system_prompt is empty."""
+    messages = [{"role": "user", "content": "Hello"}]
+    assert add_system_prompt_to_messages(messages, "") == messages
+    assert add_system_prompt_to_messages(messages, None) == messages
+
+
+def test_add_system_prompt_to_messages_merge_with_first_system():
+    """Merges new prompt into first system message when merge_with_first_system=True."""
+    messages = [
+        {"role": "system", "content": "Existing system prompt."},
+        {"role": "user", "content": "Hello"},
+    ]
+    result = add_system_prompt_to_messages(
+        messages, "You are helpful.", merge_with_first_system=True
+    )
+    assert result == [
+        {"role": "system", "content": "You are helpful.\n\nExisting system prompt."},
+        {"role": "user", "content": "Hello"},
+    ]
+
+
+def test_add_system_prompt_to_messages_merge_with_first_system_adds_new_when_no_system():
+    """When merge_with_first_system=True but no system message, adds new one at start."""
+    messages = [{"role": "user", "content": "Hello"}]
+    result = add_system_prompt_to_messages(
+        messages, "You are helpful.", merge_with_first_system=True
+    )
+    assert result == [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hello"},
+    ]
+
+
+def test_add_system_prompt_to_messages_empty_list():
+    """Adds system prompt to empty messages list."""
+    result = add_system_prompt_to_messages([], "You are helpful.")
+    assert result == [{"role": "system", "content": "You are helpful."}]
 
 
 def test_convert_prefix_message_to_non_prefix_messages():
