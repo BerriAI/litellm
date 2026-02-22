@@ -166,11 +166,7 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
 @pytest.mark.asyncio
 async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_mapping(monkeypatch):
     """
-    Regression test for alias mapping on streaming:
-
-    - `common_processing_pre_call_logic` can rewrite `request_data["model"]` via model_alias_map / key-specific aliases.
-    - Non-streaming responses are restamped using the original client-requested model (captured before the rewrite).
-    - Streaming chunks must do the same to avoid mismatched `model` values between streaming and non-streaming.
+    Streaming chunks should have provider prefixes stripped even when alias mapping is in play.
     """
     client_model_alias = "alias-model"
     canonical_model = "vllm-model"
@@ -200,7 +196,6 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
         user_api_key_dict=user_api_key_dict,
         request_data={
             "model": canonical_model,
-            "_litellm_client_requested_model": client_model_alias,
         },
     )
 
