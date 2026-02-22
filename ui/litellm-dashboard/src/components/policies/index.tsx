@@ -469,11 +469,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onDeleteClick={handleDeleteClick}
                 onEditClick={(policy) => {
                   setEditingPolicy(policy);
-                  if (policy.pipeline) {
-                    setShowFlowBuilder(true);
-                  } else {
-                    setIsAddPolicyModalVisible(true);
-                  }
+                  setShowFlowBuilder(true);
                 }}
                 onViewClick={(policyId) => setSelectedPolicyId(policyId)}
                 isAdmin={isAdmin}
@@ -643,6 +639,17 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           availableGuardrails={guardrailsList}
           createPolicy={createPolicyCall}
           updatePolicy={updatePolicyCall}
+          onVersionCreated={(newPolicy) => {
+            setEditingPolicy(newPolicy);
+            fetchPolicies();
+          }}
+          onSelectVersion={(policy) => {
+            setEditingPolicy(policy);
+          }}
+          onVersionStatusUpdated={(updatedPolicy) => {
+            setEditingPolicy(updatedPolicy);
+            fetchPolicies();
+          }}
         />
       )}
     </div>

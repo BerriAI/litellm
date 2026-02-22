@@ -1,12 +1,14 @@
 import React, { useState } from "react";
-import { Select, Typography, message } from "antd";
+import { Select, Typography, message, Spin } from "antd";
 import { Button, TextInput } from "@tremor/react";
 import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
 import { DotsVerticalIcon } from "@heroicons/react/solid";
 import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateRequest, PolicyUpdateRequest, Policy } from "./types";
 import { Guardrail } from "../guardrails/types";
-import { testPipelineCall } from "../networking";
+import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { getComplianceDatasetPrompts } from "../../data/compliancePrompts";
+import type { CompliancePrompt } from "../../data/compliancePrompts";
 
 const { Text } = Typography;
 
@@ -53,6 +55,34 @@ function updateStepAtIndex(
   updated: Partial<PipelineStep>
 ): PipelineStep[] {
   return steps.map((s, i) => (i === index ? { ...s, ...updated } : s));
+}
+
+/**
+ * Derives a pipeline from a policy. When the policy has a pipeline, use it.
+ * When it only has guardrails_add (legacy/simple form), convert those guardrails
+ * into pipeline steps in order.
+ */
+function derivePipelineFromPolicy(policy: Policy | null | undefined): GuardrailPipeline {
+  if (!policy) {
+    return { mode: "pre_call", steps: [createDefaultStep()] };
+  }
+  if (policy.pipeline?.steps?.length) {
+    return policy.pipeline;
+  }
+  const guardrails = policy.guardrails_add || [];
+  if (guardrails.length > 0) {
+    return {
+      mode: policy.pipeline?.mode ?? "pre_call",
+      steps: guardrails.map((g) => ({
+        guardrail: g,
+        on_pass: "next" as const,
+        on_fail: "block" as const,
+        pass_data: false,
+        modify_response_message: null,
+      })),
+    };
+  }
+  return { mode: "pre_call", steps: [createDefaultStep()] };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -559,6 +589,20 @@ const TERMINAL_STYLES: Record<string, { bg: string; color: string }> = {
   modify_response: { bg: "#eff6ff", color: "#2563eb" },
 };
 
+interface ComplianceRunEntry {
+  prompt: CompliancePrompt;
+  result: PipelineTestResult | null;
+  error?: string;
+  matched: boolean;
+}
+
+function complianceMatchExpected(expected: "pass" | "fail", terminalAction: string): boolean {
+  if (expected === "pass") {
+    return terminalAction === "allow" || terminalAction === "modify_response";
+  }
+  return terminalAction === "block";
+}
+
 const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   pipeline,
   accessToken,
@@ -568,6 +612,8 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<PipelineTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [complianceRunning, setComplianceRunning] = useState(false);
+  const [complianceResults, setComplianceResults] = useState<ComplianceRunEntry[]>([]);
 
   const handleRunTest = async () => {
     if (!accessToken) return;
@@ -594,6 +640,43 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
     } finally {
       setIsRunning(false);
     }
+  };
+
+  const handleRunComplianceDataset = async () => {
+    if (!accessToken) return;
+
+    const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
+    if (emptySteps.length > 0) {
+      setError("All steps must have a guardrail selected");
+      return;
+    }
+
+    setError(null);
+    setResult(null);
+    setComplianceRunning(true);
+    const prompts = getComplianceDatasetPrompts();
+    const entries: ComplianceRunEntry[] = [];
+
+    for (const prompt of prompts) {
+      try {
+        const data = await testPipelineCall(accessToken, pipeline, [
+          { role: "user", content: prompt.prompt },
+        ]);
+        const matched = complianceMatchExpected(prompt.expectedResult, data.terminal_action);
+        entries.push({ prompt, result: data, matched });
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        entries.push({
+          prompt,
+          result: null,
+          error: errMsg,
+          matched: false,
+        });
+      }
+    }
+
+    setComplianceResults(entries);
+    setComplianceRunning(false);
   };
 
   return (
@@ -657,9 +740,19 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
         <Button
           onClick={handleRunTest}
           loading={isRunning}
+          disabled={complianceRunning}
           style={{ marginTop: 8, width: "100%" }}
         >
           Run Test
+        </Button>
+        <Button
+          onClick={handleRunComplianceDataset}
+          loading={complianceRunning}
+          disabled={isRunning}
+          style={{ marginTop: 8, width: "100%" }}
+          variant="secondary"
+        >
+          Test pipeline (compliance dataset)
         </Button>
       </div>
 
@@ -773,11 +866,318 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
           </div>
         )}
 
-        {!result && !error && (
-          <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
-            Enter a test message and click "Run Test" to execute the pipeline
+        {complianceResults.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#111827",
+                marginBottom: 8,
+              }}
+            >
+              Compliance dataset
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: "#6b7280",
+                marginBottom: 10,
+              }}
+            >
+              {complianceResults.filter((e) => e.matched).length} / {complianceResults.length} matched
+              expected
+            </div>
+            <div
+              style={{
+                maxHeight: 320,
+                overflowY: "auto",
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+              }}
+            >
+              {complianceResults.map((entry, i) => {
+                const actual =
+                  entry.result?.terminal_action ?? (entry.error ? "error" : "—");
+                const matchStyle = entry.matched
+                  ? { bg: "#f0fdf4", color: "#16a34a" }
+                  : { bg: "#fef2f2", color: "#dc2626" };
+                return (
+                  <div
+                    key={entry.prompt.id ?? i}
+                    style={{
+                      padding: "8px 10px",
+                      borderBottom:
+                        i < complianceResults.length - 1
+                          ? "1px solid #e5e7eb"
+                          : "none",
+                      fontSize: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        color: "#374151",
+                        marginBottom: 4,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={entry.prompt.prompt}
+                    >
+                      {entry.prompt.prompt}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <span style={{ color: "#6b7280" }}>
+                        expected: {entry.prompt.expectedResult}
+                      </span>
+                      <span style={{ color: "#9ca3af" }}>→</span>
+                      <span style={{ color: "#6b7280" }}>
+                        actual: {actual}
+                      </span>
+                      <span
+                        style={{
+                          backgroundColor: matchStyle.bg,
+                          color: matchStyle.color,
+                          padding: "1px 6px",
+                          borderRadius: 4,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {entry.matched ? "✓" : "✗"}
+                      </span>
+                    </div>
+                    {entry.error && (
+                      <div style={{ color: "#dc2626", marginTop: 4 }}>
+                        {entry.error}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
+
+        {!result && !error && complianceResults.length === 0 && (
+          <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
+            Enter a test message and click "Run Test" or "Test pipeline (compliance dataset)" to
+            execute the pipeline
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Policy Versions Sidebar (left sidebar when editing a policy)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VERSION_STATUS_STYLES: Record<
+  string,
+  { bg: string; color: string }
+> = {
+  draft: { bg: "#f3f4f6", color: "#6b7280" },
+  published: { bg: "#eff6ff", color: "#2563eb" },
+  production: { bg: "#f0fdf4", color: "#16a34a" },
+};
+
+interface PolicyVersionsSidebarProps {
+  policyName: string;
+  editingPolicyId: string | null;
+  editingVersionStatus?: "draft" | "published" | "production";
+  accessToken: string | null;
+  versions: Policy[];
+  isLoading: boolean;
+  isCreatingVersion?: boolean;
+  isUpdatingStatus?: boolean;
+  onNewVersion: () => void;
+  onSelectVersion: (policy: Policy) => void;
+  onPublish?: () => void;
+  onPromoteToProduction?: () => void;
+}
+
+const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
+  policyName,
+  editingPolicyId,
+  editingVersionStatus,
+  accessToken,
+  versions,
+  isLoading,
+  isCreatingVersion = false,
+  isUpdatingStatus = false,
+  onNewVersion,
+  onSelectVersion,
+  onPublish,
+  onPromoteToProduction,
+}) => {
+  const canPublish = editingVersionStatus === "draft" && onPublish;
+  const canPromote = editingVersionStatus === "published" && onPromoteToProduction;
+
+  return (
+    <div
+      style={{
+        width: 260,
+        flexShrink: 0,
+        backgroundColor: "#fff",
+        borderRight: "1px solid #e5e7eb",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
+      <div style={{ padding: 16, overflowY: "auto", flex: 1 }}>
+        {/* Versions section */}
+        <div style={{ marginBottom: 24 }}>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              color: "#6b7280",
+              letterSpacing: "0.06em",
+              display: "block",
+              marginBottom: 12,
+            }}
+          >
+            Versions
+          </span>
+          <Button
+            onClick={onNewVersion}
+            disabled={!accessToken || isCreatingVersion}
+            loading={isCreatingVersion}
+            style={{ width: "100%", marginBottom: 12 }}
+          >
+            + New Version
+          </Button>
+          {isLoading ? (
+            <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
+              <Spin size="small" />
+            </div>
+          ) : versions.length === 0 ? (
+            <span style={{ fontSize: 13, color: "#9ca3af" }}>
+              No versions found
+            </span>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {versions.map((v) => {
+                const statusStyle =
+                  VERSION_STATUS_STYLES[v.version_status ?? "draft"] ??
+                  VERSION_STATUS_STYLES.draft;
+                const isActive = v.policy_id === editingPolicyId;
+                return (
+                  <button
+                    key={v.policy_id}
+                    type="button"
+                    onClick={() => onSelectVersion(v)}
+                    style={{
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "10px 12px",
+                      borderRadius: 8,
+                      border: isActive ? "1px solid #6366f1" : "1px solid #e5e7eb",
+                      backgroundColor: isActive ? "#eef2ff" : "#fff",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+                        v{v.version_number ?? 1}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 600,
+                          textTransform: "uppercase",
+                          backgroundColor: statusStyle.bg,
+                          color: statusStyle.color,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                        }}
+                      >
+                        {v.version_status ?? "draft"}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Publish / Promote to production for selected version */}
+          {(canPublish || canPromote) && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+              {canPublish && (
+                <Button
+                  variant="secondary"
+                  onClick={onPublish}
+                  disabled={!accessToken || isUpdatingStatus}
+                  loading={isUpdatingStatus}
+                  style={{ width: "100%", marginBottom: canPromote ? 8 : 0 }}
+                >
+                  Publish
+                </Button>
+              )}
+              {canPromote && (
+                <Button
+                  onClick={onPromoteToProduction}
+                  disabled={!accessToken || isUpdatingStatus}
+                  loading={isUpdatingStatus}
+                  style={{ width: "100%" }}
+                >
+                  Promote to production
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Silent Mirroring section */}
+        <div>
+          <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: "uppercase",
+                color: "#6b7280",
+                letterSpacing: "0.06em",
+              }}
+            >
+              Silent Mirroring
+            </span>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                backgroundColor: "#eef2ff",
+                color: "#6366f1",
+                padding: "2px 6px",
+                borderRadius: 4,
+              }}
+            >
+              COMING SOON
+            </span>
+          </div>
+          <span
+            style={{
+              fontSize: 12,
+              color: "#6b7280",
+              lineHeight: 1.5,
+              display: "block",
+            }}
+          >
+            Test policy versions on production traffic without blocking requests.
+            Shadow testing helps validate changes before full rollout.
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -795,6 +1195,9 @@ interface FlowBuilderPageProps {
   availableGuardrails: Guardrail[];
   createPolicy: (accessToken: string, policyData: any) => Promise<any>;
   updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
+  onVersionCreated?: (newPolicy: Policy) => void;
+  onSelectVersion?: (policy: Policy) => void;
+  onVersionStatusUpdated?: (updatedPolicy: Policy) => void;
 }
 
 export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
@@ -805,16 +1208,110 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   availableGuardrails,
   createPolicy,
   updatePolicy,
+  onVersionCreated,
+  onSelectVersion,
+  onVersionStatusUpdated,
 }) => {
   const isEditing = !!editingPolicy?.policy_id;
+  const showVersionsSidebar = !!editingPolicy?.policy_name;
 
   const [policyName, setPolicyName] = useState(editingPolicy?.policy_name || "");
   const [description, setDescription] = useState(editingPolicy?.description || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
   const [pipeline, setPipeline] = useState<GuardrailPipeline>(
-    editingPolicy?.pipeline || { mode: "pre_call", steps: [createDefaultStep()] }
+    () => derivePipelineFromPolicy(editingPolicy)
   );
+  const [versions, setVersions] = useState<Policy[]>([]);
+  const [isVersionsLoading, setIsVersionsLoading] = useState(false);
+  const [isCreatingVersion, setIsCreatingVersion] = useState(false);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // Sync local state when editingPolicy changes (e.g. user switched version)
+  React.useEffect(() => {
+    setPolicyName(editingPolicy?.policy_name || "");
+    setDescription(editingPolicy?.description || "");
+    setPipeline(derivePipelineFromPolicy(editingPolicy));
+  }, [editingPolicy?.policy_id, editingPolicy?.policy_name, editingPolicy?.description, editingPolicy?.pipeline, editingPolicy?.guardrails_add]);
+
+  // Fetch versions when editing an existing policy by name
+  React.useEffect(() => {
+    if (!showVersionsSidebar || !editingPolicy?.policy_name || !accessToken) {
+      setVersions([]);
+      return;
+    }
+    let cancelled = false;
+    setIsVersionsLoading(true);
+    listPolicyVersions(accessToken, editingPolicy.policy_name)
+      .then((res) => {
+        if (!cancelled) setVersions(res.versions || []);
+      })
+      .catch(() => {
+        if (!cancelled) setVersions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsVersionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showVersionsSidebar, editingPolicy?.policy_name, accessToken]);
+
+  const handleNewVersion = async () => {
+    if (!accessToken || !editingPolicy?.policy_name) return;
+    setIsCreatingVersion(true);
+    try {
+      const newPolicy = await createPolicyVersion(accessToken, editingPolicy.policy_name);
+      NotificationsManager.success("New draft version created");
+      onVersionCreated?.(newPolicy);
+    } catch (error) {
+      NotificationsManager.fromBackend(
+        "Failed to create version: " + (error instanceof Error ? error.message : String(error))
+      );
+    } finally {
+      setIsCreatingVersion(false);
+    }
+  };
+
+  const handleSelectVersion = (policy: Policy) => {
+    onSelectVersion?.(policy);
+  };
+
+  const handlePublishVersion = async () => {
+    if (!accessToken || !editingPolicy?.policy_id) return;
+    setIsUpdatingStatus(true);
+    try {
+      const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "published");
+      NotificationsManager.success("Version published");
+      const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
+      setVersions(list.versions ?? []);
+      onVersionStatusUpdated?.(updated);
+    } catch (error) {
+      NotificationsManager.fromBackend(
+        "Failed to publish: " + (error instanceof Error ? error.message : String(error))
+      );
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
+  const handlePromoteToProduction = async () => {
+    if (!accessToken || !editingPolicy?.policy_id) return;
+    setIsUpdatingStatus(true);
+    try {
+      const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "production");
+      NotificationsManager.success("Version promoted to production");
+      const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
+      setVersions(list.versions ?? []);
+      onVersionStatusUpdated?.(updated);
+    } catch (error) {
+      NotificationsManager.fromBackend(
+        "Failed to promote to production: " + (error instanceof Error ? error.message : String(error))
+      );
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!policyName.trim()) {
@@ -849,13 +1346,13 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       if (isEditing && editingPolicy) {
         await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
         NotificationsManager.success("Policy updated successfully");
+        onSuccess();
       } else {
         await createPolicy(accessToken, data as PolicyCreateRequest);
         NotificationsManager.success("Policy created successfully");
+        onSuccess();
+        onBack();
       }
-
-      onSuccess();
-      onBack();
     } catch (error) {
       console.error("Failed to save policy:", error);
       NotificationsManager.fromBackend(
@@ -963,8 +1460,24 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
         />
       </div>
 
-      {/* Flow builder canvas + test panel */}
+      {/* Sidebar (when editing) + Flow builder canvas + test panel */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+        {showVersionsSidebar && (
+          <PolicyVersionsSidebar
+            policyName={policyName}
+            editingPolicyId={editingPolicy?.policy_id ?? null}
+            editingVersionStatus={editingPolicy?.version_status}
+            accessToken={accessToken}
+            versions={versions}
+            isLoading={isVersionsLoading}
+            isCreatingVersion={isCreatingVersion}
+            isUpdatingStatus={isUpdatingStatus}
+            onNewVersion={handleNewVersion}
+            onSelectVersion={handleSelectVersion}
+            onPublish={handlePublishVersion}
+            onPromoteToProduction={handlePromoteToProduction}
+          />
+        )}
         <div
           style={{
             flex: 1,
