@@ -5265,8 +5265,11 @@ def _restamp_streaming_chunk_model(
     else:
         try:
             setattr(chunk, "model", stripped)
-        except Exception:
-            pass
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "litellm_call_id=%s: failed to strip provider prefix on chunk.model, error=%s",
+                request_data.get("litellm_call_id"), str(e),
+            )
 
     return chunk, model_mismatch_logged
 

@@ -281,8 +281,11 @@ def _override_openai_response_model(
     else:
         try:
             setattr(response_obj, "model", stripped)
-        except Exception:
-            pass
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "%s: failed to strip provider prefix on response.model, error=%s",
+                log_context, str(e),
+            )
 
 
 def _get_cost_breakdown_from_logging_obj(

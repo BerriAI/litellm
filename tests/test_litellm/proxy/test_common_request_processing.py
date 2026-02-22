@@ -1155,6 +1155,10 @@ class TestOverrideOpenAIResponseModel:
         _override_openai_response_model(response_obj=response_obj, log_context="test")
         assert response_obj["model"] == "my-company/custom-model"
 
+    def test_strips_prefix_preserving_nested_slashes(self):
+        response_obj = {"model": "groq/meta-llama/llama-4-maverick-17b-128e-instruct"}
+        _override_openai_response_model(response_obj=response_obj, log_context="test")
+        assert response_obj["model"] == "meta-llama/llama-4-maverick-17b-128e-instruct"
 
 class TestStreamingOverheadHeader:
     """
