@@ -1232,3 +1232,49 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
         metadata.get("max_retries") is None
     ), "max_retries should be None when not provided"
 
+
+
+def test_sanitize_value_strips_null_bytes_for_postgresql():
+    """
+    Test that _sanitize_request_body_for_spend_logs_payload strips null bytes (\x00 and \u0000)
+    from string values to prevent PostgreSQL 22P05 errors.
+
+    Reproduces: https://github.com/BerriAI/litellm/issues/21882
+    Related: https://github.com/BerriAI/litellm/issues/21290
+    """
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_request_body_for_spend_logs_payload,
+    )
+
+    # Test 1: raw null byte (\x00) - from binary file content (e.g. .docx, .pdf)
+    payload_with_raw_null = {
+        "content": "Hello\x00World",
+        "nested": {"data": "PK\x00\x03\x04"},
+    }
+    result = _sanitize_request_body_for_spend_logs_payload(payload_with_raw_null)
+    assert "\x00" not in result["content"], "Raw null byte should be stripped from string"
+    assert result["content"] == "HelloWorld"
+    assert "\x00" not in result["nested"]["data"], "Raw null byte should be stripped from nested dict"
+
+    # Test 2: escaped \u0000 representation - from LLM conversation discussing null bytes
+    payload_with_escaped_null = {
+        "content": "The null byte is \\u0000 and causes issues",
+        "messages": [{"role": "user", "content": "grep \\u0000 file.txt"}],
+    }
+    result2 = _sanitize_request_body_for_spend_logs_payload(payload_with_escaped_null)
+    assert "\\u0000" not in result2["content"], "Escaped \\u0000 should be stripped"
+    assert result2["content"] == "The null byte is  and causes issues"
+    assert "\\u0000" not in result2["messages"][0]["content"]
+
+    # Test 3: Clean strings should pass through unchanged
+    payload_clean = {"content": "Hello World", "nested": {"data": "normal text"}}
+    result3 = _sanitize_request_body_for_spend_logs_payload(payload_clean)
+    assert result3["content"] == "Hello World"
+    assert result3["nested"]["data"] == "normal text"
+
+    # Test 4: Mixed content with both null byte types in one string
+    payload_mixed = {"content": "before\x00middle\\u0000after"}
+    result4 = _sanitize_request_body_for_spend_logs_payload(payload_mixed)
+    assert result4["content"] == "beforemiddleafter"
+
+    print("All null byte sanitization tests passed - PostgreSQL 22P05 fix verified")
