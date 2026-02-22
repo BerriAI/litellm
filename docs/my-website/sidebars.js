@@ -417,6 +417,7 @@ const sidebars = {
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
+            "proxy/budget_reset_and_tz",
           ],
         },
         "proxy/caching",
