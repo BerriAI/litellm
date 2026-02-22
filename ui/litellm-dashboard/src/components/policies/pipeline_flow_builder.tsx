@@ -7,8 +7,21 @@ import { GuardrailPipeline, PipelineStep, PipelineTestResult, PolicyCreateReques
 import { Guardrail } from "../guardrails/types";
 import { testPipelineCall, listPolicyVersions, createPolicyVersion, updatePolicyVersionStatus } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
-import { getComplianceDatasetPrompts } from "../../data/compliancePrompts";
+import {
+  getComplianceDatasetPrompts,
+  getFrameworks,
+} from "../../data/compliancePrompts";
 import type { CompliancePrompt } from "../../data/compliancePrompts";
+
+const TEST_SOURCE_QUICK = "quick_chat";
+const TEST_SOURCE_ALL = "__all__";
+
+function getPromptsForTestSource(source: string): CompliancePrompt[] {
+  if (source === TEST_SOURCE_QUICK) return [];
+  if (source === TEST_SOURCE_ALL) return getComplianceDatasetPrompts();
+  const fw = getFrameworks().find((f) => f.name === source);
+  return fw ? fw.categories.flatMap((c) => c.prompts) : [];
+}
 
 const { Text } = Typography;
 
@@ -603,17 +616,27 @@ function complianceMatchExpected(expected: "pass" | "fail", terminalAction: stri
   return terminalAction === "block";
 }
 
+const testSourceOptions = [
+  { value: TEST_SOURCE_QUICK, label: "Quick chat (custom message)" },
+  ...getFrameworks().map((f) => ({ value: f.name, label: f.name })),
+  { value: TEST_SOURCE_ALL, label: "All compliance datasets" },
+];
+
 const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
   pipeline,
   accessToken,
   onClose,
 }) => {
+  const [testSource, setTestSource] = useState<string>(TEST_SOURCE_QUICK);
   const [testMessage, setTestMessage] = useState("Hello, can you help me?");
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<PipelineTestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [complianceRunning, setComplianceRunning] = useState(false);
   const [complianceResults, setComplianceResults] = useState<ComplianceRunEntry[]>([]);
+
+  const isQuickChat = testSource === TEST_SOURCE_QUICK;
+  const promptsForSource = getPromptsForTestSource(testSource);
+  const isDataset = promptsForSource.length > 0;
 
   const handleRunTest = async () => {
     if (!accessToken) return;
@@ -624,40 +647,29 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
       return;
     }
 
+    setError(null);
     setIsRunning(true);
     setResult(null);
-    setError(null);
+    setComplianceResults([]);
 
-    try {
-      const data = await testPipelineCall(
-        accessToken,
-        pipeline,
-        [{ role: "user", content: testMessage }]
-      );
-      setResult(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIsRunning(false);
-    }
-  };
-
-  const handleRunComplianceDataset = async () => {
-    if (!accessToken) return;
-
-    const emptySteps = pipeline.steps.filter((s) => !s.guardrail);
-    if (emptySteps.length > 0) {
-      setError("All steps must have a guardrail selected");
+    if (isQuickChat) {
+      try {
+        const data = await testPipelineCall(
+          accessToken,
+          pipeline,
+          [{ role: "user", content: testMessage }]
+        );
+        setResult(data);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setIsRunning(false);
+      }
       return;
     }
 
-    setError(null);
-    setResult(null);
-    setComplianceRunning(true);
-    const prompts = getComplianceDatasetPrompts();
     const entries: ComplianceRunEntry[] = [];
-
-    for (const prompt of prompts) {
+    for (const prompt of promptsForSource) {
       try {
         const data = await testPipelineCall(accessToken, pipeline, [
           { role: "user", content: prompt.prompt },
@@ -674,9 +686,8 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
         });
       }
     }
-
     setComplianceResults(entries);
-    setComplianceRunning(false);
+    setIsRunning(false);
   };
 
   return (
@@ -720,39 +731,59 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
       {/* Input section */}
       <div style={{ padding: 16, borderBottom: "1px solid #e5e7eb" }}>
         <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
-          Test Message
+          Test with
         </label>
-        <textarea
-          value={testMessage}
-          onChange={(e) => setTestMessage(e.target.value)}
-          placeholder="Enter a test message..."
-          rows={3}
-          style={{
-            width: "100%",
-            border: "1px solid #d1d5db",
-            borderRadius: 6,
-            padding: "8px 10px",
-            fontSize: 13,
-            resize: "vertical",
-            fontFamily: "inherit",
-          }}
+        <Select
+          value={testSource}
+          onChange={setTestSource}
+          options={testSourceOptions}
+          style={{ width: "100%", marginBottom: 12 }}
+          size="middle"
         />
+        {isQuickChat && (
+          <>
+            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+              Message
+            </label>
+            <textarea
+              value={testMessage}
+              onChange={(e) => setTestMessage(e.target.value)}
+              placeholder="Enter a test message..."
+              rows={3}
+              style={{
+                width: "100%",
+                border: "1px solid #d1d5db",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontSize: 13,
+                resize: "vertical",
+                fontFamily: "inherit",
+              }}
+            />
+          </>
+        )}
+        {isDataset && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "#6b7280",
+              padding: "8px 10px",
+              backgroundColor: "#f9fafb",
+              borderRadius: 6,
+              marginBottom: 8,
+            }}
+          >
+            {testSource === TEST_SOURCE_ALL
+              ? "Run pipeline against all compliance prompts (EU AI Act, GDPR, Topic Blocking, Airline, etc.)."
+              : `Run pipeline against ${promptsForSource.length} prompts from "${testSource}".`}
+          </div>
+        )}
         <Button
           onClick={handleRunTest}
           loading={isRunning}
-          disabled={complianceRunning}
           style={{ marginTop: 8, width: "100%" }}
         >
           Run Test
-        </Button>
-        <Button
-          onClick={handleRunComplianceDataset}
-          loading={complianceRunning}
-          disabled={isRunning}
-          style={{ marginTop: 8, width: "100%" }}
-          variant="secondary"
-        >
-          Test pipeline (compliance dataset)
         </Button>
       </div>
 
@@ -967,8 +998,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
 
         {!result && !error && complianceResults.length === 0 && (
           <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
-            Enter a test message and click "Run Test" or "Test pipeline (compliance dataset)" to
-            execute the pipeline
+            Choose a test source above (quick chat or a compliance dataset) and click "Run Test"
           </div>
         )}
       </div>
@@ -1044,10 +1074,21 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
               color: "#6b7280",
               letterSpacing: "0.06em",
               display: "block",
-              marginBottom: 12,
+              marginBottom: 4,
             }}
           >
             Versions
+          </span>
+          <span
+            style={{
+              fontSize: 11,
+              color: "#6b7280",
+              lineHeight: 1.4,
+              display: "block",
+              marginBottom: 12,
+            }}
+          >
+            Production = the version used when anyone calls this policy by name.
           </span>
           <Button
             onClick={onNewVersion}
@@ -1115,25 +1156,50 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
           {(canPublish || canPromote) && (
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
               {canPublish && (
-                <Button
-                  variant="secondary"
-                  onClick={onPublish}
-                  disabled={!accessToken || isUpdatingStatus}
-                  loading={isUpdatingStatus}
-                  style={{ width: "100%", marginBottom: canPromote ? 8 : 0 }}
-                >
-                  Publish
-                </Button>
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={onPublish}
+                    disabled={!accessToken || isUpdatingStatus}
+                    loading={isUpdatingStatus}
+                    style={{ width: "100%", marginBottom: 8 }}
+                  >
+                    Publish
+                  </Button>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "#6b7280",
+                      lineHeight: 1.4,
+                      display: "block",
+                      marginBottom: canPromote ? 8 : 0,
+                    }}
+                  >
+                    Published versions can be tested in the Playground before promoting to production.
+                  </span>
+                </>
               )}
               {canPromote && (
-                <Button
-                  onClick={onPromoteToProduction}
-                  disabled={!accessToken || isUpdatingStatus}
-                  loading={isUpdatingStatus}
-                  style={{ width: "100%" }}
-                >
-                  Promote to production
-                </Button>
+                <>
+                  <Button
+                    onClick={onPromoteToProduction}
+                    disabled={!accessToken || isUpdatingStatus}
+                    loading={isUpdatingStatus}
+                    style={{ width: "100%", marginBottom: 8 }}
+                  >
+                    Promote to production
+                  </Button>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "#6b7280",
+                      lineHeight: 1.4,
+                      display: "block",
+                    }}
+                  >
+                    This version will be used when anyone calls this policy by name.
+                  </span>
+                </>
               )}
             </div>
           )}
@@ -1264,6 +1330,8 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
       const newPolicy = await createPolicyVersion(accessToken, editingPolicy.policy_name);
       NotificationsManager.success("New draft version created");
       onVersionCreated?.(newPolicy);
+      const list = await listPolicyVersions(accessToken, editingPolicy.policy_name);
+      setVersions(list.versions ?? []);
     } catch (error) {
       NotificationsManager.fromBackend(
         "Failed to create version: " + (error instanceof Error ? error.message : String(error))
@@ -1282,7 +1350,9 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
     setIsUpdatingStatus(true);
     try {
       const updated = await updatePolicyVersionStatus(accessToken, editingPolicy.policy_id, "published");
-      NotificationsManager.success("Version published");
+      NotificationsManager.success(
+        "Version published. You can test it in the Playground by selecting this version in the Policies dropdown."
+      );
       const list = await listPolicyVersions(accessToken, editingPolicy.policy_name ?? "");
       setVersions(list.versions ?? []);
       onVersionStatusUpdated?.(updated);
