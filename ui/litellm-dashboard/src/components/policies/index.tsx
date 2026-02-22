@@ -452,11 +452,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 onEdit={(policy) => {
                   setEditingPolicy(policy);
                   setSelectedPolicyId(null);
-                  if (policy.pipeline) {
-                    setShowFlowBuilder(true);
-                  } else {
-                    setIsAddPolicyModalVisible(true);
-                  }
+                  setShowFlowBuilder(true);
                 }}
                 accessToken={accessToken}
                 isAdmin={isAdmin}

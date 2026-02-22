@@ -9,7 +9,7 @@ by policy_attachments (see AttachmentRegistry).
 
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (GuardrailPipeline, PipelineStep,
@@ -23,6 +23,9 @@ from litellm.types.proxy.policy_engine import (GuardrailPipeline, PipelineStep,
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+
+# Prefix for policy version IDs in request body. Use policy_<uuid> to execute a specific version.
+POLICY_VERSION_ID_PREFIX = "policy_"
 
 
 def _row_to_policy_db_response(row: Any) -> PolicyDBResponse:
@@ -462,6 +465,44 @@ class PolicyRegistry:
         except Exception as e:
             verbose_proxy_logger.exception(f"Error getting policy from DB: {e}")
             raise Exception(f"Error getting policy from DB: {str(e)}")
+
+    async def get_policy_by_id_for_request(
+        self,
+        policy_id: str,
+        prisma_client: "PrismaClient",
+    ) -> Optional[Tuple[str, Policy]]:
+        """
+        Fetch a policy version by ID from the DB and convert to Policy for resolution.
+
+        Used when the request body specifies policy_<uuid> to execute a specific version
+        (e.g. published or draft) instead of production.
+
+        Args:
+            policy_id: The policy version ID (raw UUID, no prefix)
+            prisma_client: The Prisma client instance
+
+        Returns:
+            (policy_name, Policy) if found, None otherwise
+        """
+        response = await self.get_policy_by_id_from_db(
+            policy_id=policy_id, prisma_client=prisma_client
+        )
+        if response is None:
+            return None
+        policy = self._parse_policy(
+            response.policy_name,
+            {
+                "inherit": response.inherit,
+                "description": response.description,
+                "guardrails": {
+                    "add": response.guardrails_add,
+                    "remove": response.guardrails_remove,
+                },
+                "condition": response.condition,
+                "pipeline": response.pipeline,
+            },
+        )
+        return (response.policy_name, policy)
 
     async def get_all_policies_from_db(
         self,
