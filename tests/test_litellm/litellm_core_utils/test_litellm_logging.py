@@ -1122,6 +1122,44 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
     assert result[1].name == "Object2"
 
 
+def test_get_usage_as_dict():
+    """
+    Test get_usage_as_dict returns usage as plain dict from response_obj or combined_usage_object.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import Usage
+
+    # Test case 1: None response_obj returns empty usage dict
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
+    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    # Test case 2: Empty response_obj returns empty usage dict
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={})
+    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    # Test case 3: combined_usage_object takes priority
+    combined = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={"usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        combined_usage_object=combined,
+    )
+    assert result["prompt_tokens"] == 10
+    assert result["completion_tokens"] == 5
+    assert result["total_tokens"] == 15
+
+    # Test case 4: response_obj with usage dict
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={"usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+    )
+    assert result == {"prompt_tokens": 20, "completion_tokens": 30}
+
+    # Test case 5: response_obj with no usage key returns empty
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={"id": "resp-1", "choices": []}
+    )
+    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
 def test_append_system_prompt_messages():
     """
     Test append_system_prompt_messages prepends system message from kwargs to messages list.
