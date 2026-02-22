@@ -452,7 +452,7 @@ if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() != "true":
                 fetched_map=remote,
                 backup_model_count=len(model_cost),
             ):
-                model_cost.update(remote)
+                globals()["model_cost"] = {**model_cost, **remote}
         except Exception:
             pass  # local backup already loaded
 
