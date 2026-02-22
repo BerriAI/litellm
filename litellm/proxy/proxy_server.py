@@ -98,6 +98,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     TextCompletionResponse,
     TokenCountResponse,
+    LlmProvidersSet,
 )
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -5229,64 +5230,43 @@ async def async_assistants_data_generator(
         yield f"data: {error_returned}\n\n"
 
 
-def _get_client_requested_model_for_streaming(request_data: dict) -> str:
-    """
-    Prefer the original client-requested model (pre-alias mapping) when available.
-
-    Pre-call processing can rewrite `request_data["model"]` for aliasing/routing purposes.
-    The OpenAI-compatible public `model` field should reflect what the client sent.
-    """
-    requested_model = request_data.get("_litellm_client_requested_model")
-    if isinstance(requested_model, str):
-        return requested_model
-
-    requested_model = request_data.get("model")
-    return requested_model if isinstance(requested_model, str) else ""
-
-
 def _restamp_streaming_chunk_model(
     *,
     chunk: Any,
-    requested_model_from_client: str,
     request_data: dict,
     model_mismatch_logged: bool,
 ) -> Tuple[Any, bool]:
-    # Always return the client-requested model name (not provider-prefixed internal identifiers)
-    # on streaming chunks.
-    #
-    # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
-    # internal provider/deployment identifier is leaking into the public API, and helps
-    # maintainers/operators catch regressions while preserving OpenAI-compatible output.
-    if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+    """Strip known provider prefixes from streaming chunk model field."""
+    if not isinstance(chunk, (BaseModel, dict)):
         return chunk, model_mismatch_logged
 
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
-    if not model_mismatch_logged and downstream_model != requested_model_from_client:
+
+    if not downstream_model or not isinstance(downstream_model, str) or "/" not in downstream_model:
+        return chunk, model_mismatch_logged
+
+    prefix = downstream_model.split("/", 1)[0]
+    if prefix not in LlmProvidersSet:
+        return chunk, model_mismatch_logged
+
+    stripped = downstream_model.split("/", 1)[1]
+
+    if not model_mismatch_logged:
         verbose_proxy_logger.debug(
-            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
-            request_data.get("litellm_call_id"),
-            requested_model_from_client,
-            downstream_model,
+            "litellm_call_id=%s: stripping provider prefix %r from chunk model %r",
+            request_data.get("litellm_call_id"), prefix, downstream_model,
         )
         model_mismatch_logged = True
 
     if isinstance(chunk, dict):
-        chunk["model"] = requested_model_from_client
-        return chunk, model_mismatch_logged
-
-    try:
-        setattr(chunk, "model", requested_model_from_client)
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
-            request_data.get("litellm_call_id"),
-            requested_model_from_client,
-            type(chunk),
-            str(e),
-            exc_info=True,
-        )
+        chunk["model"] = stripped
+    else:
+        try:
+            chunk.model = stripped
+        except Exception:
+            pass
 
     return chunk, model_mismatch_logged
 
@@ -5299,9 +5279,6 @@ async def async_data_generator(
         # Use a list to accumulate response segments to avoid O(n^2) string concatenation
         str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
-        requested_model_from_client = _get_client_requested_model_for_streaming(
-            request_data=request_data
-        )
         model_mismatch_logged = False
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
@@ -5322,7 +5299,6 @@ async def async_data_generator(
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
-                requested_model_from_client=requested_model_from_client,
                 request_data=request_data,
                 model_mismatch_logged=model_mismatch_logged,
             )

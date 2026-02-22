@@ -44,7 +44,7 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
-from litellm.types.utils import ServerToolUse
+from litellm.types.utils import ServerToolUse, LlmProvidersSet
 
 # Type alias for streaming chunk serializer (chunk after hooks + cost injection -> wire format)
 StreamChunkSerializer = Callable[[Any], str]
@@ -248,85 +248,41 @@ async def create_response(
 def _override_openai_response_model(
     *,
     response_obj: Any,
-    requested_model: str,
     log_context: str,
 ) -> None:
     """
-    Force the OpenAI-compatible `model` field in the response to match what the client requested.
+    Strip known LiteLLM provider prefixes (e.g. hosted_vllm/) from the response model field.
 
-    LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
-    That internal identifier should not be returned to clients in the OpenAI `model` field.
-
-    Note: This is intentionally verbose. A model mismatch is a useful signal that an internal
-    model identifier is being stamped/preserved somewhere in the request/response pipeline.
-    We log mismatches as warnings (and then restamp to the client-requested value) so these
-    paths stay observable for maintainers/operators without breaking client compatibility.
-
-    Errors are reserved for cases where the proxy cannot read/override the response model field.
-
-    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
-    we should preserve the actual model that was used (the fallback model) rather than
-    overriding it with the originally requested model.
+    Previously this replaced response.model with the client-requested alias, but that
+    hid the actual model name from callers (see #21665). Now we only strip internal
+    provider routing prefixes, preserving the real model name.
     """
-    if not requested_model:
-        return
-
-    # Check if a fallback occurred - if so, preserve the actual model used
-    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
-    if isinstance(hidden_params, dict):
-        fallback_headers = hidden_params.get("additional_headers", {}) or {}
-        attempted_fallbacks = fallback_headers.get(
-            "x-litellm-attempted-fallbacks", None
-        )
-        if attempted_fallbacks is not None and attempted_fallbacks > 0:
-            # A fallback occurred - preserve the actual model that was used
-            verbose_proxy_logger.debug(
-                "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
-                log_context,
-                attempted_fallbacks,
-            )
-            return
-
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
-        if downstream_model != requested_model:
-            verbose_proxy_logger.debug(
-                "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
-                log_context,
-                requested_model,
-                downstream_model,
-            )
-        response_obj["model"] = requested_model
+    elif hasattr(response_obj, "model"):
+        downstream_model = getattr(response_obj, "model", None)
+    else:
         return
 
-    if not hasattr(response_obj, "model"):
-        verbose_proxy_logger.error(
-            "%s: cannot override response model; missing `model` attribute. response_type=%s",
-            log_context,
-            type(response_obj),
-        )
+    if not downstream_model or not isinstance(downstream_model, str):
         return
 
-    downstream_model = getattr(response_obj, "model", None)
-    if downstream_model != requested_model:
-        verbose_proxy_logger.debug(
-            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
-            log_context,
-            requested_model,
-            downstream_model,
-        )
+    if "/" not in downstream_model:
+        return
 
-    try:
-        setattr(response_obj, "model", requested_model)
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "%s: failed to override response.model=%r on response_type=%s. error=%s",
-            log_context,
-            requested_model,
-            type(response_obj),
-            str(e),
-            exc_info=True,
-        )
+    prefix = downstream_model.split("/", 1)[0]
+    if prefix not in LlmProvidersSet:
+        return
+
+    stripped = downstream_model.split("/", 1)[1]
+
+    if isinstance(response_obj, dict):
+        response_obj["model"] = stripped
+    else:
+        try:
+            response_obj.model = stripped
+        except Exception:
+            pass
 
 
 def _get_cost_breakdown_from_logging_obj(
@@ -809,9 +765,6 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        requested_model_from_client: Optional[str] = (
-            self.data.get("model") if isinstance(self.data.get("model"), str) else None
-        )
         self._debug_log_request_payload()
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
@@ -918,14 +871,6 @@ class ProxyBaseLLMRequestProcessing:
             if callback_headers:
                 custom_headers.update(callback_headers)
 
-            # Preserve the original client-requested model (pre-alias mapping) for downstream
-            # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
-            # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
-            # what the client sent.
-            if requested_model_from_client:
-                self.data[
-                    "_litellm_client_requested_model"
-                ] = requested_model_from_client
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -985,14 +930,11 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data, user_api_key_dict=user_api_key_dict, response=response
         )
 
-        # Always return the client-requested model name (not provider-prefixed internal identifiers)
-        # for OpenAI-compatible responses.
-        if requested_model_from_client:
-            _override_openai_response_model(
-                response_obj=response,
-                requested_model=requested_model_from_client,
-                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
-            )
+        # Strip any internal provider prefixes from the response model field.
+        _override_openai_response_model(
+            response_obj=response,
+            log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+        )
 
         hidden_params = (
             getattr(response, "_hidden_params", {}) or {}

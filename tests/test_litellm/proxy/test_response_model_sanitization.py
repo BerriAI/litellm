@@ -213,5 +213,52 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     assert first.startswith("data: ")
 
     payload = json.loads(first[len("data: ") :].strip())
-    assert payload["model"] == client_model_alias
+    assert payload["model"] == canonical_model
     assert not payload["model"].startswith("hosted_vllm/")
+
+
+def test_proxy_chat_completion_returns_actual_model_not_alias(tmp_path, monkeypatch):
+    """
+    Regression test for GitHub issue #21665:
+
+    Proxy should return actual model name, not the model_list alias.
+    """
+    alias_model = "default"
+    actual_model = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    internal_model = f"bedrock/{actual_model}"
+
+    client = _initialize_proxy_with_config(
+        config={
+            "general_settings": {"master_key": "sk-1234"},
+            "model_list": [
+                {
+                    "model_name": alias_model,
+                    "litellm_params": {"model": internal_model},
+                }
+            ],
+        },
+        tmp_path=tmp_path,
+    )
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server.llm_router,
+        "acompletion",
+        AsyncMock(return_value=_make_minimal_chat_completion_response(model=actual_model)),
+    )
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "during_call_hook", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "update_request_status", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_success_hook", AsyncMock(side_effect=lambda **kwargs: kwargs["response"]))
+
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer sk-1234"},
+        json={"model": alias_model, "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Actual model name should be preserved, NOT the alias
+    assert body["model"] == actual_model
+    assert body["model"] != alias_model
