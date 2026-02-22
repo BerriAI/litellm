@@ -50,6 +50,21 @@ def _make_row(
     return row
 
 
+def _mock_prisma_transaction(prisma: MagicMock) -> MagicMock:
+    """Attach an async tx() context manager and return tx mock."""
+    tx = MagicMock()
+
+    class _TxContextManager:
+        async def __aenter__(self):
+            return tx
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    prisma.db.tx = MagicMock(return_value=_TxContextManager())
+    return tx
+
+
 @pytest.mark.asyncio
 async def test_full_lifecycle_create_draft_edit_publish_promote():
     """
@@ -99,9 +114,10 @@ async def test_full_lifecycle_create_draft_edit_publish_promote():
         guardrails_add=["g1", "g2"],
         description="Draft v2",
     )
-    prisma.db.litellm_policytable.find_first = AsyncMock(return_value=created_v1)
-    prisma.db.litellm_policytable.update_many = AsyncMock()
-    prisma.db.litellm_policytable.create = AsyncMock(return_value=v2_row)
+    tx = _mock_prisma_transaction(prisma)
+    tx.litellm_policytable.find_first = AsyncMock(side_effect=[created_v1, created_v1])
+    tx.litellm_policytable.update_many = AsyncMock()
+    tx.litellm_policytable.create = AsyncMock(return_value=v2_row)
 
     draft_v2 = await registry.create_new_version(
         policy_name="lifecycle-policy",

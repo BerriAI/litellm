@@ -4,7 +4,7 @@ CRUD ENDPOINTS FOR POLICIES
 Provides REST API endpoints for managing policies and policy attachments.
 """
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -37,7 +37,9 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyListDBResponse,
 )
-async def list_policies(version_status: Optional[str] = None):
+async def list_policies(
+    version_status: Optional[Literal["draft", "published", "production"]] = None,
+):
     """
     List all policies from the database. Optionally filter by version_status.
 
@@ -187,7 +189,6 @@ async def list_policy_versions(policy_name: str):
 @router.post(
     "/policies/name/{policy_name}/versions",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyDBResponse,
 )
 async def create_policy_version(
@@ -222,7 +223,6 @@ async def create_policy_version(
 @router.put(
     "/policies/{policy_id}/status",
     tags=["Policies"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=PolicyDBResponse,
 )
 async def update_policy_version_status(

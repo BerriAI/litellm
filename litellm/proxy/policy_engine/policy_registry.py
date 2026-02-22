@@ -682,77 +682,78 @@ class PolicyRegistry:
             PolicyDBResponse for the new draft version
         """
         try:
-            if source_policy_id is not None:
-                source = await prisma_client.db.litellm_policytable.find_unique(
-                    where={"policy_id": source_policy_id}
-                )
-                if source is None:
-                    raise Exception(f"Source policy {source_policy_id} not found")
-                if source.policy_name != policy_name:
-                    raise Exception(
-                        f"Source policy name '{source.policy_name}' does not match '{policy_name}'"
+            async with prisma_client.db.tx() as tx:
+                if source_policy_id is not None:
+                    source = await tx.litellm_policytable.find_unique(
+                        where={"policy_id": source_policy_id}
                     )
-            else:
-                # Find current production version for this policy_name
-                prod = await prisma_client.db.litellm_policytable.find_first(
-                    where={
-                        "policy_name": policy_name,
-                        "version_status": "production",
-                    }
-                )
-                if prod is None:
-                    raise Exception(
-                        f"No production version found for policy '{policy_name}'"
+                    if source is None:
+                        raise Exception(f"Source policy {source_policy_id} not found")
+                    if source.policy_name != policy_name:
+                        raise Exception(
+                            f"Source policy name '{source.policy_name}' does not match '{policy_name}'"
+                        )
+                else:
+                    # Find current production version for this policy_name
+                    prod = await tx.litellm_policytable.find_first(
+                        where={
+                            "policy_name": policy_name,
+                            "version_status": "production",
+                        }
                     )
-                source = prod
+                    if prod is None:
+                        raise Exception(
+                            f"No production version found for policy '{policy_name}'"
+                        )
+                    source = prod
 
-            # Next version number
-            latest = await prisma_client.db.litellm_policytable.find_first(
-                where={"policy_name": policy_name},
-                order={"version_number": "desc"},
-            )
-            next_num = (latest.version_number + 1) if latest else 1
-
-            now = datetime.now(timezone.utc)
-            # Set is_latest=False on all existing versions for this policy_name
-            await prisma_client.db.litellm_policytable.update_many(
-                where={"policy_name": policy_name},
-                data={"is_latest": False},
-            )
-
-            data: Dict[str, Any] = {
-                "policy_name": policy_name,
-                "version_number": next_num,
-                "version_status": "draft",
-                "parent_version_id": source.policy_id,
-                "is_latest": True,
-                "published_at": None,
-                "production_at": None,
-                "inherit": source.inherit,
-                "description": source.description,
-                "guardrails_add": source.guardrails_add or [],
-                "guardrails_remove": source.guardrails_remove or [],
-                "created_at": now,
-                "updated_at": now,
-                "created_by": created_by,
-                "updated_by": created_by,
-            }
-            # Prisma expects Json fields as JSON strings on create (same as add_policy_to_db)
-            if source.condition is not None:
-                data["condition"] = (
-                    json.dumps(source.condition)
-                    if isinstance(source.condition, dict)
-                    else source.condition
+                # Next version number
+                latest = await tx.litellm_policytable.find_first(
+                    where={"policy_name": policy_name},
+                    order={"version_number": "desc"},
                 )
-            if source.pipeline is not None:
-                data["pipeline"] = (
-                    json.dumps(source.pipeline)
-                    if isinstance(source.pipeline, dict)
-                    else source.pipeline
+                next_num = (latest.version_number + 1) if latest else 1
+
+                now = datetime.now(timezone.utc)
+                # Set is_latest=False on all existing versions for this policy_name
+                await tx.litellm_policytable.update_many(
+                    where={"policy_name": policy_name},
+                    data={"is_latest": False},
                 )
 
-            created = await prisma_client.db.litellm_policytable.create(data=data)
-            return _row_to_policy_db_response(created)
+                data: Dict[str, Any] = {
+                    "policy_name": policy_name,
+                    "version_number": next_num,
+                    "version_status": "draft",
+                    "parent_version_id": source.policy_id,
+                    "is_latest": True,
+                    "published_at": None,
+                    "production_at": None,
+                    "inherit": source.inherit,
+                    "description": source.description,
+                    "guardrails_add": source.guardrails_add or [],
+                    "guardrails_remove": source.guardrails_remove or [],
+                    "created_at": now,
+                    "updated_at": now,
+                    "created_by": created_by,
+                    "updated_by": created_by,
+                }
+                # Prisma expects Json fields as JSON strings on create (same as add_policy_to_db)
+                if source.condition is not None:
+                    data["condition"] = (
+                        json.dumps(source.condition)
+                        if isinstance(source.condition, dict)
+                        else source.condition
+                    )
+                if source.pipeline is not None:
+                    data["pipeline"] = (
+                        json.dumps(source.pipeline)
+                        if isinstance(source.pipeline, dict)
+                        else source.pipeline
+                    )
+
+                created = await tx.litellm_policytable.create(data=data)
+                return _row_to_policy_db_response(created)
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating new version: {e}")
             raise Exception(f"Error creating new version: {str(e)}")
@@ -811,6 +812,21 @@ class PolicyRegistry:
                         "updated_by": updated_by,
                     },
                 )
+                # Keep policy_<uuid> cache in sync for non-production versions.
+                published_policy = self._parse_policy(
+                    policy_name,
+                    {
+                        "inherit": updated.inherit,
+                        "description": updated.description,
+                        "guardrails": {
+                            "add": updated.guardrails_add or [],
+                            "remove": updated.guardrails_remove or [],
+                        },
+                        "condition": updated.condition,
+                        "pipeline": updated.pipeline,
+                    },
+                )
+                self._policies_by_id[policy_id] = (policy_name, published_policy)
                 return _row_to_policy_db_response(updated)
 
             # new_status == "production"
@@ -823,6 +839,14 @@ class PolicyRegistry:
                 raise Exception(
                     "Cannot promote draft directly to production. Publish the version first."
                 )
+
+            # Capture current production before demotion so cache can be updated.
+            current_production_rows = await prisma_client.db.litellm_policytable.find_many(
+                where={
+                    "policy_name": policy_name,
+                    "version_status": "production",
+                },
+            )
 
             # Demote current production to published
             await prisma_client.db.litellm_policytable.update_many(
@@ -837,6 +861,26 @@ class PolicyRegistry:
                 },
             )
 
+            # Demoted production versions are now published, so they should resolve by policy_<uuid>.
+            for demoted in current_production_rows:
+                demoted_policy = self._parse_policy(
+                    demoted.policy_name,
+                    {
+                        "inherit": demoted.inherit,
+                        "description": demoted.description,
+                        "guardrails": {
+                            "add": demoted.guardrails_add or [],
+                            "remove": demoted.guardrails_remove or [],
+                        },
+                        "condition": demoted.condition,
+                        "pipeline": demoted.pipeline,
+                    },
+                )
+                self._policies_by_id[demoted.policy_id] = (
+                    demoted.policy_name,
+                    demoted_policy,
+                )
+
             # Promote this version to production
             updated = await prisma_client.db.litellm_policytable.update(
                 where={"policy_id": policy_id},
@@ -847,6 +891,9 @@ class PolicyRegistry:
                     "updated_by": updated_by,
                 },
             )
+
+            # Production versions should not resolve by policy_<uuid>.
+            self._policies_by_id.pop(policy_id, None)
 
             # Update in-memory registry: remove old production (by name), add this one
             self.remove_policy(policy_name)

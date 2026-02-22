@@ -3,19 +3,23 @@ Unit tests for policy versioning: registry behavior, status transitions, and ver
 """
 
 from datetime import datetime, timezone
+from typing import Literal, get_args, get_origin
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.policy_engine.policy_registry import (
     PolicyRegistry,
     _row_to_policy_db_response,
     get_policy_registry,
 )
+from litellm.proxy.policy_engine.policy_endpoints import list_policies
 from litellm.types.proxy.policy_engine import (
     PolicyCreateRequest,
     PolicyDBResponse,
     PolicyUpdateRequest,
+    PolicyVersionStatusUpdateRequest,
 )
 
 
@@ -59,6 +63,21 @@ def _make_row(
     row.created_by = created_by
     row.updated_by = updated_by
     return row
+
+
+def _mock_prisma_transaction(prisma: MagicMock) -> MagicMock:
+    """Attach an async tx() context manager and return tx mock."""
+    tx = MagicMock()
+
+    class _TxContextManager:
+        async def __aenter__(self):
+            return tx
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    prisma.db.tx = MagicMock(return_value=_TxContextManager())
+    return tx
 
 
 class TestRowToPolicyDBResponse:
@@ -249,6 +268,7 @@ class TestCreateNewVersion:
     async def test_create_new_version_from_production_increments_version(self):
         registry = PolicyRegistry()
         prisma = MagicMock()
+        tx = _mock_prisma_transaction(prisma)
         prod = _make_row(
             policy_id="prod-1",
             policy_name="foo",
@@ -259,15 +279,13 @@ class TestCreateNewVersion:
             inherit=None,
             pipeline={"mode": "pre_call", "steps": []},
         )
-        # find_first for production
-        prisma.db.litellm_policytable.find_first = AsyncMock(return_value=prod)
         # find_first for latest version number
-        prisma.db.litellm_policytable.find_first.side_effect = [
+        tx.litellm_policytable.find_first = AsyncMock(side_effect=[
             prod,  # production lookup
             prod,  # latest version_number lookup
-        ]
+        ])
         # update_many for is_latest=False
-        prisma.db.litellm_policytable.update_many = AsyncMock()
+        tx.litellm_policytable.update_many = AsyncMock()
         new_row = _make_row(
             policy_id="new-id",
             policy_name="foo",
@@ -279,7 +297,7 @@ class TestCreateNewVersion:
             description="base",
             pipeline={"mode": "pre_call", "steps": []},
         )
-        prisma.db.litellm_policytable.create = AsyncMock(return_value=new_row)
+        tx.litellm_policytable.create = AsyncMock(return_value=new_row)
 
         result = await registry.create_new_version(
             policy_name="foo",
@@ -293,7 +311,7 @@ class TestCreateNewVersion:
         assert result.parent_version_id == "prod-1"
         assert result.guardrails_add == ["g1"]
         assert result.description == "base"
-        create_call = prisma.db.litellm_policytable.create.call_args[1]["data"]
+        create_call = tx.litellm_policytable.create.call_args[1]["data"]
         assert create_call["version_number"] == 2
         assert create_call["version_status"] == "draft"
         assert create_call["parent_version_id"] == "prod-1"
@@ -307,12 +325,25 @@ class TestUpdateVersionStatus:
     async def test_draft_to_published_sets_published_at(self):
         registry = PolicyRegistry()
         prisma = MagicMock()
-        draft = _make_row(policy_id="d-1", version_status="draft")
+        draft = _make_row(
+            policy_id="d-1",
+            policy_name="foo",
+            version_status="draft",
+            guardrails_add=["g1"],
+        )
         updated = _make_row(
             policy_id="d-1",
+            policy_name="foo",
             version_status="published",
             published_at=datetime.now(timezone.utc),
+            guardrails_add=["g1", "g2"],
         )
+        # Existing cache entry for this non-production policy should be refreshed.
+        stale_policy = registry._parse_policy(
+            "foo",
+            {"guardrails": {"add": ["old"], "remove": []}},
+        )
+        registry._policies_by_id["d-1"] = ("foo", stale_policy)
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=draft)
         prisma.db.litellm_policytable.update = AsyncMock(return_value=updated)
 
@@ -326,6 +357,11 @@ class TestUpdateVersionStatus:
         update_data = prisma.db.litellm_policytable.update.call_args[1]["data"]
         assert update_data["version_status"] == "published"
         assert "published_at" in update_data
+        cached = registry.get_policy_by_id_for_request("d-1")
+        assert cached is not None
+        cached_name, cached_policy = cached
+        assert cached_name == "foo"
+        assert cached_policy.guardrails.add == ["g1", "g2"]
 
     @pytest.mark.asyncio
     async def test_draft_to_production_raises(self):
@@ -351,13 +387,25 @@ class TestUpdateVersionStatus:
             policy_name="foo",
             version_status="published",
         )
+        old_production = _make_row(
+            policy_id="prod-1",
+            policy_name="foo",
+            version_status="production",
+            guardrails_add=["legacy"],
+        )
         updated_row = _make_row(
             policy_id="pub-1",
             policy_name="foo",
             version_status="production",
             production_at=datetime.now(timezone.utc),
         )
+        # Promoted version should be removed from id cache.
+        registry._policies_by_id["pub-1"] = (
+            "foo",
+            registry._parse_policy("foo", {"guardrails": {"add": ["stale"], "remove": []}}),
+        )
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=published_row)
+        prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[old_production])
         prisma.db.litellm_policytable.update_many = AsyncMock()
         prisma.db.litellm_policytable.update = AsyncMock(return_value=updated_row)
 
@@ -372,6 +420,34 @@ class TestUpdateVersionStatus:
         assert prisma.db.litellm_policytable.update_many.called
         # Registry should have been updated with new production
         assert registry.has_policy("foo")
+        # Promoted production should no longer resolve via policy_<uuid>
+        assert registry.get_policy_by_id_for_request("pub-1") is None
+        # Demoted production should now be available in id cache
+        demoted = registry.get_policy_by_id_for_request("prod-1")
+        assert demoted is not None
+        assert demoted[0] == "foo"
+
+
+class TestVersionStatusRequestValidation:
+    """Test request model validates allowed status transitions."""
+
+    def test_only_allows_published_or_production(self):
+        PolicyVersionStatusUpdateRequest(version_status="published")
+        PolicyVersionStatusUpdateRequest(version_status="production")
+        with pytest.raises(ValidationError):
+            PolicyVersionStatusUpdateRequest(version_status="active")
+
+
+class TestListPoliciesValidation:
+    """Test query parameter validation shape for list endpoint."""
+
+    def test_list_policies_version_status_is_literal(self):
+        annotation = list_policies.__annotations__["version_status"]
+        annotation_args = get_args(annotation)
+        literal_arg = next(arg for arg in annotation_args if arg is not type(None))
+
+        assert get_origin(literal_arg) is Literal
+        assert set(get_args(literal_arg)) == {"draft", "published", "production"}
 
 
 class TestCompareVersions:
