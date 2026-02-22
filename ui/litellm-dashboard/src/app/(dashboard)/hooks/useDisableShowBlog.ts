@@ -1,6 +1,6 @@
-import { useUISettingsFlags } from "./useUISettingsFlags";
+import { useUISettings } from "./uiSettings/useUISettings";
 
 export function useDisableShowBlog(): boolean {
-  const { data } = useUISettingsFlags();
-  return data?.disable_show_blog ?? false;
+  const { data } = useUISettings();
+  return (data?.values?.disable_show_blog as boolean) ?? false;
 }
