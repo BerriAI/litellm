@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from litellm._logging import verbose_logger
+
 
 def _extract_from_regex(duration: str) -> Tuple[int, str]:
     match = re.match(r"(\d+)(mo|[smhdw]?)", duration)
@@ -156,7 +158,11 @@ def _setup_timezone(
         else:
             tz = ZoneInfo(timezone_str)
     except Exception:
-        # If timezone is invalid, fall back to UTC
+        verbose_logger.warning(
+            "Failed to load timezone '%s', falling back to UTC. "
+            "Install 'tzdata' package for full timezone support.",
+            timezone_str,
+        )
         tz = timezone.utc
 
     # Convert current_time to the target timezone
