@@ -72,6 +72,37 @@ describe("CreateKey", () => {
     expect(screen.getByRole("button", { name: /create new key/i })).toBeInTheDocument();
   });
 
+  it("should display 'AI APIs' label for the llm_api key type option", async () => {
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Key Type")).toBeInTheDocument();
+    });
+
+    // Open the Key Type dropdown
+    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
+    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
+    act(() => {
+      fireEvent.mouseDown(selectElement);
+    });
+
+    await waitFor(() => {
+      // Verify "AI APIs" appears as an option
+      const options = document.querySelectorAll(".ant-select-item-option");
+      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
+      expect(hasAIAPIs).toBe(true);
+
+      // Verify old "LLM API" label does NOT appear
+      const hasLLMAPI = optionTexts.some((text) => text?.includes("LLM API"));
+      expect(hasLLMAPI).toBe(false);
+    });
+  });
+
   it("should include access_group_ids in keyCreateCall payload when access groups are selected", async () => {
     renderWithProviders(<CreateKey {...defaultProps} />);
 

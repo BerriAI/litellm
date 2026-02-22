@@ -24,6 +24,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    LITELLM_DETAILED_TIMING,
+    MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -434,6 +436,19 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-overhead-duration-ms": str(
                 hidden_params.get("litellm_overhead_time_ms", None)
             ),
+            "x-litellm-callback-duration-ms": str(
+                hidden_params.get("callback_duration_ms", None)
+            ),
+            **(
+                {
+                    "x-litellm-timing-pre-processing-ms": str(hidden_params.get("timing_pre_processing_ms", None)),
+                    "x-litellm-timing-llm-api-ms": str(hidden_params.get("timing_llm_api_ms", None)),
+                    "x-litellm-timing-post-processing-ms": str(hidden_params.get("timing_post_processing_ms", None)),
+                    "x-litellm-timing-message-copy-ms": str(hidden_params.get("timing_message_copy_ms", None)),
+                }
+                if LITELLM_DETAILED_TIMING
+                else {}
+            ),
             "x-litellm-fastest_response_batch_completion": (
                 str(fastest_response_batch_completion)
                 if fastest_response_batch_completion is not None
@@ -526,6 +541,17 @@ class ProxyBaseLLMRequestProcessing:
             "acancel_interaction",
             "asend_message",
             "call_mcp_tool",
+            "acreate_eval",
+            "alist_evals",
+            "aget_eval",
+            "aupdate_eval",
+            "adelete_eval",
+            "acancel_eval",
+            "acreate_run",
+            "alist_runs",
+            "aget_run",
+            "acancel_run",
+            "adelete_run",
         ],
         version: Optional[str] = None,
         user_model: Optional[str] = None,
@@ -608,6 +634,23 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
+        
+        ### AUTO STREAM USAGE TRACKING ###
+        # If always_include_stream_usage is enabled and this is a streaming request
+        # automatically add stream_options={'include_usage': True} if not already set
+        if (
+            general_settings.get("always_include_stream_usage", False) is True
+            and self.data.get("stream", False) is True
+        ):
+            # Only set if stream_options is not already provided by the client
+            if "stream_options" not in self.data:
+                self.data["stream_options"] = {"include_usage": True}
+            elif (
+                isinstance(self.data["stream_options"], dict)
+                and "include_usage" not in self.data["stream_options"]
+            ):
+                self.data["stream_options"]["include_usage"] = True
+        
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -656,6 +699,24 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    def _debug_log_request_payload(self) -> None:
+        """Log request payload at DEBUG level, truncating if too large."""
+        if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            return
+        _payload_str = json.dumps(self.data, default=str)
+        if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
+                len(_payload_str),
+                MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+                list(self.data.keys()) if isinstance(self.data, dict) else type(self.data).__name__,
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM:\n%s",
+                json.dumps(self.data, indent=4, default=str),
+            )
 
     async def base_process_llm_request(
         self,
@@ -708,6 +769,17 @@ class ProxyBaseLLMRequestProcessing:
             "acancel_interaction",
             "acancel_batch",
             "afile_delete",
+            "acreate_eval",
+            "alist_evals",
+            "aget_eval",
+            "aupdate_eval",
+            "adelete_eval",
+            "acancel_eval",
+            "acreate_run",
+            "alist_runs",
+            "aget_run",
+            "acancel_run",
+            "adelete_run",
         ],
         proxy_logging_obj: ProxyLogging,
         general_settings: dict,
@@ -730,12 +802,7 @@ class ProxyBaseLLMRequestProcessing:
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
-        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-            verbose_proxy_logger.debug(
-                "Request received by LiteLLM:\n{}".format(
-                    json.dumps(self.data, indent=4, default=str)
-                ),
-            )
+        self._debug_log_request_payload()
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
             request=request,

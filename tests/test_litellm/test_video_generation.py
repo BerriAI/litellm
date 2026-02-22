@@ -806,6 +806,11 @@ def test_video_content_handler_uses_get_for_openai():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.router import GenericLiteLLMParams
 
+    # Clear the HTTP client cache to prevent test isolation issues
+    # In CI, a cached real HTTPHandler from a previous test might bypass the mock
+    if hasattr(litellm, 'in_memory_llm_clients_cache'):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
     handler = BaseLLMHTTPHandler()
     config = OpenAIVideoConfig()
 

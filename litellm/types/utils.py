@@ -1,61 +1,47 @@
 import json
 import time
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
+from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional,
+                    Union)
 
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import (
-    FileTypes as FileTypes,  # type: ignore
-)
+from openai.types.audio.transcription_create_params import \
+    FileTypes as FileTypes  # type: ignore
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
-from openai.types.completion_usage import (
-    CompletionTokensDetails,
-    CompletionUsage,
-    PromptTokensDetails,
-)
+from openai.types.completion_usage import (CompletionTokensDetails,
+                                           CompletionUsage,
+                                           PromptTokensDetails)
 from openai.types.moderation import Categories as Categories
-from openai.types.moderation import (
-    CategoryAppliedInputTypes as CategoryAppliedInputTypes,
-)
+from openai.types.moderation import \
+    CategoryAppliedInputTypes as CategoryAppliedInputTypes
 from openai.types.moderation import CategoryScores as CategoryScores
 from openai.types.moderation_create_response import Moderation as Moderation
-from openai.types.moderation_create_response import (
-    ModerationCreateResponse as ModerationCreateResponse,
-)
+from openai.types.moderation_create_response import \
+    ModerationCreateResponse as ModerationCreateResponse
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
-from litellm.types.llms.base import (
-    BaseLiteLLMOpenAIResponseObject,
-    LiteLLMPydanticObjectBase,
-)
+from litellm.types.llms.base import (BaseLiteLLMOpenAIResponseObject,
+                                     LiteLLMPydanticObjectBase)
 from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
-from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from .llms.anthropic_messages.anthropic_response import \
+    AnthropicMessagesResponse
 from .llms.base import HiddenParams
-from .llms.openai import (
-    AllMessageValues,
-    Batch,
-    ChatCompletionAnnotation,
-    ChatCompletionRedactedThinkingBlock,
-    ChatCompletionThinkingBlock,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolParam,
-    ChatCompletionUsageBlock,
-    FileSearchTool,
-    FineTuningJob,
-    ImageURLListItem,
-    OpenAIChatCompletionChunk,
-    OpenAIChatCompletionFinishReason,
-    OpenAIFileObject,
-    OpenAIRealtimeStreamList,
-    ResponsesAPIResponse,
-    WebSearchOptions,
-)
+from .llms.openai import (AllMessageValues, Batch, ChatCompletionAnnotation,
+                          ChatCompletionRedactedThinkingBlock,
+                          ChatCompletionThinkingBlock,
+                          ChatCompletionToolCallChunk, ChatCompletionToolParam,
+                          ChatCompletionUsageBlock, FileSearchTool,
+                          FineTuningJob, ImageURLListItem,
+                          OpenAIChatCompletionChunk,
+                          OpenAIChatCompletionFinishReason, OpenAIFileObject,
+                          OpenAIRealtimeStreamList, ResponsesAPIResponse,
+                          WebSearchOptions)
 from .rerank import RerankResponse as RerankResponse
 
 if TYPE_CHECKING:
@@ -2408,6 +2394,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
+    user_api_key_project_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2532,6 +2519,8 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    team_alias: Optional[str]
+    team_id: Optional[str]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2619,6 +2608,52 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
         "PHONE": 1
     }
     """
+
+    guardrail_id: Optional[str]
+    """Unique identifier for the guardrail configuration, e.g. 'gd-eu-pii-001'"""
+
+    policy_template: Optional[str]
+    """Name of the policy template this guardrail belongs to, e.g. 'EU AI Act Article 5'"""
+
+    detection_method: Optional[str]
+    """How detection was performed: 'regex', 'keyword', 'llm-judge', 'presidio', etc."""
+
+    confidence_score: Optional[float]
+    """For LLM-judge guardrails: confidence score 0.0-1.0"""
+
+    classification: Optional[dict]
+    """For LLM-judge guardrails: structured classification output"""
+
+    match_details: Optional[List[dict]]
+    """Detailed match information for each detected pattern"""
+
+    patterns_checked: Optional[int]
+    """Total number of patterns evaluated by this guardrail"""
+
+    alert_recipients: Optional[List[str]]
+    """Email addresses that were notified"""
+
+    risk_score: Optional[float]
+    """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
+
+
+class GuardrailTracingDetail(TypedDict, total=False):
+    """
+    Typed fields for guardrail tracing metadata.
+
+    Passed to add_standard_logging_guardrail_information_to_request_data()
+    to enrich the StandardLoggingGuardrailInformation with provider-specific details.
+    """
+
+    guardrail_id: Optional[str]
+    policy_template: Optional[str]
+    detection_method: Optional[str]
+    confidence_score: Optional[float]
+    classification: Optional[dict]
+    match_details: Optional[List[dict]]
+    patterns_checked: Optional[int]
+    alert_recipients: Optional[List[str]]
+    risk_score: Optional[float]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -2868,8 +2903,9 @@ all_litellm_params = (
         "api_key",
         "api_version",
         "prompt_id",
-        "provider_specific_header",
         "prompt_variables",
+        "litellm_system_prompt",
+        "provider_specific_header",
         "prompt_version",
         "api_base",
         "force_timeout",
@@ -3123,6 +3159,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    LITELLM_AGENT = "litellm_agent"
 
 
 # Create a set of all provider values for quick lookup
@@ -3151,6 +3188,7 @@ class SearchProviders(str, Enum):
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
     LINKUP = "linkup"
+    DUCKDUCKGO = "duckduckgo"
 
 
 # Create a set of all search provider values for quick lookup

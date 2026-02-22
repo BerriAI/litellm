@@ -761,6 +761,23 @@
         "interactions": true
       }
     },
+    "duckduckgo": {
+      "display_name": "DuckDuckGo (`duckduckgo`)",
+      "url": "https://docs.litellm.ai/docs/search/duckduckgo",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
     "elevenlabs": {
       "display_name": "ElevenLabs (`elevenlabs`)",
       "url": "https://docs.litellm.ai/docs/providers/elevenlabs",

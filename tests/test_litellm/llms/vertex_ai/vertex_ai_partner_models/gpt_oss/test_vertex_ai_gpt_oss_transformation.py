@@ -1,9 +1,8 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 sys.path.insert(
@@ -14,6 +13,14 @@ import litellm
 from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
     VertexAIGPTOSSTransformation,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_litellm_http_client_cache():
+    """Ensure each test gets a fresh async HTTP client mock."""
+    from litellm import in_memory_llm_clients_cache
+
+    in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -76,11 +83,6 @@ async def test_vertex_ai_gpt_oss_simple_request():
     Test that a simple request to vertex_ai/openai/gpt-oss-20b-maas lands at the correct URL
     with the correct request body.
     """
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexLLM,
-    )
-
     # Mock response
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -107,19 +109,17 @@ async def test_vertex_ai_gpt_oss_simple_request():
         }
     }
 
-    client = AsyncHTTPHandler()
-
-    async def mock_post_func(*args, **kwargs):
-        return mock_response
-
-    # Mock vertexai module to prevent import from triggering authentication
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
     mock_vertexai.preview.language_models = MagicMock()
 
-    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
-         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")), \
-         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}):
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
+         patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+               return_value=("fake-token", "pathrise-convert-1606954137718")), \
+         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
+         patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}):
+        mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
@@ -134,22 +134,20 @@ async def test_vertex_ai_gpt_oss_simple_request():
             ],
             vertex_ai_location="us-central1",
             vertex_ai_project="pathrise-convert-1606954137718",
-            client=client
         )
-        
+
         # Verify the mock was called
-        mock_post.assert_called_once()
-        
+        mock_http_handler.return_value.post.assert_called_once()
+
         # Get the call arguments
-        call_args = mock_post.call_args
-        # For side_effect, the URL is passed as kwargs['url']
+        call_args = mock_http_handler.return_value.post.call_args
         called_url = call_args.kwargs["url"]
         request_body = json.loads(call_args.kwargs["data"])
-        
+
         # Verify the URL
         expected_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/pathrise-convert-1606954137718/locations/us-central1/endpoints/openapi/chat/completions"
         assert called_url == expected_url
-        
+
         # Verify the request body
         expected_request_body = {
             'model': 'openai/gpt-oss-20b-maas',
@@ -166,7 +164,7 @@ async def test_vertex_ai_gpt_oss_simple_request():
             'stream': False
         }
         assert request_body == expected_request_body
-        
+
         # Verify response structure
         assert response.model == "openai/gpt-oss-20b-maas"
         assert len(response.choices) == 1
@@ -179,11 +177,6 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
     Test that reasoning_effort parameter is correctly passed in the request body
     for GPT-OSS models.
     """
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexLLM,
-    )
-
     # Mock response
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -210,19 +203,17 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
         }
     }
 
-    client = AsyncHTTPHandler()
-
-    async def mock_post_func(*args, **kwargs):
-        return mock_response
-
-    # Mock vertexai module to prevent import from triggering authentication
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
     mock_vertexai.preview.language_models = MagicMock()
 
-    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, \
-         patch.object(VertexLLM, "_ensure_access_token", return_value=("fake-token", "pathrise-convert-1606954137718")), \
-         patch.dict('sys.modules', {'vertexai': mock_vertexai, 'vertexai.preview': mock_vertexai.preview}):
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
+         patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+               return_value=("fake-token", "pathrise-convert-1606954137718")), \
+         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
+         patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}):
+        mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
+
         response = await litellm.acompletion(
             model="vertex_ai/openai/gpt-oss-20b-maas",
             messages=[
@@ -238,20 +229,19 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
             reasoning_effort="low",
             vertex_ai_location="us-central1",
             vertex_ai_project="pathrise-convert-1606954137718",
-            client=client
         )
-        
+
         # Verify the mock was called
-        mock_post.assert_called_once()
-        
-        # Get the call arguments  
-        call_args = mock_post.call_args
+        mock_http_handler.return_value.post.assert_called_once()
+
+        # Get the call arguments
+        call_args = mock_http_handler.return_value.post.call_args
         request_body = json.loads(call_args.kwargs["data"])
-        
+
         # Verify reasoning_effort is in the request body
         assert "reasoning_effort" in request_body
         assert request_body["reasoning_effort"] == "low"
-        
+
         # Verify other expected fields
         expected_request_body = {
             'model': 'openai/gpt-oss-20b-maas',
@@ -269,7 +259,7 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
             'stream': False
         }
         assert request_body == expected_request_body
-        
+
         # Verify response structure
         assert response.model == "openai/gpt-oss-20b-maas"
         assert len(response.choices) == 1

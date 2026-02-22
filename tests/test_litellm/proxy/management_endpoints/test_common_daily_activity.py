@@ -135,36 +135,45 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
 
-    # Create mock records with endpoint fields
-    class MockRecord:
-        def __init__(self, date, endpoint, api_key, model, spend, prompt_tokens, completion_tokens):
-            self.date = date
-            self.endpoint = endpoint
-            self.api_key = api_key
-            self.model = model
-            self.model_group = None
-            self.custom_llm_provider = "openai"
-            self.mcp_namespaced_tool_name = None
-            self.spend = spend
-            self.prompt_tokens = prompt_tokens
-            self.completion_tokens = completion_tokens
-            self.total_tokens = prompt_tokens + completion_tokens
-            self.cache_read_input_tokens = 0
-            self.cache_creation_input_tokens = 0
-            self.api_requests = 1
-            self.successful_requests = 1
-            self.failed_requests = 0
-
-    mock_records = [
-        MockRecord("2024-01-01", "/v1/chat/completions", "key-1", "gpt-4", 10.0, 100, 50),
-        MockRecord("2024-01-01", "/v1/chat/completions", "key-1", "gpt-4", 5.0, 50, 25),
-        MockRecord("2024-01-01", "/v1/embeddings", "key-2", "text-embedding-ada-002", 3.0, 30, 0),
+    # query_raw returns list of dicts (pre-aggregated by GROUP BY)
+    mock_rows = [
+        {
+            "date": "2024-01-01",
+            "endpoint": "/v1/chat/completions",
+            "api_key": "key-1",
+            "model": "gpt-4",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "spend": 15.0,
+            "prompt_tokens": 150,
+            "completion_tokens": 75,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 2,
+            "successful_requests": 2,
+            "failed_requests": 0,
+        },
+        {
+            "date": "2024-01-01",
+            "endpoint": "/v1/embeddings",
+            "api_key": "key-2",
+            "model": "text-embedding-ada-002",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "spend": 3.0,
+            "prompt_tokens": 30,
+            "completion_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
     ]
 
-    # Mock the table methods
-    mock_table = MagicMock()
-    mock_table.find_many = AsyncMock(return_value=mock_records)
-    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
     mock_prisma.db.litellm_verificationtoken = MagicMock()
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
@@ -209,6 +218,9 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     assert chat_endpoint.api_key_breakdown["key-1"].metrics.spend == 15.0
     assert "key-2" in embeddings_endpoint.api_key_breakdown
     assert embeddings_endpoint.api_key_breakdown["key-2"].metrics.spend == 3.0
+
+    # Verify query_raw was called (not find_many)
+    mock_prisma.db.query_raw.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -399,33 +411,28 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
 
-    class MockRecord:
-        def __init__(self, date, endpoint, api_key, model, spend, prompt_tokens, completion_tokens):
-            self.date = date
-            self.endpoint = endpoint
-            self.api_key = api_key
-            self.model = model
-            self.model_group = None
-            self.custom_llm_provider = "openai"
-            self.mcp_namespaced_tool_name = None
-            self.spend = spend
-            self.prompt_tokens = prompt_tokens
-            self.completion_tokens = completion_tokens
-            self.total_tokens = prompt_tokens + completion_tokens
-            self.cache_read_input_tokens = 0
-            self.cache_creation_input_tokens = 0
-            self.api_requests = 1
-            self.successful_requests = 1
-            self.failed_requests = 0
-
-    # Records reference a deleted key
-    mock_records = [
-        MockRecord("2024-01-01", "/v1/chat/completions", "deleted-key-hash", "gpt-4", 10.0, 100, 50),
+    # query_raw returns list of dicts (pre-aggregated by GROUP BY)
+    mock_rows = [
+        {
+            "date": "2024-01-01",
+            "endpoint": "/v1/chat/completions",
+            "api_key": "deleted-key-hash",
+            "model": "gpt-4",
+            "model_group": None,
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,
+            "spend": 10.0,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
     ]
 
-    mock_table = MagicMock()
-    mock_table.find_many = AsyncMock(return_value=mock_records)
-    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
 
     # Active table returns nothing for this key
     mock_prisma.db.litellm_verificationtoken = MagicMock()
