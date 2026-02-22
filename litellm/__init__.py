@@ -453,8 +453,11 @@ if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() != "true":
                 backup_model_count=len(model_cost),
             ):
                 globals()["model_cost"] = {**model_cost, **remote}
-                from litellm.utils import _invalidate_model_cost_lowercase_map
-                _invalidate_model_cost_lowercase_map()
+                try:
+                    from litellm.utils import _invalidate_model_cost_lowercase_map
+                    _invalidate_model_cost_lowercase_map()
+                except Exception as e:
+                    verbose_logger.debug("failed to invalidate model cost cache: %s", e)
         except Exception:
             pass  # local backup already loaded
 
