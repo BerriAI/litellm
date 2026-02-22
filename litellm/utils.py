@@ -7448,7 +7448,16 @@ def is_cached_message(message: AllMessageValues) -> bool:
     # Check if context caching is disabled globally
     if litellm.disable_anthropic_gemini_context_caching_transform is True:
         return False
-    
+
+    # Check message-level cache_control (set by cache_control_injection_points hook for string content)
+    message_level_cache_control = message.get("cache_control")
+    if (
+        message_level_cache_control is not None
+        and isinstance(message_level_cache_control, dict)
+        and message_level_cache_control.get("type") == "ephemeral"
+    ):
+        return True
+
     if "content" not in message:
         return False
 

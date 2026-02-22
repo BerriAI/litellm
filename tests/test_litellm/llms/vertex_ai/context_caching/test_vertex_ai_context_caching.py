@@ -29,6 +29,15 @@ class TestContextCachingEndpoints:
         self.mock_client = MagicMock(spec=HTTPHandler)
         self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
 
+        # Mock is_prompt_caching_valid_prompt to return True by default.
+        # This avoids token counting in unit tests. The min-token guard is
+        # tested explicitly in test_check_and_create_cache_skips_when_below_min_tokens.
+        self._token_check_patcher = patch(
+            "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt",
+            return_value=True,
+        )
+        self._token_check_patcher.start()
+
         # Sample messages for testing
         self.sample_messages = [
             {
@@ -55,6 +64,10 @@ class TestContextCachingEndpoints:
         ]
 
         self.sample_optional_params = {"tools": self.sample_tools.copy()}
+
+    def teardown_method(self):
+        """Teardown for each test method"""
+        self._token_check_patcher.stop()
 
     @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
@@ -786,6 +799,112 @@ class TestContextCachingEndpoints:
 
             # But original tools should still be available for comparison
             assert original_tools == self.sample_tools
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    def test_check_and_create_cache_skips_when_below_min_tokens(
+        self, mock_separate, custom_llm_provider
+    ):
+        """Test that context caching is skipped when cached content is below 1024 tokens.
+
+        Gemini requires a minimum of 1024 tokens for context caching. If the cached
+        content is too small, the request should proceed without caching instead of
+        failing with a Gemini API error.
+        """
+        # Stop the default mock so the real token count check runs
+        self._token_check_patcher.stop()
+
+        short_cached_messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        non_cached_messages = [
+            {"role": "user", "content": "Hello"},
+        ]
+        all_messages = short_cached_messages + non_cached_messages
+        mock_separate.return_value = (short_cached_messages, non_cached_messages)
+        optional_params = self.sample_optional_params.copy()
+
+        result = self.context_caching.check_and_create_cache(
+            messages=all_messages,
+            optional_params=optional_params,
+            api_key="test_key",
+            api_base=None,
+            model="gemini-1.5-pro",
+            client=self.mock_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            cached_content=None,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project="test_project",
+            vertex_location="test_location",
+            vertex_auth_header="test_token",
+        )
+
+        messages, returned_params, returned_cache = result
+        assert messages == all_messages
+        assert returned_cache is None
+
+        # Restart the patcher so teardown_method can stop it cleanly
+        self._token_check_patcher.start()
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    @pytest.mark.asyncio
+    async def test_async_check_and_create_cache_skips_when_below_min_tokens(
+        self, mock_separate, custom_llm_provider
+    ):
+        """Test that async context caching is skipped when cached content is below 1024 tokens."""
+        # Stop the default mock so the real token count check runs
+        self._token_check_patcher.stop()
+
+        short_cached_messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        non_cached_messages = [
+            {"role": "user", "content": "Hello"},
+        ]
+        all_messages = short_cached_messages + non_cached_messages
+        mock_separate.return_value = (short_cached_messages, non_cached_messages)
+        optional_params = self.sample_optional_params.copy()
+
+        result = await self.context_caching.async_check_and_create_cache(
+            messages=all_messages,
+            optional_params=optional_params,
+            api_key="test_key",
+            api_base=None,
+            model="gemini-1.5-pro",
+            client=self.mock_async_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            cached_content=None,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project="test_project",
+            vertex_location="test_location",
+            vertex_auth_header="test_token",
+        )
+
+        messages, returned_params, returned_cache = result
+        assert messages == all_messages
+        assert returned_cache is None
+
+        # Restart the patcher so teardown_method can stop it cleanly
+        self._token_check_patcher.start()
 
 
 class TestCheckCachePagination:
