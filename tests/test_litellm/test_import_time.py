@@ -3,6 +3,7 @@
 Ref https://github.com/BerriAI/litellm/issues/7605
 """
 
+import os
 import subprocess
 import sys
 
@@ -29,6 +30,7 @@ def test_proxy_types_not_imported_eagerly():
         ],
         capture_output=True,
         text=True,
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     assert result.returncode == 0
     loaded, enterprise = result.stdout.strip().split(",")
@@ -49,6 +51,7 @@ def test_import_safety():
         ],
         capture_output=True,
         text=True,
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     assert result.returncode == 0, f"from litellm import * failed: {result.stderr}"
     assert "OK" in result.stdout
@@ -64,6 +67,7 @@ def test_model_cost_loaded():
         ],
         capture_output=True,
         text=True,
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     assert result.returncode == 0
     count = int(result.stdout.strip())
