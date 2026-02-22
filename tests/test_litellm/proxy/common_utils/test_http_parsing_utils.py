@@ -7,7 +7,6 @@ import orjson
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
-from starlette.datastructures import State
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -37,7 +36,6 @@ async def test_request_body_caching():
     """
     # Create a mock request with a JSON body
     mock_request = MagicMock()
-    mock_request.state = State()
     test_data = {"key": "value"}
     # Use AsyncMock for the body method
     mock_request.body = AsyncMock(return_value=orjson.dumps(test_data))
@@ -71,7 +69,6 @@ async def test_form_data_parsing():
     """
     # Create a mock request with form data
     mock_request = MagicMock()
-    mock_request.state = State()
     test_data = {"name": "test_user", "message": "hello world"}
 
     # Mock the form method to return the test data as an awaitable
@@ -107,8 +104,7 @@ async def test_form_data_with_json_metadata():
     """
     # Create a mock request with form data containing JSON metadata
     mock_request = MagicMock()
-    mock_request.state = State()
-
+    
     # Metadata is sent as a JSON string in form data
     metadata_json_string = json.dumps({
         "user_id": "12345",
@@ -156,8 +152,7 @@ async def test_form_data_with_invalid_json_metadata():
     """
     # Create a mock request with form data containing invalid JSON metadata
     mock_request = MagicMock()
-    mock_request.state = State()
-
+    
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
@@ -183,8 +178,7 @@ async def test_form_data_without_metadata():
     """
     # Create a mock request with form data without metadata
     mock_request = MagicMock()
-    mock_request.state = State()
-
+    
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
@@ -214,8 +208,7 @@ async def test_form_data_with_empty_metadata():
     """
     # Create a mock request with form data containing empty metadata
     mock_request = MagicMock()
-    mock_request.state = State()
-
+    
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
@@ -247,8 +240,7 @@ async def test_form_data_with_dict_metadata():
     """
     # Create a mock request with form data where metadata is already a dict
     mock_request = MagicMock()
-    mock_request.state = State()
-
+    
     metadata_dict = {
         "user_id": "12345",
         "tags": ["test"]
@@ -283,8 +275,7 @@ async def test_form_data_with_none_metadata():
     """
     # Create a mock request with form data where metadata is None
     mock_request = MagicMock()
-    mock_request.state = State()
-
+    
     test_data = {
         "model": "whisper-1",
         "file": "audio.mp3",
@@ -312,7 +303,6 @@ async def test_empty_request_body():
     """
     # Create a mock request with an empty body
     mock_request = MagicMock()
-    mock_request.state = State()
     mock_request.body = AsyncMock(return_value=b"")  # Empty bytes as an awaitable
     mock_request.headers = {"content-type": "application/json"}
     mock_request.scope = {}
@@ -337,7 +327,6 @@ async def test_circular_reference_handling():
     """
     # Create a mock request with initial data
     mock_request = MagicMock()
-    mock_request.state = State()
     initial_body = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello"}],
@@ -377,7 +366,6 @@ async def test_json_parsing_error_handling():
     """
     # Test case 1: Trailing comma error
     mock_request = MagicMock()
-    mock_request.state = State()
     invalid_json_with_trailing_comma = b'''{
         "model": "gpt-4o",
         "tools": [
@@ -406,7 +394,6 @@ async def test_json_parsing_error_handling():
 
     # Test case 2: Unquoted property name error
     mock_request2 = MagicMock()
-    mock_request2.state = State()
     invalid_json_unquoted_property = b'''{
         "model": "gpt-4o",
         "tools": [
@@ -431,7 +418,6 @@ async def test_json_parsing_error_handling():
 
     # Test case 3: Valid JSON should work normally
     mock_request3 = MagicMock()
-    mock_request3.state = State()
     valid_json = b'''{
         "model": "gpt-4o",
         "tools": [
@@ -763,7 +749,6 @@ async def test_request_body_with_html_script_tags():
         }
 
         mock_request = MagicMock()
-        mock_request.state = State()
         mock_request.body = AsyncMock(return_value=orjson.dumps(test_payload))
         mock_request.headers = {"content-type": "application/json"}
         mock_request.scope = {}
