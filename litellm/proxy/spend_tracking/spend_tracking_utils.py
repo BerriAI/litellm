@@ -617,7 +617,7 @@ def _sanitize_request_body_for_spend_logs_payload(
                 # Keep 35% from beginning and 65% from end (end is usually more important)
                 # This split ensures we keep more context from the end of conversations
                 start_ratio = 0.35
-                    end_ratio = 0.65
+                end_ratio = 0.65
 
                 # Calculate character distribution
                 start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
