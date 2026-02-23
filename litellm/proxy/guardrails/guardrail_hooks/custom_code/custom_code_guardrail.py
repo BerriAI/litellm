@@ -41,18 +41,18 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (CustomGuardrail,
-                                                   log_guardrail_information)
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.base import \
-    GuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .primitives import get_custom_code_primitives
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class CustomCodeGuardrailError(Exception):
@@ -154,9 +154,23 @@ class CustomCodeGuardrail(CustomGuardrail):
                 return
 
             try:
+                # Step 1: Security validation — forbidden pattern check
+                from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
+                    CustomCodeValidationError,
+                    validate_custom_code,
+                )
+
+                try:
+                    validate_custom_code(self.custom_code)
+                except CustomCodeValidationError as e:
+                    raise CustomCodeCompilationError(str(e)) from e
+
                 # Create a restricted execution environment
                 # Only include our safe primitives
                 exec_globals = get_custom_code_primitives().copy()
+
+                # CRITICAL: Restrict __builtins__ to prevent sandbox escape
+                exec_globals["__builtins__"] = {}
 
                 # Execute the user code in the restricted environment
                 exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)
@@ -390,6 +404,17 @@ class CustomCodeGuardrail(CustomGuardrail):
         Raises:
             CustomCodeCompilationError: If the new code fails to compile
         """
+        # Validate BEFORE acquiring lock / resetting state
+        from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
+            CustomCodeValidationError,
+            validate_custom_code,
+        )
+
+        try:
+            validate_custom_code(new_code)
+        except CustomCodeValidationError as e:
+            raise CustomCodeCompilationError(str(e)) from e
+
         with self._compile_lock:
             # Reset state
             old_function = self._compiled_function
