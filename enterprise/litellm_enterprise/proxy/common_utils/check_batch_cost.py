@@ -74,7 +74,8 @@ class CheckBatchCost:
         jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
                 "file_purpose": "batch",
-                "batch_processed" : False
+                "batch_processed" : False,
+                "status": {"not_in": ["failed", "expired", "cancelled"]}
             }
         )
         completed_jobs = []
@@ -111,7 +112,7 @@ class CheckBatchCost:
                     model=model_id,
                     batch_id=batch_id,
                     litellm_metadata={
-                        "user_api_key_user_id": job.created_by,
+                        "user_api_key_user_id": job.created_by or "default-user-id",
                         "batch_ignore_default_logging": True,
                     },
                 )

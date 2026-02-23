@@ -1087,11 +1087,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> List[Dict[str, Any]]:
         """
         Find batches that reference this file and still need cost tracking.
-        
-        Blocks on: validating, in_progress, finalizing (in-flight)
-        Blocks on: completed AND batch_processed=False (cost not yet computed)
-        Allows: completed AND batch_processed=True, failed, expired, cancelled
-        
+        Find batches that are in non-terminal state and have not yet been processed by CheckBatchCost.
         Args:
             file_id: The unified file ID to check
             
@@ -1123,6 +1119,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             where={
                 "file_purpose": "batch",
                 "batch_processed": False,
+                "status": {"not_in": ["failed", "expired", "cancelled"]}
             },
             take=MAX_MATCHES_TO_RETURN,
             order={"created_at": "desc"},
