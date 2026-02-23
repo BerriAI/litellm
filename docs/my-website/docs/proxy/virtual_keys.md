@@ -504,6 +504,27 @@ litellm_settings:
 - Send a `/key/generate` request with `max_budget=200`
 - Key will be created with `max_budget=100` since 100 is the upper bound
 
+#### Separate upperbounds for user keys vs service account keys
+
+To apply different limits for user keys (personal keys) and service account keys (team-only keys), use:
+
+- `upperbound_user_key_generate_params` – applies to keys with `user_id` (created via `/key/generate`)
+- `upperbound_service_account_key_generate_params` – applies to keys with `team_id` only, no `user_id` (created via `/key/service-account/generate`)
+
+When type-specific params are set, they override the global `upperbound_key_generate_params` for that key type. If not set, the global upperbound is used (backward compatible).
+
+```yaml
+litellm_settings:
+  upperbound_user_key_generate_params:
+    duration: "30d"
+    max_budget: 100
+  upperbound_service_account_key_generate_params:
+    duration: "365d"
+    max_budget: 10000
+```
+
+** Example: ** User keys are capped at 30 days and $100; service account keys at 1 year and $10,000.
+
 ### Default /key/generate params
 Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
 

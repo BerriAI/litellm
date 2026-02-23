@@ -37,6 +37,8 @@ general_settings:
         enforced_params: ["user"] # this means the "user" param is enforced for all requests made through any service account keys
 ```
 
+You can also set different upperbound limits for service account keys (e.g. max duration 1 year) vs user keys (e.g. max duration 30 days). See [Upperbound params for user vs service account keys](./virtual_keys#separate-upperbounds-for-user-keys-vs-service-account-keys).
+
 ### 2. Create Service Account Key on LiteLLM Proxy Admin UI
 
 <Image img={require('../../img/create_service_account.png')} />

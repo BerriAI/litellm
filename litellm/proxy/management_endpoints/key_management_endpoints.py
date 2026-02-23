@@ -444,6 +444,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
     team_table: Optional[LiteLLM_TeamTableCachedObj],
+    is_service_account: bool = False,
 ) -> GenerateKeyResponse:
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
@@ -489,13 +490,26 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
-    # check if user set default key/generate params on config.yaml
-    if litellm.upperbound_key_generate_params is not None:
+    # check if user set upperbound key/generate params on config.yaml
+    # Use type-specific upperbound (user vs service account) with fallback to global.
+    # is_service_account is passed explicitly by the caller to avoid inferring from
+    # data fields that may have been mutated by default_key_generate_params above.
+    upperbound_params = None
+    if is_service_account and getattr(
+        litellm, "upperbound_service_account_key_generate_params", None
+    ):
+        upperbound_params = litellm.upperbound_service_account_key_generate_params
+    elif not is_service_account and getattr(
+        litellm, "upperbound_user_key_generate_params", None
+    ):
+        upperbound_params = litellm.upperbound_user_key_generate_params
+    if upperbound_params is None:
+        upperbound_params = litellm.upperbound_key_generate_params
+
+    if upperbound_params is not None:
         for elem in data:
             key, value = elem
-            upperbound_value = getattr(
-                litellm.upperbound_key_generate_params, key, None
-            )
+            upperbound_value = getattr(upperbound_params, key, None)
             if upperbound_value is not None:
                 if value is None:
                     # Use the upperbound value if user didn't provide a value
@@ -1215,6 +1229,7 @@ async def generate_key_fn(
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
+            is_service_account=False,
         )
 
     except Exception as e:
@@ -1368,6 +1383,7 @@ async def generate_service_account_key_fn(
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=litellm_changed_by,
         team_table=team_table,
+        is_service_account=True,
     )
 
 
@@ -3031,7 +3047,10 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
-    return {"deleted_keys": deleted_tokens, "failed_tokens": failed_tokens}, _keys_being_deleted
+    return {
+        "deleted_keys": deleted_tokens,
+        "failed_tokens": failed_tokens,
+    }, _keys_being_deleted
 
 
 def _transform_verification_tokens_to_deleted_records(
@@ -3134,7 +3153,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key( # noqa: PLR0915
+async def _rotate_master_key(  # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3349,6 +3368,8 @@ async def _insert_deprecated_key(
             "Failed to insert deprecated key for grace period: %s",
             deprecated_err,
         )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -3911,8 +3932,7 @@ def _get_member_team_ids_from_objects(
         team.team_id
         for team in team_objects
         if any(
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
+            member.user_id is not None and member.user_id == user_api_key_dict.user_id
             for member in team.members_with_roles
         )
     ]
