@@ -198,6 +198,7 @@ class BaseLLMAIOHTTPHandler:
                     headers=headers,
                     json=data,
                     data=form_data,
+                    timeout=timeout,
                 )
                 if not response.ok:
                     response.raise_for_status()

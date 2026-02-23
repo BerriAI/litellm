@@ -423,3 +423,39 @@ class TestBaseLLMAIOHTTPHandler:
         # Should use transport, not connector
         mock_transport._get_valid_client_session.assert_called_once()
         assert result is mock_session_from_transport
+
+    @pytest.mark.asyncio
+    async def test_make_common_async_call_forwards_timeout(self):
+        """Test _make_common_async_call forwards timeout to aiohttp ClientSession.post"""
+        handler = BaseLLMAIOHTTPHandler()
+
+        timeout = aiohttp.ClientTimeout(total=1)
+        mock_response = Mock()
+        mock_response.ok = True
+
+        mock_session = Mock()
+        mock_session.post = AsyncMock(return_value=mock_response)
+
+        provider_config = Mock()
+        provider_config.max_retry_on_unprocessable_entity_error = 0
+
+        response = await handler._make_common_async_call(
+            async_client_session=mock_session,
+            provider_config=provider_config,
+            api_base="https://example.com/test",
+            headers={"Authorization": "Bearer test"},
+            data={"input": "hello"},
+            timeout=timeout,
+            litellm_params={},
+            form_data=None,
+            stream=False,
+        )
+
+        assert response is mock_response
+        mock_session.post.assert_awaited_once_with(
+            url="https://example.com/test",
+            headers={"Authorization": "Bearer test"},
+            json={"input": "hello"},
+            data=None,
+            timeout=timeout,
+        )
