@@ -1713,6 +1713,8 @@ class Logging(LiteLLMLoggingBaseClass):
             self._build_standard_logging_payload(logging_result, start_time, end_time)
         )
 
+        # Only emit for sync requests to avoid double emission
+        # (async_success_handler will emit for async requests)
         if should_emit and (
             standard_logging_payload := self.model_call_details.get(
                 "standard_logging_object"
@@ -2003,7 +2005,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["complete_streaming_response"] = (
                     complete_streaming_response
                 )
-                # Use shared helper so streaming follows same code path as non-streaming
+                # Use shared helper; only emit for sync (async_success_handler handles async)
                 self._process_hidden_params_and_response_cost(
                     logging_result=complete_streaming_response,
                     start_time=start_time,
