@@ -7,7 +7,7 @@ Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpo
 
 ## Setting Up Benchmarking with Network Mock
 
-The fastest way to benchmark proxy overhead is using `network_mock` mode. This intercepts outbound requests at the httpx transport layer and returns canned responses — no external endpoint needed.
+The fastest way to benchmark proxy overhead is using `network_mock` mode. This intercepts outbound requests at the httpx transport layer and returns canned responses, no need for setting up a mock provider. 
 
 **1. Create a proxy config:**
 
@@ -41,7 +41,7 @@ litellm --config benchmark_config.yaml --port 4000 --num_workers 8
 python scripts/benchmark_mock.py --requests 2000 --max-concurrent 200 --runs 3
 ```
 
-This measures pure proxy overhead (auth, routing, logging) without any network latency to a real or fake provider.
+This measures pure proxy overhead on the hot path without any network latency to a real or fake provider.
 
 ## Setting Up a Fake OpenAI Endpoint
 
