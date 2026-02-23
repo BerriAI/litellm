@@ -273,6 +273,8 @@ class TestGPTImage15OutputImageTokens:
         """
         Test that output tokens are correctly calculated in cost calculation for Azure.
         """
+        # Set environment variable to use local model cost map
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         # Simulate gpt-image-1.5 response with output_tokens_details
         usage = Usage(
             prompt_tokens=200,
