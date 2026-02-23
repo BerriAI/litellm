@@ -76,27 +76,29 @@ class SpendLogCleanup:
                     "Max logs deleted - 1,00,000, rest of the logs will be deleted in next run"
                 )
                 break
-            # Step 1: Find logs to delete
-            logs_to_delete = await prisma_client.db.litellm_spendlogs.find_many(
-                where={"startTime": {"lt": cutoff_date}},
-                take=self.batch_size,
+            # Step 1: Find logs and delete them in one go without fetching to application
+            # Delete in batches, limited by self.batch_size
+            deleted_count = await prisma_client.db.execute_raw(
+                """
+                DELETE FROM "LiteLLM_SpendLogs"
+                WHERE "request_id" IN (
+                    SELECT "request_id" FROM "LiteLLM_SpendLogs"
+                    WHERE "startTime" < $1::timestamptz
+                    LIMIT $2
+                )
+                """,
+                cutoff_date,
+                self.batch_size,
             )
-            verbose_proxy_logger.info(f"Found {len(logs_to_delete)} logs in this batch")
+            verbose_proxy_logger.info(f"Deleted {deleted_count} logs in this batch")
 
-            if not logs_to_delete:
+            if deleted_count == 0:
                 verbose_proxy_logger.info(
                     f"No more logs to delete. Total deleted: {total_deleted}"
                 )
                 break
 
-            request_ids = [log.request_id for log in logs_to_delete]
-
-            # Step 2: Delete them in one go
-            await prisma_client.db.litellm_spendlogs.delete_many(
-                where={"request_id": {"in": request_ids}}
-            )
-
-            total_deleted += len(logs_to_delete)
+            total_deleted += deleted_count
             run_count += 1
 
             # Add a small sleep to prevent overwhelming the database

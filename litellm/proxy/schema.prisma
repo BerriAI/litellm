@@ -499,6 +499,7 @@ model LiteLLM_SpendLogs {
   agent_id            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
+  @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
 }
