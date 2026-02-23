@@ -99,11 +99,9 @@ class GetBlogPosts:
             return cls.load_local_blog_posts()
 
         now = time.time()
-        if (
-            cls._cached_posts is not None
-            and (now - cls._last_fetch_time) < BLOG_POSTS_TTL_SECONDS
-        ):
-            return cls._cached_posts
+        cached = cls._cached_posts
+        if cached is not None and (now - cls._last_fetch_time) < BLOG_POSTS_TTL_SECONDS:
+            return cached
 
         try:
             data = cls.fetch_remote_blog_posts(url)
@@ -119,9 +117,10 @@ class GetBlogPosts:
         if not cls.validate_blog_posts(data):
             return cls.load_local_blog_posts()
 
-        cls._cached_posts = data["posts"]
+        posts = data["posts"]
+        cls._cached_posts = posts
         cls._last_fetch_time = now
-        return cls._cached_posts
+        return posts
 
 
 def get_blog_posts(url: str) -> List[Dict[str, str]]:
