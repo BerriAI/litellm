@@ -21,14 +21,14 @@ def test_validate_custom_code_from_subprocess():
         "from subprocess import call\ndef apply_guardrail(i, r, t):\n    return allow()"
     )
     with pytest.raises(
-        CustomCodeValidationError, match="from...import statements are not allowed"
+        CustomCodeValidationError, match="import statements are not allowed"
     ):
         validate_custom_code(code)
 
 
 def test_validate_custom_code_exec():
     code = "def apply_guardrail(i, r, t):\n    exec('print(1)')\n    return allow()"
-    with pytest.raises(CustomCodeValidationError, match="exec\(\) is not allowed"):
+    with pytest.raises(CustomCodeValidationError, match=r"exec\(\) is not allowed"):
         validate_custom_code(code)
 
 
@@ -43,7 +43,7 @@ def test_validate_custom_code_builtins():
 def test_validate_custom_code_subclasses():
     code = "def apply_guardrail(i, r, t):\n    print(''.__class__.__mro__[1].__subclasses__())\n    return allow()"
     with pytest.raises(
-        CustomCodeValidationError, match="__class__ access is not allowed"
+        CustomCodeValidationError, match="__subclasses__ access is not allowed"
     ):
         validate_custom_code(code)
 
