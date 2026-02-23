@@ -5,6 +5,7 @@ litellm>=1.50.0
 llama-index>=0.10.0
 llama-index-llms-litellm>=0.1.0
 llama-index-embeddings-huggingface>=0.2.0
+llama-index-vector-stores-chroma>=0.1.0
 haystack-ai>=2.0.0
 
 # Evaluation
