@@ -110,6 +110,11 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
 }));
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
+  fetchTeamFilterOptions: vi.fn().mockResolvedValue({
+    keyAliases: [],
+    organizationIds: [],
+    userIds: [],
+  }),
   fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
   fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
@@ -597,8 +602,22 @@ describe("TeamInfoView", () => {
   it("should display X Members in Virtual Keys tab when navigated to", async () => {
     const user = userEvent.setup();
     vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+    const fiveKeys = Array.from({ length: 5 }, (_, i) => ({
+      token: `sk-${i}`,
+      token_id: `key-${i}`,
+      key_alias: `key_${i}`,
+      key_name: `sk-...${i}`,
+      user_id: `user-${i}`,
+      organization_id: null,
+      user: { user_id: `user-${i}`, user_email: `user${i}@test.com` },
+      created_at: "2024-01-01T00:00:00Z",
+      team_id: "123",
+      spend: 0,
+      max_budget: 100,
+      models: ["gpt-4"],
+    }));
     mockUseKeys.mockReturnValue({
-      data: { keys: [], total_count: 5, current_page: 1, total_pages: 1 },
+      data: { keys: fiveKeys, total_count: 5, current_page: 1, total_pages: 1 },
       isPending: false,
       isFetching: false,
       refetch: vi.fn(),
@@ -617,6 +636,56 @@ describe("TeamInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("5 Members")).toBeInTheDocument();
     });
+  });
+
+  it("should show Filters and pagination controls in Virtual Keys tab", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [
+          {
+            token: "sk-1",
+            token_id: "key-1",
+            key_alias: "key1",
+            key_name: "sk-...1",
+            user_id: "user-1",
+            organization_id: null,
+            user: { user_id: "user-1", user_email: "user1@test.com" },
+            created_at: "2024-01-01T00:00:00Z",
+            team_id: "123",
+            spend: 0,
+            max_budget: 100,
+            models: ["gpt-4"],
+          },
+        ],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const virtualKeysTab = screen.getByRole("tab", { name: "Virtual Keys" });
+    await user.click(virtualKeysTab);
+
+    await waitFor(() => {
+      expect(screen.getByText("1 Member")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Filters" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
+    expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
   });
 
   it("should display object permissions when present", async () => {

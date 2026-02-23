@@ -8,7 +8,6 @@ import {
   ColumnDef,
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
   getSortedRowModel,
   PaginationState,
   SortingState,
@@ -28,14 +27,14 @@ import {
 } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Popover, Skeleton, Tooltip } from "antd";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAllKeyAliases, fetchAllOrganizations } from "../key_team_helpers/filter_helpers";
+import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TeamVirtualKeysTableProps {
@@ -69,22 +68,24 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const sortBy = sorting.length > 0 ? sorting[0].id : "created_at";
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : "desc";
 
+  const pageIndex = tablePagination.pageIndex;
+  const pageSize = tablePagination.pageSize;
+
   const {
     data: keys,
     isPending: isLoading,
     isFetching,
     refetch,
-  } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, {
+  } = useKeys(pageIndex + 1, pageSize, {
     teamID: teamId,
+    organizationID: filters["Organization ID"]?.trim() || undefined,
+    selectedKeyAlias: filters["Key Alias"]?.trim() || undefined,
+    userID: filters["User ID"]?.trim() || undefined,
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
-    organizationID: filters["Organization ID"] || undefined,
-    selectedKeyAlias: filters["Key Alias"] || undefined,
-    userID: filters["User ID"] || undefined,
     expand: "user",
   });
 
-  const totalCount = keys?.total_count || 0;
   const displayKeys = useMemo(() => {
     const kList = keys?.keys || [];
     const orgId = organization?.organization_id;
@@ -94,6 +95,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       organization_id: k.organization_id || orgId,
     }));
   }, [keys?.keys, organization?.organization_id]);
+
+  const totalCount = keys?.total_count ?? 0;
+  const pageCount = keys?.total_pages ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   const currentTeam: Team = useMemo(
@@ -114,29 +118,27 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     [teamId, teamAlias, organization],
   );
 
-  const allKeyAliasesQuery = useQuery({
-    queryKey: ["allKeyAliases"],
-    queryFn: async () => fetchAllKeyAliases(accessToken),
-    enabled: !!accessToken,
+  const teamFilterOptionsQuery = useQuery({
+    queryKey: ["teamFilterOptions", teamId],
+    queryFn: async () => fetchTeamFilterOptions(accessToken, teamId),
+    enabled: !!accessToken && !!teamId,
   });
-  const allKeyAliases = allKeyAliasesQuery.data || [];
+  const teamFilterOptions = teamFilterOptionsQuery.data || {
+    keyAliases: [],
+    organizationIds: [],
+    userIds: [],
+  };
 
-  const allOrganizationsQuery = useQuery({
-    queryKey: ["allOrganizations"],
-    queryFn: async () => fetchAllOrganizations(accessToken),
-    enabled: !!accessToken,
-  });
-  const allOrganizations = allOrganizationsQuery.data || [];
-
-  useEffect(() => {
-    if (refetch) {
-      const handleStorageChange = () => refetch();
-      window.addEventListener("storage", handleStorageChange);
-      return () => window.removeEventListener("storage", handleStorageChange);
-    }
+  const handleStorageChange = useCallback(() => {
+    refetch?.();
   }, [refetch]);
 
-  const handleFilterChange = (newFilters: Record<string, string>, skipDebounce = false) => {
+  useEffect(() => {
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [handleStorageChange]);
+
+  const handleFilterChange = useCallback((newFilters: Record<string, string>, skipDebounce = false) => {
     setFilters((prev) => ({
       ...prev,
       "Organization ID": newFilters["Organization ID"] ?? prev["Organization ID"],
@@ -148,9 +150,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     if (!skipDebounce) {
       setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
     }
-  };
+  }, []);
 
-  const handleFilterReset = () => {
+  const handleFilterReset = useCallback(() => {
     setFilters({
       "Organization ID": "",
       "Key Alias": "",
@@ -159,7 +161,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       "Sort Order": "desc",
     });
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-  };
+  }, []);
 
   const filterOptions: FilterOption[] = useMemo(
     () => [
@@ -168,16 +170,13 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         label: "Organization ID",
         isSearchable: true,
         searchFn: async (searchText: string) => {
-          if (!allOrganizations.length) return [];
-          const filtered = allOrganizations.filter(
-            (org) => org.organization_id?.toLowerCase().includes(searchText.toLowerCase()) ?? false,
-          );
-          return filtered
-            .filter((org) => org.organization_id != null)
-            .map((org) => ({
-              label: `${org.organization_id || "Unknown"} (${org.organization_id})`,
-              value: org.organization_id as string,
-            }));
+          const { organizationIds } = teamFilterOptions;
+          if (!organizationIds.length) return [];
+          const lower = searchText.toLowerCase();
+          const filtered = lower
+            ? organizationIds.filter((id) => id.toLowerCase().includes(lower))
+            : organizationIds;
+          return filtered.map((id) => ({ label: id, value: id }));
         },
       },
       {
@@ -185,15 +184,35 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         label: "Key Alias",
         isSearchable: true,
         searchFn: async (searchText: string) => {
-          const filtered = allKeyAliases.filter((alias) =>
-            alias.toLowerCase().includes(searchText.toLowerCase()),
-          );
+          const { keyAliases } = teamFilterOptions;
+          const lower = searchText.toLowerCase();
+          const filtered = lower
+            ? keyAliases.filter((alias) => alias.toLowerCase().includes(lower))
+            : keyAliases;
           return filtered.map((alias) => ({ label: alias, value: alias }));
         },
       },
-      { name: "User ID", label: "User ID", isSearchable: false },
+      {
+        name: "User ID",
+        label: "User ID",
+        isSearchable: true,
+        searchFn: async (searchText: string) => {
+          const { userIds } = teamFilterOptions;
+          const lower = searchText.toLowerCase();
+          const filtered = lower
+            ? userIds.filter(
+                (u) =>
+                  u.id.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower),
+              )
+            : userIds;
+          return filtered.map((u) => ({
+            label: u.email ? `${u.id} (${u.email})` : u.id,
+            value: u.id,
+          }));
+        },
+      },
     ],
-    [allOrganizations, allKeyAliases],
+    [teamFilterOptions],
   );
 
   const columns: ColumnDef<KeyResponse>[] = useMemo(
@@ -521,13 +540,8 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     [expandedAccordions],
   );
 
-  const table = useReactTable({
-    data: displayKeys,
-    columns,
-    columnResizeMode: "onChange",
-    columnResizeDirection: "ltr",
-    state: { sorting, pagination: tablePagination },
-    onSortingChange: (updaterOrValue) => {
+  const handleSortingChange = useCallback(
+    (updaterOrValue: React.SetStateAction<SortingState>) => {
       const newSorting =
         typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
@@ -535,7 +549,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         const sortState = newSorting[0];
         handleFilterChange(
           {
-            ...filters,
             "Sort By": sortState.id,
             "Sort Order": sortState.desc ? "desc" : "asc",
           },
@@ -543,17 +556,25 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         );
       }
     },
+    [sorting, handleFilterChange],
+  );
+
+  const table = useReactTable({
+    data: displayKeys,
+    columns,
+    columnResizeMode: "onChange",
+    columnResizeDirection: "ltr",
+    state: { sorting, pagination: tablePagination },
+    onSortingChange: handleSortingChange,
     onPaginationChange: setTablePagination,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     enableSorting: true,
     manualSorting: false,
     manualPagination: true,
-    pageCount: Math.ceil(totalCount / tablePagination.pageSize),
+    pageCount: pageCount,
   });
 
-  const { pageIndex, pageSize } = table.getState().pagination;
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKey ? (
