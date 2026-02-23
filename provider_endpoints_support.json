@@ -231,7 +231,7 @@
     },
     "brainiall": {
       "display_name": "Brainiall (`brainiall`)",
-      "url": "https://brainiall.com",
+      "url": "https://docs.litellm.ai/docs/providers/brainiall",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
