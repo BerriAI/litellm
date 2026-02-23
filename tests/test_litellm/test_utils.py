@@ -577,6 +577,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
 
     If this test fails after you update the json, you need to update the schema or correct the change you made.
     """
+    from pathlib import Path
 
     INTENDED_SCHEMA = {
         "type": "object",
