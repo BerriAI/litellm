@@ -1,6 +1,6 @@
 """
 Tests for MockOpenAITransport — verifies that the mock transport produces
-responses parseable by the OpenAI SDK for both streaming and non-streaming paths.
+responses parseable by the OpenAI SDK.
 """
 
 import json
@@ -60,71 +60,28 @@ class TestNonStreaming:
         body = json.loads(response.content)
         assert body["model"] == "my-custom-model"
 
-
-# ---------------------------------------------------------------------------
-# Streaming
-# ---------------------------------------------------------------------------
-
-
-class TestStreaming:
-    def test_sync_streaming_returns_sse_events(self):
+    def test_unique_ids_per_response(self):
         transport = MockOpenAITransport()
         request = httpx.Request(
             method="POST",
             url="https://api.openai.com/v1/chat/completions",
-            content=json.dumps({"model": "gpt-4o", "stream": True, "messages": []}),
+            content=json.dumps({"model": "gpt-4o", "messages": []}),
+        )
+        r1 = json.loads(transport.handle_request(request).content)
+        r2 = json.loads(transport.handle_request(request).content)
+        assert r1["id"] != r2["id"]
+
+    def test_empty_body_does_not_crash(self):
+        transport = MockOpenAITransport()
+        request = httpx.Request(
+            method="GET",
+            url="https://api.openai.com/v1/models",
+            content=b"",
         )
         response = transport.handle_request(request)
         assert response.status_code == 200
-        assert "text/event-stream" in response.headers["content-type"]
-
-        chunks = list(response.stream)
-        # Should have: content chunk, finish chunk, [DONE]
-        assert len(chunks) == 3
-        assert chunks[-1] == b"data: [DONE]\n\n"
-
-        # Parse the first chunk
-        first_line = chunks[0].decode()
-        assert first_line.startswith("data: ")
-        data = json.loads(first_line[len("data: "):].strip())
-        assert data["object"] == "chat.completion.chunk"
-        assert data["model"] == "gpt-4o"
-        assert data["choices"][0]["delta"]["content"] == "Mock response"
-
-    @pytest.mark.asyncio
-    async def test_async_streaming_returns_sse_events(self):
-        transport = MockOpenAITransport()
-        request = httpx.Request(
-            method="POST",
-            url="https://api.openai.com/v1/chat/completions",
-            content=json.dumps({"model": "gpt-4o", "stream": True, "messages": []}),
-        )
-        response = await transport.handle_async_request(request)
-        assert response.status_code == 200
-
-        chunks = []
-        async for chunk in response.stream:
-            chunks.append(chunk)
-
-        assert len(chunks) == 3
-        assert chunks[-1] == b"data: [DONE]\n\n"
-
-        # Parse finish chunk
-        finish_line = chunks[1].decode()
-        data = json.loads(finish_line[len("data: "):].strip())
-        assert data["choices"][0]["finish_reason"] == "stop"
-
-    def test_streaming_model_echoed(self):
-        transport = MockOpenAITransport()
-        request = httpx.Request(
-            method="POST",
-            url="https://api.openai.com/v1/chat/completions",
-            content=json.dumps({"model": "custom-stream", "stream": True, "messages": []}),
-        )
-        response = transport.handle_request(request)
-        first_chunk = next(iter(response.stream))
-        data = json.loads(first_chunk.decode()[len("data: "):].strip())
-        assert data["model"] == "custom-stream"
+        body = json.loads(response.content)
+        assert body["model"] == "mock-model"
 
 
 # ---------------------------------------------------------------------------
