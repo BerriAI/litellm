@@ -176,9 +176,6 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             or general_settings.get("completion_model", None)  # server default
         )
 
-        if user_model:
-            data["model"] = user_model
-
         data = await add_litellm_data_to_request(
             data=data,  # type: ignore
             request=request,

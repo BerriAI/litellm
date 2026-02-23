@@ -1564,3 +1564,96 @@ class TestStreamingOverheadHeader:
             "It was missing — this is the streaming overhead header regression."
         )
         assert custom_headers["x-litellm-overhead-duration-ms"] == "55.3"
+
+
+@pytest.mark.asyncio
+async def test_completion_model_fallback_logic(monkeypatch):
+    """
+    Test that 'completion_model' in 'general_settings' acts as a fallback,
+    not a hard override for the model specified in the request.
+    """
+    # Initialize the processing object with a request model
+    request_model = "gpt-3.5-turbo"
+    processing_obj = ProxyBaseLLMRequestProcessing(data={"model": request_model})
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    # Mock add_litellm_data_to_request to return the data as-is
+    async def mock_add_litellm_data_to_request(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(
+        "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+        mock_add_litellm_data_to_request,
+    )
+
+    # Mock other necessary objects
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.aliases = None
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "sk-123"
+    mock_user_api_key_dict.metadata = {}
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type: data
+    )
+
+    mock_proxy_config = MagicMock()
+    mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value={})
+
+    # 1. Test case: Request has a model, general_settings has completion_model
+    # The request model should win.
+    general_settings = {"completion_model": "gpt-4-fallback"}
+
+    returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+        request=mock_request,
+        general_settings=general_settings,
+        user_api_key_dict=mock_user_api_key_dict,
+        proxy_logging_obj=mock_proxy_logging_obj,
+        proxy_config=mock_proxy_config,
+        route_type="acompletion",
+    )
+
+    assert (
+        returned_data["model"] == request_model
+    ), f"Expected {request_model}, but got {returned_data['model']}. completion_model should be a fallback."
+
+    # 2. Test case: Request has NO model, general_settings has completion_model
+    # The completion_model should be used.
+    processing_obj_no_model = ProxyBaseLLMRequestProcessing(data={})
+
+    (
+        returned_data_no_model,
+        _,
+    ) = await processing_obj_no_model.common_processing_pre_call_logic(
+        request=mock_request,
+        general_settings=general_settings,
+        user_api_key_dict=mock_user_api_key_dict,
+        proxy_logging_obj=mock_proxy_logging_obj,
+        proxy_config=mock_proxy_config,
+        route_type="acompletion",
+    )
+
+    assert (
+        returned_data_no_model["model"] == "gpt-4-fallback"
+    ), f"Expected gpt-4-fallback, but got {returned_data_no_model['model']}. completion_model should be used when no model is in request."
+
+    # 3. Test case: user_model (CLI) is provided
+    # user_model should win over everything.
+    user_model_cli = "gpt-4-cli-override"
+
+    returned_data_cli, _ = await processing_obj.common_processing_pre_call_logic(
+        request=mock_request,
+        general_settings=general_settings,
+        user_api_key_dict=mock_user_api_key_dict,
+        proxy_logging_obj=mock_proxy_logging_obj,
+        proxy_config=mock_proxy_config,
+        route_type="acompletion",
+        user_model=user_model_cli,
+    )
+
+    assert (
+        returned_data_cli["model"] == user_model_cli
+    ), f"Expected {user_model_cli}, but got {returned_data_cli['model']}. CLI user_model should have highest precedence."
