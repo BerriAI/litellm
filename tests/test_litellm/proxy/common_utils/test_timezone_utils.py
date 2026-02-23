@@ -4,7 +4,6 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -80,7 +79,7 @@ class TestGetBudgetResetTimezone:
             elif hasattr(litellm, "timezone"):
                 delattr(litellm, "timezone")
     
-    def test_returns_cofigured_timezone(self):
+    def test_returns_configured_timezone(self):
         """
         When litellm.timezone is any timezone ( Asia/Tokyo etc. ), the function returns connfigured value. 
         """
