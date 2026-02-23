@@ -16,12 +16,17 @@ REQUEST_BODY = {
     "user": "new_user",
 }
 
+HEADERS = {
+    "Authorization": "Bearer sk-1234",
+    "Content-Type": "application/json",
+}
+
 
 async def send_request(session, url, semaphore):
     async with semaphore:
         start = time.perf_counter()
         try:
-            async with session.post(url, json=REQUEST_BODY) as resp:
+            async with session.post(url, json=REQUEST_BODY, headers=HEADERS) as resp:
                 await resp.read()
                 elapsed = time.perf_counter() - start
                 return elapsed if resp.status == 200 else None
@@ -49,6 +54,14 @@ async def run_benchmark(url, n_requests, max_concurrent):
 
     latencies = [r for r in results if r is not None]
     failures = sum(1 for r in results if r is None)
+
+    if not latencies:
+        return {
+            "mean": 0, "p50": 0, "p95": 0, "p99": 0,
+            "throughput": 0, "failures": n_requests,
+            "wall_time": wall_elapsed, "n_requests": n_requests,
+            "max_concurrent": max_concurrent, "latencies": [],
+        }
 
     latencies.sort()
     n = len(latencies)
