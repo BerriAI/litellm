@@ -947,9 +947,15 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params = self._add_tools_to_optional_params(
                         optional_params=optional_params, tools=[grounding_tool]
                     )
-            if param == "context_management" and isinstance(value, dict):
-                # Pass through Anthropic-specific context_management parameter
-                optional_params["context_management"] = value
+            if param == "context_management" and isinstance(value, (list, dict)):
+                # Supports both OpenAI list format and Anthropic dict format
+                anthropic_context_management = (
+                    AnthropicConfig.map_openai_context_management_to_anthropic(value)
+                )
+                if anthropic_context_management is not None:
+                    optional_params["context_management"] = (
+                        anthropic_context_management
+                    )
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
         # Nova 2 handles token budgeting differently through reasoningConfig
