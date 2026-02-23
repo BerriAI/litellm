@@ -8,16 +8,28 @@ from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmPara
 
 def test_get_guardrail_initializer_from_hooks():
     initializers = get_guardrail_initializer_from_hooks()
-    print(f"initializers: {initializers}")
     assert "aim" in initializers
 
 
 def test_guardrail_class_registry():
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    print(f"guardrail_class_registry: {guardrail_class_registry}")
     assert "aim" in guardrail_class_registry
     assert "aporia" in guardrail_class_registry
+
+
+def test_noma_registry_resolution():
+    from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaGuardrail
+    from litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2 import NomaV2Guardrail
+    from litellm.proxy.guardrails.guardrail_registry import (
+        guardrail_class_registry,
+        guardrail_initializer_registry,
+    )
+
+    assert guardrail_class_registry["noma"] is NomaGuardrail
+    assert guardrail_class_registry["noma_v2"] is NomaV2Guardrail
+    assert "noma" in guardrail_initializer_registry
+    assert "noma_v2" in guardrail_initializer_registry
 
 
 def test_update_in_memory_guardrail():

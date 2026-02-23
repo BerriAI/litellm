@@ -801,6 +801,83 @@ def test_openai_transform_video_content_request_empty_params():
     assert params == {}
 
 
+@pytest.mark.parametrize(
+    "variant,expected_suffix",
+    [
+        ("thumbnail", "?variant=thumbnail"),
+        ("spritesheet", "?variant=spritesheet"),
+    ],
+)
+def test_openai_transform_video_content_request_with_variant(variant, expected_suffix):
+    """OpenAI content transform should append ?variant= when variant is provided."""
+    config = OpenAIVideoConfig()
+    url, params = config.transform_video_content_request(
+        video_id="video_123",
+        api_base="https://api.openai.com/v1/videos",
+        litellm_params={},
+        headers={},
+        variant=variant,
+    )
+
+    assert url == f"https://api.openai.com/v1/videos/video_123/content{expected_suffix}"
+    assert params == {}
+
+
+def test_openai_transform_video_content_request_variant_none_no_query_param():
+    """OpenAI content transform should NOT append ?variant= when variant is None."""
+    config = OpenAIVideoConfig()
+    url, params = config.transform_video_content_request(
+        video_id="video_123",
+        api_base="https://api.openai.com/v1/videos",
+        litellm_params={},
+        headers={},
+        variant=None,
+    )
+
+    assert "variant" not in url
+    assert url == "https://api.openai.com/v1/videos/video_123/content"
+
+
+def test_video_content_handler_passes_variant_to_url():
+    """HTTP handler should pass variant through to the final URL."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_response = MagicMock()
+    mock_response.content = b"thumbnail-bytes"
+    mock_client.get.return_value = mock_response
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        return_value=mock_client,
+    ):
+        result = handler.video_content_handler(
+            video_id="video_abc",
+            video_content_provider_config=config,
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(
+                api_base="https://api.openai.com/v1"
+            ),
+            logging_obj=MagicMock(),
+            timeout=5.0,
+            api_key="sk-test",
+            client=mock_client,
+            _is_async=False,
+            variant="thumbnail",
+        )
+
+    assert result == b"thumbnail-bytes"
+    called_url = mock_client.get.call_args.kwargs["url"]
+    assert called_url == "https://api.openai.com/v1/videos/video_abc/content?variant=thumbnail"
+
+
 def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

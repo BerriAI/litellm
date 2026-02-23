@@ -493,6 +493,56 @@
       "description": "Detects airline flight numbers (major IATA 2-letter codes + 1-4 digit flight number) when near flight context",
       "keyword_pattern": "\\b(?:flight|departure|arrival|gate|boarding|schedule|operate|route|aircraft|plane|outbound|inbound|leg|sector|flying)\\b",
       "allow_word_numbers": false
+    },
+    {
+      "name": "sg_nric",
+      "display_name": "NRIC/FIN (Singapore National ID)",
+      "pattern": "\\b[STFGM]\\d{7}[A-Z]\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore NRIC and FIN numbers (S/T for citizens/PRs, F/G/M for foreigners + 7 digits + checksum letter)"
+    },
+    {
+      "name": "sg_phone",
+      "display_name": "Phone Number (Singapore)",
+      "pattern": "(?<!\\d)(?:\\+65|0065|65)\\s?[689]\\d{3}\\s?\\d{4}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore phone numbers (+65/0065/65 prefix with 6/8/9 starting digit for landline and mobile)"
+    },
+    {
+      "name": "sg_postal_code",
+      "display_name": "Postal Code (Singapore)",
+      "pattern": "\\b[0-8]\\d{5}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore 6-digit postal codes (ranges 01xxxx to 83xxxx)",
+      "keyword_pattern": "\\b(?:postal\\s*code|postcode|zip\\s*code|Singapore\\s*\\d|blk|block|address|HDB|flat|unit)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "passport_singapore",
+      "display_name": "Passport (Singapore)",
+      "pattern": "\\b[EK]\\d{7}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore passport numbers (E/K prefix + 7 digits)",
+      "keyword_pattern": "\\b(?:passport|travel\\s*document|document\\s*number|immigration|ICA)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_uen",
+      "display_name": "UEN (Singapore Unique Entity Number)",
+      "pattern": "\\b(?:\\d{8}[A-Z]|\\d{9}[A-Z]|[TR]\\d{2}[A-Z]{2}\\d{4}[A-Z])\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore Unique Entity Numbers for business registration (various formats: 8/9 digits + letter, or T/R prefix)",
+      "keyword_pattern": "\\b(?:UEN|company\\s*registration|business\\s*registration|ACRA|entity\\s*number|ROC|ROS)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_bank_account",
+      "display_name": "Bank Account (Singapore)",
+      "pattern": "\\b\\d{3}-\\d{5,6}-\\d{1,3}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore bank account numbers (XXX-XXXXX(X)-X(XX) format for DBS/POSB/OCBC/UOB)",
+      "keyword_pattern": "\\b(?:bank\\s*account|account\\s*number|DBS|OCBC|UOB|POSB|savings|current\\s*account|bank\\s*statement)\\b",
+      "allow_word_numbers": false
     }
   ]
 }
