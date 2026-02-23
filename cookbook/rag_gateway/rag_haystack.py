@@ -13,8 +13,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 
-from haystack import Pipeline, Document
-from haystack.components.retrievers.in_memory import InMemoryBM25Retriever
+from haystack import Pipeline, Document, component
 from haystack.components.builders import PromptBuilder
 from haystack.document_stores.in_memory import InMemoryDocumentStore
 from haystack.components.embedders import SentenceTransformersDocumentEmbedder, SentenceTransformersTextEmbedder
@@ -45,6 +44,7 @@ def load_documents(data_path: str = "sample_data/documents.json") -> List[Docume
     return documents
 
 
+@component
 class LiteLLMGenerator:
     """
     Custom Haystack component that uses LiteLLM for generation.
@@ -73,6 +73,7 @@ class LiteLLMGenerator:
         
         print(f"✅ Configured LiteLLM Generator with model: {model}")
     
+    @component.output_types(replies=List[str], meta=Dict[str, Any])
     def run(self, prompt: str) -> Dict[str, Any]:
         """
         Generate response using LiteLLM.

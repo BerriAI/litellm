@@ -9,7 +9,7 @@ llama-index-vector-stores-chroma>=0.1.0
 haystack-ai>=2.0.0
 
 # Evaluation
-ragas>=0.1.0
+ragas>=0.1.0,<0.2.0
 datasets>=2.14.0
 
 # Vector Store & Embeddings

@@ -19,7 +19,7 @@ This cookbook showcases:
 rag_gateway/
 ├── README.md                      # This file
 ├── requirements.txt               # Python dependencies
-├── litellm_config.yaml           # Multi-provider configuration (optional)
+├── litellm_config.example.yaml   # Multi-provider configuration (optional)
 ├── rag_llamaindex.py             # LlamaIndex RAG pipeline
 ├── rag_haystack.py               # Haystack RAG pipeline
 ├── evaluate_with_ragas.py        # RAGAS evaluation script
@@ -166,7 +166,7 @@ llm = setup_litellm(model_name="azure/gpt-4-deployment-name")
 
 ### Using Configuration File (Optional)
 
-The `litellm_config.yaml` file demonstrates advanced configuration:
+The `litellm_config.example.yaml` file demonstrates advanced configuration:
 
 ```yaml
 model_list:

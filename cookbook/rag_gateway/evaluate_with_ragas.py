@@ -172,11 +172,22 @@ def evaluate_rag_system(
     """
     print(f"\n📊 Evaluating with RAGAS (using {eval_model} as judge)...")
     
+    # Require API key explicitly — do not silently fall back to a dummy value
+    if not os.getenv("OPENAI_API_KEY"):
+        raise ValueError(
+            "OPENAI_API_KEY is not set. "
+            "RAGAS requires an LLM to act as a judge. "
+            "Set it with: export OPENAI_API_KEY='your-key-here'"
+        )
+    
     # Convert to RAGAS dataset format
     dataset = Dataset.from_dict(rag_data)
     
-    # Configure RAGAS to use LiteLLM
-    os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "dummy-key")
+    # Wire eval_model into RAGAS via LangchainLLMWrapper so the user-specified
+    # judge model is actually used instead of the RAGAS default.
+    from langchain_openai import ChatOpenAI
+    from ragas.llms import LangchainLLMWrapper
+    eval_llm = LangchainLLMWrapper(ChatOpenAI(model=eval_model))
     
     # Run evaluation
     try:
@@ -188,6 +199,7 @@ def evaluate_rag_system(
                 context_precision,
                 context_recall,
             ],
+            llm=eval_llm,
         )
         
         scores = {
