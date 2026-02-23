@@ -62,6 +62,7 @@ redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.
 mcp = {version = ">=1.25.0,<2.0.0", optional = true, python = ">=3.10"}
 a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
 litellm-proxy-extras = {version = "0.4.46", optional = true}
+langdetect = {version = "*", optional = true}
 rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.32", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
@@ -106,6 +107,7 @@ proxy = [
     "polars",
     "soundfile",
     "pyroscope-io",
+    "langdetect",
 ]
 
 extra_proxy = [

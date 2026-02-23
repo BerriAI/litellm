@@ -10,19 +10,13 @@ from typing import Any, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    ModifyResponseException,
-)
+from litellm.integrations.custom_guardrail import (CustomGuardrail,
+                                                   ModifyResponseException)
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-    UnifiedLLMGuardrails,
-)
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import \
+    UnifiedLLMGuardrails
 from litellm.types.proxy.policy_engine.pipeline_types import (
-    PipelineExecutionResult,
-    PipelineStep,
-    PipelineStepResult,
-)
+    PipelineExecutionResult, PipelineStep, PipelineStepResult)
 
 try:
     from fastapi.exceptions import HTTPException
@@ -61,7 +55,9 @@ class PipelineExecutor:
         if "metadata" in working_data:
             working_data["metadata"] = working_data["metadata"].copy()
 
-        for i, step in enumerate(steps):
+        i = 0
+        while i < len(steps):
+            step = steps[i]
             start_time = time.perf_counter()
 
             outcome, modified_data, error_detail = await PipelineExecutor._run_step(
@@ -95,6 +91,47 @@ class PipelineExecutor:
             if step.pass_data and modified_data is not None:
                 working_data = {**working_data, **modified_data}
 
+            # Decider branching: when step passes and decider_branches is set, branch by detection_info
+            decider_branches = getattr(step, "decider_branches", None)
+            if (
+                outcome == "pass"
+                and decider_branches is not None
+                and len(decider_branches) > 0
+            ):
+                detections = working_data.get("metadata", {}).get("detections", [])
+                detection_info: dict = {}
+                for entry in reversed(detections):
+                    if entry.get("guardrail_name") == step.guardrail:
+                        detection_info = entry.get("detection_info") or {}
+                        break
+                default_next: Optional[int] = None
+                next_index = i + 1
+                for branch in decider_branches:
+                    if branch.condition is None:
+                        default_next = branch.next_step_index
+                    else:
+                        val = detection_info.get(branch.condition.key)
+                        cond = branch.condition
+                        if cond.op == "eq":
+                            match = val == cond.value
+                        elif cond.op == "ne":
+                            match = val != cond.value
+                        elif cond.op == "in":
+                            match = (
+                                isinstance(cond.value, list) and val in cond.value
+                            )
+                        else:
+                            match = False
+                        if match:
+                            next_index = branch.next_step_index
+                            break
+                else:
+                    next_index = (
+                        default_next if default_next is not None else i + 1
+                    )
+                i = next_index
+                continue
+
             # Handle terminal actions
             if action == "allow":
                 return PipelineExecutionResult(
@@ -114,10 +151,12 @@ class PipelineExecutor:
                 return PipelineExecutionResult(
                     terminal_action="modify_response",
                     step_results=step_results,
-                    modify_response_message=step.modify_response_message or error_detail,
+                    modify_response_message=step.modify_response_message
+                    or error_detail,
                 )
 
             # action == "next" → continue to next step
+            i += 1
 
         # Ran out of steps without a terminal action → default allow
         return PipelineExecutionResult(

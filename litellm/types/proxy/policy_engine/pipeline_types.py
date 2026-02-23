@@ -14,6 +14,37 @@ VALID_PIPELINE_ACTIONS = {"allow", "block", "next", "modify_response"}
 VALID_PIPELINE_MODES = {"pre_call", "post_call"}
 
 
+class DeciderBranchCondition(BaseModel):
+    """
+    Condition for a decider branch: compare detection_info[key] with value using op.
+    """
+
+    key: str = Field(description="Key in detection_info to evaluate.")
+    op: Literal["eq", "ne", "in"] = Field(
+        description="Comparison: eq (==), ne (!=), in (val in value list)."
+    )
+    value: Any = Field(description="Value to compare against (list for 'in' op).")
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class DeciderBranch(BaseModel):
+    """
+    Branch target for decider steps. condition=None is the default branch.
+    """
+
+    condition: Optional[DeciderBranchCondition] = Field(
+        default=None,
+        description="When None, this is the default branch; otherwise branch when condition matches.",
+    )
+    next_step_index: int = Field(
+        description="Index of the next pipeline step to run when this branch is taken.",
+        ge=0,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class PipelineStep(BaseModel):
     """
     A single step in a guardrail pipeline.
@@ -37,6 +68,10 @@ class PipelineStep(BaseModel):
     modify_response_message: Optional[str] = Field(
         default=None,
         description="Custom message for modify_response action.",
+    )
+    decider_branches: Optional[List[DeciderBranch]] = Field(
+        default=None,
+        description="When set and step passes, branch to next_step_index based on detection_info; condition None = default branch.",
     )
 
     model_config = ConfigDict(extra="forbid")

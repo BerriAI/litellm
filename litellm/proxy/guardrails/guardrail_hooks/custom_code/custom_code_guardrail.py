@@ -41,18 +41,18 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (CustomGuardrail,
-                                                   log_guardrail_information)
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.base import \
-    GuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .primitives import get_custom_code_primitives
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class CustomCodeGuardrailError(Exception):
@@ -321,6 +321,12 @@ class CustomCodeGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug(
                 f"Custom code guardrail '{self.guardrail_name}': Allowing {input_type}"
             )
+            # Pass detection_info to base for logging and request_data["metadata"]["detections"]
+            detection_info = result.get("detection_info")
+            if detection_info is not None:
+                request_data.setdefault("metadata", {})[
+                    "_last_guardrail_detection_info"
+                ] = detection_info
             return inputs
 
         elif action == "block":

@@ -21,14 +21,42 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 # =============================================================================
 
 
-def allow() -> Dict[str, Any]:
+def allow(
+    detection_info: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Allow the request/response to proceed unchanged.
+
+    Optionally attach detection metadata (e.g. for detector-style guardrails
+    that return yes/no without blocking). The detection_info is logged and
+    appended to request_data["metadata"]["detections"] for downstream use.
+
+    Args:
+        detection_info: Optional detection result (e.g. {"is_english": True, "language": "en"})
 
     Returns:
         Dict indicating the request should be allowed
     """
-    return {"action": "allow"}
+    result: Dict[str, Any] = {"action": "allow"}
+    if detection_info is not None:
+        result["detection_info"] = detection_info
+    return result
+
+
+def detect(detected: bool, **kwargs: Any) -> Dict[str, Any]:
+    """
+    Allow and attach a yes/no detection result (convenience for detector guardrails).
+
+    Returns the same as allow(detection_info={"detected": detected, **kwargs}).
+
+    Args:
+        detected: The detection result (e.g. True for "is English")
+        **kwargs: Additional keys to include in detection_info (e.g. language="en")
+
+    Returns:
+        Dict indicating allow with detection_info
+    """
+    return allow(detection_info={"detected": detected, **kwargs})
 
 
 def block(
@@ -771,6 +799,82 @@ def trim(text: str) -> str:
 
 
 # =============================================================================
+# Language Detection Primitive
+# =============================================================================
+
+# Common English words used for heuristic language detection when langdetect is unavailable
+_COMMON_ENGLISH_WORDS = frozenset(
+    {"the", "and", "is", "to", "of", "in", "it", "you", "that"}
+)
+
+
+def _detect_language_heuristic(text: str) -> str:
+    """
+    Best-effort heuristic: ASCII-heavy text with enough common English words -> "en".
+    """
+    if not text or not text.strip():
+        return "unknown"
+    text = text.strip()
+    # Require majority of characters to be ASCII
+    ascii_count = sum(1 for c in text if ord(c) < 128)
+    if len(text) == 0 or ascii_count / len(text) < 0.5:
+        return "unknown"
+    words = [w.lower() for w in text.split() if w]
+    if not words:
+        return "unknown"
+    matches = sum(1 for w in words if w in _COMMON_ENGLISH_WORDS)
+    # Consider English if at least 2 common words, or >= 20% of words are common
+    if matches >= 2 or (matches / len(words)) >= 0.2:
+        return "en"
+    return "unknown"
+
+
+def detect_language(text: str) -> str:
+    """
+    Detect the language of text (best-effort).
+
+    Returns an ISO 639-1 code (e.g. "en", "es") or "unknown" if detection fails.
+    Uses the optional langdetect library when available; otherwise falls back to a
+    simple heuristic: empty text -> "unknown"; if most characters are ASCII and
+    enough words match a small set of common English words ("the", "and", "is",
+    etc.), returns "en", else "unknown".
+
+    Args:
+        text: The text to analyze
+
+    Returns:
+        Two-letter language code, or "unknown" if detection fails or is unavailable
+    """
+    if not text or not text.strip():
+        return "unknown"
+    text = text.strip()
+    try:
+        import langdetect
+
+        return langdetect.detect(text)
+    except ImportError:
+        return _detect_language_heuristic(text)
+    except Exception as e:
+        verbose_proxy_logger.debug(f"detect_language failed: {e}")
+        return _detect_language_heuristic(text)
+
+
+def is_english(text: str) -> bool:
+    """
+    Return True if the text is detected as English, False otherwise.
+
+    Uses detect_language(text) == "en". Best-effort; see detect_language().
+
+    Args:
+        text: The text to check
+
+    Returns:
+        True if language is detected as English, False otherwise
+    """
+    return detect_language(text) == "en"
+
+
+# =============================================================================
 # Primitives Registry
 # =============================================================================
 
@@ -787,6 +891,7 @@ def get_custom_code_primitives() -> Dict[str, Any]:
         "allow": allow,
         "block": block,
         "modify": modify,
+        "detect": detect,
         # Regex
         "regex_match": regex_match,
         "regex_match_all": regex_match_all,
@@ -809,6 +914,9 @@ def get_custom_code_primitives() -> Dict[str, Any]:
         "detect_code": detect_code,
         "detect_code_languages": detect_code_languages,
         "contains_code_language": contains_code_language,
+        # Language detection
+        "detect_language": detect_language,
+        "is_english": is_english,
         # Text utilities
         "contains": contains,
         "contains_any": contains_any,

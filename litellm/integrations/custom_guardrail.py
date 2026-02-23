@@ -644,10 +644,24 @@ class CustomGuardrail(CustomLogger):
 
         # For apply_guardrail functions in custom_code_guardrail scenario,
         # simplify the logged response to "allow", "deny", or "mask"
+        # If detector set _last_guardrail_detection_info, include it in logging and detections
+        metadata = request_data.get("metadata") or {}
+        last_detection = metadata.pop("_last_guardrail_detection_info", None)
+
         if original_inputs is not None and isinstance(response, dict):
             # Check if inputs were modified by comparing them
             if self._inputs_were_modified(original_inputs, response):
                 guardrail_response = "mask"
+            elif last_detection is not None:
+                guardrail_response = {"allow": True, "detection_info": last_detection}
+                request_data.setdefault("metadata", {}).setdefault(
+                    "detections", []
+                ).append(
+                    {
+                        "guardrail_name": self.guardrail_name,
+                        "detection_info": last_detection,
+                    }
+                )
             else:
                 guardrail_response = "allow"
 

@@ -6,15 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.types.proxy.policy_engine.pipeline_types import (
-    GuardrailPipeline,
-    PipelineExecutionResult,
-    PipelineStep,
-    PipelineStepResult,
-)
-from litellm.types.proxy.policy_engine.policy_types import (
-    Policy,
-    PolicyGuardrails,
-)
+    DeciderBranch, DeciderBranchCondition, GuardrailPipeline,
+    PipelineExecutionResult, PipelineStep, PipelineStepResult)
+from litellm.types.proxy.policy_engine.policy_types import (Policy,
+                                                            PolicyGuardrails)
 
 
 def test_pipeline_step_defaults():
@@ -136,6 +131,46 @@ def test_pipeline_execution_result():
     )
     assert result.terminal_action == "block"
     assert len(result.step_results) == 2
+
+
+def test_decider_branch_condition():
+    c = DeciderBranchCondition(key="language", op="eq", value="en")
+    assert c.key == "language"
+    assert c.op == "eq"
+    assert c.value == "en"
+    c_in = DeciderBranchCondition(key="tag", op="in", value=["a", "b"])
+    assert c_in.op == "in"
+    assert c_in.value == ["a", "b"]
+
+
+def test_decider_branch_default_and_conditional():
+    default_branch = DeciderBranch(condition=None, next_step_index=2)
+    assert default_branch.condition is None
+    assert default_branch.next_step_index == 2
+    cond_branch = DeciderBranch(
+        condition=DeciderBranchCondition(key="detected", op="eq", value=True),
+        next_step_index=1,
+    )
+    assert cond_branch.condition is not None
+    assert cond_branch.condition.key == "detected"
+
+
+def test_pipeline_step_with_decider_branches():
+    step = PipelineStep(
+        guardrail="detector",
+        on_pass="next",
+        decider_branches=[
+            DeciderBranch(
+                condition=DeciderBranchCondition(key="language", op="in", value=["en"]),
+                next_step_index=1,
+            ),
+            DeciderBranch(condition=None, next_step_index=2),
+        ],
+    )
+    assert step.decider_branches is not None
+    assert len(step.decider_branches) == 2
+    assert step.decider_branches[0].condition is not None
+    assert step.decider_branches[1].condition is None
 
 
 def test_pipeline_step_extra_fields_rejected():

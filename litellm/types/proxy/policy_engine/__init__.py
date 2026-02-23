@@ -11,31 +11,59 @@ Configuration:
 """
 
 from litellm.types.proxy.policy_engine.pipeline_types import (
-    GuardrailPipeline, PipelineExecutionResult, PipelineStep,
-    PipelineStepResult)
-from litellm.types.proxy.policy_engine.policy_types import (Policy,
-                                                            PolicyAttachment,
-                                                            PolicyCondition,
-                                                            PolicyConfig,
-                                                            PolicyGuardrails,
-                                                            PolicyScope)
+    DeciderBranch,
+    DeciderBranchCondition,
+    GuardrailPipeline,
+    PipelineExecutionResult,
+    PipelineStep,
+    PipelineStepResult,
+)
+from litellm.types.proxy.policy_engine.policy_types import (
+    Policy,
+    PolicyAttachment,
+    PolicyCondition,
+    PolicyConfig,
+    PolicyGuardrails,
+    PolicyScope,
+)
 from litellm.types.proxy.policy_engine.resolver_types import (
-    AttachmentImpactResponse, PipelineTestRequest,
-    PolicyAttachmentCreateRequest, PolicyAttachmentDBResponse,
-    PolicyAttachmentListResponse, PolicyConditionRequest, PolicyCreateRequest,
-    PolicyDBResponse, PolicyGuardrailsResponse, PolicyInfoResponse,
-    PolicyListDBResponse, PolicyListResponse, PolicyMatchContext,
-    PolicyMatchDetail, PolicyResolveRequest, PolicyResolveResponse,
-    PolicyScopeResponse, PolicySummaryItem, PolicyTestResponse,
-    PolicyUpdateRequest, PolicyVersionCompareResponse,
-    PolicyVersionCreateRequest, PolicyVersionListResponse,
-    PolicyVersionStatusUpdateRequest, ResolvedPolicy)
+    AttachmentImpactResponse,
+    PipelineTestRequest,
+    PolicyAttachmentCreateRequest,
+    PolicyAttachmentDBResponse,
+    PolicyAttachmentListResponse,
+    PolicyConditionRequest,
+    PolicyCreateRequest,
+    PolicyDBResponse,
+    PolicyGuardrailsResponse,
+    PolicyInfoResponse,
+    PolicyListDBResponse,
+    PolicyListResponse,
+    PolicyMatchContext,
+    PolicyMatchDetail,
+    PolicyResolveRequest,
+    PolicyResolveResponse,
+    PolicyScopeResponse,
+    PolicySummaryItem,
+    PolicyTestResponse,
+    PolicyUpdateRequest,
+    PolicyVersionCompareResponse,
+    PolicyVersionCreateRequest,
+    PolicyVersionListResponse,
+    PolicyVersionStatusUpdateRequest,
+    ResolvedPolicy,
+)
 from litellm.types.proxy.policy_engine.validation_types import (
-    PolicyValidateRequest, PolicyValidationError, PolicyValidationErrorType,
-    PolicyValidationResponse)
+    PolicyValidateRequest,
+    PolicyValidationError,
+    PolicyValidationErrorType,
+    PolicyValidationResponse,
+)
 
 __all__ = [
     # Pipeline types
+    "DeciderBranch",
+    "DeciderBranchCondition",
     "GuardrailPipeline",
     "PipelineStep",
     "PipelineStepResult",
