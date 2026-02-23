@@ -1947,23 +1947,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details[
                     "complete_streaming_response"
                 ] = complete_streaming_response
-                self.model_call_details[
-                    "response_cost"
-                ] = self._response_cost_calculator(result=complete_streaming_response)
-                ## STANDARDIZED LOGGING PAYLOAD
-                self.model_call_details[
-                    "standard_logging_object"
-                ] = self._build_standard_logging_payload(
-                    complete_streaming_response, start_time, end_time
+                
+                # Use existing function to handle hidden_params, response_cost, and logging
+                # This ensures streaming follows the same code path as non-streaming
+                self._process_hidden_params_and_response_cost(
+                    logging_result=complete_streaming_response,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
-                if (
-                    standard_logging_payload := self.model_call_details.get(
-                        "standard_logging_object"
-                    )
-                ) is not None:
-                    # Only emit for sync requests (async_success_handler handles async)
-                    if is_sync_request:
-                        emit_standard_logging_payload(standard_logging_payload)
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
@@ -2462,43 +2453,18 @@ class Logging(LiteLLMLoggingBaseClass):
             ] = complete_streaming_response
 
             try:
-                if self.model_call_details.get("cache_hit", False) is True:
-                    self.model_call_details["response_cost"] = 0.0
-                else:
-                    # check if base_model set on azure
-                    _get_base_model_from_metadata(
-                        model_call_details=self.model_call_details
-                    )
-                    # base_model defaults to None if not set on model_info
-                    self.model_call_details[
-                        "response_cost"
-                    ] = self._response_cost_calculator(
-                        result=complete_streaming_response
-                    )
-
-                verbose_logger.debug(
-                    f"Model={self.model}; cost={self.model_call_details['response_cost']}"
+                # Use existing function to handle hidden_params, response_cost, and logging
+                # This ensures streaming follows the same code path as non-streaming
+                self._process_hidden_params_and_response_cost(
+                    logging_result=complete_streaming_response,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
             except litellm.NotFoundError:
                 verbose_logger.warning(
                     f"Model={self.model} not found in completion cost map. Setting 'response_cost' to None"
                 )
                 self.model_call_details["response_cost"] = None
-
-            ## STANDARDIZED LOGGING PAYLOAD
-            self.model_call_details[
-                "standard_logging_object"
-            ] = self._build_standard_logging_payload(
-                complete_streaming_response, start_time, end_time
-            )
-
-            # print standard logging payload
-            if (
-                standard_logging_payload := self.model_call_details.get(
-                    "standard_logging_object"
-                )
-            ) is not None:
-                emit_standard_logging_payload(standard_logging_payload)
         elif self.call_type == "pass_through_endpoint":
             print_verbose(
                 "Async success callbacks: Got a pass-through endpoint response"
