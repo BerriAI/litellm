@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Retool Assist
 
@@ -89,11 +91,9 @@ Inside your Retool dashboard, configure LiteLLM as a custom AI resource:
 1. Open an app in Retool and enable **Assist** (if not already enabled in your organization)
 2. Use Assist to generate or edit app elements, it will route requests through LiteLLM
 3. Use the code option from the Sidebar to add a resource query, select the LiteLLM resource, and run it to test the setup.
-
-<Image img={require('../../img/retool_assist_resource_query.png')} />
-
 4. Check the LiteLLM **Logs** section to verify requests and track usage
 
+<Image img={require('../../img/retool_assist_resource_query.png')} />
 ---
 
 ## Troubleshooting
