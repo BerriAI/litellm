@@ -5,6 +5,44 @@ import Image from '@theme/IdealImage';
 
 Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpoint.
 
+## Setting Up Benchmarking with Network Mock
+
+The fastest way to benchmark proxy overhead is using `network_mock` mode. This intercepts outbound requests at the httpx transport layer and returns canned responses, no need for setting up a mock provider. 
+
+**1. Create a proxy config:**
+
+```yaml
+model_list:
+  - model_name: db-openai-endpoint
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: "sk-fake-key"
+      api_base: "https://api.openai.com"
+
+litellm_settings:
+  network_mock: true
+  callbacks: []
+  num_retries: 0
+  request_timeout: 30
+
+general_settings:
+  master_key: "sk-1234"
+```
+
+**2. Start the proxy:**
+
+```bash
+litellm --config benchmark_config.yaml --port 4000 --num_workers 8
+```
+
+**3. Run the benchmark script:**
+
+```bash
+python scripts/benchmark_mock.py --requests 2000 --max-concurrent 200 --runs 3
+```
+
+This measures pure proxy overhead on the hot path without any network latency to a real or fake provider.
+
 ## Setting Up a Fake OpenAI Endpoint
 
 For load testing and benchmarking, you can use a fake OpenAI proxy server. LiteLLM provides:
