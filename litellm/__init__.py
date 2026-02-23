@@ -409,6 +409,7 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
 disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
@@ -618,8 +619,9 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def add_known_models():
-    for key, value in model_cost.items():
+def add_known_models(model_cost_map: Optional[Dict] = None):
+    _map = model_cost_map if model_cost_map is not None else model_cost
+    for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):
