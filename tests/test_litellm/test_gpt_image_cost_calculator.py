@@ -269,9 +269,9 @@ class TestGPTImage15OutputImageTokens:
             f"Image tokens may not be included in cost calculation."
         )
     
-    def test_azure_gpt_image_15_output_image_tokens_cost(self):
+    def test_azure_gpt_image_15_output_tokens_cost(self):
         """
-        Test that output image tokens are correctly included in cost calculation for Azure.
+        Test that output tokens are correctly calculated in cost calculation for Azure.
         """
         # Simulate gpt-image-1.5 response with output_tokens_details
         usage = Usage(
@@ -316,7 +316,7 @@ class TestGPTImage15OutputImageTokens:
 
         assert abs(cost - expected_cost) < 1e-6, (
             f"Expected {expected_cost}, got {cost}. "
-            f"Image tokens may not be included in cost calculation."
+            f"Output tokens may be calculated in a wrong rate for Azure."
         )
 
 
