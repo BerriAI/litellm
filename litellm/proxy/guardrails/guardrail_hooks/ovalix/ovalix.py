@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import AllMessageValues, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -120,49 +120,55 @@ class OvalixGuardrail(CustomGuardrail):
         self, supported_event_hooks: List[GuardrailEventHooks]
     ) -> None:
         """Ensure required secrets and checkpoint IDs are set; auto-add hooks when IDs are present."""
+        errors: List[str] = []
+
         if not self._tracker_api_base:
-            raise OvalixGuardrailMissingSecrets(
-                "Ovalix Tracker API base required. Set OVALIX_TRACKER_API_BASE or pass tracker_api_base in litellm_params."
+            errors.append(
+                "Tracker API base, set OVALIX_TRACKER_API_BASE or pass tracker_api_base"
             )
         if not self._tracker_api_key:
-            raise OvalixGuardrailMissingSecrets(
-                "Ovalix Tracker API key required. Set OVALIX_TRACKER_API_KEY or pass tracker_api_key in litellm_params."
+            errors.append(
+                "Tracker API key, set OVALIX_TRACKER_API_KEY or pass tracker_api_key"
             )
         if not self._application_id:
-            raise OvalixGuardrailMissingSecrets(
-                "Ovalix Application ID required. Set OVALIX_APPLICATION_ID or pass application_id in litellm_params."
+            errors.append(
+                "Application ID, set OVALIX_APPLICATION_ID or pass application_id"
             )
-
         if (
             not self._pre_checkpoint_id
             and GuardrailEventHooks.pre_call in supported_event_hooks
         ):
-            raise OvalixGuardrailMissingSecrets(
-                "Ovalix Pre-checkpoint ID required. Set OVALIX_PRE_CHECKPOINT_ID or pass pre_checkpoint_id in litellm_params."
+            errors.append(
+                "Pre-checkpoint ID, set OVALIX_PRE_CHECKPOINT_ID or pass pre_checkpoint_id"
             )
-        elif (
-            self._pre_checkpoint_id
-            and GuardrailEventHooks.pre_call not in supported_event_hooks
-        ):
-            supported_event_hooks.append(GuardrailEventHooks.pre_call)
-
         if (
             not self._post_checkpoint_id
             and GuardrailEventHooks.post_call in supported_event_hooks
         ):
-            raise OvalixGuardrailMissingSecrets(
-                "Ovalix Post-checkpoint ID required. Set OVALIX_POST_CHECKPOINT_ID or pass post_checkpoint_id in litellm_params."
+            errors.append(
+                "Post-checkpoint ID, set OVALIX_POST_CHECKPOINT_ID or pass post_checkpoint_id"
             )
-        elif (
+        if not self._pre_checkpoint_id and not self._post_checkpoint_id:
+            errors.append(
+                "Pre-checkpoint ID or Post-checkpoint ID, set OVALIX_PRE_CHECKPOINT_ID or OVALIX_POST_CHECKPOINT_ID or pass pre_checkpoint_id or post_checkpoint_id"
+            )
+
+        if errors:
+            raise OvalixGuardrailMissingSecrets(
+                "Missing Ovalix guardrail configuration errors: " + ". ".join(errors)
+            )
+
+        # auto-add hooks when checkpoint IDs are present
+        if (
+            self._pre_checkpoint_id
+            and GuardrailEventHooks.pre_call not in supported_event_hooks
+        ):
+            supported_event_hooks.append(GuardrailEventHooks.pre_call)
+        if (
             self._post_checkpoint_id
             and GuardrailEventHooks.post_call not in supported_event_hooks
         ):
             supported_event_hooks.append(GuardrailEventHooks.post_call)
-
-        if not self._pre_checkpoint_id and not self._post_checkpoint_id:
-            raise OvalixGuardrailMissingSecrets(
-                "Ovalix Pre-checkpoint ID or Post-checkpoint ID required. Set OVALIX_PRE_CHECKPOINT_ID or OVALIX_POST_CHECKPOINT_ID or pass pre_checkpoint_id or post_checkpoint_id in litellm_params."
-            )
 
     def _get_actor(self, data: dict) -> str:
         """Return a stable actor identifier from request metadata (e.g. user email or id)."""
@@ -201,9 +207,7 @@ class OvalixGuardrail(CustomGuardrail):
             "data_type": "TEXT",
             "data": {"content": content},
         }
-        response = await self._async_handler.post(
-            url, headers=headers, json=payload
-        )
+        response = await self._async_handler.post(url, headers=headers, json=payload)
         response.raise_for_status()
         return response.json()
 
@@ -250,13 +254,13 @@ class OvalixGuardrail(CustomGuardrail):
                 # TODO: set the llm response text to `corrected_llm_response`. will be addressed later.
             return inputs
 
-        messages = request_data.get("messages") or []
+        messages = inputs.get("structured_messages") or []
         if not messages:
             return inputs
 
         if self._pre_checkpoint_id:
             post_guardrail_texts = await self._generate_post_guardrail_text(
-                messages, actor, session_id, request_data
+                messages, actor, session_id
             )
             return {**inputs, "texts": post_guardrail_texts}
         return inputs
@@ -318,10 +322,9 @@ class OvalixGuardrail(CustomGuardrail):
 
     async def _generate_post_guardrail_text(
         self,
-        messages: List[Dict[str, Any]],
+        messages: List[AllMessageValues],
         actor: str,
         session_id: str,
-        request_data: dict,
     ) -> List[str]:
         """
         Generate post-guardrail text for the given messages.
@@ -348,7 +351,7 @@ class OvalixGuardrail(CustomGuardrail):
                 continue
             message_role = message.get("role", None)
             if message_role and message_role != USER_MESSAGE_ROLE:
-                # we are not scanning the LLM/system/developer past responses, only the response that the user sent
+                # we are not scanning the assistant/system/developer past responses, only the responses that the user sent
                 post_guardrail_texts.insert(0, content)
                 continue
             try:
