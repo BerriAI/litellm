@@ -67,11 +67,13 @@ def test_custom_code_compile_valid():
 
 
 def test_custom_code_override_builtins():
-    # If a malicious user tries to bypass our pattern checker (which is hard but say they do),
-    # the __builtins__ restriction in _compile_custom_code should block execution using Builtins.
-    # To test this, we disable validation momentarily to test the __builtins__ block,
-    # but we can't easily mock validation, so just checking standard behavior is good
-    pass
+    # Verify that even if pattern validation is bypassed, __builtins__ = {} blocks dangerous builtins.
+    # We test this by compiling safe code and verifying builtins are not accessible in the sandbox.
+    code = "def apply_guardrail(inputs, request_data, input_type):\n    return allow()"
+    guardrail = CustomCodeGuardrail(custom_code=code, guardrail_name="test")
+    # The compiled function's globals should have empty __builtins__
+    fn_globals = guardrail._compiled_function.__globals__
+    assert fn_globals.get("__builtins__") == {}
 
 
 @pytest.mark.asyncio

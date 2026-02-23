@@ -49,6 +49,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
+from .code_validator import CustomCodeValidationError, validate_custom_code
 from .primitives import get_custom_code_primitives
 
 if TYPE_CHECKING:
@@ -155,11 +156,6 @@ class CustomCodeGuardrail(CustomGuardrail):
 
             try:
                 # Step 1: Security validation — forbidden pattern check
-                from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
-                    CustomCodeValidationError,
-                    validate_custom_code,
-                )
-
                 try:
                     validate_custom_code(self.custom_code)
                 except CustomCodeValidationError as e:
@@ -405,11 +401,6 @@ class CustomCodeGuardrail(CustomGuardrail):
             CustomCodeCompilationError: If the new code fails to compile
         """
         # Validate BEFORE acquiring lock / resetting state
-        from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
-            CustomCodeValidationError,
-            validate_custom_code,
-        )
-
         try:
             validate_custom_code(new_code)
         except CustomCodeValidationError as e:
@@ -424,7 +415,30 @@ class CustomCodeGuardrail(CustomGuardrail):
 
             try:
                 self.custom_code = new_code
-                self._compile_custom_code()
+                # Inline compilation instead of calling _compile_custom_code()
+                # to avoid deadlock (re-acquiring self._compile_lock)
+                try:
+                    validate_custom_code(self.custom_code)
+                except CustomCodeValidationError as e:
+                    raise CustomCodeCompilationError(str(e)) from e
+
+                exec_globals = get_custom_code_primitives().copy()
+                exec_globals["__builtins__"] = {}
+                exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)
+
+                if "apply_guardrail" not in exec_globals:
+                    raise CustomCodeCompilationError(
+                        "Custom code must define an 'apply_guardrail' function. "
+                        "Expected signature: apply_guardrail(inputs, request_data, input_type)"
+                    )
+
+                apply_fn = exec_globals["apply_guardrail"]
+                if not callable(apply_fn):
+                    raise CustomCodeCompilationError(
+                        "'apply_guardrail' must be a callable function"
+                    )
+
+                self._compiled_function = apply_fn
                 verbose_proxy_logger.info(
                     f"Custom code guardrail '{self.guardrail_name}': Code updated successfully"
                 )
