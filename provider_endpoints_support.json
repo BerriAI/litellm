@@ -229,6 +229,22 @@
         "interactions": true
       }
     },
+    "brainiall": {
+      "display_name": "Brainiall (`brainiall`)",
+      "url": "https://apim-ai-apis.azure-api.net/v1",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "bedrock": {
       "display_name": "AWS - Bedrock (`bedrock`)",
       "url": "https://docs.litellm.ai/docs/providers/bedrock",

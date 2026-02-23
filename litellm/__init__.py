@@ -579,6 +579,7 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+brainiall_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -840,6 +841,8 @@ def add_known_models():
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "brainiall":
+            brainiall_models.add(key)
 
 
 add_known_models()
@@ -1050,6 +1053,7 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
+    "brainiall": brainiall_models,
 }
 
 # mapping for those models which have larger equivalents

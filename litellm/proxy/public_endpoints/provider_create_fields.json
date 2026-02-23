@@ -523,6 +523,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Brainiall",
+    "provider_display_name": "Brainiall",
+    "litellm_provider": "brainiall",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "brainiall/claude-sonnet-4-6"
+  },
+  {
     "provider": "Cerebras",
     "provider_display_name": "Cerebras",
     "litellm_provider": "cerebras",

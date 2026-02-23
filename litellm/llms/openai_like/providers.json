@@ -90,5 +90,14 @@
     "headers": {
       "api-subscription-key": "{api_key}"
     }
+  },
+  "brainiall": {
+    "base_url": "https://apim-ai-apis.azure-api.net/v1",
+    "api_key_env": "BRAINIALL_API_KEY",
+    "api_base_env": "BRAINIALL_API_BASE",
+    "base_class": "openai_gpt",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
