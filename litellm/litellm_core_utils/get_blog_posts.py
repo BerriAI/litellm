@@ -2,7 +2,7 @@
 Pulls the latest LiteLLM blog posts from GitHub.
 
 Falls back to the bundled local backup on any failure.
-GitHub JSON can be overridden via LITELLM_BLOG_POSTS_URL env var.
+GitHub JSON URL is configured via litellm.blog_posts_url (or LITELLM_BLOG_POSTS_URL env var).
 
 Disable remote fetching entirely:
     export LITELLM_LOCAL_BLOG_POSTS=True
@@ -18,11 +18,6 @@ import httpx
 from pydantic import BaseModel
 
 from litellm import verbose_logger
-
-BLOG_POSTS_GITHUB_URL: str = os.getenv(
-    "LITELLM_BLOG_POSTS_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/blog_posts.json",
-)
 
 BLOG_POSTS_TTL_SECONDS: int = 3600  # 1 hour
 
@@ -57,7 +52,7 @@ class GetBlogPosts:
         """Load the bundled local backup blog posts."""
         content = json.loads(
             files("litellm")
-            .joinpath("blog_posts_backup.json")
+            .joinpath("blog_posts.json")
             .read_text(encoding="utf-8")
         )
         return content.get("posts", [])
@@ -93,7 +88,7 @@ class GetBlogPosts:
         return True
 
     @classmethod
-    def get_blog_posts(cls, url: str = BLOG_POSTS_GITHUB_URL) -> List[Dict[str, str]]:
+    def get_blog_posts(cls, url: str) -> List[Dict[str, str]]:
         """
         Return the blog posts list.
 
@@ -129,6 +124,6 @@ class GetBlogPosts:
         return cls._cached_posts
 
 
-def get_blog_posts(url: str = BLOG_POSTS_GITHUB_URL) -> List[Dict[str, str]]:
+def get_blog_posts(url: str) -> List[Dict[str, str]]:
     """Public entry point — returns the blog posts list."""
     return GetBlogPosts.get_blog_posts(url=url)

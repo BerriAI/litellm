@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.get_blog_posts import (
-    BLOG_POSTS_GITHUB_URL,
     BlogPost,
     BlogPostsResponse,
     GetBlogPosts,
@@ -68,7 +68,7 @@ def test_get_blog_posts_success():
     mock_response.raise_for_status = MagicMock()
 
     with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", return_value=mock_response):
-        posts = get_blog_posts()
+        posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert len(posts) == 1
     assert posts[0]["title"] == "Test Post"
@@ -80,7 +80,7 @@ def test_get_blog_posts_network_error_falls_back_to_local():
         "litellm.litellm_core_utils.get_blog_posts.httpx.get",
         side_effect=Exception("Network error"),
     ):
-        posts = get_blog_posts()
+        posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert isinstance(posts, list)
     assert len(posts) > 0
@@ -93,7 +93,7 @@ def test_get_blog_posts_invalid_json_falls_back_to_local():
     mock_response.raise_for_status = MagicMock()
 
     with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", return_value=mock_response):
-        posts = get_blog_posts()
+        posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert isinstance(posts, list)
     assert len(posts) > 0
@@ -115,7 +115,7 @@ def test_get_blog_posts_ttl_cache_not_refetched():
         return m
 
     with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get):
-        posts = get_blog_posts()
+        posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert call_count == 0  # cache hit, no fetch
     assert len(posts) == 1
@@ -133,7 +133,7 @@ def test_get_blog_posts_ttl_expired_refetches():
     with patch(
         "litellm.litellm_core_utils.get_blog_posts.httpx.get", return_value=mock_response
     ) as mock_get:
-        posts = get_blog_posts()
+        posts = get_blog_posts(url=litellm.blog_posts_url)
 
     mock_get.assert_called_once()
     assert len(posts) == 1
@@ -142,7 +142,7 @@ def test_get_blog_posts_ttl_expired_refetches():
 def test_get_blog_posts_local_env_var_skips_remote(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_BLOG_POSTS", "true")
     with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get") as mock_get:
-        posts = get_blog_posts()
+        posts = get_blog_posts(url=litellm.blog_posts_url)
     mock_get.assert_not_called()
     assert isinstance(posts, list)
     assert len(posts) > 0
