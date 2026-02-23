@@ -17135,6 +17135,7 @@
         "supports_web_search": true,
         "supports_url_context": true,
         "supports_native_streaming": true,
+        "tpm": 800000,
         "input_cost_per_token_priority": 3.6e-06,
         "input_cost_per_token_above_200k_tokens_priority": 7.2e-06,
         "output_cost_per_token_priority": 2.16e-05,
