@@ -1367,7 +1367,7 @@ Model Info:
 
         return False
 
-    async def send_alert(
+    async def send_alert( # noqa: PLR0913
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],
