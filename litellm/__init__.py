@@ -341,7 +341,7 @@ model_cost_map_url: str = os.getenv(
 )
 blog_posts_url: str = os.getenv(
     "LITELLM_BLOG_POSTS_URL",
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/blog_posts.json",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/blog_posts.json",
 )
 anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
