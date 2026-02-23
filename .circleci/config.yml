@@ -1456,6 +1456,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
             pip install "boto3==1.36.0"
+            pip install "semantic_router==0.1.10"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests

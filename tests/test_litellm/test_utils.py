@@ -429,7 +429,7 @@ def test_anthropic_web_search_in_model_info():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
-        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-4-sonnet-20250514",
         "anthropic/claude-sonnet-4-5-20250929",
         "anthropic/claude-3-5-sonnet-20241022",
         "anthropic/claude-3-5-haiku-20241022",
@@ -1050,7 +1050,7 @@ def test_supports_computer_use_utility():
     try:
         # Test a model known to support computer_use from backup JSON
         supports_cu_anthropic = supports_computer_use(
-            model="anthropic/claude-3-7-sonnet-20250219"
+            model="anthropic/claude-4-sonnet-20250514"
         )
         assert supports_cu_anthropic is True
 
@@ -1073,7 +1073,7 @@ def test_supports_computer_use_utility():
 def test_get_model_info_shows_supports_computer_use():
     """
     Tests if 'supports_computer_use' is correctly retrieved by get_model_info.
-    We'll use 'claude-3-7-sonnet-20250219' as it's configured
+    We'll use 'claude-4-sonnet-20250514' as it's configured
     in the backup JSON to have supports_computer_use: True.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1082,7 +1082,7 @@ def test_get_model_info_shows_supports_computer_use():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # This model should have 'supports_computer_use': True in the backup JSON
-    model_known_to_support_computer_use = "claude-3-7-sonnet-20250219"
+    model_known_to_support_computer_use = "claude-4-sonnet-20250514"
     info = litellm.get_model_info(model_known_to_support_computer_use)
     print(f"Info for {model_known_to_support_computer_use}: {info}")
 
@@ -3408,6 +3408,82 @@ class TestIsStreamingRequest:
 
     def test_stream_true_overrides_non_streaming_call_type(self):
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
+
+
+class TestCallbackAsyncSyncSeparation:
+    """Test that LoggingCallbackManager auto-routes async callbacks to async lists."""
+
+    def setup_method(self):
+        """Reset callback lists before each test."""
+        litellm.input_callback = []
+        litellm.success_callback = []
+        litellm.failure_callback = []
+        litellm._async_input_callback = []
+        litellm._async_success_callback = []
+        litellm._async_failure_callback = []
+
+    def test_async_success_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_success_callback(my_async_cb)
+        assert my_async_cb in litellm._async_success_callback
+        assert my_async_cb not in litellm.success_callback
+
+    def test_sync_success_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_success_callback(my_sync_cb)
+        assert my_sync_cb in litellm.success_callback
+        assert my_sync_cb not in litellm._async_success_callback
+
+    def test_string_callback_stays_in_sync_list(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("langfuse")
+        assert "langfuse" in litellm.success_callback
+        assert "langfuse" not in litellm._async_success_callback
+
+    def test_async_failure_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_failure_callback(my_async_cb)
+        assert my_async_cb in litellm._async_failure_callback
+        assert my_async_cb not in litellm.failure_callback
+
+    def test_sync_failure_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_failure_callback(my_sync_cb)
+        assert my_sync_cb in litellm.failure_callback
+        assert my_sync_cb not in litellm._async_failure_callback
+
+    def test_dynamodb_routed_to_async_success(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("dynamodb")
+        assert "dynamodb" in litellm._async_success_callback
+        assert "dynamodb" not in litellm.success_callback
+
+    def test_openmeter_routed_to_async_success(self):
+        litellm.logging_callback_manager.add_litellm_success_callback("openmeter")
+        assert "openmeter" in litellm._async_success_callback
+        assert "openmeter" not in litellm.success_callback
+
+    def test_async_input_callback_routed_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_input_callback(my_async_cb)
+        assert my_async_cb in litellm._async_input_callback
+        assert my_async_cb not in litellm.input_callback
+
+    def test_sync_input_callback_stays_in_sync_list(self):
+        def my_sync_cb(*args, **kwargs):
+            pass
+
+        litellm.logging_callback_manager.add_litellm_input_callback(my_sync_cb)
+        assert my_sync_cb in litellm.input_callback
+        assert my_sync_cb not in litellm._async_input_callback
 
 
 class TestMetadataNoneHandling:

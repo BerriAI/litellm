@@ -203,7 +203,7 @@ export default function KeyInfoView({
             ...parsedMetadata,
             ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-            ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
+            ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
                 litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
@@ -222,7 +222,7 @@ export default function KeyInfoView({
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-          ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
+          ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
               litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
