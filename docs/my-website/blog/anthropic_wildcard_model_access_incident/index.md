@@ -1,6 +1,6 @@
 ---
 slug: anthropic-wildcard-model-access-incident
-title: "Incident Report: anthropic/* Wildcard Blocking New Models After Cost Map Reload"
+title: "Incident Report: Wildcard Blocking New Models After Cost Map Reload"
 date: 2026-02-23T10:00:00
 authors:
   - name: Sameer Kankute
