@@ -874,7 +874,7 @@ class AmazonConverseConfig(BaseConfig):
         ):
             optional_params["fake_stream"] = True
 
-    def map_openai_params(
+    def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: dict,
         optional_params: dict,
