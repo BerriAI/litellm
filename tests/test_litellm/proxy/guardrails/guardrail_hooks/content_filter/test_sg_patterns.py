@@ -30,10 +30,10 @@ class TestSingaporeNRIC:
         pattern = get_compiled_pattern("sg_nric")
         assert pattern.search("My NRIC is S1234567A please check") is not None
 
-    def test_lowercase_letter_prefix_rejected(self):
+    def test_lowercase_letter_prefix_detected_case_insensitive(self):
         pattern = get_compiled_pattern("sg_nric")
-        # Pattern requires uppercase prefix
-        assert pattern.search("s1234567A") is None
+        # Patterns are compiled with re.IGNORECASE in patterns.py
+        assert pattern.search("s1234567A") is not None
 
     def test_wrong_prefix_rejected(self):
         pattern = get_compiled_pattern("sg_nric")
@@ -135,6 +135,10 @@ class TestSingaporeUEN:
         # T or R + 2 digits + 2 letters + 4 digits + 1 letter
         assert pattern.search("T08LL0001A") is not None
         assert pattern.search("R12AB3456Z") is not None
+
+    def test_lowercase_suffix_detected_case_insensitive(self):
+        pattern = get_compiled_pattern("sg_uen")
+        assert pattern.search("12345678a") is not None
 
 
 class TestSingaporeBankAccount:

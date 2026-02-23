@@ -531,7 +531,9 @@
       "display_name": "UEN (Singapore Unique Entity Number)",
       "pattern": "\\b(?:\\d{8}[A-Z]|\\d{9}[A-Z]|[TR]\\d{2}[A-Z]{2}\\d{4}[A-Z])\\b",
       "category": "Singapore PII Patterns",
-      "description": "Detects Singapore Unique Entity Numbers for business registration (various formats: 8/9 digits + letter, or T/R prefix)"
+      "description": "Detects Singapore Unique Entity Numbers for business registration (various formats: 8/9 digits + letter, or T/R prefix)",
+      "keyword_pattern": "\\b(?:UEN|company\\s*registration|business\\s*registration|ACRA|entity\\s*number|ROC|ROS)\\b",
+      "allow_word_numbers": false
     },
     {
       "name": "sg_bank_account",
