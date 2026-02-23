@@ -95,6 +95,7 @@ Inside your Retool dashboard, configure LiteLLM as a custom AI resource:
 4. Check the LiteLLM **Logs** section to verify requests and track usage
 
 <Image img={require('../../img/retool_assist_resource_query.png')} />
+
 ---
 
 ## Troubleshooting
