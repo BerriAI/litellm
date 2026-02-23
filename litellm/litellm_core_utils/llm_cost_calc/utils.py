@@ -200,8 +200,14 @@ def _get_token_base_cost(
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
     # Most models don't have threshold pricing, so we can return early.
+    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
+    # so that the threshold detection loop only processes standard keys.  The
+    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
     threshold_keys = [
-        k for k in model_info if k.startswith("input_cost_per_token_above_")
+        k
+        for k in model_info
+        if k.startswith("input_cost_per_token_above_")
+        and not any(k.endswith(f"_{st.value}") for st in ServiceTier)
     ]
     if not threshold_keys:
         return (
@@ -224,14 +230,34 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
+                    # Prefer a service_tier-specific above-threshold key when available,
+                    # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
+                    # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
+                    # via _get_cost_per_unit's service_tier fallback logic.
+                    tiered_input_key = (
+                        _get_service_tier_cost_key(
+                            f"input_cost_per_token_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else key
+                    )
                     prompt_base_cost = cast(
-                        float, _get_cost_per_unit(model_info, key, prompt_base_cost)
+                        float, _get_cost_per_unit(model_info, tiered_input_key, prompt_base_cost)
+                    )
+                    tiered_output_key = (
+                        _get_service_tier_cost_key(
+                            f"output_cost_per_token_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"output_cost_per_token_above_{threshold_str}_tokens"
                     )
                     completion_base_cost = cast(
                         float,
                         _get_cost_per_unit(
                             model_info,
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
+                            tiered_output_key,
                             completion_base_cost,
                         ),
                     )
@@ -517,6 +543,7 @@ def _calculate_input_cost(
     cache_read_cost: float,
     cache_creation_cost: float,
     cache_creation_cost_above_1hr: float,
+    service_tier: Optional[str] = None,
 ) -> float:
     """
     Calculates the input cost for a given model, prompt tokens, and completion tokens.
@@ -528,8 +555,11 @@ def _calculate_input_cost(
 
     ### AUDIO COST
     if prompt_tokens_details["audio_tokens"]:
+        audio_cost_key = _get_service_tier_cost_key(
+            "input_cost_per_audio_token", service_tier
+        )
         prompt_cost += calculate_cost_component(
-            model_info, "input_cost_per_audio_token", prompt_tokens_details["audio_tokens"]
+            model_info, audio_cost_key, prompt_tokens_details["audio_tokens"]
         )
 
     ### IMAGE TOKEN COST
@@ -659,6 +689,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         cache_read_cost=cache_read_cost,
         cache_creation_cost=cache_creation_cost,
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        service_tier=service_tier,
     )
 
     ## CALCULATE OUTPUT COST
