@@ -25,6 +25,8 @@ export const fetchTeamFilterOptions = async (
     const organizationIds = new Set<string>();
     const userMap = new Map<string, string>(); // user_id -> user_email
 
+    const MAX_PAGES = 1; // Cap at 20 keys on load to avoid heavy fetches
+    const PAGE_SIZE = 20;
     let page = 1;
     let totalPages = 1;
 
@@ -37,7 +39,7 @@ export const fetchTeamFilterOptions = async (
         null,
         null,
         page,
-        100,
+        PAGE_SIZE,
         null,
         null,
         "user",
@@ -64,7 +66,7 @@ export const fetchTeamFilterOptions = async (
       }
 
       page++;
-    } while (page <= totalPages);
+    } while (page <= totalPages && page <= MAX_PAGES);
 
     return {
       keyAliases: Array.from(keyAliases).sort(),
