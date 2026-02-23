@@ -1536,6 +1536,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         aspeech: Optional[bool] = None,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: Optional[bool] = None,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
@@ -1551,6 +1552,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 timeout=timeout,
                 client=client,
                 shared_session=shared_session,
+                stream=stream,
             )  # type: ignore
 
         openai_client = self._get_openai_client(
@@ -1562,6 +1564,25 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             client=client,
             shared_session=shared_session,
         )
+
+        if stream is True:
+            from litellm.llms.custom_httpx.httpx_stream_handler import (
+                HttpxStreamHandler,
+            )
+
+            ctx = cast(
+                OpenAI, openai_client
+            ).audio.speech.with_streaming_response.create(
+                model=model,
+                voice=voice,  # type: ignore
+                input=input,
+                **optional_params,
+            )
+            streamed_response = ctx.__enter__()
+            return HttpxStreamHandler(
+                response=streamed_response.http_response,
+                cleanup=lambda: ctx.__exit__(None, None, None),
+            )  # type: ignore
 
         response = cast(OpenAI, openai_client).audio.speech.create(
             model=model,
@@ -1585,6 +1606,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: Union[float, httpx.Timeout],
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: Optional[bool] = None,
     ) -> HttpxBinaryResponseContent:
         openai_client = cast(
             AsyncOpenAI,
@@ -1598,6 +1620,23 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 shared_session=shared_session,
             ),
         )
+
+        if stream is True:
+            from litellm.llms.custom_httpx.httpx_stream_handler import (
+                HttpxStreamHandler,
+            )
+
+            ctx = openai_client.audio.speech.with_streaming_response.create(
+                model=model,
+                voice=voice,  # type: ignore
+                input=input,
+                **optional_params,
+            )
+            streamed_response = await ctx.__aenter__()
+            return HttpxStreamHandler(
+                response=streamed_response.http_response,
+                cleanup=lambda: ctx.__aexit__(None, None, None),
+            )  # type: ignore
 
         response = await openai_client.audio.speech.create(
             model=model,
