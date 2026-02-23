@@ -563,16 +563,12 @@ class ProxyBaseLLMRequestProcessing:
         llm_router: Optional[Router] = None,
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
-
-        # Calculate request queue time if arrival_time is available
-        # Use start_time.timestamp() to avoid extra time.time() call for better performance
-        proxy_server_request = self.data.get("proxy_server_request", {})
-        arrival_time = proxy_server_request.get("arrival_time")
-        queue_time_seconds = None
-        if arrival_time is not None:
-            # Convert start_time (datetime) to timestamp for calculation
-            processing_start_time = start_time.timestamp()
-            queue_time_seconds = processing_start_time - arrival_time
+        # Capture arrival_time at the earliest moment for queue time metric.
+        # Must be before add_litellm_data_to_request so add_litellm preserves it.
+        arrival_time = start_time.timestamp()
+        if "proxy_server_request" not in self.data:
+            self.data["proxy_server_request"] = {}
+        self.data["proxy_server_request"]["arrival_time"] = arrival_time
 
         self.data = await add_litellm_data_to_request(
             data=self.data,
@@ -583,8 +579,16 @@ class ProxyBaseLLMRequestProcessing:
             proxy_config=proxy_config,
         )
 
-        # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
-        if queue_time_seconds is not None:
+        # Calculate request queue time (time from arrival to processing start)
+        proxy_server_request = self.data.get("proxy_server_request", {})
+        arrival_time = proxy_server_request.get("arrival_time")
+        queue_time_seconds = None
+        if arrival_time is not None:
+            processing_start_time = start_time.timestamp()
+            queue_time_seconds = processing_start_time - arrival_time
+
+        # Store queue time in metadata for Prometheus litellm_request_queue_time_seconds metric
+        if queue_time_seconds is not None and queue_time_seconds >= 0:
             from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
 
             _metadata_variable_name = _get_metadata_variable_name(request)
