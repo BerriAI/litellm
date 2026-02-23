@@ -21238,6 +21238,21 @@
         "supports_tool_choice": true,
         "supports_web_search": true
     },
+    "groq/openai/gpt-oss-safeguard-20b": {
+        "cache_read_input_token_cost": 3.7e-08,
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "groq",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 3e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "groq/playai-tts": {
         "input_cost_per_character": 5e-05,
         "litellm_provider": "groq",
