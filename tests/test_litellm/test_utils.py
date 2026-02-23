@@ -13,12 +13,12 @@ sys.path.insert(
 import litellm
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
+    CallTypes,
     Delta,
     LlmProviders,
     ModelResponseStream,
     StreamingChoices,
 )
-from litellm.types.utils import CallTypes
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -714,6 +714,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
+                "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
                     "type": "array",
                     "items": {
@@ -2337,7 +2338,7 @@ def test_register_model_with_scientific_notation():
     Test that the register_model function can handle scientific notation in the model name.
     """
     import uuid
-    
+
     # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
     test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
     
@@ -2981,8 +2982,8 @@ class TestProxyLoggingBudgetAlerts:
         via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None  # Global alerting is disabled
@@ -3018,8 +3019,8 @@ class TestProxyLoggingBudgetAlerts:
         and do not send emails when alerting is None.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None
@@ -3050,8 +3051,8 @@ class TestProxyLoggingBudgetAlerts:
         Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None
