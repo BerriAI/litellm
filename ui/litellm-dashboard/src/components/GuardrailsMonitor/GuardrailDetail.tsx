@@ -213,6 +213,9 @@ export function GuardrailDetail({
             logs={logs}
             logsLoading={logsLoading}
             totalLogs={logsData?.total ?? 0}
+            accessToken={accessToken}
+            startDate={startDate}
+            endDate={endDate}
           />
         </div>
       )}
@@ -224,6 +227,9 @@ export function GuardrailDetail({
             logs={logs}
             logsLoading={logsLoading}
             totalLogs={logsData?.total ?? 0}
+            accessToken={accessToken}
+            startDate={startDate}
+            endDate={endDate}
           />
         </div>
       )}
