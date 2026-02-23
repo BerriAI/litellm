@@ -1,9 +1,9 @@
-# MAS AI Risk Management Guidelines — Model Security
+# Guidelines on Artificial Intelligence Risk Management (MAS) — Model Security
 # Blocks requests related to adversarial attacks, data poisoning,
 # model inversion, and exfiltration targeting financial AI systems.
 # Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
 category_name: "sg_mas_model_security"
-description: "MAS AI Guidelines — Blocks adversarial attacks, model poisoning, inversion, and exfiltration attempts targeting financial AI systems"
+description: "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks adversarial attacks, model poisoning, inversion, and exfiltration attempts targeting financial AI systems"
 default_action: "BLOCK"
 
 identifier_words:

@@ -1,7 +1,7 @@
 """
-Test MAS AI Risk Management Guidelines — Conditional Keyword Matching
+Test Guidelines on Artificial Intelligence Risk Management (MAS) — Conditional Keyword Matching
 
-Tests 5 sub-guardrails covering MAS AI Risk Management obligations
+Tests 5 sub-guardrails covering Guidelines on Artificial Intelligence Risk Management (MAS) obligations
 for Singapore financial institutions:
   1. sg_mas_fairness_bias              — Discriminatory financial AI
   2. sg_mas_transparency_explainability — Opaque/unexplainable AI decisions
@@ -399,7 +399,7 @@ class TestMASPerformance:
         allowed = total - blocked
 
         print(f"\n{'='*60}")
-        print("MAS AI Risk Management Guardrail Test Summary")
+        print("Guidelines on Artificial Intelligence Risk Management (MAS) Guardrail Test Summary")
         print(f"{'='*60}")
         print(f"Total test cases : {total}")
         print(f"Expected BLOCK   : {blocked} ({blocked/total*100:.1f}%)")

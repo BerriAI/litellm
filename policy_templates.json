@@ -2277,7 +2277,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "MAS AIRM consultation draft (Nov 2025) \u2014 Blocks discriminatory AI practices in financial services that score, deny, or price based on protected attributes (race, religion, age, gender, nationality)"
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks discriminatory AI practices in financial services that score, deny, or price based on protected attributes (race, religion, age, gender, nationality)"
         }
       },
       {
@@ -2296,7 +2296,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "MAS AIRM consultation draft (Nov 2025) \u2014 Blocks deployment of opaque or unexplainable AI systems for consequential financial decisions"
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks deployment of opaque or unexplainable AI systems for consequential financial decisions"
         }
       },
       {
@@ -2315,7 +2315,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "MAS AIRM consultation draft (Nov 2025) \u2014 Blocks fully automated financial AI decisions without human-in-the-loop for consequential actions (loans, claims, trading)"
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks fully automated financial AI decisions without human-in-the-loop for consequential actions (loans, claims, trading)"
         }
       },
       {
@@ -2334,7 +2334,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "MAS AIRM consultation draft (Nov 2025) \u2014 Blocks unauthorized sharing, exposure, or mishandling of financial customer data without proper governance and data lineage"
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks unauthorized sharing, exposure, or mishandling of financial customer data without proper governance and data lineage"
         }
       },
       {
@@ -2353,13 +2353,13 @@
           ]
         },
         "guardrail_info": {
-          "description": "MAS AIRM consultation draft (Nov 2025) \u2014 Blocks adversarial attacks, model poisoning, inversion, and exfiltration attempts targeting financial AI systems"
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks adversarial attacks, model poisoning, inversion, and exfiltration attempts targeting financial AI systems"
         }
       }
     ],
     "templateData": {
       "policy_name": "mas-ai-risk-management",
-      "description": "MAS AI Risk Management for Financial Institutions alignment based on the November 2025 MAS consultation paper (draft AIRM Guidelines). Covers fairness & bias, transparency & explainability, human oversight, data governance, and model security. Aligned with the 2018 FEAT Principles, Project MindForge, and NIST AI RMF.",
+      "description": "Guidelines on Artificial Intelligence Risk Management (MAS) for Financial Institutions alignment based on the November 2025 MAS consultation paper (draft AIRM Guidelines). Covers fairness & bias, transparency & explainability, human oversight, data governance, and model security. Aligned with the 2018 FEAT Principles, Project MindForge, and NIST AI RMF.",
       "guardrails_add": [
         "mas-sg-fairness-bias",
         "mas-sg-transparency-explainability",

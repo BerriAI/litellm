@@ -1,9 +1,9 @@
-# MAS AI Risk Management Guidelines — Data Governance (Financial Data)
+# Guidelines on Artificial Intelligence Risk Management (MAS) — Data Governance (Financial Data)
 # Blocks requests to mishandle, share, or expose financial customer data
 # without proper governance, lineage, or authorization.
 # Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
 category_name: "sg_mas_data_governance"
-description: "MAS AI Guidelines — Blocks unauthorized sharing, exposure, or mishandling of financial customer data without proper governance"
+description: "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks unauthorized sharing, exposure, or mishandling of financial customer data without proper governance"
 default_action: "BLOCK"
 
 identifier_words:
