@@ -1,0 +1,77 @@
+name: Bug Report
+description: File a bug report
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+        
+        **💡 Tip:** See our [Troubleshooting Guide](https://docs.litellm.ai/docs/troubleshoot) for what information to include.
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: Check for existing issues
+      description: Please search to see if an issue already exists for the bug you encountered.
+      options:
+        - label: I have searched the existing issues and checked that my issue is not a duplicate.
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Also tell us, what did you expect to happen?
+      placeholder: Tell us what you see!
+      value: "A bug happened!"
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Please provide detailed steps to reproduce this bug(A curl/python code to reproduce the bug)
+      placeholder: |
+        1. config.yaml file/ .env file/ etc.
+        2. Run the following code...
+        3. Observe the error...
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
+      render: shell
+  - type: dropdown
+    id: component
+    attributes:
+      label: What part of LiteLLM is this about?
+      options:
+        - ''
+        - "SDK (litellm Python package)"
+        - "Proxy"
+        - "UI Dashboard"
+        - "Docs"
+        - "Other"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: What LiteLLM version are you on ? 
+      placeholder: v1.53.1
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: Twitter / LinkedIn details 
+      description: We announce new features on Twitter + LinkedIn. If this issue leads to an announcement, and you'd like a mention, we'll gladly shout you out!
+      placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
+    validations:
+      required: false

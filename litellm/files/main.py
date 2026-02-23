@@ -1,0 +1,1120 @@
+"""
+Main File for Files API implementation
+
+https://platform.openai.com/docs/api-reference/files
+
+"""
+
+import asyncio
+import contextvars
+import os
+import time
+import uuid as uuid_module
+from functools import partial
+from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
+
+import httpx
+
+import litellm
+from litellm import get_secret_str
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.files.handler import AnthropicFilesHandler
+from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
+from litellm.llms.bedrock.files.handler import BedrockFilesHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
+from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
+from litellm.types.llms.openai import (
+    CreateFileRequest,
+    FileContentRequest,
+    FileExpiresAfter,
+    FileTypes,
+    HttpxBinaryResponseContent,
+    OpenAIFileObject,
+)
+from litellm.types.router import *
+from litellm.types.utils import (
+    OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
+    LlmProviders,
+)
+from litellm.utils import (
+    ProviderConfigManager,
+    client,
+    get_litellm_params,
+    supports_httpx_timeout,
+)
+
+base_llm_http_handler = BaseLLMHTTPHandler()
+
+####### ENVIRONMENT VARIABLES ###################
+openai_files_instance = OpenAIFilesAPI()
+azure_files_instance = AzureOpenAIFilesAPI()
+vertex_ai_files_instance = VertexAIFilesHandler()
+bedrock_files_instance = BedrockFilesHandler()
+anthropic_files_instance = AnthropicFilesHandler()
+#################################################
+
+
+@client
+async def acreate_file(
+    file: FileTypes,
+    purpose: Literal["assistants", "batch", "fine-tune"],
+    expires_after: Optional[FileExpiresAfter] = None,
+    custom_llm_provider: Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> OpenAIFileObject:
+    """
+    Async: Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
+
+    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["acreate_file"] = True
+
+        call_args = {
+            "file": file,
+            "purpose": purpose,
+            "expires_after": expires_after,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "extra_body": extra_body,
+            **kwargs,
+        }
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(create_file, **call_args)
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response  # type: ignore
+
+        return response
+    except Exception as e:
+        raise e
+
+
+@client
+def create_file(
+    file: FileTypes,
+    purpose: Literal["assistants", "batch", "fine-tune"],
+    expires_after: Optional[FileExpiresAfter] = None,
+    custom_llm_provider: Optional[Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+    """
+    Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
+
+    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+
+    Specify either provider_list or custom_llm_provider.
+    """
+    try:
+        _is_async = kwargs.pop("acreate_file", False) is True
+        optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = dict(**kwargs)
+        logging_obj = cast(
+            Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
+        )
+        if logging_obj is None:
+            raise ValueError("logging_obj is required")
+        client = kwargs.get("client")
+
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        if expires_after is not None:
+            _create_file_request = CreateFileRequest(
+                file=file,
+                purpose=purpose,
+                expires_after=expires_after,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+            )
+        else:
+            _create_file_request = CreateFileRequest(
+                file=file,
+                purpose=purpose,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+            )
+
+        provider_config = ProviderConfigManager.get_provider_files_config(
+            model="",
+            provider=LlmProviders(custom_llm_provider),
+        )
+        if provider_config is not None:
+            response = base_llm_http_handler.create_file(
+                provider_config=provider_config,
+                litellm_params=litellm_params_dict,
+                create_file_data=_create_file_request,
+                headers=extra_headers or {},
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                logging_obj=logging_obj,
+                _is_async=_is_async,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+            )
+        elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
+                or os.getenv("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            organization = (
+                optional_params.organization
+                or litellm.organization
+                or os.getenv("OPENAI_ORGANIZATION", None)
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            # set API KEY
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or os.getenv("OPENAI_API_KEY")
+            )
+
+            response = openai_files_instance.create_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=organization,
+                create_file_data=_create_file_request,
+            )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            if extra_body is not None:
+                extra_body.pop("azure_ad_token", None)
+            else:
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.create_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                create_file_data=_create_file_request,
+                litellm_params=litellm_params_dict,
+            )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_files_instance.create_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                vertex_credentials=vertex_credentials,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                create_file_data=_create_file_request,
+            )
+        else:
+            raise litellm.exceptions.BadRequestError(
+                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'manus'] are supported.".format(
+                    custom_llm_provider
+                ),
+                model="n/a",
+                llm_provider=custom_llm_provider,
+                response=httpx.Response(
+                    status_code=400,
+                    content="Unsupported provider",
+                    request=httpx.Request(method="create_file", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
+            )
+        return response
+    except Exception as e:
+        raise e
+
+
+@client
+async def afile_retrieve(
+    file_id: str,
+    custom_llm_provider: Literal["openai", "azure", "gemini", "hosted_vllm", "manus"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> OpenAIFileObject:
+    """
+    Async: Get file contents
+
+    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["is_async"] = True
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            file_retrieve,
+            file_id,
+            custom_llm_provider,
+            extra_headers,
+            extra_body,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+
+        return OpenAIFileObject(**response.model_dump())
+    except Exception as e:
+        raise e
+
+
+@client
+def file_retrieve(
+    file_id: str,
+    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "manus"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> FileObject:
+    """
+    Returns the contents of the specified file.
+
+    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    """
+    try:
+        optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("is_async", False) is True
+
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
+                or os.getenv("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            organization = (
+                optional_params.organization
+                or litellm.organization
+                or os.getenv("OPENAI_ORGANIZATION", None)
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            # set API KEY
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or os.getenv("OPENAI_API_KEY")
+            )
+
+            response = openai_files_instance.retrieve_file(
+                file_id=file_id,
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=organization,
+            )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            if extra_body is not None:
+                extra_body.pop("azure_ad_token", None)
+            else:
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.retrieve_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                file_id=file_id,
+            )
+        else:
+            # Try using provider config pattern (for Manus, Bedrock, etc.)
+            provider_config = ProviderConfigManager.get_provider_files_config(
+                model="",
+                provider=LlmProviders(custom_llm_provider),
+            )
+            if provider_config is not None:
+                litellm_params_dict = get_litellm_params(**kwargs)
+                litellm_params_dict["api_key"] = optional_params.api_key
+                litellm_params_dict["api_base"] = optional_params.api_base
+                
+                logging_obj = kwargs.get("litellm_logging_obj")
+                if logging_obj is None:
+                    from litellm.litellm_core_utils.litellm_logging import (
+                        Logging as LiteLLMLoggingObj,
+                    )
+                    logging_obj = LiteLLMLoggingObj(
+                        model="",
+                        messages=[],
+                        stream=False,
+                        call_type="afile_retrieve" if _is_async else "file_retrieve",
+                        start_time=time.time(),
+                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        function_id=str(kwargs.get("id") or ""),
+                    )
+                
+                client = kwargs.get("client")
+                response = base_llm_http_handler.retrieve_file(
+                    file_id=file_id,
+                    provider_config=provider_config,
+                    litellm_params=litellm_params_dict,
+                    headers=extra_headers or {},
+                    logging_obj=logging_obj,
+                    _is_async=_is_async,
+                    client=(
+                        client
+                        if client is not None
+                        and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                        else None
+                    ),
+                    timeout=timeout,
+                )
+            else:
+                raise litellm.exceptions.BadRequestError(
+                    message="LiteLLM doesn't support {} for 'file_retrieve'. Only 'openai', 'azure', and 'manus' are supported.".format(
+                        custom_llm_provider
+                    ),
+                    model="n/a",
+                    llm_provider=custom_llm_provider,
+                    response=httpx.Response(
+                        status_code=400,
+                        content="Unsupported provider",
+                        request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    ),
+                )
+
+        return cast(FileObject, response)
+    except Exception as e:
+        raise e
+
+
+# Delete file
+@client
+async def afile_delete(
+    file_id: str,
+    custom_llm_provider: Literal["openai", "azure", "gemini", "manus"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> Coroutine[Any, Any, FileObject]:
+    """
+    Async: Delete file
+
+    LiteLLM Equivalent of DELETE https://api.openai.com/v1/files
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        model = kwargs.pop("model", None)
+        kwargs["is_async"] = True
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            file_delete,
+            file_id,
+            model,
+            custom_llm_provider,
+            extra_headers,
+            extra_body,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response  # type: ignore
+
+        return cast(FileDeleted, response)  # type: ignore
+    except Exception as e:
+        raise e
+
+
+@client
+def file_delete(
+    file_id: str,
+    model: Optional[str] = None,
+    custom_llm_provider: Union[Literal["openai", "azure", "gemini", "manus"], str] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> FileDeleted:
+    """
+    Delete file
+
+    LiteLLM Equivalent of DELETE https://api.openai.com/v1/files
+    """
+    try:
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model, custom_llm_provider
+                )
+        except Exception:
+            pass
+        optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+        client = kwargs.get("client")
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+        _is_async = kwargs.pop("is_async", False) is True
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
+                or os.getenv("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            organization = (
+                optional_params.organization
+                or litellm.organization
+                or os.getenv("OPENAI_ORGANIZATION", None)
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            # set API KEY
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or os.getenv("OPENAI_API_KEY")
+            )
+            response = openai_files_instance.delete_file(
+                file_id=file_id,
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=organization,
+            )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            if extra_body is not None:
+                extra_body.pop("azure_ad_token", None)
+            else:
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.delete_file(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                file_id=file_id,
+                client=client,
+                litellm_params=litellm_params_dict,
+            )
+        else:
+            # Try using provider config pattern (for Manus, Bedrock, etc.)
+            provider_config = ProviderConfigManager.get_provider_files_config(
+                model="",
+                provider=LlmProviders(custom_llm_provider),
+            )
+            if provider_config is not None:
+                litellm_params_dict["api_key"] = optional_params.api_key
+                litellm_params_dict["api_base"] = optional_params.api_base
+                
+                logging_obj = kwargs.get("litellm_logging_obj")
+                if logging_obj is None:
+                    from litellm.litellm_core_utils.litellm_logging import (
+                        Logging as LiteLLMLoggingObj,
+                    )
+                    logging_obj = LiteLLMLoggingObj(
+                        model="",
+                        messages=[],
+                        stream=False,
+                        call_type="afile_delete" if _is_async else "file_delete",
+                        start_time=time.time(),
+                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        function_id=str(kwargs.get("id") or ""),
+                    )
+                
+                response = base_llm_http_handler.delete_file(
+                    file_id=file_id,
+                    provider_config=provider_config,
+                    litellm_params=litellm_params_dict,
+                    headers=extra_headers or {},
+                    logging_obj=logging_obj,
+                    _is_async=_is_async,
+                    client=(
+                        client
+                        if client is not None
+                        and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                        else None
+                    ),
+                    timeout=timeout,
+                )
+            else:
+                raise litellm.exceptions.BadRequestError(
+                    message="LiteLLM doesn't support {} for 'file_delete'. Only 'openai', 'azure', 'gemini', and 'manus' are supported.".format(
+                        custom_llm_provider
+                    ),
+                    model="n/a",
+                    llm_provider=custom_llm_provider,
+                    response=httpx.Response(
+                        status_code=400,
+                        content="Unsupported provider",
+                        request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    ),
+                )
+        return cast(FileDeleted, response)
+    except Exception as e:
+        raise e
+
+
+# List files
+@client
+async def afile_list(
+    custom_llm_provider: Literal["openai", "azure", "manus"] = "openai",
+    purpose: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+):
+    """
+    Async: List files
+
+    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["is_async"] = True
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            file_list,
+            custom_llm_provider,
+            purpose,
+            extra_headers,
+            extra_body,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response  # type: ignore
+
+        return response
+    except Exception as e:
+        raise e
+
+
+@client
+def file_list(
+    custom_llm_provider: Literal["openai", "azure", "manus"] = "openai",
+    purpose: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+):
+    """
+    List files
+
+    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    """
+    try:
+        optional_params = GenericLiteLLMParams(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        # set timeout for 10 minutes by default
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(custom_llm_provider) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("is_async", False) is True
+        
+        # Check if provider has a custom files config (e.g., Manus, Bedrock, Vertex AI)
+        provider_config = ProviderConfigManager.get_provider_files_config(
+            model="",
+            provider=LlmProviders(custom_llm_provider),
+        )
+        if provider_config is not None:
+            litellm_params_dict = get_litellm_params(**kwargs)
+            litellm_params_dict["api_key"] = optional_params.api_key
+            litellm_params_dict["api_base"] = optional_params.api_base
+            
+            logging_obj = kwargs.get("litellm_logging_obj")
+            if logging_obj is None:
+                from litellm.litellm_core_utils.litellm_logging import (
+                    Logging as LiteLLMLoggingObj,
+                )
+                logging_obj = LiteLLMLoggingObj(
+                    model="",
+                    messages=[],
+                    stream=False,
+                    call_type="afile_list" if _is_async else "file_list",
+                    start_time=time.time(),
+                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                    function_id=str(kwargs.get("id", "")),
+                )
+            
+            client = kwargs.get("client")
+            response = base_llm_http_handler.list_files(
+                purpose=purpose,
+                provider_config=provider_config,
+                litellm_params=litellm_params_dict,
+                headers=extra_headers or {},
+                logging_obj=logging_obj,
+                _is_async=_is_async,
+                client=(
+                    client
+                    if client is not None
+                    and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+            )
+            return response
+        elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
+                or os.getenv("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            organization = (
+                optional_params.organization
+                or litellm.organization
+                or os.getenv("OPENAI_ORGANIZATION", None)
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            # set API KEY
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or os.getenv("OPENAI_API_KEY")
+            )
+
+            response = openai_files_instance.list_files(
+                purpose=purpose,
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=organization,
+            )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            if extra_body is not None:
+                extra_body.pop("azure_ad_token", None)
+            else:
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.list_files(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                purpose=purpose,
+            )
+        else:
+            raise litellm.exceptions.BadRequestError(
+                message="LiteLLM doesn't support {} for 'file_list'. Only 'openai', 'azure', and 'manus' are supported.".format(
+                    custom_llm_provider
+                ),
+                model="n/a",
+                llm_provider=custom_llm_provider,
+                response=httpx.Response(
+                    status_code=400,
+                    content="Unsupported provider",
+                    request=httpx.Request(method="file_list", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
+            )
+        return response
+    except Exception as e:
+        raise e
+
+
+@client
+async def afile_content(
+    file_id: str,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"] = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> HttpxBinaryResponseContent:
+    """
+    Async: Get file contents
+
+    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["afile_content"] = True
+        model = kwargs.pop("model", None)
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            file_content,
+            file_id,
+            model,
+            custom_llm_provider,
+            extra_headers,
+            extra_body,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response  # type: ignore
+
+        return response
+    except Exception as e:
+        raise e
+
+
+@client
+def file_content(
+    file_id: str,
+    model: Optional[str] = None,
+    custom_llm_provider: Optional[
+        Union[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"], str]
+    ] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+    """
+    Returns the contents of the specified file.
+
+    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    """
+    try:
+        optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
+        ### TIMEOUT LOGIC ###
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        client = kwargs.get("client")
+        # set timeout for 10 minutes by default
+
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model, custom_llm_provider
+                )
+        except Exception:
+            pass
+
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
+        ):
+            read_timeout = timeout.read or 600
+            timeout = read_timeout  # default 10 min timeout
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _file_content_request = FileContentRequest(
+            file_id=file_id,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+        )
+
+        _is_async = kwargs.pop("afile_content", False) is True
+
+        # Check if this is an Anthropic batch results request
+        if custom_llm_provider == "anthropic":
+            response = anthropic_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
+            return response
+
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+            # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
+            api_base = (
+                optional_params.api_base
+                or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
+                or os.getenv("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            organization = (
+                optional_params.organization
+                or litellm.organization
+                or os.getenv("OPENAI_ORGANIZATION", None)
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            # set API KEY
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or os.getenv("OPENAI_API_KEY")
+            )
+
+            response = openai_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=organization,
+            )
+        elif custom_llm_provider == "azure":
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
+            api_version = (
+                optional_params.api_version
+                or litellm.api_version
+                or get_secret_str("AZURE_API_VERSION")
+            )  # type: ignore
+
+            api_key = (
+                optional_params.api_key
+                or litellm.api_key
+                or litellm.azure_key
+                or get_secret_str("AZURE_OPENAI_API_KEY")
+                or get_secret_str("AZURE_API_KEY")
+            )  # type: ignore
+
+            extra_body = optional_params.get("extra_body", {})
+            if extra_body is not None:
+                extra_body.pop("azure_ad_token", None)
+            else:
+                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
+
+            response = azure_files_instance.file_content(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                api_version=api_version,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                file_content_request=_file_content_request,
+                client=client,
+                litellm_params=litellm_params_dict,
+            )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+
+            response = vertex_ai_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=api_base,
+                vertex_credentials=vertex_credentials,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_files_instance.file_content(
+                _is_async=_is_async,
+                file_content_request=_file_content_request,
+                api_base=optional_params.api_base,
+                optional_params=litellm_params_dict,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
+        else:
+            raise litellm.exceptions.BadRequestError(
+                message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock', 'manus'.".format(
+                    custom_llm_provider
+                ),
+                model="n/a",
+                llm_provider=custom_llm_provider,
+                response=httpx.Response(
+                    status_code=400,
+                    content="Unsupported provider",
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
+            )
+        return response
+    except Exception as e:
+        raise e

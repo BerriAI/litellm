@@ -1,0 +1,11 @@
+model_list: 
+  - model_name: "openai-model"
+    litellm_params: 
+      model: "gpt-3.5-turbo"
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: "redis"
+    supported_call_types: ["embedding", "aembedding"]
+    host: "os.environ/REDIS_HOST"

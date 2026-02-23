@@ -1,0 +1,30 @@
+model_list:
+  - model_name: text-davinci-003
+    litellm_params:
+        model: ollama/zephyr
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
+        temperature: 0.1
+        max_tokens: 20
+
+
+# request to gpt-4, response from ollama/llama2
+# curl --location 'http://0.0.0.0:8000/chat/completions' \
+# --header 'Content-Type: application/json' \
+# --data ' {
+#       "model": "gpt-4",
+#       "messages": [
+#         {
+#           "role": "user",
+#           "content": "what llm are you"
+#         }
+#       ],
+#     }
+# '
+#
+
+# {"id":"chatcmpl-27c85cf0-ab09-4bcf-8cb1-0ee950520743","choices":[{"finish_reason":"stop","index":0,"message":{"content":" Hello! I'm just an AI, I don't have personal experiences or emotions like humans do. However, I can help you with any questions or tasks you may have! Is there something specific you'd like to know or discuss?","role":"assistant","_logprobs":null}}],"created":1700094955.373751,"model":"ollama/llama2","object":"chat.completion","system_fingerprint":null,"usage":{"prompt_tokens":12,"completion_tokens":47,"total_tokens":59},"_response_ms":8028.017999999999}%              

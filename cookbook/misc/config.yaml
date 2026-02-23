@@ -1,0 +1,73 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+  - model_name: gpt-3.5-turbo-large
+    litellm_params: 
+      model: "gpt-3.5-turbo-1106"
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 480
+      timeout: 300
+      stream_timeout: 60
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      rpm: 480
+      timeout: 300
+      stream_timeout: 60
+  - model_name: sagemaker-completion-model
+    litellm_params:
+      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
+      input_cost_per_second: 0.000420  
+  - model_name: text-embedding-ada-002
+    litellm_params: 
+      model: azure/azure-embedding-model
+      api_key: os.environ/AZURE_API_KEY
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+    model_info:
+      mode: embedding
+      base_model: text-embedding-ada-002
+  - model_name: dall-e-2
+    litellm_params:
+      model: azure/
+      api_version: 2023-06-01-preview
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY
+  - model_name: openai-dall-e-3
+    litellm_params:
+      model: dall-e-3
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+litellm_settings:
+  drop_params: True
+  # max_budget: 100 
+  # budget_duration: 30d
+  num_retries: 5
+  request_timeout: 600
+  telemetry: False
+  context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
+  store_model_in_db: True
+  proxy_budget_rescheduler_min_time: 60
+  proxy_budget_rescheduler_max_time: 64
+  proxy_batch_write_at: 1
+  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
+
+# environment_variables:
+  # settings for using redis caching
+  # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
+  # REDIS_PORT: "16337"
+  # REDIS_PASSWORD: 

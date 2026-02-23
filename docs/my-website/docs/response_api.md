@@ -1,0 +1,1382 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# /responses
+
+
+LiteLLM provides an endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+
+Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
+
+| Feature | Supported | Notes |
+|---------|-----------|--------|
+| Cost Tracking | ✅ | Works with all supported models |
+| Logging | ✅ | Works across all integrations |
+| End-user Tracking | ✅ | |
+| Streaming | ✅ | |
+| Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
+| Fallbacks | ✅ | Works between supported models |
+| Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input and output text (non-streaming only) |
+| Supported operations | Create a response, Get a response, Delete a response | |
+| Supported LiteLLM Versions | 1.63.8+ | |
+| Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
+
+## Usage
+
+### LiteLLM Python SDK
+
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
+#### Non-streaming
+```python showLineNumbers title="OpenAI Non-streaming Response"
+import litellm
+
+# Non-streaming response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+print(response)
+```
+
+#### Response Format (OpenAI Responses API Format)
+
+```json
+{
+    "id": "resp_abc123",
+    "object": "response",
+    "created_at": 1734366691,
+    "status": "completed",
+    "model": "o1-pro-2025-01-30",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Once upon a time, a little unicorn named Stardust lived in a magical meadow where flowers sang lullabies. One night, she discovered that her horn could paint dreams across the sky, and she spent the evening creating the most beautiful aurora for all the forest creatures to enjoy. As the animals drifted off to sleep beneath her shimmering lights, Stardust curled up on a cloud of moonbeams, happy to have shared her magic with her friends.",
+                    "annotations": []
+                }
+            ]
+        }
+    ],
+    "usage": {
+        "input_tokens": 18,
+        "output_tokens": 98,
+        "total_tokens": 116
+    }
+}
+```
+
+#### Streaming
+```python showLineNumbers title="OpenAI Streaming Response"
+import litellm
+
+# Streaming response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Streaming Image Generation"
+import litellm
+import base64
+
+# Streaming image generation with partial images
+stream = litellm.responses(
+    model="gpt-4.1",  # Use an actual image generation model
+    input="Generate a gorgeous image of a river made of white owl feathers",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+
+)
+
+for event in stream:
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
+#### Image Generation (Non-streaming)
+
+Image generation is supported for models that generate images. Generated images are returned in the `output` array with `type: "image_generation_call"`.
+
+**Gemini (Google AI Studio):**
+```python showLineNumbers title="Gemini Image Generation"
+import litellm
+import base64
+
+# Gemini image generation models don't require tools parameter
+response = litellm.responses(
+    model="gemini/gemini-2.5-flash-image",
+    input="Generate a cute cat playing with yarn"
+)
+
+# Access generated images from output
+for item in response.output:
+    if item.type == "image_generation_call":
+        # item.result contains pure base64 (no data: prefix)
+        image_bytes = base64.b64decode(item.result)
+
+        # Save the image
+        with open(f"generated_{item.id}.png", "wb") as f:
+            f.write(image_bytes)
+
+print(f"Image saved: generated_{response.output[0].id}.png")
+```
+
+**OpenAI:**
+```python showLineNumbers title="OpenAI Image Generation"
+import litellm
+import base64
+
+# OpenAI models require tools parameter for image generation
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Generate a futuristic city at sunset",
+    tools=[{"type": "image_generation"}]
+)
+
+# Access generated images from output
+for item in response.output:
+    if item.type == "image_generation_call":
+        image_bytes = base64.b64decode(item.result)
+        with open(f"generated_{item.id}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
+**Response Format:**
+
+When image generation is successful, the response contains:
+
+```json
+{
+  "id": "resp_abc123",
+  "status": "completed",
+  "output": [
+    {
+      "type": "image_generation_call",
+      "id": "resp_abc123_img_0",
+      "status": "completed",
+      "result": "iVBORw0KGgo..."  // Pure base64 string (no data: prefix)
+    }
+  ]
+}
+```
+
+**Supported Models:**
+
+| Provider | Models | Requires `tools` Parameter |
+|----------|--------|---------------------------|
+| Google AI Studio | `gemini/gemini-2.5-flash-image` | ❌ No |
+| Vertex AI | `vertex_ai/gemini-2.5-flash-image-preview` | ❌ No |
+| OpenAI | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o3` | ✅ Yes |
+| AWS Bedrock | Stability AI, Amazon Nova Canvas models | Model-specific |
+| Fal AI | Various image generation models | Check model docs |
+
+**Note:** The `result` field contains pure base64-encoded image data without the `data:image/png;base64,` prefix. You must decode it with `base64.b64decode()` before saving.
+
+#### GET a Response
+```python showLineNumbers title="Get Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Retrieve the response by ID
+retrieved_response = litellm.get_responses(
+    response_id=response_id
+)
+
+print(retrieved_response)
+
+# For async usage
+# retrieved_response = await litellm.aget_responses(response_id=response_id)
+```
+
+#### CANCEL a Response
+You can cancel an in-progress response (if supported by the provider):
+
+```python showLineNumbers title="Cancel Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Cancel the response by ID
+cancel_response = litellm.cancel_responses(
+    response_id=response_id
+)
+
+print(cancel_response)
+
+# For async usage
+# cancel_response = await litellm.acancel_responses(response_id=response_id)
+```
+
+
+**REST API:**
+```bash
+curl -X POST http://localhost:4000/v1/responses/response_id/cancel \
+    -H "Authorization: Bearer sk-1234"
+```
+
+This will attempt to cancel the in-progress response with the given ID.
+**Note:** Not all providers support response cancellation. If unsupported, an error will be raised.
+
+#### DELETE a Response
+```python showLineNumbers title="Delete Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Delete the response by ID
+delete_response = litellm.delete_responses(
+    response_id=response_id
+)
+
+print(delete_response)
+
+# For async usage
+# delete_response = await litellm.adelete_responses(response_id=response_id)
+```
+
+</TabItem>
+
+<TabItem value="anthropic" label="Anthropic">
+
+#### Non-streaming
+```python showLineNumbers title="Anthropic Non-streaming Response"
+import litellm
+import os
+
+# Set API key
+os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-api-key"
+
+# Non-streaming response
+response = litellm.responses(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Anthropic Streaming Response"
+import litellm
+import os
+
+# Set API key
+os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-api-key"
+
+# Streaming response
+response = litellm.responses(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+
+<TabItem value="vertex" label="Vertex AI">
+
+#### Non-streaming
+```python showLineNumbers title="Vertex AI Non-streaming Response"
+import litellm
+import os
+
+# Set credentials - Vertex AI uses application default credentials
+# Run 'gcloud auth application-default login' to authenticate
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+# Non-streaming response
+response = litellm.responses(
+    model="vertex_ai/gemini-1.5-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Vertex AI Streaming Response"
+import litellm
+import os
+
+# Set credentials - Vertex AI uses application default credentials
+# Run 'gcloud auth application-default login' to authenticate
+os.environ["VERTEXAI_PROJECT"] = "your-gcp-project-id"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
+
+# Streaming response
+response = litellm.responses(
+    model="vertex_ai/gemini-1.5-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+
+<TabItem value="bedrock" label="AWS Bedrock">
+
+#### Non-streaming
+```python showLineNumbers title="AWS Bedrock Non-streaming Response"
+import litellm
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = "your-access-key-id"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-secret-access-key"
+os.environ["AWS_REGION_NAME"] = "us-west-2"  # or your AWS region
+
+# Non-streaming response
+response = litellm.responses(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="AWS Bedrock Streaming Response"
+import litellm
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = "your-access-key-id"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-secret-access-key"
+os.environ["AWS_REGION_NAME"] = "us-west-2"  # or your AWS region
+
+# Streaming response
+response = litellm.responses(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+
+<TabItem value="gemini" label="Google AI Studio">
+
+#### Non-streaming
+```python showLineNumbers title="Google AI Studio Non-streaming Response"
+import litellm
+import os
+
+# Set API key for Google AI Studio
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+
+# Non-streaming response
+response = litellm.responses(
+    model="gemini/gemini-1.5-flash",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Google AI Studio Streaming Response"
+import litellm
+import os
+
+# Set API key for Google AI Studio
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+
+# Streaming response
+response = litellm.responses(
+    model="gemini/gemini-1.5-flash",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+</Tabs>
+
+### LiteLLM Proxy with OpenAI SDK
+
+First, set up and start your LiteLLM proxy server.
+
+```bash title="Start LiteLLM Proxy Server"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
+First, add this to your litellm proxy config.yaml:
+```yaml showLineNumbers title="OpenAI Proxy Configuration"
+model_list:
+  - model_name: openai/o1-pro
+    litellm_params:
+      model: openai/o1-pro
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+#### Non-streaming
+```python showLineNumbers title="OpenAI Proxy Non-streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Non-streaming response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="OpenAI Proxy Streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Streaming response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Proxy Streaming Image Generation"
+from openai import OpenAI
+import base64
+
+client = OpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+
+stream = client.responses.create(
+    model="gpt-4.1",
+    input="Draw a gorgeous image of a river made of white owl feathers, snaking its way through a serene winter landscape",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+)
+
+
+for event in stream:
+    print(f"event: {event}")
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+
+```
+
+#### GET a Response
+```python showLineNumbers title="Get Response by ID with OpenAI SDK"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# First, create a response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+# Get the response ID
+response_id = response.id
+
+# Retrieve the response by ID
+retrieved_response = client.responses.retrieve(response_id)
+
+print(retrieved_response)
+```
+
+#### DELETE a Response
+```python showLineNumbers title="Delete Response by ID with OpenAI SDK"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# First, create a response
+response = client.responses.create(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+# Get the response ID
+response_id = response.id
+
+# Delete the response by ID
+delete_response = client.responses.delete(response_id)
+
+print(delete_response)
+```
+
+</TabItem>
+
+<TabItem value="anthropic" label="Anthropic">
+
+First, add this to your litellm proxy config.yaml:
+```yaml showLineNumbers title="Anthropic Proxy Configuration"
+model_list:
+  - model_name: anthropic/claude-3-5-sonnet-20240620
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20240620
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+#### Non-streaming
+```python showLineNumbers title="Anthropic Proxy Non-streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Non-streaming response
+response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Anthropic Proxy Streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Streaming response
+response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+
+<TabItem value="vertex" label="Vertex AI">
+
+First, add this to your litellm proxy config.yaml:
+```yaml showLineNumbers title="Vertex AI Proxy Configuration"
+model_list:
+  - model_name: vertex_ai/gemini-1.5-pro
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+```
+
+#### Non-streaming
+```python showLineNumbers title="Vertex AI Proxy Non-streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Non-streaming response
+response = client.responses.create(
+    model="vertex_ai/gemini-1.5-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Vertex AI Proxy Streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Streaming response
+response = client.responses.create(
+    model="vertex_ai/gemini-1.5-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+
+<TabItem value="bedrock" label="AWS Bedrock">
+
+First, add this to your litellm proxy config.yaml:
+```yaml showLineNumbers title="AWS Bedrock Proxy Configuration"
+model_list:
+  - model_name: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: us-west-2
+```
+
+#### Non-streaming
+```python showLineNumbers title="AWS Bedrock Proxy Non-streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Non-streaming response
+response = client.responses.create(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="AWS Bedrock Proxy Streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Streaming response
+response = client.responses.create(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+
+<TabItem value="gemini" label="Google AI Studio">
+
+First, add this to your litellm proxy config.yaml:
+```yaml showLineNumbers title="Google AI Studio Proxy Configuration"
+model_list:
+  - model_name: gemini/gemini-1.5-flash
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+#### Non-streaming
+```python showLineNumbers title="Google AI Studio Proxy Non-streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Non-streaming response
+response = client.responses.create(
+    model="gemini/gemini-1.5-flash",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Google AI Studio Proxy Streaming Response"
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Streaming response
+response = client.responses.create(
+    model="gemini/gemini-1.5-flash",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+</Tabs>
+
+## Response ID Security
+
+By default, LiteLLM Proxy prevents users from accessing other users' response IDs.
+
+This is done by encrypting the response ID with the user ID, enabling users to only access their own response IDs.
+
+Trying to access someone else's response ID returns 403:
+
+```json
+{
+  "error": {
+    "message": "Forbidden. The response id is not associated with the user, who this key belongs to.",
+    "code": 403
+  }
+}
+```
+
+To disable this, set `disable_responses_id_security: true`:
+
+```yaml
+general_settings:
+  disable_responses_id_security: true
+```
+
+This allows any user to access any response ID.
+
+## Supported Responses API Parameters
+
+| Provider | Supported Parameters |
+|----------|---------------------|
+| `openai` | [All Responses API parameters are supported](https://github.com/BerriAI/litellm/blob/7c3df984da8e4dff9201e4c5353fdc7a2b441831/litellm/llms/openai/responses/transformation.py#L23) |
+| `azure` | [All Responses API parameters are supported](https://github.com/BerriAI/litellm/blob/7c3df984da8e4dff9201e4c5353fdc7a2b441831/litellm/llms/openai/responses/transformation.py#L23) |
+| `anthropic` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
+| `bedrock` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
+| `gemini` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
+| `vertex_ai` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
+| `azure_ai` | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
+| All other llm api providers | [See supported parameters here](https://github.com/BerriAI/litellm/blob/f39d9178868662746f159d5ef642c7f34f9bfe5f/litellm/responses/litellm_completion_transformation/transformation.py#L57) |
+
+## Load Balancing with Session Continuity.
+
+When using the Responses API with multiple deployments of the same model (e.g., multiple Azure OpenAI endpoints), LiteLLM provides session continuity. This ensures that follow-up requests using a `previous_response_id` are routed to the same deployment that generated the original response.
+
+
+#### Example Usage
+
+<Tabs>
+<TabItem value="python-sdk" label="Python SDK">
+
+```python showLineNumbers title="Python SDK with Session Continuity"
+import litellm
+
+# Set up router with multiple deployments of the same model
+router = litellm.Router(
+    model_list=[
+        {
+            "model_name": "azure-gpt4-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-4-turbo",
+                "api_key": "your-api-key-1",
+                "api_version": "2024-06-01",
+                "api_base": "https://endpoint1.openai.azure.com",
+            },
+        },
+        {
+            "model_name": "azure-gpt4-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-4-turbo",
+                "api_key": "your-api-key-2",
+                "api_version": "2024-06-01",
+                "api_base": "https://endpoint2.openai.azure.com",
+            },
+        },
+    ],
+    # `responses_api_deployment_check` ensures Requests with `previous_response_id`
+    # are routed to the same deployment. `deployment_affinity` adds sticky sessions
+    # for requests without `previous_response_id` (useful for implicit caching).
+    # `session_affinity` adds sticky sessions based on `session_id` metadata.
+    optional_pre_call_checks=["responses_api_deployment_check", "deployment_affinity", "session_affinity"],
+    # Optional (default is 3600 seconds / 1 hour)
+    deployment_affinity_ttl_seconds=3600,
+)
+
+# Initial request
+response = await router.aresponses(
+    model="azure-gpt4-turbo",
+    input="Hello, who are you?",
+    truncation="auto",
+)
+
+# Store the response ID
+response_id = response.id
+
+# Follow-up request - will be automatically routed to the same deployment
+follow_up = await router.aresponses(
+    model="azure-gpt4-turbo",
+    input="Tell me more about yourself",
+    truncation="auto",
+    previous_response_id=response_id  # This ensures routing to the same deployment
+)
+```
+
+</TabItem>
+<TabItem value="proxy-server" label="Proxy Server">
+
+#### 1. Setup session continuity on proxy config.yaml
+
+To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks` in your proxy config.yaml.
+
+- `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
+- `session_affinity`: sticky sessions based on session id (takes priority over `deployment_affinity`)
+- `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
+
+Notes:
+- User-key affinity is keyed on `metadata.user_api_key_hash` (the API key hash). The OpenAI `user` request parameter is an end-user identifier and is intentionally not used for deployment affinity.
+- Session-ID affinity is keyed on `metadata.session_id`. For proxy requests, this can be passed via the `x-litellm-session-id` HTTP header. For Python SDK requests, you can pass it via `litellm_metadata={"session_id": "value"}` in request args.
+- `user_api_key_hash` is already SHA-256, and is used as-is (no double hashing).
+- Affinity is scoped by a stable model identifier (the model-map key, e.g. `model_map_information.model_map_key`) so model aliases map to the same stickiness bucket.
+- The mapping TTL is controlled by `deployment_affinity_ttl_seconds` (configured on Router init / proxy startup).
+
+```yaml showLineNumbers title="config.yaml with Session Continuity"
+model_list:
+  - model_name: azure-gpt4-turbo
+    litellm_params:
+      model: azure/gpt-4-turbo
+      api_key: your-api-key-1
+      api_version: 2024-06-01
+      api_base: https://endpoint1.openai.azure.com
+  - model_name: azure-gpt4-turbo
+    litellm_params:
+      model: azure/gpt-4-turbo
+      api_key: your-api-key-2
+      api_version: 2024-06-01
+      api_base: https://endpoint2.openai.azure.com
+
+router_settings:
+  optional_pre_call_checks:
+    - responses_api_deployment_check
+    - session_affinity
+    - deployment_affinity
+  # Optional (default is 3600 seconds / 1 hour)
+  deployment_affinity_ttl_seconds: 3600
+```
+
+#### 2. Use the OpenAI Python SDK to make requests to LiteLLM Proxy
+
+```python showLineNumbers title="OpenAI Client with Proxy Server"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-api-key"
+)
+
+# Initial request
+response = client.responses.create(
+    model="azure-gpt4-turbo",
+    input="Hello, who are you?"
+)
+
+response_id = response.id
+
+# Follow-up request - will be automatically routed to the same deployment
+follow_up = client.responses.create(
+    model="azure-gpt4-turbo",
+    input="Tell me more about yourself",
+    previous_response_id=response_id  # This ensures routing to the same deployment
+)
+```
+
+</TabItem>
+</Tabs>
+
+## Calling non-Responses API endpoints (`/responses` to `/chat/completions` Bridge)
+
+LiteLLM allows you to call non-Responses API models via a bridge to LiteLLM's `/chat/completions` endpoint. This is useful for calling Anthropic, Gemini and even non-Responses API OpenAI models.
+
+
+#### Python SDK Usage
+
+```python showLineNumbers title="SDK Usage"
+import litellm
+import os
+
+# Set API key
+os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-api-key"
+
+# Non-streaming response
+response = litellm.responses(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+print(response)
+```
+
+#### LiteLLM Proxy Usage
+
+**Setup Config:**
+
+```yaml showLineNumbers title="Example Configuration"
+model_list:
+- model_name: anthropic-model
+  litellm_params:
+    model: anthropic/claude-3-5-sonnet-20240620
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+**Start Proxy:**
+
+```bash showLineNumbers title="Start LiteLLM Proxy"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**Make Request:**
+
+```bash showLineNumbers title="non-Responses API Model Request"
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic-model",
+    "input": "who is Michael Jordan"
+  }'
+```
+
+
+
+
+
+
+
+## Server-side compaction
+
+For long-running conversations, you can enable **server-side compaction** so that when the rendered context size crosses a threshold, the server automatically runs compaction in-stream and emits a compaction item—no separate `POST /v1/responses/compact` call is required.
+
+Supported on the OpenAI Responses API when using the `openai` or `azure` provider. Pass `context_management` with a compaction entry and `compact_threshold` (token count; minimum 1000). When the context crosses the threshold, the server compacts in-stream and continues. Chain turns with `previous_response_id` or by appending output items to your next input array. See [OpenAI Compaction guide](https://developers.openai.com/api/docs/guides/compaction) for details.
+
+> **Note:** You can use openai `context_management` format with Anthropic models via LiteLLM via responses API. LiteLLM will automatically translate this format for Anthropic and handle context management for you.
+
+For explicit control over when compaction runs, use the standalone compact endpoint (`POST /v1/responses/compact`) instead.
+
+### Python SDK
+
+```python showLineNumbers title="Server-side compaction with LiteLLM Python SDK"
+import litellm
+
+# Non-streaming: enable compaction when context exceeds 200k tokens
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+
+# Streaming: same context_management, compaction runs in-stream if threshold is crossed
+stream = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    stream=True,
+)
+for event in stream:
+    print(event)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `context_management` to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Server-side compaction via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",  # LiteLLM Proxy (AI Gateway)
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+```
+
+**curl (proxy):**
+
+```bash title="Server-side compaction via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "input": "Your conversation input...",
+    "context_management": [{"type": "compaction", "compact_threshold": 200000}],
+    "max_output_tokens": 1024
+  }'
+```
+
+## Shell tool
+
+The **Shell tool** lets the model run commands in a hosted container or local runtime (OpenAI Responses API). You pass `tools=[{"type": "shell", "environment": {...}}]`; the `environment` object configures the runtime (e.g. `type: "container_auto"` for auto-provisioned containers). See [OpenAI Shell tool guide](https://developers.openai.com/api/docs/guides/tools-shell) for full options.
+
+Supported when using the `openai` or `azure` provider with a model that supports the Shell tool.
+
+### Python SDK
+
+```python showLineNumbers title="Shell tool with LiteLLM Python SDK"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data and run python --version.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `tools` (including `type: "shell"`) to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Shell tool via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+**curl:**
+
+```bash title="Shell tool via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-5.2",
+    "input": "List files in /mnt/data.",
+    "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
+    "tool_choice": "auto",
+    "max_output_tokens": 1024
+  }'
+```
+
+## Session Management
+
+LiteLLM Proxy supports session management for all supported models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
+
+#### Usage
+
+1. Enable storing request / response content in the database
+
+Set `store_prompts_in_cold_storage: true` in your proxy config.yaml. When this is enabled, LiteLLM will store the request and response content in the s3 bucket you specify.
+
+```yaml showLineNumbers title="config.yaml with Session Continuity"
+litellm_settings:
+  callbacks: ["s3_v2"]
+  cold_storage_custom_logger: s3_v2
+  s3_callback_params: # learn more https://docs.litellm.ai/docs/proxy/logging#s3-buckets
+    s3_bucket_name: litellm-logs   # AWS Bucket Name for S3
+    s3_region_name: us-west-2      
+
+general_settings:
+  store_prompts_in_cold_storage: true
+  store_prompts_in_spend_logs: true
+```
+
+2. Make request 1 with no `previous_response_id` (new session)
+
+Start a new conversation by making a request without specifying a previous response ID.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "who is Michael Jordan"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make initial request to start a new conversation
+response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="who is Michael Jordan"
+)
+
+print(response.id)  # Store this ID for future requests in same session
+print(response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_123abc",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"Michael Jordan is widely considered one of the greatest basketball players of all time. He played for the Chicago Bulls (1984-1993, 1995-1998) and Washington Wizards (2001-2003), winning 6 NBA Championships with the Bulls."
+    }]
+  }]
+}
+```
+
+3. Make request 2 with `previous_response_id` (same session)
+
+Continue the conversation by referencing the previous response ID to maintain conversation context.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "can you tell me more about him",
+    "previous_response_id": "resp_123abc"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make follow-up request in the same conversation session
+follow_up_response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="can you tell me more about him",
+    previous_response_id="resp_123abc"  # ID from the previous response
+)
+
+print(follow_up_response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_456def",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"Michael Jordan was born February 17, 1963. He attended University of North Carolina before being drafted 3rd overall by the Bulls in 1984. Beyond basketball, he built the Air Jordan brand with Nike and later became owner of the Charlotte Hornets."
+    }]
+  }]
+}
+```
+
+4. Make request 3 with no `previous_response_id` (new session)
+
+Start a brand new conversation without referencing previous context to demonstrate how context is not maintained between sessions.
+
+<Tabs>
+<TabItem value="curl" label="Curl">
+
+```curl
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic/claude-3-5-sonnet-latest",
+    "input": "can you tell me more about him"
+  }'
+```
+
+</TabItem>
+<TabItem value="openai-sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client with your LiteLLM proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="sk-1234"
+)
+
+# Make a new request without previous context
+new_session_response = client.responses.create(
+    model="anthropic/claude-3-5-sonnet-latest",
+    input="can you tell me more about him"
+    # No previous_response_id means this starts a new conversation
+)
+
+print(new_session_response.output[0].content[0].text)
+```
+
+</TabItem>
+</Tabs>
+
+Response:
+
+```json
+{
+  "id":"resp_789ghi",
+  "model":"claude-3-5-sonnet-20241022",
+  "output":[{
+    "type":"message",
+    "content":[{
+      "type":"output_text",
+      "text":"I don't see who you're referring to in our conversation. Could you let me know which person you'd like to learn more about?"
+    }]
+  }]
+}
+```
+
+
+
+
+
+
+
+

@@ -1,0 +1,67 @@
+# Standalone workflow to publish LiteLLM Helm Chart
+# Note: The main ghcr_deploy.yml workflow also publishes the Helm chart as part of a full release
+name: Build, Publish LiteLLM Helm Chart. New Release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "LiteLLM version tag (e.g., v1.81.0)"
+        required: true
+
+# Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  REPO_OWNER: ${{github.repository_owner}}
+
+# There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
+jobs:        
+  build-and-push-helm-chart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: lowercase github.repository_owner
+        run: |
+          echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
+
+      # Sync Helm chart version with LiteLLM release version (1-1 versioning)
+      - name: Calculate chart and app versions
+        id: chart_version
+        shell: bash
+        run: |
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+
+          # Chart version = LiteLLM version without 'v' prefix
+          # v1.81.0 -> 1.81.0
+          CHART_VERSION="${INPUT_TAG#v}"
+
+          # App version = Docker tag (keeps 'v' prefix)
+          APP_VERSION="${INPUT_TAG}"
+
+          echo "version=${CHART_VERSION}" | tee -a $GITHUB_OUTPUT
+          echo "app_version=${APP_VERSION}" | tee -a $GITHUB_OUTPUT
+
+      - name: Lint helm chart
+        run: helm lint deploy/charts/litellm-helm
+
+      - uses: ./.github/actions/helm-oci-chart-releaser
+        with:
+          name: litellm-helm
+          repository: ${{ env.REPO_OWNER }}
+          tag: ${{ steps.chart_version.outputs.version }}
+          app_version: ${{ steps.chart_version.outputs.app_version }}
+          path: deploy/charts/litellm-helm
+          registry: ${{ env.REGISTRY }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ secrets.GITHUB_TOKEN }}
+          update_dependencies: true
+  

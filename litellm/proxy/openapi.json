@@ -1,0 +1,237 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "1.0.0",
+    "title": "LiteLLM API",
+    "description": "API for LiteLLM"
+  },
+  "paths": {
+   "/chat/completions": {
+  "post": {
+    "summary": "Create chat completion for 100+ LLM APIs",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "description": "ID of the model to use"
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "description": "The role of the message's author"
+                    },
+                    "content": {
+                      "type": "string",
+                      "description": "The contents of the message"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The name of the author of the message"
+                    },
+                    "function_call": {
+                      "type": "object",
+                      "description": "The name and arguments of a function that should be called"
+                    }
+                  }
+                }
+              },
+              "functions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "The name of the function to be called"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "A description explaining what the function does"
+                    },
+                    "parameters": {
+                      "type": "object",
+                      "description": "The parameters that the function accepts"
+                    },
+                    "function_call": {
+                      "type": "string",
+                      "description": "Controls how the model responds to function calls"
+                    }
+                  }
+                }
+              },
+              "temperature": {
+                "type": "number",
+                "description": "The sampling temperature to be used"
+              },
+              "top_p": {
+                "type": "number",
+                "description": "An alternative to sampling with temperature"
+              },
+              "n": {
+                "type": "integer",
+                "description": "The number of chat completion choices to generate for each input message"
+              },
+              "stream": {
+                "type": "boolean",
+                "description": "If set to true, it sends partial message deltas"
+              },
+              "stop": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Up to 4 sequences where the API will stop generating further tokens"
+              },
+              "max_tokens": {
+                "type": "integer",
+                "description": "The maximum number of tokens to generate in the chat completion"
+              },
+              "presence_penalty": {
+                "type": "number",
+                "description": "It is used to penalize new tokens based on their existence in the text so far"
+              },
+              "frequency_penalty": {
+                "type": "number",
+                "description": "It is used to penalize new tokens based on their frequency in the text so far"
+              },
+              "logit_bias": {
+                "type": "object",
+                "description": "Used to modify the probability of specific tokens appearing in the completion"
+              },
+              "user": {
+                "type": "string",
+                "description": "A unique identifier representing your end-user"
+              }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Successful operation",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "choices": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "finish_reason": {
+                        "type": "string"
+                      },
+                      "index": {
+                        "type": "integer"
+                      },
+                      "message": {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string"
+                          },
+                          "content": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "created": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "usage": {
+                  "type": "object",
+                  "properties": {
+                    "prompt_tokens": {
+                      "type": "integer"
+                    },
+                    "completion_tokens": {
+                      "type": "integer"
+                    },
+                    "total_tokens": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "500": {
+        "description": "Server error"
+      }
+    }
+  }
+},
+
+    "/completions": {
+      "post": {
+        "summary": "Create completion",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "summary": "Get models",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    },
+
+    "/ollama_logs": {
+      "get": {
+        "summary": "Retrieve server logs for ollama models",
+        "responses": {
+          "200": {
+            "description": "Successful operation",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "Home",
+        "responses": {
+          "200": {
+            "description": "Successful operation"
+          }
+        }
+      }
+    }
+  }
+}
