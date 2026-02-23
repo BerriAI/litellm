@@ -577,6 +577,11 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+
+        # Anthropic models on Bedrock support context_management
+        if base_model.startswith("anthropic"):
+            supported_params.append("context_management")
+
         return supported_params
 
     def map_tool_choice_values(
@@ -942,6 +947,9 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params = self._add_tools_to_optional_params(
                         optional_params=optional_params, tools=[grounding_tool]
                     )
+            if param == "context_management" and isinstance(value, dict):
+                # Pass through Anthropic-specific context_management parameter
+                optional_params["context_management"] = value
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
         # Nova 2 handles token budgeting differently through reasoningConfig
