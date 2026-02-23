@@ -2,6 +2,7 @@ import json
 import os
 from typing import List
 
+import litellm
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_logger
@@ -213,7 +214,7 @@ async def get_litellm_blog_posts():
     Falls back to the bundled local backup on any failure.
     """
     try:
-        posts_data = get_blog_posts()
+        posts_data = get_blog_posts(url=litellm.blog_posts_url)
     except Exception as e:
         verbose_logger.warning(
             "LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e)

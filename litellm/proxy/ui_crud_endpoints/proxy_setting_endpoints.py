@@ -93,11 +93,6 @@ class UISettings(BaseModel):
         description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
 
-    disable_show_blog: bool = Field(
-        default=False,
-        description="If true, hides the Blog dropdown from the UI navbar.",
-    )
-
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -112,7 +107,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
-    "disable_show_blog",
 }
 
 
