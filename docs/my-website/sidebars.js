@@ -167,7 +167,8 @@ const sidebars = {
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
-        "tutorials/openai_codex"
+        "tutorials/openai_codex",
+        "tutorials/retool_assist"
       ]
     },
     {
