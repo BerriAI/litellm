@@ -790,6 +790,46 @@ def test_containers_routes_are_llm_api_routes(route):
     assert RouteChecks.is_llm_api_route(route) is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
+    ],
+)
+def test_rag_routes_are_llm_api_routes(route):
+    """Test that RAG routes are recognized as LLM API routes (internal_user_viewer can access)"""
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+def test_rag_routes_accessible_to_internal_user_viewer():
+    """
+    Test that internal_user_viewer can access RAG routes (/rag/ingest, /rag/query).
+
+    internal_user_viewer should be able to call RAG endpoints like chat/completions
+    since they are LLM API routes. For /rag/ingest, they can only add to existing
+    vector stores (enforced in the endpoint).
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    )
+
+    for route in ["/rag/ingest", "/v1/rag/ingest", "/rag/query", "/v1/rag/query"]:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+            route=route,
+            request=MagicMock(spec=Request),
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 def test_videos_route_accessible_to_internal_users():
     """
     Test that internal users can access the videos routes.
@@ -934,6 +974,109 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         pytest.fail(
             f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {str(e)}"
         )
+
+
+class TestModelsRouteExemptFromDisableLLMEndpoints:
+    """
+    Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
+
+    When DISABLE_LLM_API_ENDPOINTS is set, inference routes like /v1/chat/completions
+    should be blocked, but /models and /v1/models should remain accessible because
+    they are read-only model listing routes needed by the Admin UI.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/new (UI breaks with DISABLE_LLM_ENDPOINTS)
+    """
+
+    def _get_enterprise_route_checks(self):
+        """Import EnterpriseRouteChecks from the local enterprise source file."""
+        import importlib.util
+
+        local_file = os.path.join(
+            os.path.dirname(__file__),
+            "..", "..", "..", "..", "enterprise",
+            "litellm_enterprise", "proxy", "auth", "route_checks.py",
+        )
+        local_file = os.path.abspath(local_file)
+
+        spec = importlib.util.spec_from_file_location(
+            "local_enterprise_route_checks", local_file
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.EnterpriseRouteChecks
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_models_route_allowed_when_llm_api_disabled(self):
+        """Test that /models is allowed even when LLM API routes are disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            # /models should NOT raise - it's exempt
+            EnterpriseRouteChecks.should_call_route("/models")
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_v1_models_route_allowed_when_llm_api_disabled(self):
+        """Test that /v1/models is allowed even when LLM API routes are disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            # /v1/models should NOT raise - it's exempt
+            EnterpriseRouteChecks.should_call_route("/v1/models")
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_chat_completions_still_blocked_when_llm_api_disabled(self):
+        """Test that non-exempt LLM routes like /v1/chat/completions are still blocked"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                EnterpriseRouteChecks.should_call_route("/v1/chat/completions")
+
+            assert exc_info.value.status_code == 403
+            assert "LLM API routes are disabled for this instance." in str(
+                exc_info.value.detail
+            )
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_embeddings_still_blocked_when_llm_api_disabled(self):
+        """Test that /v1/embeddings is still blocked when LLM API routes are disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                EnterpriseRouteChecks.should_call_route("/v1/embeddings")
+
+            assert exc_info.value.status_code == 403
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_models_route_allowed_when_llm_api_not_disabled(self):
+        """Test that /models works normally when LLM API routes are not disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            # Should not raise
+            EnterpriseRouteChecks.should_call_route("/models")
+            EnterpriseRouteChecks.should_call_route("/v1/models")
 
 
 def test_route_in_additional_public_routes_wildcard_match():

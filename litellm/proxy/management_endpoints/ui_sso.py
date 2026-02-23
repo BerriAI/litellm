@@ -11,10 +11,11 @@ Has all /sso/* routes
 import asyncio
 import base64
 import hashlib
+import inspect
 import os
 import secrets
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -82,7 +83,15 @@ from litellm.proxy.utils import (
     get_server_root_path,
 )
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
-from litellm.types.proxy.management_endpoints.ui_sso import *
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    DefaultTeamSSOParams,
+    MicrosoftGraphAPIUserGroupDirectoryObject,
+    MicrosoftGraphAPIUserGroupResponse,
+    MicrosoftServicePrincipalTeam,
+    RoleMappings,
+    TeamMappings,
+)
+from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
 from litellm.types.proxy.ui_sso import ParsedOpenIDResult
 
 if TYPE_CHECKING:
@@ -96,15 +105,15 @@ router = APIRouter()
 def normalize_email(email: Optional[str]) -> Optional[str]:
     """
     Normalize email address to lowercase for consistent storage and comparison.
-    
+
     Email addresses should be treated as case-insensitive for SSO purposes,
     even though RFC 5321 technically allows case-sensitive local parts.
     This prevents issues where SSO providers return emails with different casing
     than what's stored in the database.
-    
+
     Args:
         email: Email address to normalize, can be None
-        
+
     Returns:
         Lowercased email address, or None if input is None
     """
@@ -336,7 +345,7 @@ async def google_login(
     # check if user defined a custom auth sso sign in handler, if yes, use it
     if user_custom_ui_sso_sign_in_handler is not None:
         try:
-            from litellm_enterprise.proxy.auth.custom_sso_handler import (
+            from litellm_enterprise.proxy.auth.custom_sso_handler import (  # type: ignore[import-untyped]
                 EnterpriseCustomSSOHandler,
             )
 
@@ -494,7 +503,9 @@ def generic_response_convertor(
         display_name=get_nested_value(
             response, generic_user_display_name_attribute_name
         ),
-        email=normalize_email(get_nested_value(response, generic_user_email_attribute_name)),
+        email=normalize_email(
+            get_nested_value(response, generic_user_email_attribute_name)
+        ),
         first_name=get_nested_value(response, generic_user_first_name_attribute_name),
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
@@ -584,6 +595,7 @@ async def _setup_team_mappings() -> Optional["TeamMappings"]:
 
             if team_mappings_data:
                 from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
+
                 if isinstance(team_mappings_data, dict):
                     team_mappings = TeamMappings(**team_mappings_data)
                 elif isinstance(team_mappings_data, TeamMappings):
@@ -621,6 +633,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
 
             if role_mappings_data:
                 from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
+
                 if isinstance(role_mappings_data, dict):
                     role_mappings = RoleMappings(**role_mappings_data)
                 elif isinstance(role_mappings_data, RoleMappings):
@@ -634,7 +647,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         verbose_proxy_logger.debug(
             f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
         )
-     
+
     generic_role_mappings = os.getenv("GENERIC_ROLE_MAPPINGS_ROLES", None)
     generic_role_mappings_group_claim = os.getenv(
         "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", None
@@ -644,8 +657,8 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     )
     if generic_role_mappings is not None:
         verbose_proxy_logger.debug(
-        "Found role_mappings for generic provider in environment variables"
-    )  
+            "Found role_mappings for generic provider in environment variables"
+        )
         import ast
 
         try:
@@ -670,7 +683,9 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                 )
                 return role_mappings
         except TypeError as e:
-            verbose_proxy_logger.warning(f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic.")
+            verbose_proxy_logger.warning(
+                f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic."
+            )
     return role_mappings
 
 
@@ -747,7 +762,7 @@ async def get_generic_sso_response(
     try:
         result = await generic_sso.verify_and_process(
             request,
-            params=SSOAuthenticationHandler.prepare_token_exchange_parameters(
+            params=await SSOAuthenticationHandler.prepare_token_exchange_parameters(
                 request=request,
                 generic_include_client_id=generic_include_client_id,
             ),
@@ -942,7 +957,7 @@ def _build_sso_user_update_data(
 
     Returns:
         dict: Update data containing user_email and optionally user_role if valid
-        """
+    """
     update_data: dict = {"user_email": normalize_email(user_email)}
 
     # Get SSO role from result and include if valid
@@ -1392,50 +1407,22 @@ async def insert_sso_user(
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
 
-    # Check if role_mappings is configured in SSO settings
-    role_mappings_configured = False
-    try:
-        from litellm.proxy.utils import get_prisma_client_or_throw
-
-        prisma_client = get_prisma_client_or_throw(
-            "Prisma client is None, connect a database to your proxy"
-        )
-
-        # Get SSO config from dedicated table
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
-            where={"id": "sso_config"}
-        )
-
-        if sso_db_record and sso_db_record.sso_settings:
-            sso_settings_dict = dict(sso_db_record.sso_settings)
-            role_mappings_data = sso_settings_dict.get("role_mappings")
-            role_mappings_configured = role_mappings_data is not None
-        generic_user_role_mappings = os.getenv("GENERIC_USER_ROLE_MAPPINGS", None)
-        if generic_user_role_mappings is not None:
-            role_mappings_configured = True
-
-    except Exception as e:
-        # If we can't check role_mappings, continue with existing logic
-        verbose_proxy_logger.debug(
-            f"Could not check role_mappings configuration: {e}. Using default behavior."
-        )
-
     # Apply default_internal_user_params
     if litellm.default_internal_user_params:
-        # If role_mappings is configured and user_role is already set from SSO, preserve it
-        if (
-            role_mappings_configured
-            and user_defined_values.get("user_role") is not None
-        ):
+        # Preserve the SSO-extracted role if it's a valid LiteLLM role,
+        # regardless of how it was determined (role_mappings, Microsoft app_roles,
+        # GENERIC_USER_ROLE_ATTRIBUTE, custom SSO handler, etc.)
+        sso_role = user_defined_values.get("user_role")
+        if _should_use_role_from_sso_response(sso_role):
             # Preserve the SSO-extracted role, but apply other defaults
-            preserved_role = user_defined_values.get("user_role")
+            preserved_role = sso_role
             user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
             user_defined_values["user_role"] = preserved_role  # Restore preserved role
             verbose_proxy_logger.debug(
-                f"Preserved SSO-extracted role '{preserved_role}' (role_mappings configured)"
+                f"Preserved SSO-extracted role '{preserved_role}'"
             )
         else:
-            # Default behavior: update all values including role
+            # SSO didn't provide a valid role, apply all defaults including role
             user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
 
     # Set budget for internal users
@@ -1740,7 +1727,7 @@ class SSOAuthenticationHandler:
         """
         from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-        from litellm.proxy.proxy_server import user_api_key_cache
+        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
         with generic_sso:
             # TODO: state should be a random string and added to the user session with cookie
@@ -1769,13 +1756,21 @@ class SSOAuthenticationHandler:
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
-                # Store code_verifier in cache (10 min TTL)
+                # Store code_verifier in cache (10 min TTL). Use Redis when available
+                # so callbacks landing on another pod can retrieve it (multi-pod SSO).
                 cache_key = f"pkce_verifier:{redirect_params['state']}"
-                user_api_key_cache.set_cache(
-                    key=cache_key,
-                    value=code_verifier,
-                    ttl=600,
-                )
+                if redis_usage_cache is not None:
+                    await redis_usage_cache.async_set_cache(
+                        key=cache_key,
+                        value=code_verifier,
+                        ttl=600,
+                    )
+                else:
+                    await user_api_key_cache.async_set_cache(
+                        key=cache_key,
+                        value=code_verifier,
+                        ttl=600,
+                    )
 
                 # Add PKCE parameters to the authorization URL
                 if pkce_params:
@@ -2236,7 +2231,7 @@ class SSOAuthenticationHandler:
         user_defined_values: Optional[SSOUserDefinedValues] = None
 
         if user_custom_sso is not None:
-            if asyncio.iscoroutinefunction(user_custom_sso):
+            if inspect.iscoroutinefunction(user_custom_sso):
                 user_defined_values = await user_custom_sso(result)  # type: ignore
             else:
                 raise ValueError("user_custom_sso must be a coroutine function")
@@ -2372,7 +2367,7 @@ class SSOAuthenticationHandler:
         return redirect_response
 
     @staticmethod
-    def prepare_token_exchange_parameters(
+    async def prepare_token_exchange_parameters(
         request: Request,
         generic_include_client_id: bool,
     ) -> dict:
@@ -2386,27 +2381,38 @@ class SSOAuthenticationHandler:
         Returns:
             dict: Token exchange parameters
         """
-        # Prepare token exchange parameters
-        token_params = {"include_client_id": generic_include_client_id}
+        # Prepare token exchange parameters (may add code_verifier: str later)
+        token_params: Dict[str, Any] = {"include_client_id": generic_include_client_id}
 
-        # Retrieve PKCE code_verifier if PKCE was used in authorization
+        # Retrieve PKCE code_verifier if PKCE was used in authorization.
+        # Use same cache as store: Redis when available (multi-pod), else in-memory.
         query_params = dict(request.query_params)
         state = query_params.get("state")
         if state:
-            from litellm.proxy.proxy_server import user_api_key_cache
+            from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
             cache_key = f"pkce_verifier:{state}"
-            code_verifier = user_api_key_cache.get_cache(key=cache_key)
+            if redis_usage_cache is not None:
+                code_verifier = await redis_usage_cache.async_get_cache(key=cache_key)
+            else:
+                code_verifier = await user_api_key_cache.async_get_cache(key=cache_key)
 
             if code_verifier:
-                # Add code_verifier to token exchange parameters
-                token_params["code_verifier"] = code_verifier
+                # Add code_verifier to token exchange parameters (Redis returns decoded string)
+                token_params["code_verifier"] = (
+                    code_verifier
+                    if isinstance(code_verifier, str)
+                    else str(code_verifier)
+                )
                 verbose_proxy_logger.debug(
                     "PKCE code_verifier retrieved and will be included in token exchange"
                 )
 
                 # Clean up the cache entry (single-use verifier)
-                user_api_key_cache.delete_cache(key=cache_key)
+                if redis_usage_cache is not None:
+                    await redis_usage_cache.async_delete_cache(key=cache_key)
+                else:
+                    await user_api_key_cache.async_delete_cache(key=cache_key)
         return token_params
 
     @staticmethod
@@ -2549,7 +2555,9 @@ class MicrosoftSSOHandler:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
         openid_response = CustomOpenID(
-            email=normalize_email(response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail")),
+            email=normalize_email(
+                response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail")
+            ),
             display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
             provider="microsoft",
             id=response.get(MICROSOFT_USER_ID_ATTRIBUTE),

@@ -3,7 +3,7 @@ import { Modal, Tooltip, Form, Select, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer } from "../networking";
-import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo } from "./types";
+import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -25,6 +25,8 @@ interface CreateMCPServerProps {
   isModalVisible: boolean;
   setModalVisible: (visible: boolean) => void;
   availableAccessGroups: string[];
+  prefillData?: DiscoverableMCPServer | null;
+  onBackToDiscovery?: () => void;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.BASIC];
@@ -38,6 +40,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   isModalVisible,
   setModalVisible,
   availableAccessGroups,
+  prefillData,
+  onBackToDiscovery,
 }) => {
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
@@ -183,6 +187,50 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, transportType]);
 
+  // Pre-fill form from discovery selection
+  React.useEffect(() => {
+    if (!isModalVisible || !prefillData) {
+      return;
+    }
+    // Sanitize server name: strip vendor prefix, replace hyphens with underscores
+    const sanitizedName = (prefillData.name || "")
+      .replace(/[^a-zA-Z0-9_]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "");
+
+    const transport = prefillData.transport || "";
+    setTransportType(transport);
+
+    const prefillValues: Record<string, any> = {
+      server_name: sanitizedName,
+      alias: sanitizedName,
+      description: prefillData.description || "",
+      transport: transport,
+    };
+
+    if (transport === "stdio") {
+      const stdioObj: Record<string, any> = {};
+      if (prefillData.command) stdioObj.command = prefillData.command;
+      if (prefillData.args && prefillData.args.length > 0) stdioObj.args = prefillData.args;
+      if (prefillData.env_vars && prefillData.env_vars.length > 0) {
+        const envObj: Record<string, string> = {};
+        for (const v of prefillData.env_vars) {
+          envObj[v.name] = v.description ? `<${v.description}>` : "";
+        }
+        stdioObj.env = envObj;
+      }
+      if (Object.keys(stdioObj).length > 0) {
+        prefillValues.stdio_config = JSON.stringify(stdioObj, null, 2);
+      }
+    } else if (prefillData.url) {
+      prefillValues.url = prefillData.url;
+    }
+
+    form.setFieldsValue(prefillValues);
+    setFormValues(prefillValues);
+    setAliasManuallyEdited(false);
+  }, [isModalVisible, prefillData, form]);
+
   const handleCreate = async (values: Record<string, any>) => {
     setIsLoading(true);
     try {
@@ -268,6 +316,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
       }
 
+      // Map "openapi" transport to "http" for the backend
+      if (restValues.transport === TRANSPORT.OPENAPI) {
+        restValues.transport = "http";
+      }
+
       // Prepare the payload with cost configuration and allowed tools
       const payload: Record<string, any> = {
         ...restValues,
@@ -329,9 +382,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setTransportType(value);
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
-      form.setFieldsValue({ url: undefined, auth_type: undefined, credentials: undefined });
+      form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
+    } else if (value === TRANSPORT.OPENAPI) {
+      form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined });
     } else {
-      form.setFieldsValue({ command: undefined, args: undefined, env: undefined });
+      form.setFieldsValue({ spec_path: undefined, command: undefined, args: undefined, env: undefined });
     }
   };
 
@@ -391,7 +446,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   return (
     <Modal
       title={
-        <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
+        <div className="flex items-center pb-4 border-b border-gray-100" style={{ gap: 12 }}>
+          {onBackToDiscovery && (
+            <button
+              onClick={onBackToDiscovery}
+              className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none"
+              style={{ flexShrink: 0 }}
+            >
+              &#8592;
+            </button>
+          )}
           <img
             src={mcpLogoImg}
             alt="MCP Logo"
@@ -399,7 +463,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             style={{
               height: "20px",
               width: "20px",
-              marginRight: "8px",
               objectFit: "contain",
             }}
           />
@@ -429,7 +492,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   MCP Server Name
-                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Hyphens '-' are not allowed; use underscores '_' instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
+                  <Tooltip title="Best practice: Use a descriptive name that indicates the server's purpose (e.g., 'GitHub_MCP', 'Email_Service'). Cannot contain spaces or hyphens; use underscores instead. Names must comply with SEP-986 and will be rejected if invalid (https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-names).">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
@@ -450,7 +513,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               label={
                 <span className="text-sm font-medium text-gray-700 flex items-center">
                   Alias
-                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name with spaces replaced by underscores.">
+                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name if not provided. Cannot contain spaces or hyphens; use underscores instead.">
                     <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                   </Tooltip>
                 </span>
@@ -458,12 +521,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               name="alias"
               rules={[
                 { required: false },
-                {
-                  validator: (_, value) =>
-                    value && value.includes("-")
-                      ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                      : Promise.resolve(),
-                },
+                { validator: (_, value) => validateMCPServerName(value) },
               ]}
             >
               <TextInput
@@ -504,11 +562,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
                 <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
                 <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
+                <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
               </Select>
             </Form.Item>
 
             {/* URL field - only show for HTTP and SSE */}
-            {transportType !== "stdio" && (
+            {(transportType === "http" || transportType === "sse") && (
               <Form.Item
                 label={<span className="text-sm font-medium text-gray-700">MCP Server URL</span>}
                 name="url"
@@ -524,8 +583,29 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {/* Authentication - only show for HTTP and SSE */}
-            {transportType !== "stdio" && (
+            {/* OpenAPI Spec URL - only show for OpenAPI transport */}
+            {transportType === TRANSPORT.OPENAPI && (
+              <Form.Item
+                label={
+                  <span className="text-sm font-medium text-gray-700 flex items-center">
+                    OpenAPI Spec URL
+                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
+                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                    </Tooltip>
+                  </span>
+                }
+                name="spec_path"
+                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
+              >
+                <Input
+                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                />
+              </Form.Item>
+            )}
+
+            {/* Authentication - show for HTTP, SSE, and OpenAPI */}
+            {transportType !== "stdio" && transportType !== "" && (
               <Form.Item
                 label={<span className="text-sm font-medium text-gray-700">Authentication</span>}
                 name="auth_type"
@@ -541,7 +621,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {transportType !== "stdio" && shouldShowAuthValueField && (
+            {transportType !== "stdio" && transportType !== "" && shouldShowAuthValueField && (
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
@@ -562,7 +642,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               </Form.Item>
             )}
 
-            {transportType !== "stdio" && isOAuthAuthType && (
+            {transportType !== "stdio" && transportType !== "" && isOAuthAuthType && (
               <OAuthFormFields
                 isM2M={isM2MFlow}
                 initialFlowType={OAUTH_FLOW.INTERACTIVE}
