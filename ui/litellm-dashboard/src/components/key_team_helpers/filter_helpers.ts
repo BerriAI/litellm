@@ -1,6 +1,81 @@
-import { teamListCall, organizationListCall, keyAliasesCall } from "../networking"
+import { teamListCall, organizationListCall, keyAliasesCall, keyListCall } from "../networking";
 import { Team } from "./key_list";
 import { Organization } from "../networking";
+
+export interface TeamFilterOptions {
+  keyAliases: string[];
+  organizationIds: string[];
+  userIds: Array<{ id: string; email: string }>;
+}
+
+/**
+ * Fetches filter options (key aliases, org IDs, user IDs) scoped to a team's keys.
+ * Used by TeamVirtualKeysTable to show only relevant filter options.
+ */
+export const fetchTeamFilterOptions = async (
+  accessToken: string | null,
+  teamId: string,
+): Promise<TeamFilterOptions> => {
+  if (!accessToken || !teamId) {
+    return { keyAliases: [], organizationIds: [], userIds: [] };
+  }
+
+  try {
+    const keyAliases = new Set<string>();
+    const organizationIds = new Set<string>();
+    const userMap = new Map<string, string>(); // user_id -> user_email
+
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const response = await keyListCall(
+        accessToken,
+        null,
+        teamId,
+        null,
+        null,
+        null,
+        page,
+        100,
+        null,
+        null,
+        "user",
+        null,
+      );
+
+      const keys = response?.keys || [];
+      totalPages = response?.total_pages ?? 1;
+
+      for (const key of keys) {
+        const alias = key?.key_alias;
+        if (alias && typeof alias === "string") {
+          keyAliases.add(alias.trim());
+        }
+        const orgId = key?.organization_id;
+        if (orgId && typeof orgId === "string") {
+          organizationIds.add(orgId.trim());
+        }
+        const userId = key?.user_id;
+        if (userId && typeof userId === "string") {
+          const email = key?.user?.user_email || userId;
+          userMap.set(userId, email);
+        }
+      }
+
+      page++;
+    } while (page <= totalPages);
+
+    return {
+      keyAliases: Array.from(keyAliases).sort(),
+      organizationIds: Array.from(organizationIds).sort(),
+      userIds: Array.from(userMap.entries()).map(([id, email]) => ({ id, email })),
+    };
+  } catch (error) {
+    console.error("Error fetching team filter options:", error);
+    return { keyAliases: [], organizationIds: [], userIds: [] };
+  }
+};
 
 /**
  * Fetches all key aliases via the dedicated /key/aliases endpoint

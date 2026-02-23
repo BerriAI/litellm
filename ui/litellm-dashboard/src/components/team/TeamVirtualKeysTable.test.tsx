@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
@@ -17,8 +18,11 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
-  fetchAllOrganizations: vi.fn().mockResolvedValue([]),
+  fetchTeamFilterOptions: vi.fn().mockResolvedValue({
+    keyAliases: [],
+    organizationIds: [],
+    userIds: [],
+  }),
 }));
 
 vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
@@ -139,7 +143,7 @@ describe("TeamVirtualKeysTable", () => {
     });
   });
 
-  it("should call useKeys with expand user to fetch user email", async () => {
+  it("should call useKeys with page, pageSize, and expand user for server-side pagination", async () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
@@ -188,5 +192,165 @@ describe("TeamVirtualKeysTable", () => {
       expect(screen.getByText("0 Members")).toBeInTheDocument();
     });
     expect(screen.getByText("Key ID")).toBeInTheDocument();
+  });
+
+  it("should display keys in table when data is loaded", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [
+          createMockKey({ key_alias: "alice_key_team1" }),
+          createMockKey({ token: "sk-2", token_id: "key-2", key_alias: "bob_key_team1" }),
+        ],
+        total_count: 2,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("2 Members")).toBeInTheDocument();
+    });
+    expect(screen.getByText("alice_key_team1")).toBeInTheDocument();
+    expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
+  });
+
+  it("should show Page X of Y when multiple pages exist", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [createMockKey()],
+        total_count: 100,
+        current_page: 1,
+        total_pages: 3,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+    });
+    expect(screen.getByText("100 Members")).toBeInTheDocument();
+  });
+
+  it("should fetch page 2 when Next is clicked", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockImplementation((page: number) => ({
+      data: {
+        keys: page === 1 ? [createMockKey()] : [createMockKey({ token: "sk-page2", key_alias: "page2_key" })],
+        total_count: 100,
+        current_page: page,
+        total_pages: 3,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any));
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+    });
+
+    const nextButton = screen.getByRole("button", { name: "Next" });
+    await user.click(nextButton);
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        2,
+        50,
+        expect.objectContaining({ teamID: "team-1" })
+      );
+    });
+  });
+
+  it("should show Loading keys when isPending", async () => {
+    mockUseKeys.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isFetching: true,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Loading keys...")).toBeInTheDocument();
+    });
+  });
+
+  it("should show No keys found when keys array is empty", async () => {
+    mockUseKeys.mockReturnValue({
+      data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("0 Members")).toBeInTheDocument();
+    });
+    expect(screen.getByText("No keys found")).toBeInTheDocument();
+  });
+
+  it("should fetch team-scoped filter options for Key Alias, Organization ID, and User ID", async () => {
+    const mockFetchTeamFilterOptions = vi.mocked(fetchTeamFilterOptions);
+    mockFetchTeamFilterOptions.mockResolvedValue({
+      keyAliases: ["alice_key_team1", "charlie_key_team1"],
+      organizationIds: ["org-123"],
+      userIds: [
+        { id: "user-1", email: "alice@example.com" },
+        { id: "user-2", email: "charlie@example.com" },
+      ],
+    });
+
+    // Use unique teamId to avoid cache hit from previous tests (refetchOnMount: false)
+    renderWithProviders(
+      <TeamVirtualKeysTable {...defaultProps} teamId="team-filter-options-test" />
+    );
+
+    await waitFor(() => {
+      expect(mockFetchTeamFilterOptions).toHaveBeenCalledWith(
+        "test-token",
+        "team-filter-options-test"
+      );
+    });
+  });
+
+  it("should open Key Info View when key is clicked", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [createMockKey({ token: "sk-click-me", key_alias: "clickable_key" })],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("clickable_key")).toBeInTheDocument();
+    });
+
+    const keyButton = screen.getByRole("button", { name: /sk-click-me|clickable_key/ });
+    await userEvent.click(keyButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Key Info View")).toBeInTheDocument();
+    });
   });
 });
