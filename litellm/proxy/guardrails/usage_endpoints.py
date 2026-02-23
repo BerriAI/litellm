@@ -420,14 +420,16 @@ async def guardrails_usage_detail(
 
 
 def _build_usage_logs_where(
-    guardrail_id: Optional[str],
+    guardrail_ids: Optional[List[str]],
     policy_id: Optional[str],
     start_date: Optional[str],
     end_date: Optional[str],
 ) -> Dict[str, Any]:
     where: Dict[str, Any] = {}
-    if guardrail_id:
-        where["guardrail_id"] = guardrail_id
+    if guardrail_ids:
+        where["guardrail_id"] = (
+            {"in": guardrail_ids} if len(guardrail_ids) > 1 else guardrail_ids[0]
+        )
     if policy_id:
         where["policy_id"] = policy_id
     if start_date or end_date:
@@ -549,20 +551,20 @@ async def guardrails_usage_logs(
         return UsageLogsResponse(logs=[], total=0, page=page, page_size=page_size)
 
     try:
-        # SpendLogGuardrailIndex stores logical names (guardrail_name) from metadata, not UUIDs.
-        # Resolve UUID to guardrail_name when querying from the dashboard (which passes guardrail_id).
-        effective_guardrail_id: Optional[str] = guardrail_id
+        # Index rows may store either guardrail_id (UUID) or guardrail_name from metadata.
+        # Query by both so we match regardless of which was written.
+        effective_guardrail_ids: List[str] = [guardrail_id] if guardrail_id else []
         if guardrail_id:
             guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
                 where={"guardrail_id": guardrail_id}
             )
             if guardrail:
                 logical_name = getattr(guardrail, "guardrail_name", None)
-                if logical_name:
-                    effective_guardrail_id = logical_name
+                if logical_name and logical_name not in effective_guardrail_ids:
+                    effective_guardrail_ids.append(logical_name)
 
         where = _build_usage_logs_where(
-            effective_guardrail_id, policy_id, start_date, end_date
+            effective_guardrail_ids or None, policy_id, start_date, end_date
         )
         index_rows = await prisma_client.db.litellm_spendlogguardrailindex.find_many(
             where=where,
