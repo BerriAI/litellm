@@ -812,6 +812,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   file_object Json // Stores the OpenAIFileObject
   file_purpose String // either 'batch' or 'fine-tune'
   status String? // check if batch cost has been tracked  
+  batch_processed Boolean @default(false) // set to true by CheckBatchCost after cost is computed
   created_at DateTime @default(now())
   created_by String?
   updated_at DateTime @updatedAt
