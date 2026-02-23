@@ -8489,7 +8489,7 @@
         "tool_use_system_prompt_tokens": 346,
         "provider_specific_entry": {
             "us": 1.1,
-            "fast": 1.1
+            "fast": 6.0
         }
     },
     "claude-opus-4-6-20260205": {
@@ -8524,7 +8524,7 @@
         "tool_use_system_prompt_tokens": 346,
         "provider_specific_entry": {
             "us": 1.1,
-            "fast": 1.1
+            "fast": 6.0
         }
     },
     "claude-sonnet-4-20250514": {
