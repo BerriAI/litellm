@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -16,6 +18,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     Choices,
     CompletionTokensDetailsWrapper,
+    LlmProviders,
     Message,
     ModelResponse,
     Function,
@@ -1267,6 +1270,573 @@ class TestToolTransformation:
         assert result_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in result_tool["function"]["parameters"]
         assert result_tool["function"]["parameters"]["properties"]["arg"]["type"] == "string"
+
+
+class TestShellToolTransformation:
+    """Test cases for shell tool handling across the Responses API pipeline"""
+
+    # -------------------------------------------------------------------
+    # Anthropic / Bedrock: shell → bash_20250124 mapping
+    # -------------------------------------------------------------------
+
+    def test_shell_tool_maps_to_bash_for_anthropic(self):
+        """Shell tool should map to bash_20250124 for Anthropic"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="anthropic",
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "bash_20250124"
+        assert result_tools[0]["name"] == "bash"
+
+    def test_shell_tool_maps_to_bash_for_bedrock(self):
+        """Shell tool should map to bash_20250124 for Bedrock"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="bedrock",
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "bash_20250124"
+        assert result_tools[0]["name"] == "bash"
+
+    def test_shell_tool_mixed_with_function_tools_anthropic(self):
+        """Shell tool should coexist with function tools for Anthropic"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "shell",
+                "environment": {"type": "container_auto"},
+            },
+        ]
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools,
+            custom_llm_provider="anthropic",
+        )
+
+        assert len(result_tools) == 2
+        assert result_tools[0]["function"]["name"] == "get_weather"
+        assert result_tools[1]["type"] == "bash_20250124"
+        assert result_tools[1]["name"] == "bash"
+
+    # -------------------------------------------------------------------
+    # Gemini / Vertex AI: shell → code_execution mapping
+    # -------------------------------------------------------------------
+
+    def test_shell_tool_maps_to_code_execution_for_vertex_ai(self):
+        """Shell tool should map to code_execution for Vertex AI"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert len(result_tools) == 1
+        assert "code_execution" in result_tools[0]
+        assert result_tools[0]["code_execution"] == {}
+
+    def test_shell_tool_maps_to_code_execution_for_gemini(self):
+        """Shell tool should map to code_execution for Gemini"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="gemini",
+        )
+
+        assert len(result_tools) == 1
+        assert "code_execution" in result_tools[0]
+
+    def test_shell_tool_mixed_with_function_tools_vertex(self):
+        """Shell tool should coexist with function tools for Vertex AI"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "shell",
+                "environment": {"type": "container_auto"},
+            },
+        ]
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools,
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert len(result_tools) == 2
+        assert result_tools[0]["function"]["name"] == "get_weather"
+        assert "code_execution" in result_tools[1]
+
+    # -------------------------------------------------------------------
+    # Fallback providers: shell → synthetic _litellm_shell function tool
+    # -------------------------------------------------------------------
+
+    def test_shell_tool_maps_to_function_for_unsupported_provider(self):
+        """Shell tool should map to _litellm_shell function tool for unsupported providers"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+            custom_llm_provider="huggingface",
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "_litellm_shell"
+        assert "command" in result_tools[0]["function"]["parameters"]["properties"]
+
+    def test_shell_tool_maps_to_function_when_no_provider(self):
+        """Shell tool should map to _litellm_shell function tool when no provider is specified"""
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[shell_tool],
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "_litellm_shell"
+
+    def test_shell_tool_mixed_with_function_tools_unsupported(self):
+        """Shell tool should coexist with function tools for unsupported providers"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "shell",
+                "environment": {"type": "container_auto"},
+            },
+        ]
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools,
+            custom_llm_provider="huggingface",
+        )
+
+        assert len(result_tools) == 2
+        assert result_tools[0]["function"]["name"] == "get_weather"
+        assert result_tools[1]["type"] == "function"
+        assert result_tools[1]["function"]["name"] == "_litellm_shell"
+
+    def test_request_has_litellm_shell_tool_true(self):
+        """request_has_litellm_shell_tool should detect the synthetic tool"""
+        tools = [LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()]
+        assert LiteLLMCompletionResponsesConfig.request_has_litellm_shell_tool(tools) is True
+
+    def test_request_has_litellm_shell_tool_false_for_regular_tools(self):
+        """request_has_litellm_shell_tool should return False for normal function tools"""
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {}},
+            }
+        ]
+        assert LiteLLMCompletionResponsesConfig.request_has_litellm_shell_tool(tools) is False
+
+    def test_request_has_litellm_shell_tool_false_for_none(self):
+        """request_has_litellm_shell_tool should return False for None"""
+        assert LiteLLMCompletionResponsesConfig.request_has_litellm_shell_tool(None) is False
+
+    # -------------------------------------------------------------------
+    # Non-shell tools are unaffected
+    # -------------------------------------------------------------------
+
+    def test_shell_tool_error_does_not_affect_other_tools(self):
+        """Other tools in the same request should not be impacted by the shell error path"""
+        function_tool = {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {}},
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["function"]["name"] == "get_weather"
+
+    def test_openai_passthrough_shell_tool(self):
+        """OpenAI config should passthrough shell tools unchanged"""
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
+        )
+
+        config = OpenAIResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "gpt-4.1")
+
+        assert len(result) == 1
+        assert result[0]["type"] == "shell"
+        assert result[0]["environment"]["type"] == "container_auto"
+
+    def test_base_config_returns_sandbox_fallback_for_shell_tool(self):
+        """Base config should return the _litellm_shell function tool as sandbox fallback"""
+        from litellm.llms.base_llm.responses.transformation import (
+            BaseResponsesAPIConfig,
+        )
+
+        class _DummyConfig(BaseResponsesAPIConfig):
+            @property
+            def custom_llm_provider(self):
+                return LlmProviders.HUGGINGFACE
+
+            def get_supported_openai_params(self, model):
+                return []
+
+            def map_openai_params(self, response_api_optional_params, model, drop_params):
+                return {}
+
+            def validate_environment(self, headers, model, litellm_params):
+                return headers
+
+            def get_complete_url(self, api_base, litellm_params):
+                return ""
+
+            def transform_responses_api_request(self, model, input, response_api_optional_request_params, litellm_params, headers):
+                return {}
+
+            def transform_response_api_response(self, model, raw_response, logging_obj):
+                pass
+
+            def transform_streaming_response(self, model, parsed_chunk, logging_obj):
+                pass
+
+            def transform_delete_response_api_request(self, response_id, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_delete_response_api_response(self, raw_response, logging_obj):
+                pass
+
+            def transform_get_response_api_request(self, response_id, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_get_response_api_response(self, raw_response, logging_obj):
+                pass
+
+            def transform_list_input_items_request(self, response_id, api_base, litellm_params, headers, **kwargs):
+                return ("", {})
+
+            def transform_list_input_items_response(self, raw_response, logging_obj):
+                return {}
+
+            def transform_cancel_response_api_request(self, response_id, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_cancel_response_api_response(self, raw_response, logging_obj):
+                pass
+
+            def transform_compact_response_api_request(self, model, input, response_api_optional_request_params, api_base, litellm_params, headers):
+                return ("", {})
+
+            def transform_compact_response_api_response(self, raw_response, logging_obj):
+                pass
+
+        config = _DummyConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "some-model")
+        assert len(result) == 1
+        assert result[0]["type"] == "function"
+        assert result[0]["function"]["name"] == "_litellm_shell"
+
+    def test_xai_returns_sandbox_fallback_for_shell_tool(self):
+        """XAI config should return the sandbox fallback for shell tools"""
+        from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
+
+        config = XAIResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "grok-3")
+        assert len(result) == 1
+        assert result[0]["function"]["name"] == "_litellm_shell"
+
+    def test_perplexity_returns_sandbox_fallback_for_shell_tool(self):
+        """Perplexity config should return the sandbox fallback for shell tools"""
+        from litellm.llms.perplexity.responses.transformation import (
+            PerplexityResponsesConfig,
+        )
+
+        config = PerplexityResponsesConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "sonar-pro")
+        assert len(result) == 1
+        assert result[0]["function"]["name"] == "_litellm_shell"
+
+    def test_volcengine_returns_sandbox_fallback_for_shell_tool(self):
+        """VolcEngine config should return the sandbox fallback for shell tools"""
+        from litellm.llms.volcengine.responses.transformation import (
+            VolcEngineResponsesAPIConfig,
+        )
+
+        config = VolcEngineResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {"type": "container_auto"},
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "doubao-pro")
+        assert len(result) == 1
+        assert result[0]["function"]["name"] == "_litellm_shell"
+
+    def test_openai_shell_tool_preserves_all_environment_fields(self):
+        """OpenAI passthrough should preserve all environment config fields"""
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
+        )
+
+        config = OpenAIResponsesAPIConfig()
+        shell_tool = {
+            "type": "shell",
+            "environment": {
+                "type": "container_reference",
+                "container_id": "ctr_abc123",
+                "network_policy": "allow_all",
+            },
+        }
+
+        result = config.transform_shell_tool_params(shell_tool, "gpt-4.1")
+
+        assert len(result) == 1
+        assert result[0]["environment"]["type"] == "container_reference"
+        assert result[0]["environment"]["container_id"] == "ctr_abc123"
+        assert result[0]["environment"]["network_policy"] == "allow_all"
+
+
+class TestShellExecutionLoop:
+    """Test the sandbox shell execution loop in the handler."""
+
+    @pytest.mark.asyncio
+    async def test_handler_runs_shell_loop_on_litellm_shell_tool_call(self):
+        """
+        When the model calls _litellm_shell, the handler should execute the
+        command via the sandbox and re-invoke the model with the result.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        shell_fn_tool = LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+        # First response: model calls _litellm_shell
+        first_response = ModelResponse(
+            id="resp-1",
+            created=1000,
+            model="mistral/mistral-large-latest",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="_litellm_shell",
+                                    arguments='{"command": ["echo", "hello"]}',
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        # Second response: model produces final text (no more tool calls)
+        final_response = ModelResponse(
+            id="resp-2",
+            created=1001,
+            model="mistral/mistral-large-latest",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content="The command printed: hello",
+                    ),
+                )
+            ],
+        )
+
+        sandbox_result = {
+            "success": True,
+            "output": "hello\n",
+            "error": "",
+            "files": [],
+        }
+
+        handler = LiteLLMCompletionTransformationHandler()
+
+        with (
+            patch(
+                "litellm.responses.litellm_completion_transformation.handler.litellm.acompletion",
+                new_callable=AsyncMock,
+                return_value=final_response,
+            ) as mock_acompletion,
+            patch(
+                "litellm.llms.litellm_proxy.skills.sandbox_executor.SkillsSandboxExecutor.execute_shell_command",
+                return_value=sandbox_result,
+            ) as mock_exec,
+        ):
+            result = await handler._run_shell_execution_loop(
+                initial_response=first_response,
+                completion_args={
+                    "model": "mistral/mistral-large-latest",
+                    "messages": [{"role": "user", "content": "run echo hello"}],
+                    "tools": [shell_fn_tool],
+                },
+            )
+
+        mock_exec.assert_called_once_with(["echo", "hello"])
+        mock_acompletion.assert_called_once()
+        call_kwargs = mock_acompletion.call_args.kwargs
+        messages = call_kwargs["messages"]
+        # Should have: user, assistant (tool call), tool result
+        assert len(messages) == 3
+        assert messages[2]["role"] == "tool"
+        assert "hello" in messages[2]["content"]
+
+        assert result.id == "resp-2"
+
+    @pytest.mark.asyncio
+    async def test_handler_no_loop_when_no_shell_call(self):
+        """If the model does NOT call _litellm_shell, no loop should run."""
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        response = ModelResponse(
+            id="resp-1",
+            created=1000,
+            model="mistral/mistral-large-latest",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(role="assistant", content="No shell needed."),
+                )
+            ],
+        )
+
+        handler = LiteLLMCompletionTransformationHandler()
+        result = await handler._run_shell_execution_loop(
+            initial_response=response,
+            completion_args={
+                "model": "mistral/mistral-large-latest",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [],
+            },
+        )
+
+        assert result is response
+
+    def test_extract_shell_tool_calls_parses_correctly(self):
+        """_extract_shell_tool_calls should parse _litellm_shell calls."""
+        from litellm.responses.litellm_completion_transformation.handler import (
+            LiteLLMCompletionTransformationHandler,
+        )
+
+        response = ModelResponse(
+            id="resp-1",
+            created=1000,
+            model="test",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_abc",
+                                type="function",
+                                function=Function(
+                                    name="_litellm_shell",
+                                    arguments='{"command": ["ls", "-la"]}',
+                                ),
+                            ),
+                            ChatCompletionMessageToolCall(
+                                id="call_def",
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments='{"city": "NYC"}',
+                                ),
+                            ),
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        calls = LiteLLMCompletionTransformationHandler._extract_shell_tool_calls(response)
+        assert len(calls) == 1
+        assert calls[0]["id"] == "call_abc"
+        assert calls[0]["command"] == ["ls", "-la"]
 
 
 class TestUsageTransformation:

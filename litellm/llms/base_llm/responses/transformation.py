@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -9,6 +9,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
+    ShellToolParam,
 )
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -217,6 +218,56 @@ class BaseResponsesAPIConfig(ABC):
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
         return False
+
+    #########################################################
+    ########## SHELL TOOL TRANSFORMATION ####################
+    #########################################################
+    LITELLM_SHELL_TOOL_NAME = "_litellm_shell"
+
+    def transform_shell_tool_params(
+        self,
+        shell_tool: ShellToolParam,
+        model: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Transform a unified Responses API shell tool into provider-specific tool format.
+
+        Returns a list of tool dicts to include in the request.  Providers that
+        support shell-like tools natively (OpenAI, Azure) override this method
+        and pass the tool through as-is.
+
+        The default implementation returns a synthetic ``_litellm_shell``
+        function tool in **Responses API format** (top-level ``name``,
+        ``description``, ``parameters``).  When the model calls this function,
+        the LiteLLM handler executes the command in a sandboxed Docker container
+        via ``SkillsSandboxExecutor`` and feeds the output back automatically.
+        """
+        return [
+            {
+                "type": "function",
+                "name": self.LITELLM_SHELL_TOOL_NAME,
+                "description": (
+                    "Execute a shell command in a sandboxed environment. "
+                    "Provide the command as an array of strings, e.g. "
+                    '["ls", "-la"]. Returns stdout, stderr and exit code.'
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "The command and arguments to execute",
+                        }
+                    },
+                    "required": ["command"],
+                },
+            }
+        ]
+
+    #########################################################
+    ########## END SHELL TOOL TRANSFORMATION ################
+    #########################################################
 
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########

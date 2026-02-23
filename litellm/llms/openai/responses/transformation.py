@@ -51,6 +51,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         )
 
+    def transform_shell_tool_params(
+        self,
+        shell_tool: ShellToolParam,
+        model: str,
+    ) -> list:
+        """OpenAI natively supports the shell tool — pass through unchanged."""
+        return [dict(shell_tool)]
+
     def map_openai_params(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,

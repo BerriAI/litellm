@@ -6,6 +6,7 @@ Supports Docker, Podman, and Kubernetes backends.
 """
 
 import base64
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -269,6 +270,43 @@ print(json.dumps(files))
             )
         
         return generated_files
+
+    def execute_shell_command(
+        self,
+        command: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Execute a shell command in the sandbox.
+
+        Wraps the command in a Python ``subprocess.run`` call so it can
+        reuse the same ``SandboxSession`` infrastructure.
+
+        Args:
+            command: Command and arguments as a list of strings,
+                     e.g. ``["ls", "-la"]``.
+
+        Returns:
+            Same shape as ``execute()``:
+            ``{"success": bool, "output": str, "error": str, "files": []}``
+        """
+        if not command:
+            return {
+                "success": False,
+                "output": "",
+                "error": "No command provided",
+                "files": [],
+            }
+
+        serialized_command = json.dumps(command)
+        code = (
+            "import subprocess, sys\n"
+            f"r = subprocess.run({serialized_command}, capture_output=True, text=True)\n"
+            "print(r.stdout, end='')\n"
+            "if r.stderr:\n"
+            "    print(r.stderr, end='', file=sys.stderr)\n"
+            "sys.exit(r.returncode)\n"
+        )
+        return self.execute(code=code, skill_files={})
 
     def _get_mime_type(self, filename: str) -> str:
         """Get MIME type for a file based on extension."""

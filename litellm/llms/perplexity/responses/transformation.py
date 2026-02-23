@@ -10,7 +10,7 @@ and Perplexity's Responses API format, which supports:
 - Instructions parameter for system-level guidance
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import httpx
 
@@ -25,6 +25,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
+    ShellToolParam,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -144,6 +145,20 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         
         return mapped_params
 
+    def transform_shell_tool_params(
+        self,
+        shell_tool: ShellToolParam,
+        model: str,
+    ) -> list:
+        """Perplexity has no native shell support — return sandbox fallback tool."""
+        from litellm.llms.base_llm.responses.transformation import (
+            BaseResponsesAPIConfig,
+        )
+
+        return BaseResponsesAPIConfig.transform_shell_tool_params(
+            self, shell_tool, model
+        )
+
     def _transform_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Transform tools to Perplexity format
@@ -157,9 +172,12 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
         for tool in tools:
             if isinstance(tool, dict):
                 tool_type = tool.get("type")
+
+                if tool_type == "shell":
+                    perplexity_tools.extend(self.transform_shell_tool_params(cast(ShellToolParam, tool), ""))
                 
                 # Direct Perplexity tool format
-                if tool_type in ["web_search", "fetch_url"]:
+                elif tool_type in ["web_search", "fetch_url"]:
                     perplexity_tools.append(tool)
                 
                 # OpenAI function format - try to map to Perplexity tools

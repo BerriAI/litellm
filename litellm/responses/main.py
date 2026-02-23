@@ -496,6 +496,26 @@ async def aresponses(
                 f"Got an unexpected None response from the Responses API: {response}"
             )
 
+        # Auto-execute _litellm_shell calls (sandbox fallback for
+        # providers without native shell support like xAI, Perplexity, etc.)
+        if isinstance(response, ResponsesAPIResponse) and not stream:
+            from litellm.responses.shell_tool_handler import (
+                extract_shell_calls_from_response,
+                run_responses_shell_execution_loop,
+            )
+
+            if extract_shell_calls_from_response(response):
+                extra_kwargs_for_loop: Dict[str, Any] = {}
+                if max_output_tokens is not None:
+                    extra_kwargs_for_loop["max_output_tokens"] = max_output_tokens
+                response = await run_responses_shell_execution_loop(
+                    response=response,
+                    model=model,
+                    tools=tools,
+                    previous_response_id=previous_response_id,
+                    responses_kwargs=extra_kwargs_for_loop,
+                )
+
         return response
     except Exception as e:
         raise litellm.exception_type(

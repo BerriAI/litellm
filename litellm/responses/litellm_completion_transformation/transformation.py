@@ -169,7 +169,8 @@ class LiteLLMCompletionResponsesConfig:
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []  # type: ignore
+            responses_api_request.get("tools") or [],  # type: ignore
+            custom_llm_provider=custom_llm_provider,
         )
 
         response_format = None
@@ -1267,9 +1268,83 @@ class LiteLLMCompletionResponsesConfig:
         """
         return ChatCompletionSystemMessage(role="system", content=instructions or "")
 
+    SHELL_TOOL_BASH_PROVIDERS = {"anthropic", "bedrock"}
+    SHELL_TOOL_CODE_EXEC_PROVIDERS = {"vertex_ai", "vertex_ai_beta", "gemini"}
+    SHELL_TOOL_NATIVE_PROVIDERS = SHELL_TOOL_BASH_PROVIDERS | SHELL_TOOL_CODE_EXEC_PROVIDERS
+
+    LITELLM_SHELL_TOOL_NAME = "_litellm_shell"
+
+    @staticmethod
+    def _get_litellm_shell_function_tool() -> Dict[str, Any]:
+        """
+        Return a synthetic function-tool definition that LiteLLM injects for
+        providers without native shell / code-execution support.
+
+        The handler intercepts calls to this tool, executes the command in a
+        sandboxed Docker container via ``SkillsSandboxExecutor``, and feeds
+        the result back to the model automatically.
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": LiteLLMCompletionResponsesConfig.LITELLM_SHELL_TOOL_NAME,
+                "description": (
+                    "Execute a shell command in a sandboxed environment. "
+                    "Provide the command as an array of strings, e.g. "
+                    '[\"ls\", \"-la\"]. Returns stdout, stderr and exit code.'
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "The command and arguments to execute",
+                        }
+                    },
+                    "required": ["command"],
+                },
+            },
+        }
+
+    @staticmethod
+    def _transform_shell_tool_for_provider(
+        shell_tool: Dict[str, Any],
+        custom_llm_provider: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Map the unified Responses API ``shell`` tool to the provider's
+        Chat Completion equivalent.
+
+        - **Anthropic / Bedrock** → ``bash_20250124`` hosted tool
+        - **Vertex AI / Gemini** → ``code_execution`` tool
+        - **All others** → synthetic ``_litellm_shell`` function tool
+          (executed server-side via ``SkillsSandboxExecutor``)
+        """
+        if custom_llm_provider in LiteLLMCompletionResponsesConfig.SHELL_TOOL_BASH_PROVIDERS:
+            return {"type": "bash_20250124", "name": "bash"}
+
+        if custom_llm_provider in LiteLLMCompletionResponsesConfig.SHELL_TOOL_CODE_EXEC_PROVIDERS:
+            return {"code_execution": {}}
+
+        return LiteLLMCompletionResponsesConfig._get_litellm_shell_function_tool()
+
+    @staticmethod
+    def request_has_litellm_shell_tool(tools: Optional[List[Any]]) -> bool:
+        """Return True if any tool in the list is the synthetic shell function."""
+        if not tools:
+            return False
+        for tool in tools:
+            if isinstance(tool, dict):
+                fn = tool.get("function") or {}
+                if fn.get("name") == LiteLLMCompletionResponsesConfig.LITELLM_SHELL_TOOL_NAME:
+                    return True
+        return False
+
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        custom_llm_provider: Optional[str] = None,
     ) -> Tuple[
         List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
         Optional[OpenAIWebSearchOptions],
@@ -1301,6 +1376,12 @@ class LiteLLMCompletionResponsesConfig:
                     search_context_size=_search_context_size,
                     user_location=_user_location,
                 )
+            elif tool.get("type") == "shell":
+                mapped = LiteLLMCompletionResponsesConfig._transform_shell_tool_for_provider(
+                    shell_tool=cast(Dict[str, Any], tool),
+                    custom_llm_provider=custom_llm_provider,
+                )
+                chat_completion_tools.append(cast(ChatCompletionToolParam, mapped))
             elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
