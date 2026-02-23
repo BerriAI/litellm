@@ -1,10 +1,10 @@
-# MAS AI Risk Management Guidelines — Fairness & Bias
+# MAS AIRM Guidelines (Nov 2025 consultation draft) — Fairness & Bias
 # Blocks requests that would create discriminatory AI systems in
 # financial services (credit, lending, insurance, hiring) based on
 # protected attributes (race, religion, age, gender, nationality).
 # Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
 category_name: "sg_mas_fairness_bias"
-description: "MAS AI Guidelines — Blocks discriminatory AI practices in financial services that score, deny, or price based on protected attributes"
+description: "MAS AIRM consultation draft (Nov 2025) — Blocks discriminatory AI practices in financial services that score, deny, or price based on protected attributes"
 default_action: "BLOCK"
 
 identifier_words:

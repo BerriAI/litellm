@@ -1,9 +1,9 @@
-# MAS AI Risk Management Guidelines — Transparency & Explainability
+# MAS AIRM Guidelines (Nov 2025 consultation draft) — Transparency & Explainability
 # Blocks requests to deploy opaque/unexplainable AI for consequential
 # financial decisions (credit, claims, trading) without explainability.
 # Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
 category_name: "sg_mas_transparency_explainability"
-description: "MAS AI Guidelines — Blocks opaque or unexplainable AI systems for consequential financial decisions"
+description: "MAS AIRM consultation draft (Nov 2025) — Blocks opaque or unexplainable AI systems for consequential financial decisions"
 default_action: "BLOCK"
 
 identifier_words:

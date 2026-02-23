@@ -1,9 +1,9 @@
-# MAS AI Risk Management Guidelines — Human Oversight & Control
+# MAS AIRM Guidelines (Nov 2025 consultation draft) — Human Oversight & Control
 # Blocks requests to build or deploy fully automated financial AI
 # systems for consequential decisions without human-in-the-loop.
 # Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
 category_name: "sg_mas_human_oversight"
-description: "MAS AI Guidelines — Blocks fully automated financial AI decisions without human oversight for consequential actions"
+description: "MAS AIRM consultation draft (Nov 2025) — Blocks fully automated financial AI decisions without human oversight for consequential actions"
 default_action: "BLOCK"
 
 identifier_words:
