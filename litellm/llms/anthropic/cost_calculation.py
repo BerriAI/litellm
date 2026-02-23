@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo, Usage
+import litellm
 
 
 def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
@@ -22,19 +23,32 @@ def cost_per_token(model: str, usage: "Usage") -> Tuple[float, float]:
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    model_with_prefix = model
-    
-    # First, prepend inference_geo if present
-    if hasattr(usage, "inference_geo") and usage.inference_geo and usage.inference_geo.lower() not in ["global", "not_available"]:
-        model_with_prefix = f"{usage.inference_geo}/{model_with_prefix}"
-    
-    # Then, prepend speed if it's "fast"
-    if hasattr(usage, "speed") and usage.speed == "fast":
-        model_with_prefix = f"fast/{model_with_prefix}"
-    
     prompt_cost, completion_cost = generic_cost_per_token(
-        model=model_with_prefix, usage=usage, custom_llm_provider="anthropic"
+        model=model, usage=usage, custom_llm_provider="anthropic"
     )
+
+    # Apply provider_specific_entry multipliers for geo/speed routing
+    try:
+        model_info = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+        provider_specific_entry: dict = model_info.get("provider_specific_entry") or {}
+
+        multiplier = 1.0
+        if (
+            hasattr(usage, "inference_geo")
+            and usage.inference_geo
+            and usage.inference_geo.lower() not in ["global", "not_available"]
+        ):
+            multiplier *= provider_specific_entry.get(
+                usage.inference_geo.lower(), 1.0
+            )
+        if hasattr(usage, "speed") and usage.speed == "fast":
+            multiplier *= provider_specific_entry.get("fast", 1.0)
+
+        if multiplier != 1.0:
+            prompt_cost *= multiplier
+            completion_cost *= multiplier
+    except Exception:
+        pass
 
     return prompt_cost, completion_cost
 
