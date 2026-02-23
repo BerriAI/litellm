@@ -1305,6 +1305,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         aspeech: Optional[bool] = None,
         client=None,
         litellm_params: Optional[dict] = None,
+        stream: Optional[bool] = None,
     ) -> HttpxBinaryResponseContent:
         max_retries = optional_params.pop("max_retries", 2)
 
@@ -1323,6 +1324,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 timeout=timeout,
                 client=client,
                 litellm_params=litellm_params,
+                stream=stream,
             )  # type: ignore
 
         azure_client: AzureOpenAI = self.get_azure_openai_client(
@@ -1334,6 +1336,23 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             client=client,
             litellm_params=litellm_params,
         )  # type: ignore
+
+        if stream is True:
+            from litellm.llms.custom_httpx.httpx_stream_handler import (
+                HttpxStreamHandler,
+            )
+
+            ctx = azure_client.audio.speech.with_streaming_response.create(
+                model=model,
+                voice=voice,  # type: ignore
+                input=input,
+                **optional_params,
+            )
+            streamed_response = ctx.__enter__()
+            return HttpxStreamHandler(
+                response=streamed_response.http_response,
+                cleanup=lambda: ctx.__exit__(None, None, None),
+            )  # type: ignore
 
         response = azure_client.audio.speech.create(
             model=model,
@@ -1358,6 +1377,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: Union[float, httpx.Timeout],
         client=None,
         litellm_params: Optional[dict] = None,
+        stream: Optional[bool] = None,
     ) -> HttpxBinaryResponseContent:
         azure_client: AsyncAzureOpenAI = self.get_azure_openai_client(
             api_base=api_base,
@@ -1368,6 +1388,23 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             client=client,
             litellm_params=litellm_params,
         )  # type: ignore
+
+        if stream is True:
+            from litellm.llms.custom_httpx.httpx_stream_handler import (
+                HttpxStreamHandler,
+            )
+
+            ctx = azure_client.audio.speech.with_streaming_response.create(
+                model=model,
+                voice=voice,  # type: ignore
+                input=input,
+                **optional_params,
+            )
+            streamed_response = await ctx.__aenter__()
+            return HttpxStreamHandler(
+                response=streamed_response.http_response,
+                cleanup=lambda: ctx.__aexit__(None, None, None),
+            )  # type: ignore
 
         azure_response = await azure_client.audio.speech.create(
             model=model,
