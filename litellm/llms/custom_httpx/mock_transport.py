@@ -8,7 +8,8 @@ so the full proxy -> router -> OpenAI SDK -> httpx path is exercised.
 
 import json
 import time
-from typing import Iterator, List
+import uuid
+from typing import Tuple
 
 import httpx
 
@@ -17,10 +18,14 @@ import httpx
 # Pre-built response templates
 # ---------------------------------------------------------------------------
 
+def _mock_id() -> str:
+    return f"chatcmpl-mock-{uuid.uuid4().hex[:8]}"
+
+
 def _chat_completion_json(model: str) -> dict:
     """Return a minimal valid ChatCompletion object."""
     return {
-        "id": "chatcmpl-mock",
+        "id": _mock_id(),
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
@@ -42,73 +47,9 @@ def _chat_completion_json(model: str) -> dict:
     }
 
 
-def _streaming_sse_payloads(model: str) -> List[bytes]:
-    """Pre-build the SSE byte payloads for a streaming response."""
-    chunk = {
-        "id": "chatcmpl-mock",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"role": "assistant", "content": "Mock response"},
-                "finish_reason": None,
-            }
-        ],
-    }
-    done_chunk = {
-        "id": "chatcmpl-mock",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {},
-                "finish_reason": "stop",
-            }
-        ],
-    }
-    return [
-        b"data: " + json.dumps(chunk).encode() + b"\n\n",
-        b"data: " + json.dumps(done_chunk).encode() + b"\n\n",
-        b"data: [DONE]\n\n",
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Byte-stream wrappers
-# ---------------------------------------------------------------------------
-
-class MockSSEAsyncStream(httpx.AsyncByteStream):
-    """Async byte stream that yields pre-built SSE payloads."""
-
-    def __init__(self, payloads: List[bytes]) -> None:
-        self._payloads = payloads
-
-    async def __aiter__(self):  # type: ignore[override]
-        for payload in self._payloads:
-            yield payload
-
-
-class MockSSESyncStream(httpx.SyncByteStream):
-    """Sync byte stream that yields pre-built SSE payloads."""
-
-    def __init__(self, payloads: List[bytes]) -> None:
-        self._payloads = payloads
-
-    def __iter__(self) -> Iterator[bytes]:
-        return iter(self._payloads)
-
-
 # ---------------------------------------------------------------------------
 # Transport
 # ---------------------------------------------------------------------------
-
-_STREAM_HEADERS = {
-    "content-type": "text/event-stream",
-}
 
 _JSON_HEADERS = {
     "content-type": "application/json",
@@ -123,22 +64,17 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
     """
 
     @staticmethod
-    def _parse_request(request: httpx.Request) -> tuple:
-        """Extract (model, stream) from the request body."""
-        body = json.loads(request.content)
+    def _parse_request(request: httpx.Request) -> Tuple[str, bool]:
+        """Extract model from the request body."""
+        try:
+            body = json.loads(request.content)
+        except (json.JSONDecodeError, ValueError):
+            return ("mock-model", False)
         model = body.get("model", "mock-model")
-        stream = body.get("stream", False)
-        return model, stream
+        return (model, False)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        model, stream = self._parse_request(request)
-        if stream:
-            payloads = _streaming_sse_payloads(model)
-            return httpx.Response(
-                status_code=200,
-                headers=_STREAM_HEADERS,
-                stream=MockSSEAsyncStream(payloads),
-            )
+        model, _ = self._parse_request(request)
         body = json.dumps(_chat_completion_json(model)).encode()
         return httpx.Response(
             status_code=200,
@@ -147,14 +83,7 @@ class MockOpenAITransport(httpx.AsyncBaseTransport, httpx.BaseTransport):
         )
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        model, stream = self._parse_request(request)
-        if stream:
-            payloads = _streaming_sse_payloads(model)
-            return httpx.Response(
-                status_code=200,
-                headers=_STREAM_HEADERS,
-                stream=MockSSESyncStream(payloads),
-            )
+        model, _ = self._parse_request(request)
         body = json.dumps(_chat_completion_json(model)).encode()
         return httpx.Response(
             status_code=200,
