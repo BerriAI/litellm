@@ -5400,6 +5400,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        variant: Optional[str] = None,
     ) -> Union[bytes, Coroutine[Any, Any, bytes]]:
         """
         Handle video content download requests.
@@ -5415,6 +5416,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 api_key=api_key,
                 client=client,
+                variant=variant,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -5446,6 +5448,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            variant=variant,
         )
 
         try:
@@ -5488,6 +5491,7 @@ class BaseLLMHTTPHandler:
         extra_headers: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        variant: Optional[str] = None,
     ) -> bytes:
         """
         Async version of the video content download handler.
@@ -5522,6 +5526,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            variant=variant,
         )
 
         try:
