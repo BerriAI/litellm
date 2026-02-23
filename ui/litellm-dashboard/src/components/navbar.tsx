@@ -3,13 +3,8 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import {
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  MoonOutlined,
-  SunOutlined,
-} from "@ant-design/icons";
-import { Switch, Tag } from "antd";
+import { MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
+import { Button, Switch, Tag } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
@@ -43,7 +38,7 @@ const Navbar: React.FC<NavbarProps> = ({
   sidebarCollapsed = false,
   onToggleSidebar,
   isDarkMode,
-  toggleDarkMode
+  toggleDarkMode,
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
@@ -111,7 +106,7 @@ const Navbar: React.FC<NavbarProps> = ({
                     style={{ animationDuration: "2s" }}
                     title="Thanks for using LiteLLM!"
                   >
-                    ❄️
+                    🌑
                   </span>
                   <Tag className="relative text-xs font-medium cursor-pointer z-10">
                     <a
@@ -132,26 +127,21 @@ const Navbar: React.FC<NavbarProps> = ({
             <CommunityEngagementButtons />
             {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
             Do not set this to true by default until all components are confirmed to support dark mode styles. */}
-            {false && <Switch
-              data-testid="dark-mode-toggle"
-              checked={isDarkMode}
-              onChange={toggleDarkMode}
-              checkedChildren={<MoonOutlined />}
-              unCheckedChildren={<SunOutlined />}
-            />}
-            <a
-              href="https://docs.litellm.ai/docs/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
-            >
+            {false && (
+              <Switch
+                data-testid="dark-mode-toggle"
+                checked={isDarkMode}
+                onChange={toggleDarkMode}
+                checkedChildren={<MoonOutlined />}
+                unCheckedChildren={<SunOutlined />}
+              />
+            )}
+            <Button type="text" href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer">
               Docs
-            </a>
+            </Button>
             <BlogDropdown />
 
-            {!isPublicPage && (
-              <UserDropdown onLogout={handleLogout} />
-            )}
+            {!isPublicPage && <UserDropdown onLogout={handleLogout} />}
           </div>
         </div>
       </div>

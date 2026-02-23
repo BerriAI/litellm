@@ -1,140 +1,230 @@
-import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
 import { BlogDropdown } from "./BlogDropdown";
-import { useDisableShowBlog } from "@/app/(dashboard)/hooks/useDisableShowBlog";
 
-// Mock hooks
-vi.mock("@/app/(dashboard)/hooks/useDisableShowBlog", () => ({
-  useDisableShowBlog: vi.fn(() => false),
-}));
-
-vi.mock("@/components/networking", () => ({
-  getProxyBaseUrl: () => "http://localhost:4000",
-}));
-
-const SAMPLE_POSTS = {
-  posts: [
-    {
-      title: "Test Post 1",
-      description: "First test post description.",
-      date: "2026-02-01",
-      url: "https://www.litellm.ai/blog/test-1",
-    },
-    {
-      title: "Test Post 2",
-      description: "Second test post description.",
-      date: "2026-01-15",
-      url: "https://www.litellm.ai/blog/test-2",
-    },
-  ],
+let mockDisableBlogPosts = false;
+let mockRefetch = vi.fn();
+let mockUseBlogPostsResult: {
+  data: { posts: { title: string; date: string; description: string; url: string }[] } | null | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  refetch: () => void;
+} = {
+  data: undefined,
+  isLoading: false,
+  isError: false,
+  refetch: mockRefetch,
 };
 
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
-  });
-  return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
+vi.mock("@/app/(dashboard)/hooks/useDisableBlogPosts", () => ({
+  useDisableBlogPosts: () => mockDisableBlogPosts,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/blogPosts/useBlogPosts", () => ({
+  useBlogPosts: () => mockUseBlogPostsResult,
+}));
+
+const MOCK_POSTS = [
+  { title: "Post One", date: "2026-02-01", description: "Description one", url: "https://example.com/1" },
+  { title: "Post Two", date: "2026-02-02", description: "Description two", url: "https://example.com/2" },
+  { title: "Post Three", date: "2026-02-03", description: "Description three", url: "https://example.com/3" },
+  { title: "Post Four", date: "2026-02-04", description: "Description four", url: "https://example.com/4" },
+  { title: "Post Five", date: "2026-02-05", description: "Description five", url: "https://example.com/5" },
+  { title: "Post Six", date: "2026-02-06", description: "Description six", url: "https://example.com/6" },
+];
+
+async function openDropdown() {
+  const user = userEvent.setup();
+  await user.hover(screen.getByRole("button", { name: /blog/i }));
 }
 
 describe("BlogDropdown", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDisableBlogPosts = false;
+    mockRefetch = vi.fn();
+    mockUseBlogPostsResult = {
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      refetch: mockRefetch,
+    };
   });
 
-  it("renders the Blog button", async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => SAMPLE_POSTS,
-    });
-
-    render(<BlogDropdown />, { wrapper: createWrapper() });
-    expect(screen.getByText("Blog")).toBeInTheDocument();
-  });
-
-  it("shows posts on success", async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => SAMPLE_POSTS,
-    });
-
-    render(<BlogDropdown />, { wrapper: createWrapper() });
-
-    // Open the dropdown
-    fireEvent.click(screen.getByText("Blog"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Test Post 1")).toBeInTheDocument();
-      expect(screen.getByText("Test Post 2")).toBeInTheDocument();
+  describe("when blog posts are disabled", () => {
+    it("renders nothing", () => {
+      mockDisableBlogPosts = true;
+      const { container } = renderWithProviders(<BlogDropdown />);
+      expect(container).toBeEmptyDOMElement();
     });
   });
 
-  it("shows at most 5 posts", async () => {
-    const manyPosts = Array.from({ length: 8 }, (_, i) => ({
-      title: `Post ${i + 1}`,
-      description: `Description ${i + 1}`,
-      date: "2026-02-01",
-      url: `https://www.litellm.ai/blog/post-${i + 1}`,
-    }));
-
-    global.fetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ posts: manyPosts }),
+  describe("when blog posts are enabled", () => {
+    it("renders the Blog trigger button", () => {
+      renderWithProviders(<BlogDropdown />);
+      expect(screen.getByRole("button", { name: /blog/i })).toBeInTheDocument();
     });
 
-    render(<BlogDropdown />, { wrapper: createWrapper() });
-    fireEvent.click(screen.getByText("Blog"));
+    describe("loading state", () => {
+      it("shows a loading spinner", async () => {
+        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isLoading: true };
+        renderWithProviders(<BlogDropdown />);
 
-    await waitFor(() => {
-      expect(screen.getByText("Post 1")).toBeInTheDocument();
-      expect(screen.getByText("Post 5")).toBeInTheDocument();
-      expect(screen.queryByText("Post 6")).not.toBeInTheDocument();
-    });
-  });
+        await openDropdown();
 
-  it("shows error message and Retry button on fetch failure", async () => {
-    global.fetch = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Network error"))
-      .mockRejectedValueOnce(new Error("Network error"));
-
-    render(<BlogDropdown />, { wrapper: createWrapper() });
-    fireEvent.click(screen.getByText("Blog"));
-
-    await waitFor(() => {
-      expect(screen.getByText(/Failed to load blog posts/i)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
-    });
-  });
-
-  it("calls refetch when Retry is clicked", async () => {
-    global.fetch = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Network error"))
-      .mockRejectedValueOnce(new Error("Network error"))
-      .mockResolvedValueOnce({ ok: true, json: async () => SAMPLE_POSTS });
-
-    render(<BlogDropdown />, { wrapper: createWrapper() });
-    fireEvent.click(screen.getByText("Blog"));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+        await waitFor(() => {
+          expect(document.querySelector(".anticon-loading")).toBeInTheDocument();
+        });
+      });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    describe("error state", () => {
+      beforeEach(() => {
+        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isError: true };
+      });
 
-    await waitFor(() => {
-      expect(screen.getByText("Test Post 1")).toBeInTheDocument();
+      it("shows an error message", async () => {
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByText("Failed to load posts")).toBeInTheDocument();
+        });
+      });
+
+      it("shows a Retry button", async () => {
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+        });
+      });
+
+      it("calls refetch when Retry is clicked", async () => {
+        const user = userEvent.setup();
+        renderWithProviders(<BlogDropdown />);
+
+        await user.hover(screen.getByRole("button", { name: /blog/i }));
+
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+        });
+
+        await user.click(screen.getByRole("button", { name: /retry/i }));
+
+        expect(mockRefetch).toHaveBeenCalledTimes(1);
+      });
     });
-  });
 
-  it("returns null when useDisableShowBlog is true", () => {
-    vi.mocked(useDisableShowBlog).mockReturnValue(true);
+    describe("empty state", () => {
+      it("shows 'No posts available' when data is null", async () => {
+        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: null };
+        renderWithProviders(<BlogDropdown />);
 
-    const { container } = render(<BlogDropdown />, { wrapper: createWrapper() });
-    expect(container.firstChild).toBeNull();
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByText("No posts available")).toBeInTheDocument();
+        });
+      });
+
+      it("shows 'No posts available' when posts array is empty", async () => {
+        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: [] } };
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByText("No posts available")).toBeInTheDocument();
+        });
+      });
+    });
+
+    describe("with posts", () => {
+      beforeEach(() => {
+        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS.slice(0, 3) } };
+      });
+
+      it("renders post titles", async () => {
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByText("Post One")).toBeInTheDocument();
+          expect(screen.getByText("Post Two")).toBeInTheDocument();
+          expect(screen.getByText("Post Three")).toBeInTheDocument();
+        });
+      });
+
+      it("renders post descriptions", async () => {
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByText("Description one")).toBeInTheDocument();
+        });
+      });
+
+      it("renders post links with correct attributes", async () => {
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          const link = screen.getByRole("link", { name: /post one/i });
+          expect(link).toHaveAttribute("href", "https://example.com/1");
+          expect(link).toHaveAttribute("target", "_blank");
+          expect(link).toHaveAttribute("rel", "noopener noreferrer");
+        });
+      });
+
+      it("renders formatted post dates", async () => {
+        mockUseBlogPostsResult = {
+          ...mockUseBlogPostsResult,
+          data: { posts: [{ title: "Date Post", date: "2026-02-15", description: "Desc", url: "https://example.com" }] },
+        };
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByText("Feb 15, 2026")).toBeInTheDocument();
+        });
+      });
+
+      it("renders the 'View all posts' link", async () => {
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          const viewAllLink = screen.getByRole("link", { name: /view all posts/i });
+          expect(viewAllLink).toHaveAttribute("href", "https://docs.litellm.ai/blog");
+          expect(viewAllLink).toHaveAttribute("target", "_blank");
+          expect(viewAllLink).toHaveAttribute("rel", "noopener noreferrer");
+        });
+      });
+    });
+
+    describe("post limit", () => {
+      it("renders at most 5 posts when more than 5 are provided", async () => {
+        mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS } };
+        renderWithProviders(<BlogDropdown />);
+
+        await openDropdown();
+
+        await waitFor(() => {
+          expect(screen.getByText("Post One")).toBeInTheDocument();
+          expect(screen.getByText("Post Five")).toBeInTheDocument();
+          expect(screen.queryByText("Post Six")).not.toBeInTheDocument();
+        });
+      });
+    });
   });
 });
