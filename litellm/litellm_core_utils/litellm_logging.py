@@ -1629,6 +1629,7 @@ class Logging(LiteLLMLoggingBaseClass):
         logging_result,
         start_time,
         end_time,
+        should_emit: bool = True,
     ):
         hidden_params = getattr(logging_result, "_hidden_params", {})
         if hidden_params:
@@ -1657,7 +1658,9 @@ class Logging(LiteLLMLoggingBaseClass):
             logging_result, start_time, end_time
         )
 
-        if (
+        # Only emit for sync requests to avoid double emission
+        # (async_success_handler will emit for async requests)
+        if should_emit and (
             standard_logging_payload := self.model_call_details.get(
                 "standard_logging_object"
             )
@@ -1950,10 +1953,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 
                 # Use existing function to handle hidden_params, response_cost, and logging
                 # This ensures streaming follows the same code path as non-streaming
+                # Only emit for sync requests (async_success_handler handles async)
                 self._process_hidden_params_and_response_cost(
                     logging_result=complete_streaming_response,
                     start_time=start_time,
                     end_time=end_time,
+                    should_emit=is_sync_request,
                 )
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
