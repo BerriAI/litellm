@@ -493,6 +493,17 @@ def _usage_log_entry_from_row(
         if hasattr(sl.startTime, "isoformat")
         else str(sl.startTime)
     )
+    # #region agent log
+    try:
+        _log_path = "/Users/krrishdholakia/Documents/litellm/.cursor/debug-d1cae6.log"
+        import json as _json
+        _msg_t = getattr(sl, "messages", None)
+        _resp_t = getattr(sl, "response", None)
+        with open(_log_path, "a") as _f:
+            _f.write(_json.dumps({"sessionId": "d1cae6", "hypothesisId": "H2", "location": "usage_endpoints.py:_usage_log_entry_from_row", "message": "sl.messages and sl.response types", "data": {"messages_type": type(_msg_t).__name__ if _msg_t is not None else "None", "response_type": type(_resp_t).__name__ if _resp_t is not None else "None", "messages_repr": repr(_msg_t)[:120] if _msg_t is not None else None, "response_repr": repr(_resp_t)[:120] if _resp_t is not None else None}, "timestamp": __import__("time").time() * 1000}) + "\n")
+    except Exception:
+        pass
+    # #endregion
     return UsageLogEntry(
         id=r.request_id,
         timestamp=ts,
@@ -522,7 +533,17 @@ def _snippet(text: Any, max_len: int = 200) -> Optional[str]:
         s = " ".join(parts)
     else:
         s = str(text)
-    return (s[:max_len] + "...") if len(s) > max_len else s
+    result = (s[:max_len] + "...") if len(s) > max_len else s
+    # #region agent log
+    try:
+        _log_path = "/Users/krrishdholakia/Documents/litellm/.cursor/debug-d1cae6.log"
+        import json as _json
+        with open(_log_path, "a") as _f:
+            _f.write(_json.dumps({"sessionId": "d1cae6", "hypothesisId": "H1", "location": "usage_endpoints.py:_snippet", "message": "snippet input and result", "data": {"text_type": type(text).__name__, "text_repr": repr(text)[:150], "result": result, "result_is_empty_brace": result == "{}"}, "timestamp": __import__("time").time() * 1000}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    return result
 
 
 @router.get(

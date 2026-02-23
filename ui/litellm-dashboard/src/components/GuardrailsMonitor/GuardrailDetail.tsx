@@ -209,7 +209,7 @@ export function GuardrailDetail({
 
           <LogViewer
             guardrailName={data.name}
-            filterAction="blocked"
+            filterAction="all"
             logs={logs}
             logsLoading={logsLoading}
             totalLogs={logsData?.total ?? 0}
