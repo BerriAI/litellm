@@ -198,6 +198,23 @@ class PolicyDBResponse(BaseModel):
 
     policy_id: str = Field(description="Unique ID of the policy.")
     policy_name: str = Field(description="Name of the policy.")
+    version_number: int = Field(default=1, description="Version number of this policy.")
+    version_status: str = Field(
+        default="production",
+        description="One of: draft, published, production.",
+    )
+    parent_version_id: Optional[str] = Field(
+        default=None, description="Policy ID this version was cloned from."
+    )
+    is_latest: bool = Field(
+        default=True, description="True if this is the latest version by version_number."
+    )
+    published_at: Optional[datetime] = Field(
+        default=None, description="When this version was published."
+    )
+    production_at: Optional[datetime] = Field(
+        default=None, description="When this version was promoted to production."
+    )
     inherit: Optional[str] = Field(default=None, description="Parent policy name.")
     description: Optional[str] = Field(default=None, description="Policy description.")
     guardrails_add: List[str] = Field(
@@ -231,6 +248,49 @@ class PolicyListDBResponse(BaseModel):
         default_factory=list, description="List of policies."
     )
     total_count: int = Field(default=0, description="Total number of policies.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy Versioning Types
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class PolicyVersionCreateRequest(BaseModel):
+    """Request body for creating a new policy version (draft)."""
+
+    source_policy_id: Optional[str] = Field(
+        default=None,
+        description="Policy ID to clone from. If None, clone from current production version.",
+    )
+
+
+class PolicyVersionStatusUpdateRequest(BaseModel):
+    """Request body for updating a policy version's status."""
+
+    version_status: str = Field(
+        description="New status: 'published' or 'production'.",
+    )
+
+
+class PolicyVersionListResponse(BaseModel):
+    """Response for listing all versions of a policy."""
+
+    policy_name: str = Field(description="Name of the policy.")
+    versions: List[PolicyDBResponse] = Field(
+        default_factory=list, description="All versions ordered by version_number desc."
+    )
+    total_count: int = Field(default=0, description="Total number of versions.")
+
+
+class PolicyVersionCompareResponse(BaseModel):
+    """Response for comparing two policy versions."""
+
+    version_a: PolicyDBResponse = Field(description="First version.")
+    version_b: PolicyDBResponse = Field(description="Second version.")
+    field_diffs: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Field name -> {version_a: val, version_b: val} for differing fields.",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

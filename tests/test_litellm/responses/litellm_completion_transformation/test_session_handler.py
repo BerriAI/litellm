@@ -319,7 +319,7 @@ async def test_should_check_cold_storage_for_full_payload():
                 ]
             }
         ],
-        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "model": "anthropic/claude-4-sonnet-20250514",
         "stream": True,
         "litellm_trace_id": "16b86861-c120-4ecb-865b-4d2238bfd8f0"
     }
@@ -333,7 +333,7 @@ async def test_should_check_cold_storage_for_full_payload():
                 "content": "Hello, this is a regular message"
             }
         ],
-        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "model": "anthropic/claude-4-sonnet-20250514",
         "stream": True
     }
     

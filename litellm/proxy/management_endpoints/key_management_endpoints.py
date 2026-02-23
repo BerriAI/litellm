@@ -20,7 +20,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import fastapi
-import prisma
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
@@ -1072,6 +1071,7 @@ async def generate_key_fn(
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
+    - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
@@ -3153,6 +3153,8 @@ async def _rotate_master_key( # noqa: PLR0915
     3. Encrypt the values with the new master key
     4. Update the values in the DB
     """
+    import prisma
+
     from litellm.proxy.proxy_server import proxy_config
 
     try:

@@ -34,7 +34,25 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 @pytest.mark.parametrize(
     "prisma_error",
     [
+        HTTPClientClosedError(),
+        ClientNotConnectedError(),
+        PrismaError("can't reach database server"),
+        PrismaError("connection refused"),
+        PrismaError("timed out while connecting"),
+    ],
+)
+def test_is_database_connection_error_prisma_connection_errors(prisma_error):
+    """
+    Test that only Prisma connection-related errors are considered DB connection errors.
+    """
+    assert PrismaDBExceptionHandler.is_database_connection_error(prisma_error) == True
+
+
+@pytest.mark.parametrize(
+    "prisma_error",
+    [
         PrismaError(),
+        PrismaError("validation failed on query"),
         DataError(data={"user_facing_error": {"meta": {"table": "test_table"}}}),
         UniqueViolationError(
             data={"user_facing_error": {"meta": {"table": "test_table"}}}
@@ -52,15 +70,11 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
         RecordNotFoundError(
             data={"user_facing_error": {"meta": {"table": "test_table"}}}
         ),
-        HTTPClientClosedError(),
-        ClientNotConnectedError(),
     ],
 )
-def test_is_database_connection_error_prisma_errors(prisma_error):
-    """
-    Test that all Prisma errors are considered database connection errors
-    """
-    assert PrismaDBExceptionHandler.is_database_connection_error(prisma_error) == True
+def test_is_database_transport_error_non_connection_prisma_errors(prisma_error):
+    """Data-layer errors should not trigger reconnect — DB is reachable when these occur."""
+    assert PrismaDBExceptionHandler.is_database_transport_error(prisma_error) == False
 
 
 def test_is_database_connection_generic_errors():

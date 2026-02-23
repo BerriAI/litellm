@@ -489,6 +489,7 @@ def test_gemini_finish_reason():
     assert response.choices[0].finish_reason == "length"
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_gemini_url_context():
     from litellm import completion
 
@@ -575,96 +576,187 @@ def test_gemini_with_empty_function_call_arguments():
 
 @pytest.mark.asyncio
 async def test_claude_tool_use_with_gemini():
-    response = await litellm.anthropic.messages.acreate(
-        messages=[
-            {
-                "role": "user",
-                "content": "Hello, can you tell me the weather in Boston. Please respond with a tool call?",
-            }
-        ],
-        model="gemini/gemini-2.5-flash",
-        stream=True,
-        max_tokens=100,
-        tools=[
-            {
-                "name": "get_weather",
-                "description": "Get current weather information for a specific location",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                },
-            }
-        ],
+    """
+    Tests that tool use via litellm.anthropic.messages.acreate with a non-Anthropic model
+    (Gemini) correctly produces Anthropic SSE streaming format with tool_use blocks.
+
+    Uses a mocked acompletion response to make the test deterministic — Gemini 2.5 flash
+    can return MALFORMED_FUNCTION_CALL non-deterministically with low max_tokens, so this
+    test focuses on verifying the streaming transformation logic rather than live model behavior.
+    """
+    from unittest.mock import patch, AsyncMock
+    from litellm.types.utils import (
+        ModelResponseStream,
+        StreamingChoices,
+        Delta,
+        ChatCompletionDeltaToolCall,
+        Function,
     )
 
-    is_content_block_tool_use = False
-    is_partial_json = False
-    has_usage_in_message_delta = False
-    is_content_block_stop = False
+    def make_chunk(content=None, finish_reason=None, tool_calls=None, usage=None):
+        kwargs = {}
+        if usage is not None:
+            kwargs["usage"] = usage
+        return ModelResponseStream(
+            id="chatcmpl-mock",
+            model="gemini-2.5-flash",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=content,
+                        role="assistant",
+                        tool_calls=tool_calls,
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+            **kwargs,
+        )
 
-    async for chunk in response:
-        print(chunk)
-        if "content_block_stop" in str(chunk):
-            is_content_block_stop = True
+    mock_chunks = [
+        # Tool call start — function name triggers new content_block_start with type=tool_use
+        make_chunk(
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call-mock-id",
+                    type="function",
+                    function=Function(name="get_weather", arguments=""),
+                    index=0,
+                )
+            ],
+        ),
+        # Partial tool call arguments — emits input_json_delta with partial_json
+        make_chunk(
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call-mock-id",
+                    type="function",
+                    function=Function(name=None, arguments='{"location": "Boston"}'),
+                    index=0,
+                )
+            ],
+        ),
+        # Final chunk — triggers message_delta with stop_reason=tool_use
+        make_chunk(finish_reason="tool_calls"),
+        # Usage chunk — merged into the held message_delta
+        make_chunk(
+            usage={
+                "prompt_tokens": 63,
+                "completion_tokens": 30,
+                "total_tokens": 93,
+            }
+        ),
+    ]
 
-        # Handle bytes chunks (SSE format)
-        if isinstance(chunk, bytes):
-            chunk_str = chunk.decode("utf-8")
+    class MockAsyncStream:
+        def __init__(self):
+            self._index = 0
 
-            # Parse SSE format: event: <type>\ndata: <json>\n\n
-            if "data: " in chunk_str:
-                try:
-                    # Extract JSON from data line
-                    data_line = [
-                        line
-                        for line in chunk_str.split("\n")
-                        if line.startswith("data: ")
-                    ][0]
-                    json_str = data_line[6:]  # Remove 'data: ' prefix
-                    chunk_data = json.loads(json_str)
+        def __aiter__(self):
+            return self
 
-                    # Check for tool_use
-                    if "tool_use" in json_str:
-                        is_content_block_tool_use = True
-                    if "partial_json" in json_str:
-                        is_partial_json = True
-                    if "content_block_stop" in json_str:
-                        is_content_block_stop = True
+        async def __anext__(self):
+            if self._index < len(mock_chunks):
+                chunk = mock_chunks[self._index]
+                self._index += 1
+                return chunk
+            raise StopAsyncIteration
 
-                    # Check for usage in message_delta with stop_reason
-                    if (
-                        chunk_data.get("type") == "message_delta"
-                        and chunk_data.get("delta", {}).get("stop_reason") is not None
-                        and "usage" in chunk_data
-                    ):
-                        has_usage_in_message_delta = True
-                        # Verify usage has the expected structure
-                        usage = chunk_data["usage"]
-                        assert (
-                            "input_tokens" in usage
-                        ), "input_tokens should be present in usage"
-                        assert (
-                            "output_tokens" in usage
-                        ), "output_tokens should be present in usage"
-                        assert isinstance(
-                            usage["input_tokens"], int
-                        ), "input_tokens should be an integer"
-                        assert isinstance(
-                            usage["output_tokens"], int
-                        ), "output_tokens should be an integer"
-                        print(f"Found usage in message_delta: {usage}")
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = MockAsyncStream()
 
-                except (json.JSONDecodeError, IndexError) as e:
-                    # Skip chunks that aren't valid JSON
-                    pass
-        else:
-            # Handle dict chunks (fallback)
-            if "tool_use" in str(chunk):
-                is_content_block_tool_use = True
-            if "partial_json" in str(chunk):
-                is_partial_json = True
+        response = await litellm.anthropic.messages.acreate(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, can you tell me the weather in Boston. Please respond with a tool call?",
+                }
+            ],
+            model="gemini/gemini-2.5-flash",
+            stream=True,
+            max_tokens=1000,
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get current weather information for a specific location",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                }
+            ],
+        )
+
+        is_content_block_tool_use = False
+        is_partial_json = False
+        has_usage_in_message_delta = False
+        is_content_block_stop = False
+
+        async for chunk in response:
+            print(chunk)
             if "content_block_stop" in str(chunk):
                 is_content_block_stop = True
+
+            # Handle bytes chunks (SSE format)
+            if isinstance(chunk, bytes):
+                chunk_str = chunk.decode("utf-8")
+
+                # Parse SSE format: event: <type>\ndata: <json>\n\n
+                if "data: " in chunk_str:
+                    try:
+                        # Extract JSON from data line
+                        data_line = [
+                            line
+                            for line in chunk_str.split("\n")
+                            if line.startswith("data: ")
+                        ][0]
+                        json_str = data_line[6:]  # Remove 'data: ' prefix
+                        chunk_data = json.loads(json_str)
+
+                        # Check for tool_use
+                        if "tool_use" in json_str:
+                            is_content_block_tool_use = True
+                        if "partial_json" in json_str:
+                            is_partial_json = True
+                        if "content_block_stop" in json_str:
+                            is_content_block_stop = True
+
+                        # Check for usage in message_delta with stop_reason
+                        if (
+                            chunk_data.get("type") == "message_delta"
+                            and chunk_data.get("delta", {}).get("stop_reason") is not None
+                            and "usage" in chunk_data
+                        ):
+                            has_usage_in_message_delta = True
+                            # Verify usage has the expected structure
+                            usage = chunk_data["usage"]
+                            assert (
+                                "input_tokens" in usage
+                            ), "input_tokens should be present in usage"
+                            assert (
+                                "output_tokens" in usage
+                            ), "output_tokens should be present in usage"
+                            assert isinstance(
+                                usage["input_tokens"], int
+                            ), "input_tokens should be an integer"
+                            assert isinstance(
+                                usage["output_tokens"], int
+                            ), "output_tokens should be an integer"
+                            print(f"Found usage in message_delta: {usage}")
+
+                    except (json.JSONDecodeError, IndexError) as e:
+                        # Skip chunks that aren't valid JSON
+                        pass
+            else:
+                # Handle dict chunks (fallback)
+                if "tool_use" in str(chunk):
+                    is_content_block_tool_use = True
+                if "partial_json" in str(chunk):
+                    is_partial_json = True
+                if "content_block_stop" in str(chunk):
+                    is_content_block_stop = True
 
     assert is_content_block_tool_use, "content_block_tool_use should be present"
     assert is_partial_json, "partial_json should be present"

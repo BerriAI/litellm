@@ -827,6 +827,42 @@ async def get_category_yaml(category_name: str):
         )
 
 
+@router.get(
+    "/guardrails/ui/major_airlines",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_major_airlines():
+    """
+    Get the major airlines list from IATA (competitor intent, airline type).
+    Returns airline id, match variants (pipe-separated), and tags.
+    """
+    import os
+
+    airlines_path = os.path.join(
+        os.path.dirname(__file__),
+        "guardrail_hooks",
+        "litellm_content_filter",
+        "competitor_intent",
+        "major_airlines.json",
+    )
+    if not os.path.exists(airlines_path):
+        raise HTTPException(
+            status_code=404,
+            detail="major_airlines.json not found",
+        )
+    try:
+        with open(airlines_path, "r", encoding="utf-8") as f:
+            import json
+
+            airlines = json.load(f)
+        return {"airlines": airlines}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading major_airlines.json: {str(e)}"
+        ) from e
+
+
 @router.post(
     "/guardrails/validate_blocked_words_file",
     tags=["Guardrails"],
