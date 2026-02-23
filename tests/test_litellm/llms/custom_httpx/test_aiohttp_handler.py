@@ -3,6 +3,7 @@ import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
+import httpx
 import pytest
 
 sys.path.insert(
@@ -429,7 +430,7 @@ class TestBaseLLMAIOHTTPHandler:
         """Test _make_common_async_call forwards timeout to aiohttp ClientSession.post"""
         handler = BaseLLMAIOHTTPHandler()
 
-        timeout = aiohttp.ClientTimeout(total=1)
+        timeout = 1.0
         mock_response = Mock()
         mock_response.ok = True
 
@@ -452,10 +453,47 @@ class TestBaseLLMAIOHTTPHandler:
         )
 
         assert response is mock_response
-        mock_session.post.assert_awaited_once_with(
-            url="https://example.com/test",
+        mock_session.post.assert_awaited_once()
+        post_kwargs = mock_session.post.await_args.kwargs
+        assert post_kwargs["url"] == "https://example.com/test"
+        assert post_kwargs["headers"] == {"Authorization": "Bearer test"}
+        assert post_kwargs["json"] == {"input": "hello"}
+        assert post_kwargs["data"] is None
+        assert isinstance(post_kwargs["timeout"], aiohttp.ClientTimeout)
+        assert post_kwargs["timeout"].total == timeout
+
+    @pytest.mark.asyncio
+    async def test_make_common_async_call_converts_httpx_timeout(self):
+        """Test _make_common_async_call converts httpx.Timeout to aiohttp.ClientTimeout"""
+        handler = BaseLLMAIOHTTPHandler()
+
+        timeout = httpx.Timeout(timeout=10.0, connect=2.0, read=3.0, write=4.0)
+        mock_response = Mock()
+        mock_response.ok = True
+
+        mock_session = Mock()
+        mock_session.post = AsyncMock(return_value=mock_response)
+
+        provider_config = Mock()
+        provider_config.max_retry_on_unprocessable_entity_error = 0
+
+        response = await handler._make_common_async_call(
+            async_client_session=mock_session,
+            provider_config=provider_config,
+            api_base="https://example.com/test",
             headers={"Authorization": "Bearer test"},
-            json={"input": "hello"},
-            data=None,
+            data={"input": "hello"},
             timeout=timeout,
+            litellm_params={},
+            form_data=None,
+            stream=False,
         )
+
+        assert response is mock_response
+        mock_session.post.assert_awaited_once()
+        post_timeout = mock_session.post.await_args.kwargs["timeout"]
+        assert isinstance(post_timeout, aiohttp.ClientTimeout)
+        assert post_timeout.total == 3.0
+        assert post_timeout.connect == 2.0
+        assert post_timeout.sock_connect == 2.0
+        assert post_timeout.sock_read == 3.0
