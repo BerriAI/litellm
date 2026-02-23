@@ -122,6 +122,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     queryKey: ["teamFilterOptions", teamId],
     queryFn: async () => fetchTeamFilterOptions(accessToken, teamId),
     enabled: !!accessToken && !!teamId,
+    staleTime: 30000, // 30 seconds - align with useKeys
   });
   const teamFilterOptions = teamFilterOptionsQuery.data || {
     keyAliases: [],
