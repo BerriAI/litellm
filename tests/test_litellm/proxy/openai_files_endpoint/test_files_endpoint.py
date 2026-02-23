@@ -1134,3 +1134,47 @@ def test_create_file_with_deep_nested_litellm_metadata(
     assert captured_litellm_metadata["config"]["database"]["port"] == "5432"
     assert "cache" in captured_litellm_metadata["config"]
     assert captured_litellm_metadata["config"]["cache"]["enabled"] == "true"
+
+
+def test_create_batch_file_with_failing_guardrail(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """
+    Test that uploading a batch file triggers guardrails and fails if the guardrail raises an exception.
+    """
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+    
+    # Mock pre_call_hook to raise an exception simulating a blocked request
+    mock_pre_call_hook = mocker.patch.object(
+        proxy_logging_obj, 
+        "pre_call_hook", 
+        side_effect=Exception("Guardrail blocked this batch item")
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+    
+    test_file_content = b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Bad stuff"}]}}'
+    test_file = ("nested.jsonl", test_file_content, "application/jsonl")
+    
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "batch",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+    
+    # Verify the guardrail was called
+    assert mock_pre_call_hook.call_count == 1
+    
+    # Verify request failed
+    assert response.status_code == 500
+    error_detail = response.json()
+    assert "Guardrail blocked this batch item" in error_detail["error"]["message"]

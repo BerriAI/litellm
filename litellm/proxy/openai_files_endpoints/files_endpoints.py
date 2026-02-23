@@ -461,6 +461,17 @@ async def create_file(  # noqa: PLR0915
             **data
         )
 
+        # Run pre-call guardrails on batch file content
+        if purpose == "batch":
+            from litellm.proxy.batches_endpoints.batch_guardrail_utils import (
+                run_pre_call_guardrails_on_batch_file,
+            )
+            await run_pre_call_guardrails_on_batch_file(
+                file_content=file_content,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         response = await route_create_file(
             llm_router=llm_router,
             _create_file_request=_create_file_request,
