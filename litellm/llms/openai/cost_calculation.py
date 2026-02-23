@@ -7,7 +7,7 @@ from typing import Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import CallTypes, Usage
+from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
 
 
@@ -132,7 +132,7 @@ def video_generation_cost(
     model: str,
     duration_seconds: float,
     custom_llm_provider: Optional[str] = None,
-    model_info: Optional[dict] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
     Calculates the cost for video generation based on duration in seconds.

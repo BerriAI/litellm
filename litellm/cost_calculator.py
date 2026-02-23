@@ -1196,7 +1196,7 @@ def completion_cost(  # noqa: PLR0915
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
                     # Extract custom model_info for deployment-specific pricing
-                    _video_model_info: Optional[dict] = None
+                    _video_model_info: Optional[ModelInfo] = None
                     if custom_pricing and litellm_logging_obj is not None:
                         _litellm_params = getattr(
                             litellm_logging_obj, "litellm_params", None
@@ -1857,7 +1857,7 @@ def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
     custom_llm_provider: Optional[str] = None,
-    model_info: Optional[dict] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -1866,7 +1866,7 @@ def default_video_cost_calculator(
         model (str): Model name
         duration_seconds (float): Duration of the generated video in seconds
         custom_llm_provider (Optional[str]): Custom LLM provider
-        model_info (Optional[dict]): Deployment-level model info containing
+        model_info (Optional[ModelInfo]): Deployment-level model info containing
             custom video pricing. When provided, used before falling back to
             the global litellm.model_cost lookup.
 
@@ -1877,8 +1877,9 @@ def default_video_cost_calculator(
         Exception: If model pricing not found in cost map
     """
     # Use custom model_info pricing if provided (deployment-specific pricing)
+    cost_info: Optional[dict] = None
     if model_info is not None:
-        cost_info = model_info
+        cost_info = dict(model_info)
     else:
         # Build model names for cost lookup
         base_model_name = model
@@ -1896,7 +1897,6 @@ def default_video_cost_calculator(
         model_without_provider = model.split("/")[-1]
 
         # Try model with provider first, fall back to base model name
-        cost_info = None
         models_to_check: List[Optional[str]] = [
             base_model_name,
             model,
@@ -1913,10 +1913,11 @@ def default_video_cost_calculator(
             prefixed_model = f"{custom_llm_provider}/{model}"
             if prefixed_model in litellm.model_cost:
                 cost_info = litellm.model_cost[prefixed_model]
-        if cost_info is None:
-            raise Exception(
-                f"Model not found in cost map. Tried checking {models_to_check}"
-            )
+
+    if cost_info is None:
+        raise Exception(
+            f"Model not found in cost map for model={model}"
+        )
 
     # Check for video-specific cost per second first
     video_cost_per_second = cost_info.get("output_cost_per_video_per_second")
