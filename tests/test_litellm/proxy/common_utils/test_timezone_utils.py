@@ -41,7 +41,7 @@ def test_get_budget_reset_time():
 
 class TestGetBudgetResetTimezone:
     """
-    Tests for get_budget_reset_time()
+    Tests for get_budget_reset_timezone()
     """
 
     def test_returns_utc_when_timezone_not_set(self):
@@ -72,7 +72,7 @@ class TestGetBudgetResetTimezone:
         has_attr = hasattr(litellm, "timezone")
 
         try:
-            litellm.timezone = original
+            litellm.timezone = None
             assert get_budget_reset_timezone() == "UTC"
         finally:
             if has_attr:
@@ -116,4 +116,3 @@ class TestGetBudgetResetTimezone:
                 litellm.timezone = original
             elif hasattr(litellm, "timezone"):
                 delattr(litellm, "timezone")
-        
