@@ -103,6 +103,11 @@ def print_aggregate(results):
     total_failures = sum(r["failures"] for r in results)
     total_requests = sum(r["n_requests"] for r in results)
     n = len(all_latencies)
+
+    if not all_latencies:
+        print(f"\n  Aggregate: all {total_requests} requests failed across {len(results)} runs")
+        return
+
     mean = statistics.mean(all_latencies) * 1000
     p50 = all_latencies[n // 2] * 1000
     p95 = all_latencies[int(n * 0.95)] * 1000
