@@ -1,4 +1,3 @@
-import anyio
 import asyncio
 import copy
 import enum
@@ -31,6 +30,7 @@ from typing import (
     get_type_hints,
 )
 
+import anyio
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
@@ -3598,9 +3598,6 @@ class ProxyConfig:
             parsed = value
         elif isinstance(value, str):
             import json
-
-            import yaml
-
             try:
                 parsed = yaml.safe_load(value)
             except (yaml.YAMLError, json.JSONDecodeError):
@@ -4388,6 +4385,9 @@ class ProxyConfig:
                 litellm.model_cost = new_model_cost_map
                 # Invalidate case-insensitive lookup map since model_cost was replaced
                 _invalidate_model_cost_lowercase_map()
+                # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
+                # wildcard patterns like "anthropic/*" include any newly added models.
+                litellm.add_known_models(model_cost_map=new_model_cost_map)
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -11890,6 +11890,9 @@ async def reload_model_cost_map(
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
+        # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
+        # wildcard patterns like "anthropic/*" include any newly added models.
+        litellm.add_known_models(model_cost_map=new_model_cost_map)
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
@@ -12141,6 +12144,55 @@ async def get_model_cost_map_reload_status(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get model cost map reload status: {str(e)}",
+        )
+
+
+@router.get(
+    "/model/cost_map/source",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def get_model_cost_map_source(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Returns information about where the current model cost/pricing data was loaded from.
+
+    Response fields:
+    - source: "local" (bundled backup) or "remote" (fetched from URL)
+    - url: the remote URL that was attempted (null when env-forced local)
+    - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
+    - fallback_reason: human-readable reason why remote failed (null on success)
+    - model_count: number of models in the currently loaded cost map
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map_source_info,
+        )
+
+        source_info = get_model_cost_map_source_info()
+        model_count = len(litellm.model_cost) if litellm.model_cost else 0
+
+        return {
+            **source_info,
+            "model_count": model_count,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to get model cost map source info: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get model cost map source info: {str(e)}",
         )
 
 

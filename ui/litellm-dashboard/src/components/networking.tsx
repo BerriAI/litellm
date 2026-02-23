@@ -466,6 +466,33 @@ export const cancelModelCostMapReload = async (accessToken: string) => {
   }
 };
 
+export const getModelCostMapSource = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/model/cost_map/source`
+      : `/model/cost_map/source`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
+    const jsonData = await response.json();
+    console.log("Model cost map source info:", jsonData);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to get model cost map source info:", error);
+    throw error;
+  }
+};
+
 export const getModelCostMapReloadStatus = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl
