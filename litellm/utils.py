@@ -5719,6 +5719,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 annotation_cost_per_page=_model_info.get(
                     "annotation_cost_per_page", None
                 ),
+                provider_specific_entry=_model_info.get(
+                    "provider_specific_entry", None
+                ),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
