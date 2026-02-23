@@ -515,3 +515,82 @@ def test_proxy_admin_jwt_auth_handles_no_team_object():
     assert result.team_metadata is None
     assert result.org_id is None
     assert result.end_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_common_checks_team_model_denied():
+    """
+    Test that common_checks (called after custom auth) enforces team model access.
+    If team_object only allows ["gpt-4"], requesting "gpt-3.5-turbo" should be denied.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-custom-key",
+        team_id="test-team",
+    )
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=["gpt-4"],
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+
+    with pytest.raises(ProxyException):
+        await common_checks(
+            request=mock_request,
+            request_body={"model": "gpt-3.5-turbo"},
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            general_settings={},
+            global_proxy_spend=None,
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_common_checks_team_model_allowed():
+    """
+    Test that common_checks passes when the team allows the requested model.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-custom-key",
+        team_id="test-team",
+    )
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=["gpt-4"],
+    )
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+
+    result = await common_checks(
+        request=mock_request,
+        request_body={"model": "gpt-4"},
+        team_object=team_object,
+        user_object=None,
+        end_user_object=None,
+        general_settings={},
+        global_proxy_spend=None,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+    )
+    assert result is True

@@ -9698,3 +9698,33 @@ export const checkGdprCompliance = async (
   }
   return response.json();
 };
+
+export const provisionPartnerGuardrailCall = async (
+  accessToken: string,
+  data: {
+    guardrail_name: string;
+    provider: string;
+    credential_name: string;
+    provision_config: Record<string, any>;
+    aws_region_name?: string;
+    mode?: string;
+    default_on?: boolean;
+  }
+) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/provision_partner`
+    : `/guardrails/provision_partner`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(deriveErrorMessage(errorData));
+  }
+  return response.json();
+};

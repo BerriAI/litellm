@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
@@ -747,6 +747,21 @@ class Guardrail(TypedDict, total=False):
     policy_template: Optional[str]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
+
+
+class PartnerProvisionResult(NamedTuple):
+    """Generic result returned by any partner guardrail provisioner.
+
+    Each provider's ``provision_partner_guardrail`` method builds the
+    provider-specific ``Guardrail`` dict and returns it inside this type
+    so the endpoint stays completely provider-agnostic.
+    """
+
+    guardrail_data: "Guardrail"
+    provider: str
+    provider_guardrail_id: str
+    provider_guardrail_version: str
+    message: str
 
 
 class guardrailConfig(TypedDict):

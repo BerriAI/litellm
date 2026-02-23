@@ -1,10 +1,22 @@
-# Custom Auth 
+# Custom Auth
 
 You can now override the default api key auth.
 
+## How it works
+
+When you set `custom_auth`, the proxy will:
+
+1. Run your custom auth function first
+2. If it returns a `UserAPIKeyAuth` object, the proxy runs LiteLLM's built-in checks on it — model access, budget limits, and other guardrails based on the fields you set on the returned object
+3. If any check fails, the request is rejected
+
+This means you handle identity verification (who is this user?) while LiteLLM enforces the access policies you define on the `UserAPIKeyAuth` object (what can they do?).
+
+For example, if you return `UserAPIKeyAuth(models=["gpt-4"])`, the proxy will reject requests for any other model.
+
 ## Usage
 
-#### 1. Create a custom auth file. 
+#### 1. Create a custom auth file.
 
 Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
 
@@ -12,13 +24,13 @@ Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This i
 from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 
-async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth: 
-    try: 
+async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+    try:
         modified_master_key = "sk-my-master-key"
         if api_key == modified_master_key:
             return UserAPIKeyAuth(api_key=api_key)
         raise Exception
-    except: 
+    except:
         raise Exception
 ```
 

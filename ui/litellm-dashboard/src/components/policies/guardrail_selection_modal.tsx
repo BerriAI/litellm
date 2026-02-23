@@ -1,22 +1,28 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Checkbox, Button, Divider, Tag } from "antd";
+import { Modal, Checkbox, Button, Divider, Tag, Tooltip } from "antd";
 import { CheckCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { credentialListCall } from "../networking";
+import PartnerGuardrailCard from "./partner_guardrail_card";
+import {
+  GuardrailInfo,
+  PartnerGuardrailConfig,
+  PartnerGuardrailSelection,
+} from "./types";
 
-interface GuardrailInfo {
-  guardrail_name: string;
-  description: string;
-  alreadyExists: boolean;
-  definition: any;
-}
+export type { PartnerGuardrailSelection } from "./types";
 
 interface GuardrailSelectionModalProps {
   visible: boolean;
   template: any;
   existingGuardrails: Set<string>;
-  onConfirm: (selectedGuardrails: any[]) => void;
+  onConfirm: (
+    selectedGuardrails: any[],
+    partnerGuardrails?: PartnerGuardrailSelection[]
+  ) => void;
   onCancel: () => void;
   isLoading?: boolean;
   progressInfo?: { current: number; total: number } | null;
+  accessToken?: string;
 }
 
 const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
@@ -27,12 +33,27 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
   onCancel,
   isLoading = false,
   progressInfo,
+  accessToken,
 }) => {
   const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(
     new Set()
   );
 
-  // Prepare guardrail info with existence status
+  const [partnerEnabled, setPartnerEnabled] = useState<
+    Record<string, boolean>
+  >({});
+  const [partnerCredentials, setPartnerCredentials] = useState<
+    Record<string, string>
+  >({});
+  const [partnerRegions, setPartnerRegions] = useState<
+    Record<string, string>
+  >({});
+  const [credentials, setCredentials] = useState<any[]>([]);
+  const [credentialsLoading, setCredentialsLoading] = useState(false);
+
+  const partnerGuardrailConfigs: PartnerGuardrailConfig[] =
+    template?.partnerGuardrails || [];
+
   const guardrailsInfo: GuardrailInfo[] = (
     template?.guardrailDefinitions || []
   ).map((def: any) => ({
@@ -42,15 +63,34 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
     definition: def,
   }));
 
-  // Initialize selection: select only new guardrails by default
   useEffect(() => {
     if (visible && template) {
       const newGuardrails = guardrailsInfo
         .filter((g) => !g.alreadyExists)
         .map((g) => g.guardrail_name);
       setSelectedGuardrails(new Set(newGuardrails));
+      setPartnerEnabled({});
+      setPartnerCredentials({});
+      setPartnerRegions({});
     }
   }, [visible, template]);
+
+  useEffect(() => {
+    const anyEnabled = Object.values(partnerEnabled).some(Boolean);
+    if (anyEnabled && accessToken && credentials.length === 0) {
+      setCredentialsLoading(true);
+      credentialListCall(accessToken)
+        .then((data) => {
+          setCredentials(data?.credentials || []);
+        })
+        .catch((err) => {
+          console.error("Failed to fetch credentials:", err);
+        })
+        .finally(() => {
+          setCredentialsLoading(false);
+        });
+    }
+  }, [partnerEnabled, accessToken]);
 
   const handleToggle = (guardrailName: string) => {
     setSelectedGuardrails((prev) => {
@@ -79,7 +119,31 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
     const selectedDefinitions = guardrailsInfo
       .filter((g) => selectedGuardrails.has(g.guardrail_name))
       .map((g) => g.definition);
-    onConfirm(selectedDefinitions);
+
+    const partnerSelections: PartnerGuardrailSelection[] = [];
+    for (const pg of partnerGuardrailConfigs) {
+      if (partnerEnabled[pg.provider] && partnerCredentials[pg.provider]) {
+        partnerSelections.push({
+          provider: pg.provider,
+          credential_name: partnerCredentials[pg.provider],
+          provision_config: pg.provision_config,
+          aws_region_name: partnerRegions[pg.provider] || undefined,
+        });
+      }
+    }
+
+    onConfirm(
+      selectedDefinitions,
+      partnerSelections.length > 0 ? partnerSelections : undefined
+    );
+  };
+
+  const getCredentialsForProvider = (credentialProvider: string) => {
+    return credentials.filter((c: any) => {
+      const provider =
+        c.credential_info?.custom_llm_provider?.toLowerCase() || "";
+      return provider.includes(credentialProvider.toLowerCase());
+    });
   };
 
   const newGuardrailsCount = guardrailsInfo.filter(
@@ -177,7 +241,9 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                     <CheckCircleOutlined className="text-green-600 text-lg" />
                   ) : (
                     <Checkbox
-                      checked={selectedGuardrails.has(guardrail.guardrail_name)}
+                      checked={selectedGuardrails.has(
+                        guardrail.guardrail_name
+                      )}
                       onChange={() => handleToggle(guardrail.guardrail_name)}
                     />
                   )}
@@ -196,23 +262,28 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                   <p className="text-sm text-gray-600">
                     {guardrail.description}
                   </p>
-                  
-                  {/* Show guardrail type and mode */}
                   <div className="flex gap-2 mt-2">
                     <Tag className="text-xs">
-                      {guardrail.definition?.litellm_params?.guardrail || "unknown"}
+                      {guardrail.definition?.litellm_params?.guardrail ||
+                        "unknown"}
                     </Tag>
                     <Tag className="text-xs" color="blue">
                       {guardrail.definition?.litellm_params?.mode || "unknown"}
                     </Tag>
                     {guardrail.definition?.litellm_params?.patterns && (
                       <Tag className="text-xs" color="purple">
-                        {guardrail.definition.litellm_params.patterns.length} pattern(s)
+                        {
+                          guardrail.definition.litellm_params.patterns.length
+                        }{" "}
+                        pattern(s)
                       </Tag>
                     )}
                     {guardrail.definition?.litellm_params?.categories && (
                       <Tag className="text-xs" color="orange">
-                        {guardrail.definition.litellm_params.categories.length} category/categories
+                        {
+                          guardrail.definition.litellm_params.categories.length
+                        }{" "}
+                        category/categories
                       </Tag>
                     )}
                   </div>
@@ -239,7 +310,8 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-lg">✨</span>
                 <span className="font-medium text-purple-900 text-sm">
-                  AI-Discovered Competitors ({template.discoveredCompetitors.length})
+                  AI-Discovered Competitors (
+                  {template.discoveredCompetitors.length})
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5">
@@ -250,8 +322,64 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
                 ))}
               </div>
               <p className="text-xs text-purple-600 mt-2">
-                These competitor names will be automatically blocked by the competitor-name-blocker guardrail.
+                These competitor names will be automatically blocked by the
+                competitor-name-blocker guardrail.
               </p>
+            </div>
+          </>
+        )}
+
+        {/* Partner Guardrails Section */}
+        {partnerGuardrailConfigs.length > 0 && (
+          <>
+            <Divider />
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Enhance with Partner Guardrail
+                </span>
+                <Tooltip title="Optional. Provisions a cloud-based guardrail for stronger ML-powered detection alongside the keyword-based rules above.">
+                  <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
+                </Tooltip>
+                <Tag color="default" className="text-xs ml-1">
+                  Optional
+                </Tag>
+              </div>
+
+              {partnerGuardrailConfigs.map((pg) => (
+                <PartnerGuardrailCard
+                  key={pg.provider}
+                  pg={pg}
+                  isEnabled={partnerEnabled[pg.provider] || false}
+                  onToggle={(checked) =>
+                    setPartnerEnabled((prev) => ({
+                      ...prev,
+                      [pg.provider]: checked,
+                    }))
+                  }
+                  selectedCredential={
+                    partnerCredentials[pg.provider] || undefined
+                  }
+                  onCredentialChange={(value) =>
+                    setPartnerCredentials((prev) => ({
+                      ...prev,
+                      [pg.provider]: value,
+                    }))
+                  }
+                  selectedRegion={partnerRegions[pg.provider] || undefined}
+                  onRegionChange={(value) =>
+                    setPartnerRegions((prev) => ({
+                      ...prev,
+                      [pg.provider]: value,
+                    }))
+                  }
+                  providerCredentials={getCredentialsForProvider(
+                    pg.credential_provider
+                  )}
+                  allCredentials={credentials}
+                  credentialsLoading={credentialsLoading}
+                />
+              ))}
             </div>
           </>
         )}
@@ -262,16 +390,26 @@ const GuardrailSelectionModal: React.FC<GuardrailSelectionModalProps> = ({
         <div className="text-sm text-gray-600">
           {selectedCount > 0 ? (
             <p>
-              <span className="font-medium text-gray-900">{selectedCount}</span>{" "}
+              <span className="font-medium text-gray-900">
+                {selectedCount}
+              </span>{" "}
               guardrail{selectedCount > 1 ? "s" : ""} will be created
+              {Object.values(partnerEnabled).some(Boolean) && (
+                <span className="text-orange-600">
+                  {" "}
+                  + partner guardrail will be provisioned
+                </span>
+              )}
             </p>
           ) : existingCount > 0 ? (
             <p className="text-green-600">
-              All guardrails already exist. You can proceed to use this template.
+              All guardrails already exist. You can proceed to use this
+              template.
             </p>
           ) : (
             <p className="text-orange-600">
-              Select at least one guardrail to create, or click &quot;Use Template&quot; to proceed without creating new guardrails.
+              Select at least one guardrail to create, or click &quot;Use
+              Template&quot; to proceed without creating new guardrails.
             </p>
           )}
         </div>

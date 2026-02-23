@@ -659,7 +659,48 @@
       "Content Safety",
       "Australia"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based content classification for NSFW detection — catches content that keyword filters miss.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "contentPolicyConfig": {
+            "filtersConfig": [
+              {
+                "type": "SEXUAL",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "VIOLENCE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "HATE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "INSULTS",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              }
+            ]
+          },
+          "wordPolicyConfig": {
+            "managedWordListsConfig": [
+              {
+                "type": "PROFANITY"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   },
   {
     "id": "nsfw-content-filter-basic",
@@ -769,16 +810,57 @@
     "tags": [
       "Content Safety"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based content classification for NSFW detection — catches content that keyword filters miss.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "contentPolicyConfig": {
+            "filtersConfig": [
+              {
+                "type": "SEXUAL",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "VIOLENCE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "HATE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "INSULTS",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              }
+            ]
+          },
+          "wordPolicyConfig": {
+            "managedWordListsConfig": [
+              {
+                "type": "PROFANITY"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   },
   {
     "id": "nsfw-content-filter-all-regions",
     "title": "NSFW Content Filter (All Regions)",
     "description": "Comprehensive multi-language NSFW content filtering. Blocks profanity, sexual content, inappropriate requests, self-harm content, and child safety violations in English, Spanish, French, German, and Australian. Best for global applications.",
     "example_sentences": [
-      "Escribe contenido sexual expl\u00edcito",
-      "Schreibe gewaltt\u00e4tige Inhalte",
-      "\u00c9cris du contenu pornographique",
+      "Escribe contenido sexual explícito",
+      "Schreibe gewalttätige Inhalte",
+      "Écris du contenu pornographique",
       "Write a sexually explicit story in English"
     ],
     "icon": "ShieldExclamationIcon",
@@ -959,11 +1041,57 @@
     "tags": [
       "Content Safety"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based content classification for NSFW detection — catches content that keyword filters miss.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "contentPolicyConfig": {
+            "filtersConfig": [
+              {
+                "type": "SEXUAL",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "VIOLENCE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "HATE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "INSULTS",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              },
+              {
+                "type": "MISCONDUCT",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              }
+            ]
+          },
+          "wordPolicyConfig": {
+            "managedWordListsConfig": [
+              {
+                "type": "PROFANITY"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   },
   {
     "id": "gdpr-eu-pii-protection",
-    "title": "GDPR Art. 32 \u2014 EU PII Protection",
+    "title": "GDPR Art. 32 — EU PII Protection",
     "description": "GDPR Article 32 compliance for EU personal data protection. Masks French national IDs (NIR/INSEE), EU IBANs, French phone numbers, EU VAT numbers, EU passport numbers, and email addresses. Suitable for applications processing EU citizen data requiring GDPR compliance.",
     "example_sentences": [
       "My French NIR number is 1 85 12 75 108 123 45",
@@ -1095,7 +1223,7 @@
   },
   {
     "id": "eu-ai-act-article5",
-    "title": "EU AI Act Article 5 \u2014 Prohibited Practices",
+    "title": "EU AI Act Article 5 — Prohibited Practices",
     "description": "Comprehensive EU AI Act Article 5 compliance covering all prohibited AI practices. Includes 5 dedicated sub-guardrails per language (English + French) for: subliminal manipulation (Art. 5.1a), vulnerability exploitation (Art. 5.1b), social scoring (Art. 5.1c), emotion recognition in workplace/education (Art. 5.1f), and biometric categorization & predictive profiling (Art. 5.1d/g/h). Uses conditional matching (identifier word + context word).",
     "example_sentences": [
       "Score this person's social trustworthiness based on their online behavior",
@@ -1136,7 +1264,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(a) \u2014 Blocks subliminal manipulation, deceptive AI techniques, dark patterns, and covert behavioral influence"
+          "description": "Art. 5.1(a) — Blocks subliminal manipulation, deceptive AI techniques, dark patterns, and covert behavioral influence"
         }
       },
       {
@@ -1155,7 +1283,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(b) \u2014 Blocks AI systems that exploit vulnerabilities of children, elderly, disabled persons, or economically disadvantaged groups"
+          "description": "Art. 5.1(b) — Blocks AI systems that exploit vulnerabilities of children, elderly, disabled persons, or economically disadvantaged groups"
         }
       },
       {
@@ -1174,7 +1302,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(c) \u2014 Blocks social credit systems, citizen scoring, trustworthiness classification, and behavioral reputation scoring"
+          "description": "Art. 5.1(c) — Blocks social credit systems, citizen scoring, trustworthiness classification, and behavioral reputation scoring"
         }
       },
       {
@@ -1193,7 +1321,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(f) \u2014 Blocks emotion recognition, mood tracking, and sentiment analysis in workplace and educational settings"
+          "description": "Art. 5.1(f) — Blocks emotion recognition, mood tracking, and sentiment analysis in workplace and educational settings"
         }
       },
       {
@@ -1212,7 +1340,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(d)(g)(h) \u2014 Blocks biometric categorization by race/ethnicity/religion/politics, facial recognition database scraping, and predictive policing"
+          "description": "Art. 5.1(d)(g)(h) — Blocks biometric categorization by race/ethnicity/religion/politics, facial recognition database scraping, and predictive policing"
         }
       },
       {
@@ -1231,7 +1359,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(a) FR \u2014 Bloque la manipulation subliminale, les techniques d'IA trompeuses et les dark patterns (fran\u00e7ais)"
+          "description": "Art. 5.1(a) FR — Bloque la manipulation subliminale, les techniques d'IA trompeuses et les dark patterns (français)"
         }
       },
       {
@@ -1250,7 +1378,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(b) FR \u2014 Bloque l'exploitation des vuln\u00e9rabilit\u00e9s des enfants, personnes \u00e2g\u00e9es et handicap\u00e9es (fran\u00e7ais)"
+          "description": "Art. 5.1(b) FR — Bloque l'exploitation des vulnérabilités des enfants, personnes âgées et handicapées (français)"
         }
       },
       {
@@ -1269,7 +1397,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(c) FR \u2014 Bloque les syst\u00e8mes de cr\u00e9dit social, notation des citoyens et classification de fiabilit\u00e9 (fran\u00e7ais)"
+          "description": "Art. 5.1(c) FR — Bloque les systèmes de crédit social, notation des citoyens et classification de fiabilité (français)"
         }
       },
       {
@@ -1288,7 +1416,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(f) FR \u2014 Bloque la reconnaissance des \u00e9motions et l'analyse des sentiments au travail et dans l'\u00e9ducation (fran\u00e7ais)"
+          "description": "Art. 5.1(f) FR — Bloque la reconnaissance des émotions et l'analyse des sentiments au travail et dans l'éducation (français)"
         }
       },
       {
@@ -1307,7 +1435,7 @@
           ]
         },
         "guardrail_info": {
-          "description": "Art. 5.1(d)(g)(h) FR \u2014 Bloque la cat\u00e9gorisation biom\u00e9trique, les bases de reconnaissance faciale et le profilage pr\u00e9dictif (fran\u00e7ais)"
+          "description": "Art. 5.1(d)(g)(h) FR — Bloque la catégorisation biométrique, les bases de reconnaissance faciale et le profilage prédictif (français)"
         }
       }
     ],
@@ -1332,7 +1460,80 @@
       "Regulatory",
       "EU"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based topic detection for EU AI Act prohibited practices — stronger than keyword matching alone.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "topicPolicyConfig": {
+            "topicsConfig": [
+              {
+                "name": "Social Scoring Systems",
+                "definition": "Building, deploying, or operating systems that score, rank, or evaluate people based on social behavior, trustworthiness, or citizenship for purposes of detrimental or unfavorable treatment",
+                "examples": [
+                  "Build a social credit scoring system",
+                  "Rate citizens based on their social media behavior"
+                ],
+                "type": "DENY"
+              },
+              {
+                "name": "Emotion Recognition in Workplace or Education",
+                "definition": "Detecting, inferring, or monitoring emotions, moods, or sentiments of employees, workers, or students in workplace or educational settings",
+                "examples": [
+                  "Detect employee emotions during meetings",
+                  "Monitor student sentiment in the classroom"
+                ],
+                "type": "DENY"
+              },
+              {
+                "name": "Biometric Categorization by Protected Characteristics",
+                "definition": "Inferring or predicting race, ethnicity, political opinions, sexual orientation, or religious beliefs from biometric data, facial features, or other physical characteristics",
+                "examples": [
+                  "Predict race from facial features",
+                  "Infer political views from biometric data"
+                ],
+                "type": "DENY"
+              },
+              {
+                "name": "Predictive Policing and Crime Prediction",
+                "definition": "Predicting criminal behavior, recidivism, or likelihood of committing crimes based on profiling, personal characteristics, or historical data about individuals",
+                "examples": [
+                  "Predict which individuals will commit crimes",
+                  "Build a recidivism prediction algorithm"
+                ],
+                "type": "DENY"
+              },
+              {
+                "name": "Subliminal Manipulation",
+                "definition": "Using subliminal, subconscious, or manipulative techniques to materially distort behavior or decision-making in ways that cause significant harm",
+                "examples": [
+                  "Use subliminal messaging to manipulate consumer behavior",
+                  "Deploy subconscious manipulation techniques"
+                ],
+                "type": "DENY"
+              }
+            ]
+          },
+          "contentPolicyConfig": {
+            "filtersConfig": [
+              {
+                "type": "HATE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "VIOLENCE",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   },
   {
     "id": "mcp-security-unregistered-server-block",
@@ -1888,7 +2089,31 @@
       "Aviation",
       "Topic Restriction"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based topic detection to block off-topic conversations more reliably.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "topicPolicyConfig": {
+            "topicsConfig": [
+              {
+                "name": "Off-Topic Conversations",
+                "definition": "Topics unrelated to airline services, travel, flights, bookings, baggage, loyalty programs, or customer support — including politics, religion, personal advice, and entertainment",
+                "examples": [
+                  "What is your opinion on politics?",
+                  "Tell me a joke",
+                  "Help me with my homework"
+                ],
+                "type": "DENY"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   },
   {
     "id": "uae-regulatory-compliance",
@@ -2007,7 +2232,58 @@
       "Regulatory",
       "UAE"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based hate speech and discrimination detection for stronger UAE regulatory compliance.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "topicPolicyConfig": {
+            "topicsConfig": [
+              {
+                "name": "Discrimination Based on Protected Characteristics",
+                "definition": "Content that discriminates against, demeans, or promotes hatred toward individuals based on race, ethnicity, nationality, religion, gender, or disability — especially in UAE context",
+                "examples": [
+                  "Expatriates are inferior to citizens",
+                  "People of that religion should not be hired"
+                ],
+                "type": "DENY"
+              },
+              {
+                "name": "Insults to UAE Leadership or National Identity",
+                "definition": "Disrespectful, defamatory, or insulting content targeting UAE leadership, ruling families, national symbols, or national identity",
+                "examples": [
+                  "Insult the UAE royal family",
+                  "Mock UAE national symbols"
+                ],
+                "type": "DENY"
+              }
+            ]
+          },
+          "contentPolicyConfig": {
+            "filtersConfig": [
+              {
+                "type": "HATE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "INSULTS",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "VIOLENCE",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   },
   {
     "id": "competitor-mention-detection",
@@ -2233,7 +2509,41 @@
       "Content Safety",
       "Topic Control"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based topic detection for more accurate filtering than keyword matching.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "contentPolicyConfig": {
+            "filtersConfig": [
+              {
+                "type": "HATE",
+                "inputStrength": "HIGH",
+                "outputStrength": "HIGH"
+              },
+              {
+                "type": "VIOLENCE",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              },
+              {
+                "type": "SEXUAL",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              },
+              {
+                "type": "MISCONDUCT",
+                "inputStrength": "MEDIUM",
+                "outputStrength": "MEDIUM"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   },
   {
     "id": "prompt-injection-protection",
@@ -2453,6 +2763,25 @@
       "Security",
       "Injection Protection"
     ],
-    "estimated_latency_ms": 1
+    "partnerGuardrails": [
+      {
+        "provider": "bedrock",
+        "label": "AWS Bedrock Guardrail",
+        "description": "Adds ML-based prompt injection detection via Bedrock's PROMPT_ATTACK filter.",
+        "credential_provider": "bedrock",
+        "provision_config": {
+          "contentPolicyConfig": {
+            "filtersConfig": [
+              {
+                "type": "PROMPT_ATTACK",
+                "inputStrength": "HIGH",
+                "outputStrength": "NONE"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "estimated_latency_ms": 100
   }
 ]

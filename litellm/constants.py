@@ -1507,3 +1507,7 @@ MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
 MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
 COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
 DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
+
+# Partner guardrail provisioning
+BEDROCK_PARTNER_GUARDRAIL_BLOCKED_INPUT_MSG = "Your request was blocked by the content safety guardrail."
+BEDROCK_PARTNER_GUARDRAIL_BLOCKED_OUTPUT_MSG = "The response was blocked by the content safety guardrail."
