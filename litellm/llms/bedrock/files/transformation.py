@@ -259,14 +259,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 AmazonConverseConfig,
             )
 
-            config = AmazonConverseConfig()
-            mapped_params = config.map_openai_params(
+            converse_config = AmazonConverseConfig()
+            mapped_params = converse_config.map_openai_params(
                 non_default_params=optional_params,
                 optional_params={},
                 model=_model,
                 drop_params=False,
             )
-            return config.transform_request(
+            return converse_config.transform_request(
                 model=_model,
                 messages=messages,
                 optional_params=mapped_params,

@@ -322,6 +322,7 @@ async def create_model_group(
 
     # Validate model_names exist in router (only if using model_names path)
     if not use_model_ids and has_model_names:
+        assert data.model_names is not None
         all_valid, missing_models = validate_models_exist(
             model_names=data.model_names,
             llm_router=llm_router,
@@ -354,12 +355,14 @@ async def create_model_group(
         
         # Update deployments using the appropriate method
         if use_model_ids:
+            assert data.model_ids is not None
             models_updated = await update_specific_deployments_with_access_group(
                 model_ids=data.model_ids,
                 access_group=data.access_group,
                 prisma_client=prisma_client,
             )
         else:
+            assert data.model_names is not None
             models_updated = await update_deployments_with_access_group(
                 model_names=data.model_names,
                 access_group=data.access_group,
@@ -587,6 +590,7 @@ async def update_access_group(
     
     # Validation: Check if all new models exist (only if using model_names path)
     if not use_model_ids and has_model_names:
+        assert data.model_names is not None
         all_valid, missing_models = validate_models_exist(
             model_names=data.model_names,
             llm_router=llm_router,
@@ -619,12 +623,14 @@ async def update_access_group(
         
         # Step 2: Add access group using the appropriate method
         if use_model_ids:
+            assert data.model_ids is not None
             models_updated = await update_specific_deployments_with_access_group(
                 model_ids=data.model_ids,
                 access_group=access_group,
                 prisma_client=prisma_client,
             )
         else:
+            assert data.model_names is not None
             models_updated = await update_deployments_with_access_group(
                 model_names=data.model_names,
                 access_group=access_group,
