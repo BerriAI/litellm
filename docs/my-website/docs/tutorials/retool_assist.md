@@ -38,7 +38,7 @@ Set up LiteLLM Proxy following the [Getting Started Guide](https://docs.litellm.
 
 ## 2. Expose LiteLLM with a Public URL
 
-Retool Cloud runs on Retool's servers. When Retool tries to connect to `localhost`, it refers to Retool's own machines—not yours. You must expose your local LiteLLM proxy with a public URL.
+Retool Cloud runs on Retool's servers. You must expose your local LiteLLM proxy with a public URL.
 
 ### Using ngrok
 
@@ -70,7 +70,10 @@ Create a virtual key that Retool Assist will use to authenticate with LiteLLM. T
 
 Inside your Retool dashboard, configure LiteLLM as a custom AI resource:
 
-1. Go to **Resources** (left sidebar)
+1. Go to **Resources**
+
+<Image img={require('../../img/retool_assist_resources_select.png')} />
+
 2. Under the **AI** category, select **Custom Provider**
 
 <Image img={require('../../img/retool_assist_custom_provider.png')} />
