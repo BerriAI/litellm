@@ -231,12 +231,12 @@
     },
     "brainiall": {
       "display_name": "Brainiall (`brainiall`)",
-      "url": "https://apim-ai-apis.azure-api.net/v1",
+      "url": "https://brainiall.com",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
