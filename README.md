@@ -471,3 +471,4 @@ All these checks must pass before your PR can be merged.
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
 
+- [ODEI](https://api.odei.ai) - Constitutional world model for AI agents. Neo4j knowledge graph (91 nodes), 7-layer safety guardrails. [GitHub](https://github.com/odei-ai/web)
