@@ -118,7 +118,8 @@ class NomaGuardrail(CustomGuardrail):
         if not _LEGACY_NOMA_DEPRECATION_WARNED:
             warnings.warn(
                 "Guardrail provider 'noma' is deprecated. "
-                "Please migrate to 'noma_v2'.",
+                "Please migrate to 'noma_v2'. "
+                "The legacy 'noma' API will no longer be supported after March 31, 2026.",
                 DeprecationWarning,
                 stacklevel=2,
             )
