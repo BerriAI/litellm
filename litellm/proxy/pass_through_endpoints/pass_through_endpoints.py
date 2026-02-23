@@ -171,10 +171,11 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
         )
         data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
+            user_model  # model name passed via cli args
             or data.get("model", None)  # default passed in http request
+            or general_settings.get("completion_model", None)  # server default
         )
+
         if user_model:
             data["model"] = user_model
 
