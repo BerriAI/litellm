@@ -3,6 +3,7 @@ Unit tests for Ovalix guardrail: config resolution and apply_guardrail behavior
 with mocked Tracker service responses (allow, anonymize, block).
 """
 import os
+from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -196,7 +197,8 @@ class TestOvalixGuardrail:
         try:
             guardrail = OvalixGuardrail(**_guardrail_kwargs())
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[{"role": "user", "content": "how are you?"}]
+                structured_messages=[{"role": "user", "content": "how are you?"}],
+                texts=["how are you?"],
             )
             request_data = {}
 
@@ -232,7 +234,8 @@ class TestOvalixGuardrail:
             inputs = GenericGuardrailAPIInputs(
                 structured_messages=[
                     {"role": "user", "content": "Hello, my name is David."}
-                ]
+                ],
+                texts=["Hello, my name is David."],
             )
             request_data = {}
 
@@ -266,7 +269,8 @@ class TestOvalixGuardrail:
         try:
             guardrail = OvalixGuardrail(**_guardrail_kwargs())
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[{"role": "user", "content": "I am 15 YO"}]
+                structured_messages=[{"role": "user", "content": "I am 15 YO"}],
+                texts=["I am 15 YO"],
             )
             request_data = {}
 
@@ -305,7 +309,8 @@ class TestOvalixGuardrail:
                 structured_messages=[
                     {"role": "user", "content": "I am 15 YO"},
                     {"role": "user", "content": "how are you?"},
-                ]
+                ],
+                texts=["I am 15 YO", "how are you?"],
             )
             request_data = {}
 
@@ -343,13 +348,18 @@ class TestOvalixGuardrail:
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_response_allow_returns_inputs(self):
-        """When input_type is response and Tracker allows, apply_guardrail returns inputs unchanged."""
+        """When input_type is response and Tracker allows, apply_guardrail returns inputs with texts updated from Tracker."""
         for k, v in _ovalix_env().items():
             os.environ[k] = v
         try:
             guardrail = OvalixGuardrail(**_guardrail_kwargs())
-            inputs = GenericGuardrailAPIInputs()
-            request_data = {"response": None}
+            inputs = GenericGuardrailAPIInputs(
+                structured_messages=[
+                    {"role": "assistant", "content": "Safe assistant reply"}
+                ],
+                texts=["Safe assistant reply"],
+            )
+            request_data = {}
 
             mock_response = MagicMock()
             mock_response.json.return_value = TRACKER_RESPONSE_ALLOW
@@ -357,11 +367,7 @@ class TestOvalixGuardrail:
 
             with patch.object(
                 guardrail._async_handler, "post", new_callable=AsyncMock
-            ) as mock_post, patch.object(
-                guardrail,
-                "_get_llm_response_text",
-                return_value="Safe assistant reply",
-            ):
+            ) as mock_post:
                 mock_post.return_value = mock_response
                 result = await guardrail.apply_guardrail(
                     inputs=inputs,
@@ -370,7 +376,7 @@ class TestOvalixGuardrail:
                     logging_obj=None,
                 )
 
-            assert result == inputs
+            assert result.get("texts") == ["how are you?"]
             assert mock_post.call_count == 1
         finally:
             for k in _ovalix_env():
@@ -378,13 +384,14 @@ class TestOvalixGuardrail:
                     del os.environ[k]
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_block_returns_inputs(
-        self, guardrail_with_env
-    ):
-        """When Tracker blocks on response, apply_guardrail still returns inputs (no raise)."""
+    async def test_apply_guardrail_response_block_raises(self, guardrail_with_env):
+        """When Tracker blocks on response, apply_guardrail raises OvalixGuardrailBlockedException."""
         guardrail = guardrail_with_env
-        inputs = GenericGuardrailAPIInputs()
-        request_data = {"response": None}
+        inputs = GenericGuardrailAPIInputs(
+            structured_messages=[{"role": "user", "content": "I am 15 YO"}],
+            texts=["I am 15 YO"],
+        )
+        request_data = {}
 
         mock_response = MagicMock()
         mock_response.json.return_value = TRACKER_RESPONSE_BLOCK
@@ -392,60 +399,18 @@ class TestOvalixGuardrail:
 
         with patch.object(
             guardrail._async_handler, "post", new_callable=AsyncMock
-        ) as mock_post, patch.object(
-            guardrail,
-            "_get_llm_response_text",
-            return_value="I am 15 YO",
-        ):
-            mock_post.return_value = mock_response
-            result = await guardrail.apply_guardrail(
-                inputs=inputs,
-                request_data=request_data,
-                input_type="response",
-                logging_obj=None,
-            )
-
-        assert result == inputs
-        assert mock_post.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_apply_guardrail_request_non_user_messages_not_sent_to_tracker(
-        self, guardrail_with_env
-    ):
-        """Only user messages are sent to Tracker; system/assistant content is passed through."""
-        guardrail = guardrail_with_env
-        inputs = GenericGuardrailAPIInputs(
-            structured_messages=[
-                {"role": "system", "content": "You are helpful."},
-                {"role": "user", "content": "hello"},
-            ]
-        )
-        request_data = {}
-
-        # Tracker allows and returns same content for the user message
-        allow_hello = {
-            "action_type": "allow",
-            "data_type": "TEXT",
-            "original_data": {"content": "hello"},
-            "modified_data": {"content": "hello"},
-            "alerts": [],
-        }
-        mock_response = MagicMock()
-        mock_response.json.return_value = allow_hello
-        mock_response.raise_for_status = MagicMock()
-
-        with patch.object(
-            guardrail._async_handler, "post", new_callable=AsyncMock
         ) as mock_post:
             mock_post.return_value = mock_response
-            result = await guardrail.apply_guardrail(
-                inputs=inputs,
-                request_data=request_data,
-                input_type="request",
-                logging_obj=None,
-            )
+            with pytest.raises(OvalixGuardrailBlockedException) as exc_info:
+                await guardrail.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="response",
+                    logging_obj=None,
+                )
 
-        assert result.get("texts") == ["You are helpful.", "hello"]
+        assert "This message was blocked by Ovalix" in str(exc_info.value.message)
+        assert exc_info.value.status_code == 400
         assert mock_post.call_count == 1
 
     @pytest.mark.asyncio
@@ -455,7 +420,8 @@ class TestOvalixGuardrail:
         """When Tracker response has no modified_data.content, original content is used."""
         guardrail = guardrail_with_env
         inputs = GenericGuardrailAPIInputs(
-            structured_messages=[{"role": "user", "content": "original text"}]
+            structured_messages=[{"role": "user", "content": "original text"}],
+            texts=["original text"],
         )
         request_data = {}
 
@@ -490,7 +456,8 @@ class TestOvalixGuardrail:
         """When Tracker returns HTTP error (e.g. 400), GuardrailRaisedException is raised."""
         guardrail = guardrail_with_env
         inputs = GenericGuardrailAPIInputs(
-            structured_messages=[{"role": "user", "content": "hello"}]
+            structured_messages=[{"role": "user", "content": "hello"}],
+            texts=["hello"],
         )
         request_data = {}
 
@@ -523,7 +490,8 @@ class TestOvalixGuardrail:
         try:
             guardrail = OvalixGuardrail(**_guardrail_kwargs())
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[{"role": "user", "content": "hello"}]
+                structured_messages=[{"role": "user", "content": "hello"}],
+                texts=["hello"],
             )
             request_data = {}
 
@@ -552,7 +520,7 @@ class TestOvalixGuardrail:
             os.environ[k] = v
         try:
             guardrail = OvalixGuardrail(**_guardrail_kwargs())
-            inputs = GenericGuardrailAPIInputs(structured_messages=[])
+            inputs = GenericGuardrailAPIInputs(structured_messages=[], texts=[])
             request_data = {}
 
             with patch.object(
@@ -619,3 +587,55 @@ class TestOvalixGuardrail:
         session_id_2 = guardrail._get_session_id(data)
         assert session_id_1 == session_id_2
         assert "app-1" in session_id_1
+
+    def test_block_current_message_raises_ovalix_blocked_exception(
+        self, guardrail_with_env
+    ):
+        """_block_current_message raises OvalixGuardrailBlockedException with status_code 400."""
+        guardrail = guardrail_with_env
+        with pytest.raises(OvalixGuardrailBlockedException) as exc_info:
+            guardrail._block_current_message("Custom block reason")
+        assert "Custom block reason" in str(exc_info.value.message)
+        assert exc_info.value.status_code == 400
+
+    def test_get_trackers_corrected_message(self, guardrail_with_env):
+        """_get_trackers_corrected_message returns modified_data.content or None."""
+        guardrail = guardrail_with_env
+        assert (
+            guardrail._get_trackers_corrected_message(
+                {"modified_data": {"content": "corrected text"}}
+            )
+            == "corrected text"
+        )
+        assert guardrail._get_trackers_corrected_message({"modified_data": {}}) is None
+        assert (
+            guardrail._get_trackers_corrected_message({"modified_data": "not-a-dict"})
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_response_no_texts_returns_unchanged(self):
+        """When input_type is response and inputs have no texts, apply_guardrail returns inputs without calling Tracker."""
+        for k, v in _ovalix_env().items():
+            os.environ[k] = v
+        try:
+            guardrail = OvalixGuardrail(**_guardrail_kwargs())
+            inputs = GenericGuardrailAPIInputs()
+            request_data = {}
+
+            with patch.object(
+                guardrail._async_handler, "post", new_callable=AsyncMock
+            ) as mock_post:
+                result = await guardrail.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="response",
+                    logging_obj=None,
+                )
+
+            assert result == inputs
+            mock_post.assert_not_called()
+        finally:
+            for k in _ovalix_env():
+                if k in os.environ:
+                    del os.environ[k]

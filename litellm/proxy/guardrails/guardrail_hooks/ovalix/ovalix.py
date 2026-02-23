@@ -5,12 +5,12 @@ post_call (model output) checkpoints with optional correction/blocking.
 """
 
 import datetime
+import hashlib
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import AllMessageValues, GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE = "This message was blocked by Ovalix"
 BLOCKED_ACTION_TYPE = "block"
-USER_MESSAGE_ROLE = "user"
 
 
 class OvalixGuardrailMissingSecrets(Exception):
@@ -181,7 +180,7 @@ class OvalixGuardrail(CustomGuardrail):
 
     def _get_session_id(self, data: dict) -> str:
         """Return a unique identifier for the chat/session (actor + date + application_id)."""
-        actor = hash(self._get_actor(data))
+        actor = hashlib.sha256(self._get_actor(data).encode()).hexdigest()[:8]
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         return f"{actor}_{today}_{self._application_id}"
 
@@ -239,124 +238,36 @@ class OvalixGuardrail(CustomGuardrail):
 
         actor = self._get_actor(request_data)
         session_id = self._get_session_id(request_data)
+        texts = inputs.get("texts") or []
+        if not texts or not isinstance(texts, list):
+            return inputs
 
         if input_type == "response":
-            llm_response = self._get_llm_response_text(
-                request_data.get("response", None)
+            if not self._post_checkpoint_id:
+                return inputs
+            corrected_llm_responses = await self._generate_post_guardrail_llm_texts(
+                texts, actor, session_id, self._post_checkpoint_id
             )
-            if llm_response:
-                (
-                    corrected_llm_response,
-                    is_blocked,
-                ) = await self._handle_post_llm_response(
-                    llm_response, actor, session_id
-                )
-                # TODO: set the llm response text to `corrected_llm_response`. will be addressed later.
-            return inputs
-
-        messages = inputs.get("structured_messages") or []
-        if not messages:
-            return inputs
+            return {**inputs, "texts": corrected_llm_responses}
 
         if self._pre_checkpoint_id:
-            post_guardrail_texts = await self._generate_post_guardrail_text(
-                messages, actor, session_id
+            post_guardrail_texts = await self._generate_post_guardrail_llm_texts(
+                texts, actor, session_id, self._pre_checkpoint_id
             )
             return {**inputs, "texts": post_guardrail_texts}
         return inputs
 
-    def _block_current_message(self, blocking_message: str) -> None:
-        """Raise OvalixGuardrailBlockedException with the given message (no default wrapper)."""
-        raise OvalixGuardrailBlockedException(
-            guardrail_name=self.guardrail_name,
-            message=blocking_message,
-            should_wrap_with_default_message=False,
-        )
-
-    def _get_llm_response_text(
-        self, response: Optional[litellm.ModelResponse]
-    ) -> Optional[str]:
-        """Extract the first assistant text content from a ModelResponse, or None."""
-        if not response:
-            return None
-        if isinstance(response, litellm.ModelResponse):
-            for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
-                        return choice.message.content
-        return None
-
-    async def _handle_post_llm_response(
-        self, llm_response: str, actor: str, session_id: str
-    ) -> tuple[str, bool]:
-        """Run post-call checkpoint on model output; return corrected text or raise if blocked."""
-        if not self._post_checkpoint_id:
-            raise ValueError(
-                "Ovalix: post-checkpoint ID is required for post_call handling."
-            )
-
-        try:
-            resp = await self._call_checkpoint(
-                llm_response, self._post_checkpoint_id, actor, session_id
-            )
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "Ovalix apply_guardrail checkpoint call failed: %s", e
-            )
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message=f"Ovalix guardrail error: {e!s}",
-                should_wrap_with_default_message=False,
-            ) from e
-
-        action_type = (resp.get("action_type") or "").lower()
-        if action_type == BLOCKED_ACTION_TYPE:
-            blocking_message = (
-                self._get_trackers_corrected_message(resp)
-                or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
-            )
-            return blocking_message, True
-        return self._get_trackers_corrected_message(resp) or llm_response, False
-
-    async def _generate_post_guardrail_text(
-        self,
-        messages: List[AllMessageValues],
-        actor: str,
-        session_id: str,
+    async def _generate_post_guardrail_llm_texts(
+        self, texts: List[str], actor: str, session_id: str, checkpoint_id: str
     ) -> List[str]:
-        """
-        Generate post-guardrail text for the given messages.
-
-        Args:
-            messages: List of messages
-            actor: Actor
-            session_id: Session ID
-            request_data: Request data
-
-        Returns:
-            List of post-guardrail texts
-        """
-        is_last_prompt = True
+        """Generate post-guardrail LLM responses for the given LLM responses."""
         post_guardrail_texts: List[str] = []
 
-        if not self._pre_checkpoint_id:
-            # should not happen - if it does, the guardrail is not configured correctly and self._validate_config did not raise an error
-            raise ValueError("Ovalix: pre-checkpoint ID is required")
-
-        for message in reversed(messages):
-            content = message.get("content", None) or ""
-            if not isinstance(content, str):
-                continue
-            message_role = message.get("role", None)
-            if message_role and message_role != USER_MESSAGE_ROLE:
-                # we are not scanning the assistant/system/developer past responses, only the responses that the user sent
-                post_guardrail_texts.insert(0, content)
-                continue
+        is_first_response = True
+        for llm_response in reversed(texts):
             try:
                 resp = await self._call_checkpoint(
-                    content, self._pre_checkpoint_id, actor, session_id
+                    llm_response, checkpoint_id, actor, session_id
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(
@@ -369,20 +280,29 @@ class OvalixGuardrail(CustomGuardrail):
                 ) from e
 
             action_type = (resp.get("action_type") or "").lower()
-            if action_type == BLOCKED_ACTION_TYPE:
-                blocking_message = (
-                    self._get_trackers_corrected_message(resp)
-                    or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
-                )
-                if is_last_prompt:
-                    self._block_current_message(blocking_message)
-                else:
-                    post_guardrail_texts.insert(0, blocking_message)
+            blocking_message = (
+                self._get_trackers_corrected_message(resp)
+                or BLOCKED_BY_OVALIX_FALLBACK_MESSAGE
+            )
+            if action_type == BLOCKED_ACTION_TYPE and is_first_response:
+                self._block_current_message(blocking_message)
+            elif action_type == BLOCKED_ACTION_TYPE:
+                post_guardrail_texts.insert(0, blocking_message)
             else:
-                new_content = self._get_trackers_corrected_message(resp) or content
-                post_guardrail_texts.insert(0, new_content)
-            is_last_prompt = False
+                corrected_text = (
+                    self._get_trackers_corrected_message(resp) or llm_response
+                )
+                post_guardrail_texts.insert(0, corrected_text)
+            is_first_response = False
         return post_guardrail_texts
+
+    def _block_current_message(self, blocking_message: str) -> None:
+        """Raise OvalixGuardrailBlockedException with the given message (no default wrapper)."""
+        raise OvalixGuardrailBlockedException(
+            guardrail_name=self.guardrail_name,
+            message=blocking_message,
+            should_wrap_with_default_message=False,
+        )
 
     def _get_trackers_corrected_message(self, resp: dict) -> Optional[str]:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
