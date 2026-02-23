@@ -22,7 +22,6 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_ssl_configuration,
 )
-from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
 
 
 def _get_client_init_params(cls: type) -> Tuple[str, ...]:
@@ -207,6 +206,8 @@ class BaseOpenAILLM:
             return litellm.aclient_session
 
         if getattr(litellm, "network_mock", False):
+            from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
+
             return httpx.AsyncClient(transport=MockOpenAITransport())
 
         # Get unified SSL configuration
@@ -230,6 +231,8 @@ class BaseOpenAILLM:
             return litellm.client_session
 
         if getattr(litellm, "network_mock", False):
+            from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
+
             return httpx.Client(transport=MockOpenAITransport())
 
         # Get unified SSL configuration
