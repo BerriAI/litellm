@@ -2685,5 +2685,136 @@
       "Singapore"
     ],
     "estimated_latency_ms": 1
+  },
+  {
+    "id": "mas-ai-risk-management",
+    "title": "Singapore MAS \u2014 AI Risk Management for Financial Institutions",
+    "description": "Monetary Authority of Singapore (MAS) AI Risk Management Guidelines compliance for financial institutions. Covers 5 enforceable obligation areas: fairness & bias in financial decisions, transparency & explainability of AI models, human oversight for consequential actions, data governance for financial customer data, and model security against adversarial attacks. Based on the 2025 MAS consultation paper and aligned with FEAT Principles and Project MindForge. Zero-cost keyword-based detection.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-blue-600",
+    "iconBg": "bg-blue-50",
+    "guardrails": [
+      "mas-sg-fairness-bias",
+      "mas-sg-transparency-explainability",
+      "mas-sg-human-oversight",
+      "mas-sg-data-governance",
+      "mas-sg-model-security"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "mas-sg-fairness-bias",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_fairness_bias",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_fairness_bias.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "MAS AI Guidelines \u2014 Blocks discriminatory AI practices in financial services that score, deny, or price based on protected attributes (race, religion, age, gender, nationality)"
+        }
+      },
+      {
+        "guardrail_name": "mas-sg-transparency-explainability",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_transparency_explainability",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_transparency_explainability.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "MAS AI Guidelines \u2014 Blocks deployment of opaque or unexplainable AI systems for consequential financial decisions"
+        }
+      },
+      {
+        "guardrail_name": "mas-sg-human-oversight",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_human_oversight",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_human_oversight.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "MAS AI Guidelines \u2014 Blocks fully automated financial AI decisions without human-in-the-loop for consequential actions (loans, claims, trading)"
+        }
+      },
+      {
+        "guardrail_name": "mas-sg-data-governance",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_data_governance",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_data_governance.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "MAS AI Guidelines \u2014 Blocks unauthorized sharing, exposure, or mishandling of financial customer data without proper governance and data lineage"
+        }
+      },
+      {
+        "guardrail_name": "mas-sg-model-security",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_model_security",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_model_security.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "MAS AI Guidelines \u2014 Blocks adversarial attacks, model poisoning, inversion, and exfiltration attempts targeting financial AI systems"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "mas-ai-risk-management",
+      "description": "MAS AI Risk Management Guidelines compliance for financial institutions. Covers fairness & bias, transparency & explainability, human oversight, data governance, and model security. Aligned with MAS FEAT Principles, Project MindForge, and NIST AI RMF.",
+      "guardrails_add": [
+        "mas-sg-fairness-bias",
+        "mas-sg-transparency-explainability",
+        "mas-sg-human-oversight",
+        "mas-sg-data-governance",
+        "mas-sg-model-security"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Financial Services",
+      "Regulatory",
+      "Singapore"
+    ],
+    "estimated_latency_ms": 1
   }
 ]
