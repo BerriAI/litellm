@@ -48,6 +48,7 @@ import {
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
+import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 
 export interface TeamMembership {
   user_id: string;
@@ -724,6 +725,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   variant="card"
                 />
               </Grid>
+            ),
+          },
+          {
+            key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
+            label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS],
+            children: (
+              <TeamVirtualKeysTable
+                teamId={teamId}
+                teamAlias={info.team_alias}
+                organization={organization}
+              />
             ),
           },
           {

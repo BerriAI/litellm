@@ -100,12 +100,28 @@ vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
+  useKeys: vi.fn().mockReturnValue({
+    data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock("../key_team_helpers/filter_helpers", () => ({
+  fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
+  fetchAllOrganizations: vi.fn().mockResolvedValue([]),
+}));
+
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
+const mockUseKeys = vi.mocked(useKeys);
 const mockUseTeam = vi.mocked(useTeam);
 const mockUseOrganization = vi.mocked(useOrganization);
 const mockUseCurrentUser = vi.mocked(useCurrentUser);
@@ -179,6 +195,12 @@ describe("TeamInfoView", () => {
     mockUseCurrentUser.mockReturnValue({
       data: { models: [] },
       isLoading: false,
+    } as any);
+    mockUseKeys.mockReturnValue({
+      data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
     } as any);
 
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
@@ -558,7 +580,42 @@ describe("TeamInfoView", () => {
     renderWithProviders(<TeamInfoView {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Virtual Keys")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Virtual Keys" })).toBeInTheDocument();
+    });
+  });
+
+  it("should show Virtual Keys tab when user cannot edit team", async () => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+    renderWithProviders(<TeamInfoView {...defaultProps} is_team_admin={false} is_proxy_admin={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Virtual Keys" })).toBeInTheDocument();
+    });
+  });
+
+  it("should display X Members in Virtual Keys tab when navigated to", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+    mockUseKeys.mockReturnValue({
+      data: { keys: [], total_count: 5, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+    await waitFor(() => {
+      const teamNameElements = screen.queryAllByText("Test Team");
+      expect(teamNameElements.length).toBeGreaterThan(0);
+    });
+
+    const virtualKeysTab = screen.getByRole("tab", { name: "Virtual Keys" });
+    await user.click(virtualKeysTab);
+
+    await waitFor(() => {
+      expect(screen.getByText("5 Members")).toBeInTheDocument();
     });
   });
 
