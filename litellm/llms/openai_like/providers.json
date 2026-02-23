@@ -80,6 +80,11 @@
     "base_url": "https://api.gmi-serving.com/v1",
     "api_key_env": "GMI_API_KEY"
   },
+  "perplexity": {
+    "base_url": "https://api.perplexity.ai",
+    "api_key_env": "PERPLEXITYAI_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "sarvam": {
     "base_url": "https://api.sarvam.ai/v1",
     "api_key_env": "SARVAM_API_KEY",
