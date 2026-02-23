@@ -1086,10 +1086,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self, file_id: str
     ) -> List[Dict[str, Any]]:
         """
-        Find batches in non-terminal states that reference this file.
+        Find batches that reference this file and still need cost tracking.
         
-        Non-terminal states: validating, in_progress, finalizing
-        Terminal states: completed, complete, failed, expired, cancelled
+        Blocks on: validating, in_progress, finalizing (in-flight)
+        Blocks on: completed AND batch_processed=False (cost not yet computed)
+        Allows: completed AND batch_processed=True, failed, expired, cancelled
         
         Args:
             file_id: The unified file ID to check
@@ -1121,7 +1122,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
                 "file_purpose": "batch",
-                "status": {"in": ["validating", "in_progress", "finalizing"]},
+                "batch_processed": False,
             },
             take=MAX_MATCHES_TO_RETURN,
             order={"created_at": "desc"},
@@ -1205,7 +1206,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             
             error_message += (
                 f"To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
-                f"Alternatively, wait for all batches to complete processing."
+                f"Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
             )
             
             raise HTTPException(
