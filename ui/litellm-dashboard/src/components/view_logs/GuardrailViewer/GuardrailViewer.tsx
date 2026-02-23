@@ -78,7 +78,7 @@ const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set([
 ]);
 
 const formatMode = (mode: unknown): string => {
-  if (mode == null) return "—";
+  if (mode == null || mode === "") return "—";
   const s = typeof mode === "string" ? mode : String(mode);
   return s.replace(/_/g, "-").toUpperCase();
 };

@@ -220,7 +220,7 @@ export function GuardrailsOverview({
 
       <Grid numItems={2} numItemsLg={5} className="gap-4 mb-6 items-stretch">
         <Col className="flex flex-col">
-          <MetricCard label="Total Requests Evaluated" value={metrics.totalRequests.toLocaleString()} />
+          <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
         </Col>
         <Col className="flex flex-col">
           <MetricCard

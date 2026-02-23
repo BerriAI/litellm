@@ -1,12 +1,16 @@
 import {
   CheckCircleOutlined,
   CloseOutlined,
-  CopyOutlined,
   DownOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
+import moment from "moment";
 import { Button, Spin } from "antd";
 import React, { useState } from "react";
+import { uiSpendLogsCall } from "@/components/networking";
+import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
+import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
@@ -42,6 +46,9 @@ interface LogViewerProps {
   logs?: LogEntry[];
   logsLoading?: boolean;
   totalLogs?: number;
+  accessToken?: string | null;
+  startDate?: string;
+  endDate?: string;
 }
 
 export function LogViewer({
@@ -50,10 +57,14 @@ export function LogViewer({
   logs = [],
   logsLoading = false,
   totalLogs,
+  accessToken = null,
+  startDate = "",
+  endDate = "",
 }: LogViewerProps) {
   const [sampleSize, setSampleSize] = useState(10);
-  const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<string>(filterAction);
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const filteredLogs = logs.filter(
     (log) => activeFilter === "all" || log.action === activeFilter
@@ -67,6 +78,43 @@ export function LogViewer({
     "flagged",
     "passed",
   ];
+
+  const startTime = startDate
+    ? moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss")
+    : moment().subtract(24, "hours").utc().format("YYYY-MM-DD HH:mm:ss");
+  const endTime = endDate
+    ? moment(endDate).utc().endOf("day").format("YYYY-MM-DD HH:mm:ss")
+    : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+  const { data: fullLogResponse } = useQuery({
+    queryKey: ["spend-log-by-request", selectedRequestId, startTime, endTime],
+    queryFn: async () => {
+      if (!accessToken || !selectedRequestId) return null;
+      const res = await uiSpendLogsCall({
+        accessToken,
+        start_date: startTime,
+        end_date: endTime,
+        page: 1,
+        page_size: 10,
+        params: { request_id: selectedRequestId },
+      });
+      return res as { data: ViewLogsLogEntry[]; total: number };
+    },
+    enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
+  });
+
+  const selectedLog: ViewLogsLogEntry | null =
+    fullLogResponse?.data?.[0] ?? null;
+
+  const handleLogClick = (log: LogEntry) => {
+    setSelectedRequestId(log.id);
+    setDrawerOpen(true);
+  };
+
+  const handleCloseDrawer = () => {
+    setDrawerOpen(false);
+    setSelectedRequestId(null);
+  };
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg">
@@ -128,16 +176,15 @@ export function LogViewer({
         </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
-      <div className="divide-y divide-gray-100">
-        {displayLogs.map((log) => {
-          const config = actionConfig[log.action];
-          const ActionIcon = config.icon;
-          const isExpanded = expandedLog === log.id;
-          return (
-            <div key={log.id}>
+        <div className="divide-y divide-gray-100">
+          {displayLogs.map((log) => {
+            const config = actionConfig[log.action];
+            const ActionIcon = config.icon;
+            return (
               <button
+                key={log.id}
                 type="button"
-                onClick={() => setExpandedLog(isExpanded ? null : log.id)}
+                onClick={() => handleLogClick(log)}
                 className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
               >
                 <ActionIcon
@@ -160,60 +207,21 @@ export function LogViewer({
                     {log.input_snippet ?? log.input ?? "—"}
                   </p>
                 </div>
-                <span
-                  className={`flex-shrink-0 mt-1 transition-transform ${
-                    isExpanded ? "rotate-180" : ""
-                  }`}
-                >
-                  <DownOutlined className="w-4 h-4 text-gray-400" />
-                </span>
+                <DownOutlined className="w-4 h-4 text-gray-400 flex-shrink-0 mt-1" />
               </button>
-
-              {isExpanded && (
-                <div className="px-4 pb-4 pl-11">
-                  <div className="bg-gray-50 rounded-lg p-4 space-y-3 text-sm">
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                          Input
-                        </span>
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<CopyOutlined />}
-                          aria-label="Copy input"
-                        />
-                      </div>
-                      <p className="text-gray-800 font-mono text-xs bg-white rounded border border-gray-200 p-3">
-                        {log.input_snippet ?? log.input ?? "—"}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                        Output
-                      </span>
-                      <p className="text-gray-800 font-mono text-xs bg-white rounded border border-gray-200 p-3 mt-1">
-                        {log.output_snippet ?? log.output ?? "—"}
-                      </p>
-                    </div>
-                    {(log.reason ?? log.score != null) && (
-                    <div>
-                      <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                        Reason
-                      </span>
-                      <p className="text-gray-700 text-xs mt-1">
-                        {log.reason ?? (log.score != null ? `Score: ${log.score}` : "—")}
-                      </p>
-                    </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
       )}
+
+      <LogDetailsDrawer
+        open={drawerOpen}
+        onClose={handleCloseDrawer}
+        logEntry={selectedLog}
+        accessToken={accessToken}
+        allLogs={selectedLog ? [selectedLog] : []}
+        startTime={startTime}
+      />
     </div>
   );
 }

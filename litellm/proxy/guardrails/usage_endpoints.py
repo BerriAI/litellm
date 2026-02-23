@@ -343,11 +343,23 @@ async def guardrails_usage_detail(
 
         raise HTTPException(status_code=404, detail="Guardrail not found")
 
+    # Metrics are keyed by logical name (from spend log metadata), not UUID
+    logical_id = getattr(guardrail, "guardrail_name", None) or (
+        guardrail.get("guardrail_name") if isinstance(guardrail, dict) else None
+    )
+    metric_ids = [i for i in (logical_id, guardrail_id) if i]
+
     metrics = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
-        where={"guardrail_id": guardrail_id, "date": {"gte": start, "lte": end}}
+        where={
+            "guardrail_id": {"in": metric_ids},
+            "date": {"gte": start, "lte": end},
+        }
     )
     metrics_prev = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
-        where={"guardrail_id": guardrail_id, "date": {"lt": start}}
+        where={
+            "guardrail_id": {"in": metric_ids},
+            "date": {"lt": start},
+        }
     )
 
     requests = sum(int(m.requests_evaluated or 0) for m in metrics)
@@ -359,29 +371,41 @@ async def guardrails_usage_detail(
     prev_fail = (100.0 * prev_blocked / prev_req) if prev_req else 0.0
     trend = _trend_from_comparison(fail_rate, prev_fail)
 
+    # Aggregate by date in case metrics exist under both UUID and logical name
+    ts_by_date: Dict[str, Dict[str, Any]] = {}
+    for m in metrics:
+        d = m.date
+        if d not in ts_by_date:
+            ts_by_date[d] = {"passed": 0, "blocked": 0}
+        ts_by_date[d]["passed"] += int(m.passed_count or 0)
+        ts_by_date[d]["blocked"] += int(m.blocked_count or 0)
     time_series = [
-        {
-            "date": m.date,
-            "passed": int(m.passed_count or 0),
-            "blocked": int(m.blocked_count or 0),
-            "score": None,
-        }
-        for m in sorted(metrics, key=lambda x: x.date)
+        {"date": d, "passed": v["passed"], "blocked": v["blocked"], "score": None}
+        for d, v in sorted(ts_by_date.items())
     ]
+    _litellm_params = getattr(guardrail, "litellm_params", None) or (
+        guardrail.get("litellm_params") if isinstance(guardrail, dict) else None
+    )
     litellm_params = (
-        (guardrail.litellm_params or {})
-        if isinstance(guardrail.litellm_params, dict)
+        _litellm_params
+        if isinstance(_litellm_params, dict)
         else {}
     )
+    _guardrail_info = getattr(guardrail, "guardrail_info", None) or (
+        guardrail.get("guardrail_info") if isinstance(guardrail, dict) else None
+    )
     guardrail_info = (
-        (guardrail.guardrail_info or {})
-        if isinstance(guardrail.guardrail_info, dict)
+        _guardrail_info
+        if isinstance(_guardrail_info, dict)
         else {}
+    )
+    _guardrail_name = getattr(guardrail, "guardrail_name", None) or (
+        guardrail.get("guardrail_name") if isinstance(guardrail, dict) else None
     )
 
     return UsageDetailResponse(
         guardrail_id=guardrail_id,
-        guardrail_name=guardrail.guardrail_name or guardrail_id,
+        guardrail_name=_guardrail_name or guardrail_id,
         type=str(guardrail_info.get("type", "Guardrail")),
         provider=str(litellm_params.get("guardrail", "Unknown")),
         requestsEvaluated=requests,
@@ -396,14 +420,16 @@ async def guardrails_usage_detail(
 
 
 def _build_usage_logs_where(
-    guardrail_id: Optional[str],
+    guardrail_ids: Optional[List[str]],
     policy_id: Optional[str],
     start_date: Optional[str],
     end_date: Optional[str],
 ) -> Dict[str, Any]:
     where: Dict[str, Any] = {}
-    if guardrail_id:
-        where["guardrail_id"] = guardrail_id
+    if guardrail_ids:
+        where["guardrail_id"] = (
+            {"in": guardrail_ids} if len(guardrail_ids) > 1 else guardrail_ids[0]
+        )
     if policy_id:
         where["policy_id"] = policy_id
     if start_date or end_date:
@@ -474,7 +500,7 @@ def _usage_log_entry_from_row(
         score=score_val,
         latency_ms=latency_val,
         model=sl.model,
-        input_snippet=_snippet(sl.messages),
+        input_snippet=_input_snippet_for_log(sl),
         output_snippet=_snippet(sl.response),
         reason=reason_val,
     )
@@ -496,7 +522,34 @@ def _snippet(text: Any, max_len: int = 200) -> Optional[str]:
         s = " ".join(parts)
     else:
         s = str(text)
-    return (s[:max_len] + "...") if len(s) > max_len else s
+    result = (s[:max_len] + "...") if len(s) > max_len else s
+    if result == "{}":
+        return None
+    return result
+
+
+def _input_snippet_for_log(sl: Any) -> Optional[str]:
+    """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
+    out = _snippet(sl.messages)
+    if out:
+        return out
+    psr = getattr(sl, "proxy_server_request", None)
+    if not psr:
+        return None
+    if isinstance(psr, str):
+        try:
+            psr = json.loads(psr)
+        except Exception:
+            return _snippet(psr)
+    if isinstance(psr, dict):
+        msgs = psr.get("messages")
+        if msgs is None and isinstance(psr.get("body"), dict):
+            msgs = psr["body"].get("messages")
+        out = _snippet(msgs)
+        if out:
+            return out
+        return _snippet(psr)
+    return _snippet(psr)
 
 
 @router.get(
@@ -525,7 +578,21 @@ async def guardrails_usage_logs(
         return UsageLogsResponse(logs=[], total=0, page=page, page_size=page_size)
 
     try:
-        where = _build_usage_logs_where(guardrail_id, policy_id, start_date, end_date)
+        # Index rows may store either guardrail_id (UUID) or guardrail_name from metadata.
+        # Query by both so we match regardless of which was written.
+        effective_guardrail_ids: List[str] = [guardrail_id] if guardrail_id else []
+        if guardrail_id:
+            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+                where={"guardrail_id": guardrail_id}
+            )
+            if guardrail:
+                logical_name = getattr(guardrail, "guardrail_name", None)
+                if logical_name and logical_name not in effective_guardrail_ids:
+                    effective_guardrail_ids.append(logical_name)
+
+        where = _build_usage_logs_where(
+            effective_guardrail_ids or None, policy_id, start_date, end_date
+        )
         index_rows = await prisma_client.db.litellm_spendlogguardrailindex.find_many(
             where=where,
             order={"start_time": "desc"},
