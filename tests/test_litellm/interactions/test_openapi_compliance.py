@@ -148,7 +148,15 @@ class TestResponseCompliance:
         schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
         status_prop = schema["properties"]["status"]
         
-        expected_statuses = ["UNSPECIFIED", "IN_PROGRESS", "REQUIRES_ACTION", "COMPLETED", "FAILED", "CANCELLED"]
+        expected_statuses = [
+            "UNSPECIFIED",
+            "IN_PROGRESS",
+            "REQUIRES_ACTION",
+            "COMPLETED",
+            "FAILED",
+            "CANCELLED",
+            "INCOMPLETE",
+        ]
         assert status_prop["enum"] == expected_statuses
         print(f"✓ Status enum values: {expected_statuses}")
 
