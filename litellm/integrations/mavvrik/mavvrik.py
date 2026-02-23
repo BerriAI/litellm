@@ -249,7 +249,7 @@ class MavvrikLogger(CustomLogger):
         verbose_logger.debug("MavvrikLogger: %d rows fetched, transforming…", len(df))
 
         transformer = MavvrikTransformer()
-        csv_payload = transformer.to_csv(df)
+        csv_payload = transformer.to_csv(df, instance_id=self.instance_id)
 
         if not csv_payload:
             verbose_logger.debug(
