@@ -963,20 +963,29 @@ model LiteLLM_SkillsTable {
   updated_by     String?
 }
 
-// Policy table for storing guardrail policies
+// Policy table for storing guardrail policies (versioned)
 model LiteLLM_PolicyTable {
-  policy_id        String    @id @default(uuid())
-  policy_name      String    @unique
-  inherit          String?   // Name of parent policy to inherit from
-  description      String?
-  guardrails_add   String[]  @default([])
-  guardrails_remove String[] @default([])
-  condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
-  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
-  created_at       DateTime  @default(now())
-  created_by       String?
-  updated_at       DateTime  @default(now()) @updatedAt
-  updated_by       String?
+  policy_id          String    @id @default(uuid())
+  policy_name        String    // No longer @unique; use @@unique([policy_name, version_number])
+  version_number     Int       @default(1)
+  version_status     String    @default("production")  // "draft" | "published" | "production"
+  parent_version_id  String?
+  is_latest          Boolean   @default(true)
+  published_at       DateTime?
+  production_at      DateTime?
+  inherit            String?   // Name of parent policy to inherit from
+  description        String?
+  guardrails_add     String[]  @default([])
+  guardrails_remove  String[]  @default([])
+  condition          Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline           Json?     // Optional guardrail pipeline (mode + steps[])
+  created_at         DateTime  @default(now())
+  created_by         String?
+  updated_at         DateTime  @default(now()) @updatedAt
+  updated_by         String?
+
+  @@unique([policy_name, version_number])
+  @@index([policy_name, version_status])
 }
 
 // Policy attachment table for defining where policies apply

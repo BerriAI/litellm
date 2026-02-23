@@ -538,6 +538,13 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
   },
 };
 
+/** Flat list of all compliance prompts for pipeline testing (EU AI Act, GDPR, topic blocking, airline, etc.). */
+export function getComplianceDatasetPrompts(): CompliancePrompt[] {
+  return getFrameworks().flatMap((fw) =>
+    fw.categories.flatMap((cat) => cat.prompts)
+  );
+}
+
 export function getFrameworks(): ComplianceFramework[] {
   const frameworkMap = new Map<
     string,
