@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 from datetime import datetime
 from typing import Literal, Optional
 from urllib.parse import urlparse
@@ -14,7 +13,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.passthrough_endpoints.assembly_ai import (
     ASSEMBLY_AI_MAX_POLLING_ATTEMPTS,
     ASSEMBLY_AI_POLLING_INTERVAL,
@@ -52,7 +50,7 @@ class AssemblyAIPassthroughLoggingHandler:
         The maximum number of polling attempts for the AssemblyAI API.
         """
 
-    def assemblyai_passthrough_logging_handler(
+    async def assemblyai_passthrough_logging_handler(
         self,
         httpx_response: httpx.Response,
         response_body: dict,
@@ -65,10 +63,11 @@ class AssemblyAIPassthroughLoggingHandler:
         **kwargs,
     ):
         """
-        Since cost tracking requires polling the AssemblyAI API, we need to handle this in a separate thread. Hence the executor.submit.
+        Handles logging for AssemblyAI passthrough requests.
+        Polls for transcript completion and calculates dynamic cost.
+        Runs in the caller's async context for proper DB access.
         """
-        executor.submit(
-            self._handle_assemblyai_passthrough_logging,
+        await self._handle_assemblyai_passthrough_logging(
             httpx_response,
             response_body,
             logging_obj,
@@ -80,7 +79,7 @@ class AssemblyAIPassthroughLoggingHandler:
             **kwargs,
         )
 
-    def _handle_assemblyai_passthrough_logging(
+    async def _handle_assemblyai_passthrough_logging(
         self,
         httpx_response: httpx.Response,
         response_body: dict,
@@ -110,7 +109,7 @@ class AssemblyAIPassthroughLoggingHandler:
             raise ValueError(
                 "Transcript ID is required to log the cost of the transcription"
             )
-        transcript_response = self._poll_assembly_for_transcript_response(
+        transcript_response = await self._poll_assembly_for_transcript_response(
             transcript_id=transcript_id, url_route=url_route
         )
         verbose_proxy_logger.debug(
@@ -151,21 +150,17 @@ class AssemblyAIPassthroughLoggingHandler:
         logging_obj.model_call_details["custom_llm_provider"] = "assemblyai"
         logging_obj.model_call_details["response_cost"] = response_cost
 
-        asyncio.run(
-            pass_through_endpoint_logging._handle_logging(
-                logging_obj=logging_obj,
-                standard_logging_response_object=self._get_response_to_log(
-                    transcript_response
-                ),
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=cache_hit,
-                **kwargs,
-            )
+        await pass_through_endpoint_logging._handle_logging(
+            logging_obj=logging_obj,
+            standard_logging_response_object=self._get_response_to_log(
+                transcript_response
+            ),
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
         )
-
-        pass
 
     def _get_response_to_log(
         self, transcript_response: Optional[AssemblyAITranscriptResponse]
@@ -174,7 +169,7 @@ class AssemblyAIPassthroughLoggingHandler:
             return {}
         return dict(transcript_response)
 
-    def _get_assembly_transcript(
+    async def _get_assembly_transcript(
         self,
         transcript_id: str,
         request_region: Optional[Literal["eu"]] = None,
@@ -206,12 +201,13 @@ class AssemblyAIPassthroughLoggingHandler:
         try:
             url = f"{_base_url}/v2/transcript/{transcript_id}"
             headers = {
-                "Authorization": f"Bearer {_api_key}",
+                "Authorization": f"{_api_key}",
                 "Content-Type": "application/json",
             }
 
-            response = httpx.get(url, headers=headers)
-            response.raise_for_status()
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
 
             return response.json()
         except Exception as e:
@@ -220,7 +216,7 @@ class AssemblyAIPassthroughLoggingHandler:
             )
             return None
 
-    def _poll_assembly_for_transcript_response(
+    async def _poll_assembly_for_transcript_response(
         self,
         transcript_id: str,
         url_route: Optional[str] = None,
@@ -231,7 +227,7 @@ class AssemblyAIPassthroughLoggingHandler:
         for _ in range(
             self.max_polling_attempts
         ):  # 180 attempts * 10s = 30 minutes max
-            transcript = self._get_assembly_transcript(
+            transcript = await self._get_assembly_transcript(
                 request_region=AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(
                     url=url_route
                 ),
@@ -244,7 +240,7 @@ class AssemblyAIPassthroughLoggingHandler:
                 or transcript.get("status") == "error"
             ):
                 return AssemblyAITranscriptResponse(**transcript)
-            time.sleep(self.polling_interval)
+            await asyncio.sleep(self.polling_interval)
         return None
 
     @staticmethod
