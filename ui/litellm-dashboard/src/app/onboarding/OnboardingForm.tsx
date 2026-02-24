@@ -31,6 +31,10 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const accessToken: string | null = decoded?.key ?? null;
   const jwtToken: string | null = credentialsData?.token ?? null;
 
+  React.useEffect(() => {
+    if (userEmail) form.setFieldValue("user_email", userEmail);
+  }, [userEmail, form]);
+
   const handleSubmit = (formValues: { password: string }) => {
     if (!accessToken || !jwtToken || !userId || !inviteId) return;
 
@@ -108,7 +112,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
 
         <Form className="mt-10 mb-5" layout="vertical" form={form} onFinish={handleSubmit}>
           <Form.Item label="Email Address" name="user_email">
-            <Input type="email" disabled value={userEmail} />
+            <Input type="email" disabled />
           </Form.Item>
 
           <Form.Item
