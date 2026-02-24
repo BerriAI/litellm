@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.assembly_ai import (
     ASSEMBLY_AI_MAX_POLLING_ATTEMPTS,
     ASSEMBLY_AI_POLLING_INTERVAL,
@@ -173,13 +175,15 @@ class AssemblyAIPassthroughLoggingHandler:
     async def _get_assembly_transcript(
         self,
         transcript_id: str,
+        client: httpx.AsyncClient,
         request_region: Optional[Literal["eu"]] = None,
     ) -> Optional[dict]:
         """
         Get the transcript details from AssemblyAI API
 
         Args:
-            response_body (dict): Response containing the transcript ID
+            transcript_id (str): The transcript ID to poll
+            client (httpx.AsyncClient): Reusable HTTP client for polling
 
         Returns:
             Optional[dict]: Transcript details if successful, None otherwise
@@ -210,13 +214,12 @@ class AssemblyAIPassthroughLoggingHandler:
         try:
             url = f"{_base_url}/v2/transcript/{safe_transcript_id}"
             headers = {
-                "Authorization": f"{_api_key}",
+                "Authorization": _api_key,
                 "Content-Type": "application/json",
             }
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
 
             return response.json()
         except Exception as e:
@@ -233,6 +236,10 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         Poll the status of the transcript until it is completed or timeout (30 minutes)
         """
+        async_client_obj = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        )
+        client = async_client_obj.client
         for _ in range(
             self.max_polling_attempts
         ):  # 180 attempts * 10s = 30 minutes max
@@ -241,6 +248,7 @@ class AssemblyAIPassthroughLoggingHandler:
                     url=url_route
                 ),
                 transcript_id=transcript_id,
+                client=client,
             )
             if transcript is None:
                 return None

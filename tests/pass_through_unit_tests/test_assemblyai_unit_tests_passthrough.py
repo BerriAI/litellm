@@ -60,23 +60,21 @@ async def test_get_assembly_transcript(assembly_handler, mock_transcript_respons
         mock_response.json.return_value = mock_transcript_response
         mock_response.raise_for_status.return_value = None
 
-        with patch("httpx.AsyncClient") as MockClient:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_client_instance.__aexit__ = AsyncMock(return_value=False)
-            MockClient.return_value = mock_client_instance
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
 
-            transcript = await assembly_handler._get_assembly_transcript("test-transcript-id")
-            assert transcript == mock_transcript_response
+        transcript = await assembly_handler._get_assembly_transcript(
+            "test-transcript-id", client=mock_client
+        )
+        assert transcript == mock_transcript_response
 
-            mock_client_instance.get.assert_called_once_with(
-                "https://api.assemblyai.com/v2/transcript/test-transcript-id",
-                headers={
-                    "Authorization": "test-key",
-                    "Content-Type": "application/json",
-                },
-            )
+        mock_client.get.assert_called_once_with(
+            "https://api.assemblyai.com/v2/transcript/test-transcript-id",
+            headers={
+                "Authorization": "test-key",
+                "Content-Type": "application/json",
+            },
+        )
 
 
 @pytest.mark.asyncio
@@ -87,7 +85,8 @@ async def test_poll_assembly_for_transcript_response(
     Test that the _poll_assembly_for_transcript_response method returns the correct transcript response
     """
     with patch.object(
-        assembly_handler, "_get_assembly_transcript",
+        assembly_handler,
+        "_get_assembly_transcript",
         new_callable=AsyncMock,
         return_value=mock_transcript_response,
     ):
@@ -97,9 +96,7 @@ async def test_poll_assembly_for_transcript_response(
         transcript = await assembly_handler._poll_assembly_for_transcript_response(
             "test-transcript-id",
         )
-        assert transcript == AssemblyAITranscriptResponse(
-            **mock_transcript_response
-        )
+        assert transcript == AssemblyAITranscriptResponse(**mock_transcript_response)
 
 
 def test_is_assemblyai_route():
@@ -134,7 +131,9 @@ async def test_get_assembly_transcript_rejects_slash_in_id(assembly_handler):
         return_value="test-key",
     ):
         with pytest.raises(ValueError, match="disallowed characters"):
-            await assembly_handler._get_assembly_transcript("../../admin/credentials")
+            await assembly_handler._get_assembly_transcript(
+                "../../admin/credentials", client=AsyncMock()
+            )
 
 
 @pytest.mark.asyncio
@@ -144,7 +143,9 @@ async def test_get_assembly_transcript_rejects_dotdot_in_id(assembly_handler):
         return_value="test-key",
     ):
         with pytest.raises(ValueError, match="disallowed characters"):
-            await assembly_handler._get_assembly_transcript("..evil")
+            await assembly_handler._get_assembly_transcript(
+                "..evil", client=AsyncMock()
+            )
 
 
 @pytest.mark.asyncio
@@ -154,7 +155,9 @@ async def test_get_assembly_transcript_rejects_fragment_in_id(assembly_handler):
         return_value="test-key",
     ):
         with pytest.raises(ValueError, match="disallowed characters"):
-            await assembly_handler._get_assembly_transcript("abc#suffix")
+            await assembly_handler._get_assembly_transcript(
+                "abc#suffix", client=AsyncMock()
+            )
 
 
 @pytest.mark.asyncio
@@ -164,7 +167,9 @@ async def test_get_assembly_transcript_rejects_query_in_id(assembly_handler):
         return_value="test-key",
     ):
         with pytest.raises(ValueError, match="disallowed characters"):
-            await assembly_handler._get_assembly_transcript("abc?x=1")
+            await assembly_handler._get_assembly_transcript(
+                "abc?x=1", client=AsyncMock()
+            )
 
 
 @pytest.mark.asyncio
@@ -179,22 +184,16 @@ async def test_get_assembly_transcript_allows_valid_id(
         mock_response.json.return_value = mock_transcript_response
         mock_response.raise_for_status.return_value = None
 
-        with patch("httpx.AsyncClient") as MockClient:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_client_instance.__aenter__ = AsyncMock(
-                return_value=mock_client_instance
-            )
-            mock_client_instance.__aexit__ = AsyncMock(return_value=False)
-            MockClient.return_value = mock_client_instance
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
 
-            transcript = await assembly_handler._get_assembly_transcript(
-                "abc123-valid-id_xyz"
-            )
-            assert transcript == mock_transcript_response
-            called_url = mock_client_instance.get.call_args[0][0]
-            assert "abc123-valid-id_xyz" in called_url
-            assert ".." not in called_url
+        transcript = await assembly_handler._get_assembly_transcript(
+            "abc123-valid-id_xyz", client=mock_client
+        )
+        assert transcript == mock_transcript_response
+        called_url = mock_client.get.call_args[0][0]
+        assert "abc123-valid-id_xyz" in called_url
+        assert ".." not in called_url
 
 
 @pytest.mark.asyncio
@@ -216,17 +215,22 @@ async def test_assemblyai_handler_runs_in_async_context():
     response_body = {"id": "test-id", "status": "queued", "speech_model": "nano"}
     mock_transcript = {"id": "test-id", "status": "completed", "audio_duration": 60.0}
 
-    with patch.object(
-        handler, "_poll_assembly_for_transcript_response",
-        new_callable=AsyncMock,
-        return_value=AssemblyAITranscriptResponse(**mock_transcript),
-    ), patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler.get_standard_logging_object_payload",
-        return_value={},
-    ), patch(
-        "litellm.proxy.pass_through_endpoints.success_handler.PassThroughEndpointLogging._handle_logging",
-        new_callable=AsyncMock,
-    ) as mock_handle_logging:
+    with (
+        patch.object(
+            handler,
+            "_poll_assembly_for_transcript_response",
+            new_callable=AsyncMock,
+            return_value=AssemblyAITranscriptResponse(**mock_transcript),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_provider_handlers.assembly_passthrough_logging_handler.get_standard_logging_object_payload",
+            return_value={},
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.success_handler.PassThroughEndpointLogging._handle_logging",
+            new_callable=AsyncMock,
+        ) as mock_handle_logging,
+    ):
         # This must be awaitable (async), not fire-and-forget (thread pool)
         await handler.assemblyai_passthrough_logging_handler(
             httpx_response=mock_httpx_response,
