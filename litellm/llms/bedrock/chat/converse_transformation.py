@@ -875,7 +875,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # noqa: PLR0915
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
 
         for param, value in non_default_params.items():
@@ -891,17 +891,15 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["maxTokens"] = value
             if param == "stream":
                 optional_params["stream"] = value
-        if param == "stop":
-            if isinstance(value, str):
-                if len(value) == 0:  # converse raises error for empty strings
-                    continue
-                value = [value]
-            elif isinstance(value, list):
-                # Filter out empty strings from list (Bedrock rejects them)
-                value = [v for v in value if isinstance(v, str) and len(v) > 0]
-                if not value:  # Skip if empty list or all empty strings
-                    continue
-            optional_params["stopSequences"] = value
+            if param == "stop":
+                if isinstance(value, str):
+                    if len(value) > 0:  # skip empty strings (converse rejects them)
+                        optional_params["stopSequences"] = [value]
+                elif isinstance(value, list):
+                    # Filter out empty strings from list (Bedrock rejects them)
+                    filtered = [v for v in value if isinstance(v, str) and len(v) > 0]
+                    if filtered:  # only set if non-empty after filtering
+                        optional_params["stopSequences"] = filtered
             if param == "temperature":
                 optional_params["temperature"] = value
             if param == "top_p":
