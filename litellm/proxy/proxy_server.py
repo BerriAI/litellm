@@ -7195,6 +7195,7 @@ async def realtime_websocket_endpoint(
             model=model,
             route_type="_arealtime",
         )
+        data["user_api_key_dict"] = user_api_key_dict
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",
