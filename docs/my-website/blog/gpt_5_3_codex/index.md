@@ -44,7 +44,7 @@ Important:
 ## Docker Image
 
 ```bash
-docker pull ghcr.io/berriai/litellm:v1.81.3-stable.sonnet-4-6
+docker pull ghcr.io/berriai/litellm:v1.81.12-stable.gpt-5.3
 ```
 
 ## Usage 
@@ -68,7 +68,7 @@ docker run -d \
   -p 4000:4000 \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   -v $(pwd)/config.yaml:/app/config.yaml \
-  ghcr.io/berriai/litellm:v1.81.3-stable.sonnet-4-6 \
+  ghcr.io/berriai/litellm:v1.81.12-stable.gpt-5.3 \
   --config /app/config.yaml
 ```
 
