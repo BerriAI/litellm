@@ -354,3 +354,143 @@ def test_extra_headers_not_present():
     # Verify metadata is still forwarded
     assert "metadata" in completion_kwargs
     assert completion_kwargs["metadata"]["user_id"] == "test-user"
+
+
+def test_google_genai_adapter_tool_type_object_fix():
+    """Test that anyOf parametersJsonSchema gets type:object injected when missing.
+    Fixes: https://github.com/BerriAI/litellm/issues/21584
+    Anthropic requires a top-level 'type': 'object' in input_schema.
+    When Pydantic models or Gemini CLI produce 'anyOf' schemas without 'type',
+    the transformation must inject it.
+    """
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    # Tools with anyOf schema and NO top-level 'type' (as sent by Gemini CLI)
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "delegate_to_agent",
+                    "description": "Delegates a task to a specialized sub-agent.",
+                    "parametersJsonSchema": {
+                        "anyOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "agent_name": {
+                                        "type": "string",
+                                        "const": "codebase_investigator",
+                                    },
+                                    "objective": {"type": "string"},
+                                },
+                                "required": ["agent_name", "objective"],
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "agent_name": {
+                                        "type": "string",
+                                        "const": "cli_help",
+                                    },
+                                    "question": {"type": "string"},
+                                },
+                                "required": ["agent_name", "question"],
+                                "additionalProperties": False,
+                            },
+                        ],
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        # NOTE: intentionally NO top-level 'type' key
+                    },
+                }
+            ]
+        }
+    ]
+
+    openai_tools = adapter._transform_google_genai_tools_to_openai(tools)
+
+    assert len(openai_tools) == 1
+    tool = openai_tools[0]
+    assert tool["type"] == "function"
+    assert tool["function"]["name"] == "delegate_to_agent"
+
+    params = tool["function"]["parameters"]
+
+    # The fix: type:object must be present at the top level
+    assert "type" in params, "type:object must be injected for anyOf schemas"
+    assert params["type"] == "object", f"Expected 'object', got '{params['type']}'"
+
+    # anyOf and $schema should be preserved
+    assert "anyOf" in params, "anyOf key should be preserved"
+    assert len(params["anyOf"]) == 2
+
+
+def test_google_genai_adapter_type_object_already_present():
+    """Test that existing type:object is NOT overwritten when already present."""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "list_directory",
+                    "description": "Lists directory contents.",
+                    "parametersJsonSchema": {
+                        "type": "object",  # already has type
+                        "properties": {
+                            "dir_path": {"type": "string"}
+                        },
+                        "required": ["dir_path"],
+                    },
+                }
+            ]
+        }
+    ]
+
+    openai_tools = adapter._transform_google_genai_tools_to_openai(tools)
+    params = openai_tools[0]["function"]["parameters"]
+
+    # type should still be 'object', not changed
+    assert params["type"] == "object"
+    assert "properties" in params
+    assert "dir_path" in params["properties"]
+
+
+def test_top_p_not_sent_alongside_temperature_for_anthropic():
+    """Test that when both temperature and top_p are in config, top_p is
+    dropped from the completion request to avoid Anthropic rejection.
+    Anthropic does not support temperature and top_p simultaneously.
+    Ref: https://github.com/BerriAI/litellm/issues/21584 (OsiPog comment)
+    """
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    model = "claude-sonnet-4-6"
+    contents = [{"role": "user", "parts": [{"text": "hello"}]}]
+    # Gemini CLI sends both temperature and topP
+    config = {
+        "temperature": 1,
+        "topP": 0.95,
+        "topK": 64,
+    }
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents,
+        config=config,
+    )
+
+    # temperature should be forwarded
+    assert "temperature" in completion_request
+    assert completion_request["temperature"] == 1
+
+    # top_p must NOT be forwarded when temperature is also present
+    # to avoid Anthropic's 'temperature and top_p cannot be used together' error
+    assert "top_p" not in completion_request, (
+        "top_p must not be sent to Anthropic when temperature is also present"
+    )
