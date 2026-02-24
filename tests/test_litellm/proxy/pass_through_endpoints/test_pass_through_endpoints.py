@@ -2369,3 +2369,36 @@ def test_get_registered_pass_through_route_with_custom_root():
 
     # Clean up
     _registered_pass_through_routes.clear()
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_handler_forwards_raw_body_for_binary():
+    """
+    Regression test: When _parsed_body is None and content-type is not JSON,
+    the handler should forward raw bytes instead of json=None.
+    """
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({"content-type": "application/octet-stream"})
+    raw_bytes = b"\x00\x01\x02audio-data"
+    mock_request.body = AsyncMock(return_value=raw_bytes)
+
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_client.request.return_value = mock_response
+
+    url = httpx.URL("https://api.assemblyai.com/v2/upload")
+
+    result = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+        request=mock_request,
+        async_client=mock_client,
+        url=url,
+        headers={"Authorization": "test-key", "content-type": "application/octet-stream"},
+        _parsed_body=None,
+    )
+
+    # Should send raw bytes via content=, NOT json=None
+    mock_client.request.assert_called_once()
+    call_kwargs = mock_client.request.call_args
+    assert "content" in call_kwargs.kwargs
+    assert call_kwargs.kwargs["content"] == raw_bytes

@@ -410,14 +410,25 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 requested_query_params=requested_query_params,
             )
         else:
-            # Generic httpx method
-            response = await async_client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=requested_query_params,
-                json=_parsed_body,
-            )
+            content_type = request.headers.get("content-type", "")
+            if _parsed_body is None and "application/json" not in content_type:
+                # Non-JSON request (e.g. binary upload) — forward raw bytes
+                response = await async_client.request(
+                    method=request.method,
+                    url=url,
+                    headers=headers,
+                    params=requested_query_params,
+                    content=await request.body(),
+                )
+            else:
+                # JSON request — forward parsed body
+                response = await async_client.request(
+                    method=request.method,
+                    url=url,
+                    headers=headers,
+                    params=requested_query_params,
+                    json=_parsed_body,
+                )
         return response
 
     @staticmethod
