@@ -313,7 +313,7 @@ class TestStreamUsageAiChat:
 
             error_events = [e for e in events if e["type"] == "error"]
             assert len(error_events) == 1
-            assert "LLM error" in error_events[0]["message"]
+            assert "internal error" in error_events[0]["message"].lower()
 
     @pytest.mark.asyncio
     async def test_non_admin_enforces_user_id(self):

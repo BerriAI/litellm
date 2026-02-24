@@ -449,14 +449,16 @@ async def _process_tool_call(
     """Execute a single tool call, yielding SSE events for status."""
     fn_name = tc.function.name
     fn_args = json.loads(tc.function.arguments)
+
+    allowed_names = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
     handler = TOOL_HANDLERS.get(fn_name)
 
-    if not handler:
+    if fn_name not in allowed_names or not handler:
         chat_messages.append(
             {
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": f"Unknown tool: {fn_name}",
+                "content": f"Tool not available: {fn_name}",
             }
         )
         return
@@ -475,8 +477,9 @@ async def _process_tool_call(
         )
         yield _sse({**tool_event_base, "status": "complete"})
     except Exception as e:
-        tool_result = f"Error: {e}"
-        yield _sse({**tool_event_base, "status": "error", "error": str(e)})
+        verbose_proxy_logger.error("Tool %s failed: %s", fn_name, e)
+        tool_result = f"Error fetching {handler['label']}. Please try again."
+        yield _sse({**tool_event_base, "status": "error"})
 
     chat_messages.append(
         {"role": "tool", "tool_call_id": tc.id, "content": tool_result}
@@ -542,4 +545,9 @@ async def stream_usage_ai_chat(
 
     except Exception as e:
         verbose_proxy_logger.error("AI usage chat failed: %s", e)
-        yield _sse({"type": "error", "message": str(e)})
+        yield _sse(
+            {
+                "type": "error",
+                "message": "An internal error occurred. Please try again.",
+            }
+        )
