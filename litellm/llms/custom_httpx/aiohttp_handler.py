@@ -190,6 +190,7 @@ class BaseLLMAIOHTTPHandler:
         async_client_session = self._get_async_client_session(
             dynamic_client_session=async_client_session
         )
+        aiohttp_timeout: aiohttp.ClientTimeout
         if isinstance(timeout, aiohttp.ClientTimeout):
             aiohttp_timeout = timeout
         elif isinstance(timeout, httpx.Timeout):
