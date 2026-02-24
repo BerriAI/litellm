@@ -30,6 +30,12 @@ class UIThemeConfig(BaseModel):
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
     )
 
+    # Favicon configuration
+    favicon_url: Optional[str] = Field(
+        default=None,
+        description="URL to custom favicon image. Must be an HTTP/HTTPS URL to a .ico, .png, or .svg file",
+    )
+
 
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
@@ -794,6 +800,27 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
             del os.environ["UI_LOGO_PATH"]
             verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
 
+    # Update LITELLM_FAVICON_URL environment variable if favicon_url is provided
+    favicon_url = theme_data.get("favicon_url")
+    verbose_proxy_logger.debug(f"Updating favicon_url: {favicon_url}")
+
+    if (
+        favicon_url and isinstance(favicon_url, str) and favicon_url.strip()
+    ):  # Check if favicon_url exists and is not empty/whitespace
+        config["environment_variables"]["LITELLM_FAVICON_URL"] = favicon_url
+        os.environ["LITELLM_FAVICON_URL"] = favicon_url
+        verbose_proxy_logger.debug(f"Set LITELLM_FAVICON_URL to: {favicon_url}")
+    else:
+        # Remove the environment variable to restore default favicon
+        if "LITELLM_FAVICON_URL" in config.get("environment_variables", {}):
+            del config["environment_variables"]["LITELLM_FAVICON_URL"]
+            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from config")
+        if "LITELLM_FAVICON_URL" in os.environ:
+            del os.environ["LITELLM_FAVICON_URL"]
+            verbose_proxy_logger.debug(
+                "Removed LITELLM_FAVICON_URL from environment"
+            )
+
     # Handle environment variable encryption if needed
     stored_config = config.copy()
     if (
@@ -809,7 +836,7 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     await proxy_config.save_config(new_config=stored_config)
 
     return {
-        "message": "Logo settings updated successfully.",
+        "message": "UI theme settings updated successfully.",
         "status": "success",
         "theme_config": theme_data,
     }

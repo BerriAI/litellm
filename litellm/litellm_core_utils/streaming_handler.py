@@ -6,7 +6,17 @@ import logging
 import threading
 import time
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import anyio
 import httpx
@@ -151,10 +161,10 @@ class CustomStreamWrapper:
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator["ModelResponseStream"]:
         return self
 
-    def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
     async def aclose(self):
@@ -1726,7 +1736,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self):  # noqa: PLR0915
+    def __next__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -1748,7 +1758,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
                     print_verbose(
-                        f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
+                        f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
                     response: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
@@ -1900,7 +1910,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self):  # noqa: PLR0915
+    async def __anext__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -1996,9 +2006,7 @@ class CustomStreamWrapper:
                     else:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
-                        processed_chunk: Optional[
-                            ModelResponseStream
-                        ] = self.chunk_creator(chunk=chunk)
+                        processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
                             continue
 

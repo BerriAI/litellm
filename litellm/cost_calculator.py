@@ -480,6 +480,7 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage_block,
+                service_tier=service_tier,
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
@@ -500,7 +501,9 @@ def cost_per_token(  # noqa: PLR0915
             model=model, usage=usage_block, response_time_ms=response_time_ms
         )
     elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(model=model, usage=usage_block)
+        return gemini_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
@@ -702,6 +705,36 @@ def _get_response_model(completion_response: Any) -> Optional[str]:
         return completion_response.get("model", None)
 
     return None
+
+
+_GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: dict = {
+    # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
+    "ON_DEMAND_PRIORITY": "priority",
+    # FLEX / BATCH maps to "flex" — selects input_cost_per_token_flex, etc.
+    "FLEX": "flex",
+    "BATCH": "flex",
+    # ON_DEMAND is standard pricing — no service_tier suffix applied
+    "ON_DEMAND": None,
+}
+
+
+def _map_traffic_type_to_service_tier(traffic_type: Optional[str]) -> Optional[str]:
+    """
+    Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
+
+    This allows the same `_priority` / `_flex` cost-key suffix logic used for
+    OpenAI/Azure to work for Gemini and Vertex AI models.
+
+    trafficType values seen in practice
+    ------------------------------------
+    ON_DEMAND          -> standard pricing  (service_tier = None)
+    ON_DEMAND_PRIORITY -> priority pricing  (service_tier = "priority")
+    FLEX / BATCH       -> batch/flex pricing (service_tier = "flex")
+    """
+    if traffic_type is None:
+        return None
+    service_tier = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(traffic_type.upper())
+    return service_tier
 
 
 def _get_usage_object(
@@ -1145,6 +1178,20 @@ def completion_cost(  # noqa: PLR0915
                             "custom_llm_provider", custom_llm_provider or None
                         )
                         region_name = hidden_params.get("region_name", region_name)
+
+                        # For Gemini/Vertex AI responses, trafficType is stored in
+                        # provider_specific_fields.  Map it to the service_tier used
+                        # by the cost key lookup (_priority / _flex suffixes) so that
+                        # ON_DEMAND_PRIORITY requests are billed at priority prices.
+                        if service_tier is None:
+                            provider_specific = (
+                                hidden_params.get("provider_specific_fields") or {}
+                            )
+                            raw_traffic_type = provider_specific.get("traffic_type")
+                            if raw_traffic_type:
+                                service_tier = _map_traffic_type_to_service_tier(
+                                    raw_traffic_type
+                                )
                 else:
                     if model is None:
                         raise ValueError(

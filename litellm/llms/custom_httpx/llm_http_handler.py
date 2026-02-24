@@ -3014,8 +3014,11 @@ class BaseLLMHTTPHandler:
             raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
         # Store the upload URL in litellm_params for the transformation method
+        # Honour the URL already set by transform_create_file_request (e.g. Bedrock pre-signed S3 uploads),
+        # fall back to api_base for providers that do not set it.
         litellm_params_with_url = dict(litellm_params)
-        litellm_params_with_url["upload_url"] = api_base
+        if "upload_url" not in litellm_params:
+            litellm_params_with_url["upload_url"] = api_base
 
         return provider_config.transform_create_file_response(
             model=None,
@@ -5397,6 +5400,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        variant: Optional[str] = None,
     ) -> Union[bytes, Coroutine[Any, Any, bytes]]:
         """
         Handle video content download requests.
@@ -5412,6 +5416,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 api_key=api_key,
                 client=client,
+                variant=variant,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -5443,6 +5448,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            variant=variant,
         )
 
         try:
@@ -5485,6 +5491,7 @@ class BaseLLMHTTPHandler:
         extra_headers: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        variant: Optional[str] = None,
     ) -> bytes:
         """
         Async version of the video content download handler.
@@ -5519,6 +5526,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            variant=variant,
         )
 
         try:
@@ -5594,7 +5602,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = video_remix_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
         )
@@ -5676,7 +5684,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = video_remix_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
         )

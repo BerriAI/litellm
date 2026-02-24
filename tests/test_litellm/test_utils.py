@@ -13,12 +13,12 @@ sys.path.insert(
 import litellm
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
+    CallTypes,
     Delta,
     LlmProviders,
     ModelResponseStream,
     StreamingChoices,
 )
-from litellm.types.utils import CallTypes
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -606,10 +606,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
+                "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
+                "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
+                "input_cost_per_audio_token_priority": {"type": "number"},
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
+                "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -644,6 +648,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "max_video_length": {"type": "number"},
                 "max_videos_per_prompt": {"type": "number"},
                 "metadata": {"type": "object"},
+                "provider_specific_entry": {"type": "object"},
                 "mode": {
                     "type": "string",
                     "enum": [
@@ -714,6 +719,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
                 "tpm": {"type": "number"},
+                "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
                     "type": "array",
                     "items": {
@@ -802,8 +808,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         },
     }
 
-    prod_json = "./model_prices_and_context_window.json"
-    # prod_json = "../../model_prices_and_context_window.json"
+    prod_json = os.path.join(os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json")
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
@@ -2337,7 +2342,7 @@ def test_register_model_with_scientific_notation():
     Test that the register_model function can handle scientific notation in the model name.
     """
     import uuid
-    
+
     # Use a truly unique model name with uuid to avoid conflicts when tests run in parallel
     test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
     
@@ -2981,8 +2986,8 @@ class TestProxyLoggingBudgetAlerts:
         via metadata.soft_budget_alerting_emails to work even when global alerting is disabled.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None  # Global alerting is disabled
@@ -3018,8 +3023,8 @@ class TestProxyLoggingBudgetAlerts:
         and do not send emails when alerting is None.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None
@@ -3050,8 +3055,8 @@ class TestProxyLoggingBudgetAlerts:
         Test that soft_budget alerts with empty alert_emails list still respect alerting=None.
         """
         from litellm.caching.caching import DualCache
-        from litellm.proxy.utils import ProxyLogging
         from litellm.proxy._types import CallInfo, Litellm_EntityType
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None
@@ -3554,3 +3559,43 @@ class TestMetadataNoneHandling:
         litellm_params = {"metadata": None}
         metadata = litellm_params.get("metadata") or {}
         assert metadata == {}
+
+
+class TestValidateAndFixThinkingParam:
+    """Tests for validate_and_fix_thinking_param."""
+
+    def test_none_returns_none(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        assert validate_and_fix_thinking_param(thinking=None) is None
+
+    def test_already_snake_case(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+
+    def test_camel_case_normalized(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 32000}
+        assert "budgetTokens" not in result
+
+    def test_both_keys_snake_case_wins(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budget_tokens": 10000, "budgetTokens": 50000}
+        result = validate_and_fix_thinking_param(thinking=thinking)
+        assert result == {"type": "enabled", "budget_tokens": 10000}
+        assert "budgetTokens" not in result
+
+    def test_original_dict_not_mutated(self):
+        from litellm.utils import validate_and_fix_thinking_param
+
+        thinking = {"type": "enabled", "budgetTokens": 32000}
+        validate_and_fix_thinking_param(thinking=thinking)
+        assert "budgetTokens" in thinking
+        assert "budget_tokens" not in thinking

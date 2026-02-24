@@ -205,6 +205,11 @@ class BaseOpenAILLM:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
+        if getattr(litellm, "network_mock", False):
+            from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
+
+            return httpx.AsyncClient(transport=MockOpenAITransport())
+
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
 
@@ -224,6 +229,11 @@ class BaseOpenAILLM:
     def _get_sync_http_client() -> Optional[httpx.Client]:
         if litellm.client_session is not None:
             return litellm.client_session
+
+        if getattr(litellm, "network_mock", False):
+            from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport
+
+            return httpx.Client(transport=MockOpenAITransport())
 
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
