@@ -66,7 +66,7 @@ model_list:
 ```bash
 docker run -d \
   -p 4000:4000 \
-  -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+  -e ANTHROPIC_API_KEY=$OPENAI_API_KEY \
   -v $(pwd)/config.yaml:/app/config.yaml \
   ghcr.io/berriai/litellm:v1.81.12-stable.gpt-5.3 \
   --config /app/config.yaml
