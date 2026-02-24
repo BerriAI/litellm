@@ -13,8 +13,6 @@ from email.mime.text import MIMEText
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Coroutine,
     Dict,
     List,
     Literal,
@@ -2277,6 +2275,11 @@ class PrismaClient:
             0.0,
             float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
         )
+        self._engine_pidfd: int = -1
+        self._engine_pid: int = 0
+        self._watching_engine: bool = False
+        self._engine_confirmed_dead: bool = False
+        self._engine_wait_thread: Optional[threading.Thread] = None
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -3544,31 +3547,368 @@ class PrismaClient:
             )
             raise e
 
+    def _get_engine_pid(self) -> int:
+        try:
+            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
+            if engine is not None and engine.process is not None:
+                return engine.process.pid
+        except (AttributeError, TypeError):
+            pass
+        return 0
+
+    def _is_engine_alive(self) -> bool:
+        if self._engine_pid <= 0:
+            return True
+        try:
+            os.kill(self._engine_pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+
+    @staticmethod
+    def _reap_all_zombies() -> set:
+        """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
+
+        Returns a set of reaped PIDs.  As PID 1 in Docker (or any
+        process that spawns children), we must reap ALL terminated
+        children to prevent zombie accumulation.
+        """
+        reaped: set = set()
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break
+                reaped.add(pid)
+            except ChildProcessError:
+                break
+        return reaped
+
+    def _try_waitpid_watch(self, pid: int) -> bool:
+        """Watch engine PID via os.waitpid() in a dedicated thread.
+
+        The thread blocks on os.waitpid(pid, 0) which is a kernel-level
+        wait and with zero CPU overhead, instant detection when the process exits.
+        When the process dies, the thread notifies the asyncio event loop
+        via call_soon_threadsafe.
+
+        Returns True if the thread was started, False on failure.
+        """
+        try:
+            probe_pid, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            verbose_proxy_logger.debug(
+                "PID %s is not a child process; skipping waitpid watch.", pid,
+            )
+            return False
+
+        if probe_pid == pid:
+            verbose_proxy_logger.warning(
+                "prisma-query-engine PID %s already dead at watch start.", pid,
+            )
+            self._engine_confirmed_dead = True
+            self._reap_all_zombies()
+            self._cleanup_engine_watcher()
+            asyncio.create_task(
+                self.attempt_db_reconnect(
+                    reason="engine_process_death",
+                    force=True,
+                )
+            )
+            return True
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+
+        thread = threading.Thread(
+            target=self._waitpid_thread_func,
+            args=(pid, loop),
+            daemon=True,
+            name=f"prisma-engine-waitpid-{pid}",
+        )
+        thread.start()
+        self._engine_wait_thread = thread
+        return True
+
+    def _waitpid_thread_func(self, pid: int, loop: asyncio.AbstractEventLoop) -> None:
+        """Thread function: block until engine PID exits, then notify event loop.
+
+        Note: uvloop/libuv may reap the child first via waitpid(-1, WNOHANG)
+        in its SIGCHLD handler. In that case our waitpid raises ChildProcessError.
+        we still notify the event loop because the engine is dead either way.
+        """
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+        except OSError:
+            pass
+        try:
+            loop.call_soon_threadsafe(self._on_engine_death_from_thread, pid)
+        except RuntimeError:
+            pass
+
+    def _on_engine_death_from_thread(self, dead_pid: int) -> None:
+        """Called on the event loop thread when the waitpid thread detects engine death."""
+        if self._engine_confirmed_dead:
+            return
+        if dead_pid != self._engine_pid:
+            return
+        verbose_proxy_logger.error(
+            "prisma-query-engine PID %s exited (waitpid thread); triggering reconnect.",
+            dead_pid,
+        )
+        self._engine_confirmed_dead = True
+        self._reap_all_zombies()
+        self._cleanup_engine_watcher()
+        asyncio.create_task(
+            self.attempt_db_reconnect(
+                reason="engine_process_death",
+                force=True,
+            )
+        )
+
+    def _try_pidfd_watch(self, pid: int) -> bool:
+        """
+        Watch engine PID via pidfd_open + asyncio event loop reader.
+
+        Returns True if pidfd watch was set up, False if unavailable or failed.
+        Broad OSError catch handles both ENOSYS and SECCOMP-blocked syscalls.
+        """
+        if not hasattr(os, "pidfd_open"):
+            return False
+        fd = -1
+        try:
+            fd = os.pidfd_open(pid, 0)  # type: ignore[attr-defined]
+            asyncio.get_running_loop().add_reader(fd, self._on_pidfd_readable)
+            self._engine_pidfd = fd
+            return True
+        except OSError:
+            if fd >= 0:
+                os.close(fd)
+            return False
+
+    def _on_pidfd_readable(self) -> None:
+        """pidfd became readable: engine process exited or became zombie.
+
+        Sets _engine_confirmed_dead BEFORE cleanup so _run_reconnect_cycle
+        takes the heavy path (recreate Prisma client + re-arm watcher).
+        """
+        if self._engine_confirmed_dead:
+            # Already handled -- just clean up pidfd resources.
+            if self._engine_pidfd >= 0:
+                try:
+                    asyncio.get_running_loop().remove_reader(self._engine_pidfd)
+                except Exception:
+                    pass
+                try:
+                    os.close(self._engine_pidfd)
+                except OSError:
+                    pass
+                self._engine_pidfd = -1
+            return
+        dead_pid = self._engine_pid
+        verbose_proxy_logger.error(
+            "prisma-query-engine PID %s exited (pidfd event); triggering reconnect.",
+            dead_pid,
+        )
+        self._engine_confirmed_dead = True
+        self._reap_all_zombies()
+        self._cleanup_engine_watcher()
+        asyncio.create_task(
+            self.attempt_db_reconnect(
+                reason="engine_process_death",
+                force=True,
+            )
+        )
+
+    async def _poll_engine_proc(self) -> None:
+        """poll via os.kill(pid, 0) every 1s.
+        Only used when BOTH waitpid thread and pidfd are unavailable
+        (e.g., PID is not our child process and pidfd_open fails)
+        """
+        while self._watching_engine and self._engine_pid > 0:
+            try:
+                os.kill(self._engine_pid, 0)
+            except ProcessLookupError:
+                verbose_proxy_logger.error(
+                    "prisma-query-engine PID %s gone; triggering reconnect.",
+                    self._engine_pid,
+                )
+                self._engine_confirmed_dead = True
+                self._reap_all_zombies()
+                self._cleanup_engine_watcher()
+                await self.attempt_db_reconnect(
+                    reason="engine_process_death",
+                    force=True,
+                )
+                return
+            except (PermissionError, OSError):
+                verbose_proxy_logger.debug(
+                    "Cannot signal PID %s; stopping engine poll.",
+                    self._engine_pid,
+                )
+                self._cleanup_engine_watcher()
+                return
+            await asyncio.sleep(1)
+
+    def _cleanup_engine_watcher(self) -> None:
+        """Clean up pidfd reader, waitpid thread ref, or stop polling and reset state."""
+        self._watching_engine = False
+        if self._engine_pidfd >= 0:
+            try:
+                asyncio.get_running_loop().remove_reader(self._engine_pidfd)
+            except Exception:
+                pass
+            try:
+                os.close(self._engine_pidfd)
+            except OSError:
+                pass
+            self._engine_pidfd = -1
+        self._engine_wait_thread = None
+        self._engine_pid = 0
+
+    async def _start_engine_watcher(self) -> None:
+        """
+        Start watching the Prisma query engine process for death.
+
+        Detection priority:
+        1. os.waitpid() in a dedicated thread, works with all event loops.
+        2. pidfd_open kernel fd registered with asyncio.
+        3. os.kill(pid, 0) polling (1s), last-resort fallback when neither
+           waitpid thread nor pidfd are available.
+
+        """
+        if self._watching_engine or self._engine_pidfd >= 0 or self._engine_wait_thread is not None:
+            return
+        pid = self._get_engine_pid()
+        if pid == 0:
+            verbose_proxy_logger.debug("Could not find prisma-query-engine PID; engine death detection unavailable.")
+            return
+        self._engine_pid = pid
+        self._engine_confirmed_dead = False
+        verbose_proxy_logger.info("Found prisma-query-engine at PID %s.", pid)
+        waitpid_ok = self._try_waitpid_watch(pid)
+        pidfd_ok = False if waitpid_ok else self._try_pidfd_watch(pid)
+        if waitpid_ok:
+            verbose_proxy_logger.info(
+                "Watching engine PID %s via waitpid thread.", pid,
+            )
+        elif pidfd_ok:
+            verbose_proxy_logger.info(
+                "Watching engine PID %s via pidfd.", pid,
+            )
+        else:
+            verbose_proxy_logger.info(
+                "Watching engine PID %s via os.kill polling.", pid,
+            )
+            self._watching_engine = True
+            asyncio.create_task(self._poll_engine_proc())
+
+    def _stop_engine_watcher(self) -> None:
+        """Stop watching the engine process and clean up all resources."""
+        self._cleanup_engine_watcher()
+        self._engine_confirmed_dead = False
+        verbose_proxy_logger.debug("Stopped engine process watcher.")
+
     async def _run_reconnect_cycle(
         self, timeout_seconds: Optional[float] = None
     ) -> None:
         """
-        Run a reconnect cycle with direct db operations and a single overall timeout
-        budget to avoid long retries on hot paths (e.g. auth).
+        Run a reconnect cycle with a single overall timeout budget.
+
+        Uses the _engine_confirmed_dead flag (set by waitpid thread / pidfd / poll
+        handlers) to choose between heavy reconnect (engine dead -- recreate
+        Prisma client, re-arm watcher) and lightweight reconnect (network
+        blip -- disconnect, connect, SELECT 1).
         """
-        async def _do_direct_reconnect() -> None:
-            try:
-                await self.db.disconnect()
-            except Exception as disconnect_err:
-                verbose_proxy_logger.debug(
-                    "Prisma DB disconnect before reconnect failed (ignored): %s",
-                    disconnect_err,
-                )
-
-            await self.db.connect()
-            await self.db.query_raw("SELECT 1")
-
         effective_timeout = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else self._db_watchdog_reconnect_timeout_seconds
+            timeout_seconds if timeout_seconds is not None else self._db_watchdog_reconnect_timeout_seconds
         )
-        await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
+
+        engine_is_dead = self._engine_confirmed_dead or (
+            self._engine_pid > 0 and not self._is_engine_alive()
+        )
+
+        if engine_is_dead:
+            dead_pid = self._engine_pid
+            verbose_proxy_logger.warning(
+                "prisma-query-engine PID %s is dead; reconnecting.",
+                dead_pid,
+            )
+            self._reap_all_zombies()
+            self._cleanup_engine_watcher()
+            self._engine_confirmed_dead = False
+
+            async def _do_heavy_reconnect() -> None:
+                db_url = os.getenv("DATABASE_URL", "")
+                if not db_url:
+                    verbose_proxy_logger.error("DATABASE_URL not set; cannot recreate Prisma client.")
+                    raise RuntimeError("DATABASE_URL not set")
+                await self.db.recreate_prisma_client(db_url)
+                await self._start_engine_watcher()
+
+            await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
+        else:
+            verbose_proxy_logger.debug("Performing Prisma DB reconnect (engine alive or unknown).")
+
+            async def _do_direct_reconnect() -> None:
+                try:
+                    await self.db.disconnect()
+                except Exception as disconnect_err:
+                    verbose_proxy_logger.debug(
+                        "Prisma DB disconnect before reconnect failed (ignored): %s",
+                        disconnect_err,
+                    )
+
+                await self.db.connect()
+                await self.db.query_raw("SELECT 1")
+
+            await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
+
+    async def _attempt_reconnect_inside_lock(
+        self,
+        force: bool,
+        reason: str,
+        timeout_seconds: Optional[float],
+    ) -> bool:
+        now = time.time()
+        if (
+            force is False
+            and now - self._db_last_reconnect_attempt_ts
+            < self._db_reconnect_cooldown_seconds
+        ):
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
+                reason,
+            )
+            return False
+
+        verbose_proxy_logger.warning(
+            "Attempting Prisma DB reconnect. reason=%s", reason
+        )
+
+        reconnect_succeeded = False
+        try:
+            await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
+            reconnect_succeeded = True
+            verbose_proxy_logger.info(
+                "Prisma DB reconnect succeeded. reason=%s", reason
+            )
+        except Exception as reconnect_err:
+            verbose_proxy_logger.error(
+                "Prisma DB reconnect failed. reason=%s error=%s",
+                reason,
+                reconnect_err,
+            )
+        finally:
+            self._db_last_reconnect_attempt_ts = time.time()
+
+        return reconnect_succeeded
 
     async def attempt_db_reconnect(
         self,
@@ -3595,59 +3935,10 @@ class PrismaClient:
             )
             return False
 
-        async def _attempt_reconnect_inside_lock() -> bool:
-            now = time.time()
-            if (
-                force is False
-                and now - self._db_last_reconnect_attempt_ts
-                < self._db_reconnect_cooldown_seconds
-            ):
-                verbose_proxy_logger.debug(
-                    "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
-                    reason,
-                )
-                return False
-
-            verbose_proxy_logger.warning(
-                "Attempting Prisma DB reconnect. reason=%s", reason
-            )
-
-            reconnect_succeeded = False
-            try:
-                await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
-                reconnect_succeeded = True
-                verbose_proxy_logger.info(
-                    "Prisma DB reconnect succeeded. reason=%s", reason
-                )
-            except Exception as reconnect_err:
-                verbose_proxy_logger.error(
-                    "Prisma DB reconnect failed. reason=%s error=%s",
-                    reason,
-                    reconnect_err,
-                )
-            finally:
-                # Start cooldown after reconnect attempt has completed.
-                self._db_last_reconnect_attempt_ts = time.time()
-
-            return reconnect_succeeded
-
         if lock_timeout_seconds is None:
             async with self._db_reconnect_lock:
-                return await _attempt_reconnect_inside_lock()
+                return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
 
-        return await self._attempt_reconnect_with_lock_timeout(
-            _attempt_reconnect_inside_lock,
-            reason=reason,
-            lock_timeout_seconds=lock_timeout_seconds,
-        )
-
-    async def _attempt_reconnect_with_lock_timeout(
-        self,
-        reconnect_fn: Callable[[], Coroutine[Any, Any, bool]],
-        reason: str,
-        lock_timeout_seconds: float,
-    ) -> bool:
-        """Acquire the reconnect lock with a timeout, then run reconnect_fn."""
         lock_acquired_by_timeout_task = False
 
         async def _acquire_reconnect_lock() -> bool:
@@ -3695,14 +3986,14 @@ class PrismaClient:
             return False
 
         try:
-            return await reconnect_fn()
+            return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
         finally:
             self._db_reconnect_lock.release()
 
     async def start_db_health_watchdog_task(self) -> None:
-        """
-        Start a background task that probes DB health and attempts reconnect on failure.
-        """
+        """Start background tasks that monitor DB health:
+        - A periodic SELECT 1 probe that triggers reconnect on network/connection failure.
+        - A process-level watcher that detects engine death via waitpid thread, pidfd, or os.kill polling."""
         if self._db_health_watchdog_enabled is not True:
             verbose_proxy_logger.debug(
                 "Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED"
@@ -3720,11 +4011,11 @@ class PrismaClient:
             self._db_health_watchdog_probe_timeout_seconds,
             self._db_watchdog_reconnect_timeout_seconds,
         )
+        await self._start_engine_watcher()
 
     async def stop_db_health_watchdog_task(self) -> None:
-        """
-        Stop DB health watchdog task gracefully.
-        """
+        """Stop DB health watchdog task and engine watcher gracefully."""
+        self._stop_engine_watcher()
         if self._db_health_watchdog_task is None:
             return
         self._db_health_watchdog_task.cancel()
