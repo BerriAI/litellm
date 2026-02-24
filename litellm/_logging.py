@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 set_verbose = False
 
@@ -179,6 +180,65 @@ else:
 
     handler.setFormatter(formatter)
 
+
+class _SensitiveDataFilter(logging.Filter):
+    """Redacts sensitive values (API keys, tokens, passwords, etc.) from DEBUG log messages."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._masker = SensitiveDataMasker()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno == logging.DEBUG:
+            try:
+                message = record.getMessage()
+                masked = self._mask_message(message)
+                if masked != message:
+                    record.msg = masked
+                    record.args = ()
+            except Exception:
+                pass
+        return True
+
+    def _mask_message(self, message: str) -> str:
+        """Find all Python dict repr strings in the message and mask sensitive keys."""
+        if not message or "{" not in message:
+            return message
+        result = message
+        i = 0
+        while i < len(result):
+            start = result.find("{", i)
+            if start == -1:
+                break
+            depth = 0
+            end = -1
+            for j in range(start, len(result)):
+                c = result[j]
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = j
+                        break
+            if end == -1:
+                break
+            substr = result[start : end + 1]
+            try:
+                parsed = ast.literal_eval(substr)
+                if isinstance(parsed, dict) and parsed:
+                    masked_str = str(self._masker.mask_dict(parsed))
+                    result = result[:start] + masked_str + result[end + 1 :]
+                    i = start + len(masked_str)
+                else:
+                    i = end + 1
+            except (ValueError, SyntaxError, TypeError):
+                i = end + 1
+        return result
+
+
+_sensitive_data_filter = _SensitiveDataFilter()
+
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
@@ -187,6 +247,11 @@ verbose_logger = logging.getLogger("LiteLLM")
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
+
+# Redact sensitive data from all debug logs
+verbose_proxy_logger.addFilter(_sensitive_data_filter)
+verbose_router_logger.addFilter(_sensitive_data_filter)
+verbose_logger.addFilter(_sensitive_data_filter)
 
 
 def _suppress_loggers():
