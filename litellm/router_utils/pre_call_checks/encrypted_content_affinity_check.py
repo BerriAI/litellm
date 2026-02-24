@@ -263,7 +263,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 ] = True
                 return [deployment]
 
-            verbose_router_logger.debug(
+            verbose_router_logger.error(
                 "EncryptedContentAffinityCheck: cached deployment=%s for item_id=%s "
                 "not found in healthy_deployments",
                 cached_model_id,
