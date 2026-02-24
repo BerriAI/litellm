@@ -483,7 +483,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             parent_otel_span = (
                 open_telemetry_logger.create_litellm_proxy_request_started_span(
                     start_time=start_time,
-                    headers=dict(request.headers),
+                    headers=_safe_get_request_headers(request),
                 )
             )
 
@@ -562,7 +562,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                     parent_otel_span=parent_otel_span,
-                    request_headers=dict(request.headers),
+                    request_headers=_safe_get_request_headers(request),
                 )
 
                 is_proxy_admin = result["is_proxy_admin"]
