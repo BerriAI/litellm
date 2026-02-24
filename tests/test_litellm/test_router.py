@@ -1172,6 +1172,61 @@ async def test_acompletion_streaming_iterator_edge_cases():
 
 
 @pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_preserves_hidden_params():
+    """
+    Regression test: FallbackStreamWrapper must copy _hidden_params from the
+    original CustomStreamWrapper so that x-litellm-overhead-duration-ms (and
+    other hidden params) are present in the proxy response headers for streaming.
+    """
+    from unittest.mock import MagicMock
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    # Simulate a CustomStreamWrapper that already has timing metadata set by
+    # update_response_metadata (litellm_overhead_time_ms, _response_ms, etc.)
+    mock_response = MagicMock()
+    mock_response.model = "gpt-4"
+    mock_response.custom_llm_provider = "openai"
+    mock_response.logging_obj = MagicMock()
+    mock_response._hidden_params = {
+        "litellm_overhead_time_ms": 12.34,
+        "_response_ms": 500.0,
+        "litellm_call_id": "test-call-id",
+        "api_base": "https://api.openai.com",
+        "additional_headers": {},
+    }
+
+    # Make the mock iterable (yields nothing — we only care about hidden_params)
+    async def _empty():
+        return
+        yield  # make it an async generator
+
+    mock_response.__aiter__ = lambda self: _empty().__aiter__()
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_response,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    # The returned FallbackStreamWrapper must carry the original _hidden_params
+    assert hasattr(result, "_hidden_params"), "result must have _hidden_params"
+    assert result._hidden_params.get("litellm_overhead_time_ms") == 12.34, (
+        "litellm_overhead_time_ms must be preserved — "
+        "this is what drives x-litellm-overhead-duration-ms in streaming responses"
+    )
+    assert result._hidden_params.get("litellm_call_id") == "test-call-id"
+    assert result._hidden_params.get("_response_ms") == 500.0
+
+
+@pytest.mark.asyncio
 async def test_async_function_with_fallbacks_common_utils():
     """Test the async_function_with_fallbacks_common_utils method"""
     # Create a basic router for testing
@@ -1724,6 +1779,54 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
     assert credentials["custom_llm_provider"] == "bedrock"
+
+
+def test_get_deployment_credentials_with_provider_resolves_credential_name():
+    """
+    Test that get_deployment_credentials_with_provider correctly resolves
+    litellm_credential_name to actual credential values (for UI-created models).
+    """
+    from litellm.types.utils import CredentialItem
+
+    # Setup credential list with a test credential
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="test-azure-cred",
+            credential_info={"custom_llm_provider": "azure"},
+            credential_values={
+                "api_key": "resolved-api-key",
+                "api_base": "https://resolved.openai.azure.com",
+                "api_version": "2024-02-01"
+            }
+        )
+    ]
+    
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "litellm_credential_name": "test-azure-cred",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="azure-gpt-4"
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "resolved-api-key"
+    assert credentials["api_base"] == "https://resolved.openai.azure.com"
+    assert credentials["api_version"] == "2024-02-01"
+    assert credentials["custom_llm_provider"] == "azure"
+    # Ensure credential name is removed after resolution
+    assert "litellm_credential_name" not in credentials
+    
+    # Cleanup
+    litellm.credential_list = []
 
 
 def test_get_available_guardrail_single_deployment():
