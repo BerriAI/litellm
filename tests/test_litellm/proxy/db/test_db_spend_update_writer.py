@@ -1183,17 +1183,21 @@ async def test_daily_agent_receives_deepcopied_payload():
     Test that the daily agent handler receives a deepcopied payload (not the original).
 
     Previously, add_spend_log_transaction_to_daily_agent_transaction received the raw
-    payload without a deepcopy, which was a mutation bug.
+    payload without a deepcopy, which was a mutation bug. This test goes through
+    update_database() to verify the production deepcopy path.
     """
     db_writer = DBSpendUpdateWriter()
 
-    original_payload = {"key": "value", "nested": {"a": 1}}
-    captured_payloads = []
+    # Capture the payload object that get_logging_payload returns (the "original")
+    # and the payload the agent handler receives (should be a deepcopy)
+    original_payload_ref = {}
+    captured_agent_payloads = []
 
-    async def capture_payload(**kwargs):
-        captured_payloads.append(kwargs.get("payload"))
+    async def capture_agent_payload(**kwargs):
+        captured_agent_payloads.append(kwargs.get("payload"))
 
     # Mock all helpers
+    db_writer._insert_spend_log_to_db = AsyncMock()
     db_writer._update_user_db = AsyncMock()
     db_writer._update_key_db = AsyncMock()
     db_writer._update_team_db = AsyncMock()
@@ -1202,32 +1206,51 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(
-        side_effect=capture_payload
+        side_effect=capture_agent_payload
     )
     db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
 
-    import copy
+    # Mock get_logging_payload to return a known dict and capture its identity
+    fake_payload = {
+        "startTime": "2024-01-01T00:00:00",
+        "endTime": "2024-01-01T00:01:00",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "spend": 0.0,
+        "nested": {"a": 1},
+    }
+    original_payload_ref["obj"] = fake_payload  # store reference to the original
 
-    payload_copy = copy.deepcopy(original_payload)
+    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+    ), patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+        return_value=fake_payload,
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id="test-end-user",
+            team_id="test-team",
+            org_id="test-org",
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
+        )
 
-    await db_writer._batch_database_updates(
-        response_cost=0.1,
-        user_id="u1",
-        hashed_token="t1",
-        team_id="team1",
-        org_id="org1",
-        end_user_id="eu1",
-        prisma_client=MagicMock(),
-        user_api_key_cache=MagicMock(),
-        litellm_proxy_budget_name="budget",
-        payload_copy=payload_copy,
-        request_tags=None,
-    )
+        # Let the single batched task run
+        await asyncio.sleep(0)
 
-    # The payload passed to the agent handler should NOT be the original object
-    assert len(captured_payloads) == 1
-    assert captured_payloads[0] is not original_payload
-    # But it should have the same content
-    assert captured_payloads[0] == original_payload
+    # The agent handler should have been called
+    assert len(captured_agent_payloads) == 1
+    # The payload must NOT be the same object as the original (deepcopy occurred)
+    assert captured_agent_payloads[0] is not original_payload_ref["obj"]
+    # But it should have equivalent content
+    assert captured_agent_payloads[0]["model"] == "gpt-4"
+    assert captured_agent_payloads[0]["spend"] == 0.1
