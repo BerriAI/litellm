@@ -59,7 +59,7 @@ export function OnboardingFormBody({
           />
         )}
 
-        <Form className="mt-10 mb-5" layout="vertical" form={form} onFinish={onSubmit}>
+        <Form className="mt-10 mb-5" layout="vertical" form={form} onFinish={(values) => onSubmit({ password: values.password })}>
           <Form.Item label="Email Address" name="user_email">
             <Input type="email" disabled />
           </Form.Item>
