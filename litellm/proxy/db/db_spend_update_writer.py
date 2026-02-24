@@ -509,9 +509,16 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
             try:
-                db_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_update_transactions_from_redis_buffer()
-                )
+                (
+                    db_spend_update_transactions,
+                    daily_spend_update_transactions,
+                    daily_team_spend_update_transactions,
+                    daily_org_spend_update_transactions,
+                    daily_end_user_spend_update_transactions,
+                    daily_agent_spend_update_transactions,
+                    daily_tag_spend_update_transactions,
+                ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
                 if db_spend_update_transactions is not None:
                     await self._commit_spend_updates_to_db(
                         prisma_client=prisma_client,
@@ -520,9 +527,6 @@ class DBSpendUpdateWriter:
                         db_spend_update_transactions=db_spend_update_transactions,
                     )
 
-                daily_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_user_spend(
                         n_retry_times=n_retry_times,
@@ -530,9 +534,6 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_spend_update_transactions,
                     )
-                daily_team_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_team_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_team_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_team_spend(
                         n_retry_times=n_retry_times,
@@ -541,9 +542,6 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_team_spend_update_transactions,
                     )
 
-                daily_org_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_org_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_org_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_org_spend(
                         n_retry_times=n_retry_times,
@@ -552,9 +550,6 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_org_spend_update_transactions,
                     )
 
-                daily_tag_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_tag_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_tag_spend(
                         n_retry_times=n_retry_times,
@@ -562,9 +557,6 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_tag_spend_update_transactions,
                     )
-                daily_end_user_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_end_user_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_end_user_spend(
                         n_retry_times=n_retry_times,
@@ -572,9 +564,6 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_end_user_spend_update_transactions,
                     )
-                daily_agent_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_agent_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_agent_spend(
                         n_retry_times=n_retry_times,
