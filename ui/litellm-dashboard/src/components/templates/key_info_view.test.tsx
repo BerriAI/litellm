@@ -363,31 +363,101 @@ describe("KeyInfoView", () => {
   });
 
 
-  it("should show edit button in settings tab when user has write access", async () => {
-    vi.mocked(useAuthorized).mockReturnValue({
-      ...baseUseAuthorizedMock,
-      userRole: "Admin",
+  describe("'Edit Settings' button visibility in the Settings tab", () => {
+    const renderAndOpenSettingsTab = async (keyData = MOCK_KEY_DATA) => {
+      render(
+        <KeyInfoView
+          keyData={keyData}
+          onClose={() => {}}
+          keyId="test-key-id"
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByRole("tab", { name: /settings/i })).toBeInTheDocument();
+      });
+      await userEvent.click(screen.getByRole("tab", { name: /settings/i }));
+    };
+
+    it("should show the Edit Settings button when the user is a proxy admin for a key they do not own", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user-id",
+        userRole: "proxy_admin",
+      });
+
+      await renderAndOpenSettingsTab({ ...MOCK_KEY_DATA, user_id: "someone-else-id" });
+
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    render(
-      <KeyInfoView
-        keyData={MOCK_KEY_DATA}
-        onClose={() => { }}
-        keyId={"test-key-id"}
-        onKeyDataUpdate={() => { }}
-        teams={[]}
-      />,
-    );
+    it("should show the Edit Settings button when the user is the key owner", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "owner-user-id",
+        userRole: "Internal User",
+      });
 
-    await waitFor(() => {
-      const settingsTab = screen.getByRole("tab", { name: /settings/i });
-      expect(settingsTab).toBeInTheDocument();
+      await renderAndOpenSettingsTab({ ...MOCK_KEY_DATA, user_id: "owner-user-id" });
+
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
 
-    const settingsTab = screen.getByRole("tab", { name: /settings/i });
-    await userEvent.click(settingsTab);
+    it("should not show the Edit Settings button when an Internal User does not own the key", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "non-owner-user-id",
+        userRole: "Internal User",
+      });
 
-    await waitFor(() => {
+      await renderAndOpenSettingsTab({ ...MOCK_KEY_DATA, user_id: "owner-user-id" });
+
+      expect(screen.queryByRole("button", { name: /edit settings/i })).not.toBeInTheDocument();
+    });
+
+    it("should not show the Edit Settings button when the user is an Internal Viewer even if they own the key", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "owner-user-id",
+        userRole: "Internal Viewer",
+      });
+
+      await renderAndOpenSettingsTab({ ...MOCK_KEY_DATA, user_id: "owner-user-id" });
+
+      expect(screen.queryByRole("button", { name: /edit settings/i })).not.toBeInTheDocument();
+    });
+
+    it("should show the Edit Settings button when the user is a team admin for the key's team", async () => {
+      const teamId = "test-team-id";
+      const teamAdminUserId = "team-admin-user";
+      vi.mocked(useTeams).mockReturnValue({
+        teams: [
+          {
+            team_id: teamId,
+            team_alias: "Test Team",
+            models: [],
+            max_budget: null,
+            budget_duration: null,
+            tpm_limit: null,
+            rpm_limit: null,
+            organization_id: "org-1",
+            created_at: "2025-01-01T00:00:00Z",
+            keys: [],
+            members_with_roles: [{ user_id: teamAdminUserId, role: "admin" }],
+            spend: 0,
+          },
+        ],
+        setTeams: vi.fn(),
+      });
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: teamAdminUserId,
+        userRole: "user",
+      });
+
+      await renderAndOpenSettingsTab({ ...MOCK_KEY_DATA, team_id: teamId, user_id: "other-user-id" });
+
       expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
     });
   });
