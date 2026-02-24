@@ -25,6 +25,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.error_utils import is_stream_required_error
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -151,47 +152,6 @@ else:
 
 
 class BaseLLMHTTPHandler:
-    @staticmethod
-    def _contains_stream_required_text(value: Any) -> bool:
-        if value is None:
-            return False
-        if isinstance(value, str):
-            if "stream must be set to true" in value.lower():
-                return True
-            try:
-                parsed = json.loads(value)
-            except Exception:
-                return False
-            return BaseLLMHTTPHandler._contains_stream_required_text(parsed)
-        if isinstance(value, dict):
-            for key in ("detail", "message", "error"):
-                if key in value and BaseLLMHTTPHandler._contains_stream_required_text(
-                    value[key]
-                ):
-                    return True
-            return any(
-                BaseLLMHTTPHandler._contains_stream_required_text(v)
-                for v in value.values()
-            )
-        if isinstance(value, list):
-            return any(
-                BaseLLMHTTPHandler._contains_stream_required_text(v) for v in value
-            )
-        return False
-
-    @classmethod
-    def _is_stream_required_error(cls, e: Exception) -> bool:
-        for attr in ("body", "message", "text"):
-            if cls._contains_stream_required_text(getattr(e, attr, None)):
-                return True
-        response = getattr(e, "response", None)
-        if response is not None:
-            try:
-                return cls._contains_stream_required_text(response.text)
-            except Exception:
-                return False
-        return False
-
     @staticmethod
     def _merge_stream_hidden_params(
         response: ModelResponse, streamwrapper: CustomStreamWrapper
@@ -416,7 +376,10 @@ class BaseLLMHTTPHandler:
                 signed_json_body=signed_json_body,
             )
         except Exception as e:
-            if self._is_stream_required_error(e) and not provider_config.has_custom_stream_wrapper:
+            if (
+                is_stream_required_error(e)
+                and not provider_config.has_custom_stream_wrapper
+            ):
                 logging_obj.model_call_details["forced_streaming_fallback"] = True
                 stream_data = self._add_stream_param_to_request_body(
                     data=data.copy(),
@@ -725,7 +688,10 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
         except Exception as e:
-            if self._is_stream_required_error(e) and not provider_config.has_custom_stream_wrapper:
+            if (
+                is_stream_required_error(e)
+                and not provider_config.has_custom_stream_wrapper
+            ):
                 logging_obj.model_call_details["forced_streaming_fallback"] = True
                 stream_data = self._add_stream_param_to_request_body(
                     data=data.copy(),

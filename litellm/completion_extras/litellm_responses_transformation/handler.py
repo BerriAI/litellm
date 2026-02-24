@@ -2,12 +2,12 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-import json
 from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
 
 from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.litellm_core_utils.error_utils import is_stream_required_error
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
@@ -37,57 +37,6 @@ class ResponsesToCompletionBridgeHandler:
         if stream is None:
             stream = litellm_params.get("stream", False)
         return bool(stream)
-
-    @staticmethod
-    def _contains_stream_required_text(value: Any) -> bool:
-        if value is None:
-            return False
-        if isinstance(value, (bytes, bytearray)):
-            try:
-                value = value.decode("utf-8", errors="ignore")
-            except Exception:
-                value = str(value)
-        if isinstance(value, str):
-            lowered = value.lower()
-            if "stream must be set to true" in lowered:
-                return True
-            try:
-                parsed = json.loads(value)
-            except Exception:
-                return False
-            return ResponsesToCompletionBridgeHandler._contains_stream_required_text(
-                parsed
-            )
-        if isinstance(value, dict):
-            for key in ("detail", "message", "error"):
-                if key in value and ResponsesToCompletionBridgeHandler._contains_stream_required_text(
-                    value[key]
-                ):
-                    return True
-            return any(
-                ResponsesToCompletionBridgeHandler._contains_stream_required_text(v)
-                for v in value.values()
-            )
-        if isinstance(value, list):
-            return any(
-                ResponsesToCompletionBridgeHandler._contains_stream_required_text(v)
-                for v in value
-            )
-        return False
-
-    @classmethod
-    def _is_stream_required_error(cls, e: Exception) -> bool:
-        for attr in ("body", "message", "text"):
-            if cls._contains_stream_required_text(getattr(e, attr, None)):
-                return True
-        response = getattr(e, "response", None)
-        if response is not None:
-            try:
-                if cls._contains_stream_required_text(response.text):
-                    return True
-            except Exception:
-                return False
-        return cls._contains_stream_required_text(str(e))
 
     @staticmethod
     def _coerce_response_object(
@@ -233,7 +182,7 @@ class ResponsesToCompletionBridgeHandler:
                 **request_data,
             )
         except Exception as e:
-            if not stream and self._is_stream_required_error(e):
+            if not stream and is_stream_required_error(e):
                 if hasattr(logging_obj, "model_call_details"):
                     logging_obj.model_call_details["forced_streaming_fallback"] = True
                 request_data = {**request_data, "stream": True}
@@ -321,7 +270,7 @@ class ResponsesToCompletionBridgeHandler:
                 aresponses=True,
             )
         except Exception as e:
-            if not stream and self._is_stream_required_error(e):
+            if not stream and is_stream_required_error(e):
                 if hasattr(logging_obj, "model_call_details"):
                     logging_obj.model_call_details["forced_streaming_fallback"] = True
                 request_data = {**request_data, "stream": True}

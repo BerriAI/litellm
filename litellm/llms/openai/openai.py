@@ -34,6 +34,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.litellm_core_utils.error_utils import is_stream_required_error
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -340,13 +341,6 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
 class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def __init__(self) -> None:
         super().__init__()
-
-    @staticmethod
-    def _is_stream_required_error(e: Exception) -> bool:
-        message = getattr(e, "message", None) or getattr(e, "text", None) or str(e)
-        if isinstance(message, dict):
-            message = json.dumps(message)
-        return "stream must be set to true" in str(message).lower()
 
     @staticmethod
     def _merge_stream_hidden_params(
@@ -935,7 +929,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     elif (
                         stream is False
                         and return_complete_response is False
-                        and self._is_stream_required_error(e)
+                        and is_stream_required_error(e)
                     ):
                         stream = True
                         return_complete_response = True
