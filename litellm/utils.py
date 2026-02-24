@@ -5832,8 +5832,8 @@ def get_model_info(
             if value is not None:
                 _model_info[key] = value  # type: ignore
 
-    if verbose_logger.isEnabledFor(logging.DEBUG):
-        verbose_logger.debug(f"model_info: {_model_info}")
+    # if verbose_logger.isEnabledFor(logging.DEBUG):
+        # verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params
