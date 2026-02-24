@@ -203,6 +203,133 @@ class RealTimeStreaming:
                 return True
         return False
 
+    async def _handle_with_provider_config(self, raw_response):
+        returned_object = self.provider_config.transform_realtime_response(
+            raw_response,
+            self.model,
+            self.logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": self.session_configuration_request,
+                "current_output_item_id": self.current_output_item_id,
+                "current_response_id": self.current_response_id,
+                "current_delta_chunks": self.current_delta_chunks,
+                "current_conversation_id": self.current_conversation_id,
+                "current_item_chunks": self.current_item_chunks,
+                "current_delta_type": self.current_delta_type,
+            },
+        )
+
+        transformed_response = returned_object["response"]
+        self.current_output_item_id = returned_object[
+            "current_output_item_id"
+        ]
+        self.current_response_id = returned_object["current_response_id"]
+        self.current_delta_chunks = returned_object["current_delta_chunks"]
+        self.current_conversation_id = returned_object[
+            "current_conversation_id"
+        ]
+        self.current_item_chunks = returned_object["current_item_chunks"]
+        self.current_delta_type = returned_object["current_delta_type"]
+        self.session_configuration_request = returned_object[
+            "session_configuration_request"
+        ]
+        events = (
+            transformed_response
+            if isinstance(transformed_response, list)
+            else [transformed_response]
+        )
+        for event in events:
+            ## GUARDRAIL: inject create_response=false on session.created
+            if isinstance(event, dict) and event.get("type") == "session.created":
+                if self._has_realtime_guardrails():
+                    await self.backend_ws.send(
+                        json.dumps(
+                            {
+                                "type": "session.update",
+                                "session": {
+                                    "turn_detection": {
+                                        "type": "server_vad",
+                                        "create_response": False,
+                                    }
+                                },
+                            }
+                        )
+                    )
+        for event in events:
+            event_str = json.dumps(event)
+            ## GUARDRAIL: run on transcription events in provider_config path too
+            if (
+                isinstance(event, dict)
+                and event.get("type")
+                == "conversation.item.input_audio_transcription.completed"
+            ):
+                transcript = event.get("transcript", "")
+                self.store_message(event_str)
+                await self.websocket.send_text(event_str)
+                blocked = await self.run_realtime_guardrails(
+                    transcript, item_id=event.get("item_id")
+                )
+                if not blocked:
+                    await self.backend_ws.send(
+                        json.dumps({"type": "response.create"})
+                    )
+                continue
+            ## LOGGING
+            self.store_message(event_str)
+            await self.websocket.send_text(event_str)
+
+    async def _handle_without_provider_config(self, raw_response):
+        ## GUARDRAIL: intercept transcription events before triggering LLM
+        try:
+            event_obj = json.loads(raw_response)
+
+            if event_obj.get("type") == "session.created":
+                # If any realtime guardrails are registered, proactively
+                # set create_response=false so the LLM never auto-responds
+                # before our guardrail has a chance to run.
+                if self._has_realtime_guardrails():
+                    await self.backend_ws.send(
+                        json.dumps(
+                            {
+                                "type": "session.update",
+                                "session": {
+                                    "turn_detection": {
+                                        "type": "server_vad",
+                                        "create_response": False,
+                                    }
+                                },
+                            }
+                        )
+                    )
+                    verbose_logger.debug(
+                        "[realtime guardrail] injected create_response=false into session"
+                    )
+
+            if (
+                event_obj.get("type")
+                == "conversation.item.input_audio_transcription.completed"
+            ):
+                transcript = event_obj.get("transcript", "")
+                ## LOGGING — must happen before continue below
+                self.store_message(raw_response)
+                # Forward transcript to client so user sees what they said
+                await self.websocket.send_text(raw_response)
+                blocked = await self.run_realtime_guardrails(
+                    transcript,
+                    item_id=event_obj.get("item_id"),
+                )
+                if not blocked:
+                    # Clean — trigger LLM response
+                    await self.backend_ws.send(
+                        json.dumps({"type": "response.create"})
+                    )
+                return
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        ## LOGGING
+        self.store_message(raw_response)
+        await self.websocket.send_text(raw_response)
+
     async def backend_to_client_send_messages(self):
         import websockets
 
@@ -216,131 +343,9 @@ class RealTimeStreaming:
                     raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
 
                 if self.provider_config:
-                    returned_object = self.provider_config.transform_realtime_response(
-                        raw_response,
-                        self.model,
-                        self.logging_obj,
-                        realtime_response_transform_input={
-                            "session_configuration_request": self.session_configuration_request,
-                            "current_output_item_id": self.current_output_item_id,
-                            "current_response_id": self.current_response_id,
-                            "current_delta_chunks": self.current_delta_chunks,
-                            "current_conversation_id": self.current_conversation_id,
-                            "current_item_chunks": self.current_item_chunks,
-                            "current_delta_type": self.current_delta_type,
-                        },
-                    )
-
-                    transformed_response = returned_object["response"]
-                    self.current_output_item_id = returned_object[
-                        "current_output_item_id"
-                    ]
-                    self.current_response_id = returned_object["current_response_id"]
-                    self.current_delta_chunks = returned_object["current_delta_chunks"]
-                    self.current_conversation_id = returned_object[
-                        "current_conversation_id"
-                    ]
-                    self.current_item_chunks = returned_object["current_item_chunks"]
-                    self.current_delta_type = returned_object["current_delta_type"]
-                    self.session_configuration_request = returned_object[
-                        "session_configuration_request"
-                    ]
-                    events = (
-                        transformed_response
-                        if isinstance(transformed_response, list)
-                        else [transformed_response]
-                    )
-                    for event in events:
-                        ## GUARDRAIL: inject create_response=false on session.created
-                        if isinstance(event, dict) and event.get("type") == "session.created":
-                            if self._has_realtime_guardrails():
-                                await self.backend_ws.send(
-                                    json.dumps(
-                                        {
-                                            "type": "session.update",
-                                            "session": {
-                                                "turn_detection": {
-                                                    "type": "server_vad",
-                                                    "create_response": False,
-                                                }
-                                            },
-                                        }
-                                    )
-                                )
-                    for event in events:
-                        event_str = json.dumps(event)
-                        ## GUARDRAIL: run on transcription events in provider_config path too
-                        if (
-                            isinstance(event, dict)
-                            and event.get("type")
-                            == "conversation.item.input_audio_transcription.completed"
-                        ):
-                            transcript = event.get("transcript", "")
-                            self.store_message(event_str)
-                            await self.websocket.send_text(event_str)
-                            blocked = await self.run_realtime_guardrails(
-                                transcript, item_id=event.get("item_id")
-                            )
-                            if not blocked:
-                                await self.backend_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
-                            continue
-                        ## LOGGING
-                        self.store_message(event_str)
-                        await self.websocket.send_text(event_str)
-
+                    await self._handle_with_provider_config(raw_response)
                 else:
-                    ## GUARDRAIL: intercept transcription events before triggering LLM
-                    try:
-                        event_obj = json.loads(raw_response)
-
-                        if event_obj.get("type") == "session.created":
-                            # If any realtime guardrails are registered, proactively
-                            # set create_response=false so the LLM never auto-responds
-                            # before our guardrail has a chance to run.
-                            if self._has_realtime_guardrails():
-                                await self.backend_ws.send(
-                                    json.dumps(
-                                        {
-                                            "type": "session.update",
-                                            "session": {
-                                                "turn_detection": {
-                                                    "type": "server_vad",
-                                                    "create_response": False,
-                                                }
-                                            },
-                                        }
-                                    )
-                                )
-                                verbose_logger.debug(
-                                    "[realtime guardrail] injected create_response=false into session"
-                                )
-
-                        if (
-                            event_obj.get("type")
-                            == "conversation.item.input_audio_transcription.completed"
-                        ):
-                            transcript = event_obj.get("transcript", "")
-                            ## LOGGING — must happen before continue below
-                            self.store_message(raw_response)
-                            # Forward transcript to client so user sees what they said
-                            await self.websocket.send_text(raw_response)
-                            blocked = await self.run_realtime_guardrails(
-                                transcript,
-                                item_id=event_obj.get("item_id"),
-                            )
-                            if not blocked:
-                                # Clean — trigger LLM response
-                                await self.backend_ws.send(
-                                    json.dumps({"type": "response.create"})
-                                )
-                            continue
-                    except (json.JSONDecodeError, AttributeError):
-                        pass
-                    ## LOGGING
-                    self.store_message(raw_response)
-                    await self.websocket.send_text(raw_response)
+                    await self._handle_without_provider_config(raw_response)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.exception(
