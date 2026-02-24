@@ -147,11 +147,17 @@ class RealTimeStreaming:
                     session_id=item_id,
                 )
             except Exception as e:
-                safe_msg = (
-                    str(e)
-                    if str(e)
-                    else "I'm sorry, that request was blocked by the content filter."
-                )
+                # Extract the human-readable error from HTTPException detail dict,
+                # falling back to str(e) for other exception types.
+                try:
+                    detail = e.detail  # type: ignore[attr-defined]
+                    safe_msg = (
+                        detail.get("error")
+                        if isinstance(detail, dict)
+                        else str(detail)
+                    ) or "I'm sorry, that request was blocked by the content filter."
+                except AttributeError:
+                    safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
                 # Ask OpenAI to speak the warning — TTS audio plays naturally in the client
                 await self.backend_ws.send(
                     json.dumps(
