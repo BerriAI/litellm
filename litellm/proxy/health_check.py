@@ -11,7 +11,7 @@ from typing import List, Optional
 import litellm
 
 logger = logging.getLogger(__name__)
-from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS, DEFAULT_HEALTH_CHECK_PROMPT
+from litellm.constants import DEFAULT_HEALTH_CHECK_PROMPT, HEALTH_CHECK_TIMEOUT_SECONDS
 
 ILLEGAL_DISPLAY_PARAMS = [
     "messages",
@@ -98,6 +98,66 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded"}
 
 
+async def _run_model_health_check(model: dict):
+    litellm_params = model["litellm_params"]
+    model_info = model.get("model_info", {})
+    mode = model_info.get("mode", None)
+    litellm_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
+
+    return await run_with_timeout(
+        litellm.ahealth_check(
+            litellm_params,
+            mode=mode,
+            prompt=DEFAULT_HEALTH_CHECK_PROMPT,
+            input=["test from litellm"],
+        ),
+        timeout,
+    )
+
+
+async def _run_health_checks_with_bounded_concurrency(
+    models: list, concurrency_limit: int
+) -> tuple[list, int]:
+    """
+    Run health checks with at most `concurrency_limit` active tasks.
+    Preserves result ordering to match `models`.
+    """
+    results: list = [None] * len(models)
+    tasks_to_index: dict[asyncio.Task, int] = {}
+    model_iter = iter(enumerate(models))
+    peak_in_flight = 0
+
+    def _schedule_next() -> bool:
+        nonlocal peak_in_flight
+        try:
+            idx, next_model = next(model_iter)
+        except StopIteration:
+            return False
+        task = asyncio.create_task(_run_model_health_check(next_model))
+        tasks_to_index[task] = idx
+        peak_in_flight = max(peak_in_flight, len(tasks_to_index))
+        return True
+
+    for _ in range(min(concurrency_limit, len(models))):
+        _schedule_next()
+
+    while tasks_to_index:
+        done, _ = await asyncio.wait(
+            set(tasks_to_index.keys()),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            idx = tasks_to_index.pop(task)
+            try:
+                results[idx] = task.result()
+            except Exception as e:
+                results[idx] = e
+            _schedule_next()
+
+    return results, peak_in_flight
+
+
 async def _perform_health_check(
     model_list: list,
     details: Optional[bool] = True,
@@ -114,66 +174,6 @@ async def _perform_health_check(
     instrumentation_enabled = bool(instrumentation_context.get("enabled", False))
     cycle_id = instrumentation_context.get("cycle_id", "unknown")
     source = instrumentation_context.get("source", "unknown")
-
-    async def _run_model_health_check(model: dict):
-        litellm_params = model["litellm_params"]
-        model_info = model.get("model_info", {})
-        mode = model_info.get("mode", None)
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info, litellm_params
-        )
-        timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
-
-        return await run_with_timeout(
-            litellm.ahealth_check(
-                litellm_params,
-                mode=mode,
-                prompt=DEFAULT_HEALTH_CHECK_PROMPT,
-                input=["test from litellm"],
-            ),
-            timeout,
-        )
-
-    async def _run_health_checks_with_bounded_concurrency(
-        models: list, concurrency_limit: int
-    ) -> tuple[list, int]:
-        """
-        Run health checks with at most `concurrency_limit` active tasks.
-        Preserves result ordering to match `models`.
-        """
-        results: list = [None] * len(models)
-        tasks_to_index: dict[asyncio.Task, int] = {}
-        model_iter = iter(enumerate(models))
-        peak_in_flight = 0
-
-        def _schedule_next() -> bool:
-            nonlocal peak_in_flight
-            try:
-                idx, next_model = next(model_iter)
-            except StopIteration:
-                return False
-            task = asyncio.create_task(_run_model_health_check(next_model))
-            tasks_to_index[task] = idx
-            peak_in_flight = max(peak_in_flight, len(tasks_to_index))
-            return True
-
-        for _ in range(min(concurrency_limit, len(models))):
-            _schedule_next()
-
-        while tasks_to_index:
-            done, _ = await asyncio.wait(
-                set(tasks_to_index.keys()),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in done:
-                idx = tasks_to_index.pop(task)
-                try:
-                    results[idx] = task.result()
-                except Exception as e:
-                    results[idx] = e
-                _schedule_next()
-
-        return results, peak_in_flight
 
     dispatch_mode = "unbounded"
     peak_in_flight = 0
