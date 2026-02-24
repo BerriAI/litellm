@@ -16,9 +16,11 @@ class ToolDiscoveryQueue:
     """
     In-memory buffer for tool registry upserts.
 
-    Deduplicates by tool_name — once a tool has been seen in this process,
-    it is never enqueued again (the DB row already exists or will be created
-    during the current flush cycle).
+    Deduplicates by tool_name within each flush cycle: a tool is only queued
+    once per ~30s batch, so call_count increments once per flush cycle the
+    tool appears in (not once per invocation, but not once per pod lifetime
+    either). The seen-set is cleared on flush so subsequent batches can
+    re-count the same tool.
     """
 
     def __init__(self) -> None:
@@ -44,6 +46,8 @@ class ToolDiscoveryQueue:
         )
 
     def flush(self) -> List[ToolDiscoveryQueueItem]:
-        """Return and clear all pending items."""
+        """Return and clear all pending items. Resets seen-set so the next
+        flush cycle can re-count the same tools."""
         items, self._pending = self._pending, []
+        self._seen_tool_names.clear()
         return items

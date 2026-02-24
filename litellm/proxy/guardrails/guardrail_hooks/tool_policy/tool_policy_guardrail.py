@@ -83,7 +83,6 @@ class ToolPolicyGuardrail(CustomGuardrail):
                 t["function"]["name"]
                 for t in tools
                 if isinstance(t, dict)
-                and t.get("type") == "function"
                 and isinstance(t.get("function"), dict)
                 and t["function"].get("name")
             ]
@@ -131,7 +130,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
         if not tool_names or prisma_client is None:
             return {}
 
-        cache_key = f"tool_policies:{':'.join(sorted(tool_names))}"
+        cache_key = f"tool_policies:{chr(0).join(sorted(tool_names))}"
         cached = await self._policy_cache.async_get_cache(cache_key)
         if cached is not None and isinstance(cached, dict):
             verbose_proxy_logger.debug(

@@ -10,6 +10,7 @@ when running against an older generated schema.
 """
 
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
@@ -61,13 +62,14 @@ async def batch_upsert_tools(
             key_hash = item.get("key_hash")
             team_id = item.get("team_id")
             key_alias = item.get("key_alias")
+            now = datetime.now(timezone.utc).isoformat()
             await prisma_client.db.execute_raw(
                 'INSERT INTO "LiteLLM_ToolTable" '
                 "(tool_id, tool_name, origin, call_policy, call_count, created_by, updated_by, key_hash, team_id, key_alias) "
                 "VALUES ($7, $1, $2, 'untrusted', 1, $3, $3, $4, $5, $6) "
                 "ON CONFLICT (tool_name) DO UPDATE SET "
                 "call_count = \"LiteLLM_ToolTable\".call_count + 1, "
-                "updated_at = NOW()",
+                "updated_at = $8",
                 tool_name,
                 origin,
                 created_by,
@@ -75,6 +77,7 @@ async def batch_upsert_tools(
                 team_id,
                 key_alias,
                 str(uuid.uuid4()),
+                now,
             )
         verbose_proxy_logger.debug(
             "tool_registry_writer: upserted %d tool(s)", len(data)
@@ -137,14 +140,16 @@ async def update_tool_policy(
     """Update the call_policy for a tool. Upserts the row if it does not exist yet."""
     try:
         _updated_by = updated_by or "system"
+        now = datetime.now(timezone.utc).isoformat()
         await prisma_client.db.execute_raw(
             'INSERT INTO "LiteLLM_ToolTable" (tool_id, tool_name, call_policy, created_by, updated_by) '
             "VALUES ($4, $1, $2, $3, $3) "
-            "ON CONFLICT (tool_name) DO UPDATE SET call_policy = $2, updated_by = $3, updated_at = NOW()",
+            "ON CONFLICT (tool_name) DO UPDATE SET call_policy = $2, updated_by = $3, updated_at = $5",
             tool_name,
             call_policy,
             _updated_by,
             str(uuid.uuid4()),
+            now,
         )
         return await get_tool(prisma_client, tool_name)
     except Exception as e:
