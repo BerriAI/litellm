@@ -171,6 +171,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               userRole={userRole}
               userID={userID}
               serverAlias={mcpServer.alias}
+              extraHeaders={mcpServer.extra_headers}
             />
           </TabPanel>
 
