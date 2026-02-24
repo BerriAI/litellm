@@ -1771,10 +1771,11 @@ async def update_cache(  # noqa: PLR0915
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update user spend in cache. "
                 "Budget enforcement may use stale spend values. "
-                "user_id=%s, response_cost=%s - %s",
+                "user_id=%s, response_cost=%s - %s\n%s",
                 user_id,
                 response_cost,
                 str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE END-USER SPEND ###
@@ -1814,10 +1815,11 @@ async def update_cache(  # noqa: PLR0915
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update end user spend in cache. "
                 "Budget enforcement may use stale spend values. "
-                "end_user_id=%s, response_cost=%s - %s",
+                "end_user_id=%s, response_cost=%s - %s\n%s",
                 end_user_id,
                 response_cost,
                 str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE TEAM SPEND ###
@@ -1861,10 +1863,11 @@ async def update_cache(  # noqa: PLR0915
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update team spend in cache. "
                 "Budget enforcement may use stale spend values. "
-                "team_id=%s, response_cost=%s - %s",
+                "team_id=%s, response_cost=%s - %s\n%s",
                 team_id,
                 response_cost,
                 str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE TAG SPEND ###
@@ -1912,10 +1915,11 @@ async def update_cache(  # noqa: PLR0915
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update tag spend in cache. "
                 "Budget enforcement may use stale spend values. "
-                "tags=%s, response_cost=%s - %s",
+                "tags=%s, response_cost=%s - %s\n%s",
                 tags,
                 response_cost,
                 str(e),
+                traceback.format_exc(),
             )
 
     if token is not None and response_cost is not None:
