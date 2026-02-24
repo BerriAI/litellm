@@ -69,7 +69,7 @@ always_block_keywords:
 exceptions:
   - "human in the loop"
   - "human review"
-  - "with human oversight"
+  - "human oversight"
   - "appeals process"
   - "explainability"
   - "fairness audit"
