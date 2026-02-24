@@ -1196,6 +1196,8 @@ When responding to Computer Use tool calls, include the URL and screenshot:
 
 
 
+
+
 ## Thought Signatures
 
 Thought signatures are encrypted representations of the model's internal reasoning process for a given turn in a conversation. By passing thought signatures back to the model in subsequent requests, you provide it with the context of its previous thoughts, allowing it to build upon its reasoning and maintain a coherent line of inquiry.

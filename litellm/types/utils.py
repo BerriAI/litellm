@@ -226,6 +226,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]
     tpm: Optional[int]
     rpm: Optional[int]
+    provider_specific_entry: Optional[Dict[str, float]]
 
 
 class ModelInfo(ModelInfoBase, total=False):
@@ -2408,6 +2409,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_team_id: Optional[str]
+    user_api_key_project_id: Optional[str]
     user_api_key_user_id: Optional[str]
     user_api_key_user_email: Optional[str]
     user_api_key_team_alias: Optional[str]
@@ -2532,6 +2534,8 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: Optional[
         str
     ]  # S3/GCS object key for cold storage retrieval
+    team_alias: Optional[str]
+    team_id: Optional[str]
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
@@ -2914,8 +2918,9 @@ all_litellm_params = (
         "api_key",
         "api_version",
         "prompt_id",
-        "provider_specific_header",
         "prompt_variables",
+        "litellm_system_prompt",
+        "provider_specific_header",
         "prompt_version",
         "api_base",
         "force_timeout",
@@ -3169,6 +3174,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    LITELLM_AGENT = "litellm_agent"
 
 
 # Create a set of all provider values for quick lookup
@@ -3197,6 +3203,7 @@ class SearchProviders(str, Enum):
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
     LINKUP = "linkup"
+    DUCKDUCKGO = "duckduckgo"
 
 
 # Create a set of all search provider values for quick lookup

@@ -2,7 +2,7 @@
 # Utilise une logique conditionnelle : BLOQUER si un mot identificateur + un mot de blocage apparaissent ensemble
 # Référence : https://artificialintelligenceact.eu/article/5/
 category_name: "eu_ai_act_article5_prohibited_practices_fr"
-description: "Détecte les pratiques interdites de l'Article 5 de la loi sur l'IA de l'UE (français)"
+description: "Detects EU AI Act Article 5 prohibited practices using conditional keyword matching in French"
 default_action: "BLOCK"
 
 # MOTS IDENTIFICATEURS - Actions qui pourraient créer des systèmes interdits

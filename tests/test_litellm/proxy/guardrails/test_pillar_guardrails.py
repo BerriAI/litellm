@@ -6,6 +6,7 @@ and following LiteLLM testing patterns and best practices.
 """
 
 # Standard library imports
+import importlib
 import os
 import sys
 from typing import Dict
@@ -49,16 +50,14 @@ def setup_and_teardown():
     to speed up testing by removing callbacks being chained.
     """
     import asyncio
-    import importlib
-    import sys
+    global litellm
 
-    # Reload litellm to ensure clean state
-    # During parallel test execution, another worker might have removed litellm from sys.modules
-    # so we need to ensure it's imported before reloading
-    if "litellm" not in sys.modules:
-        import litellm as _litellm
-    else:
-        importlib.reload(litellm)
+    # Always import then reload to ensure fresh state
+    # This handles both cases uniformly:
+    # 1. litellm not in sys.modules (parallel worker removed it)
+    # 2. litellm already imported (normal case)
+    _module = importlib.import_module("litellm")
+    litellm = importlib.reload(_module)
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()

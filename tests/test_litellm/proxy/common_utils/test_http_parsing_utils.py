@@ -807,3 +807,24 @@ def test_safe_get_request_headers_copy_protects_cache():
     # Cache must be unaffected
     assert "authorization" in _safe_get_request_headers(mock_request)
     assert _safe_get_request_headers(mock_request) is original
+
+
+def test_safe_get_request_headers_state_unavailable():
+    """
+    Test that _safe_get_request_headers still returns headers when
+    request.state rejects attribute writes (the except path on the cache-write).
+    """
+    class ReadOnlyState:
+        """State object that allows reads but raises on writes."""
+        def __setattr__(self, name, value):
+            raise AttributeError("read-only state")
+
+        def __getattr__(self, name):
+            return None  # _cached_headers not found → triggers fresh read
+
+    mock_request = MagicMock()
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.state = ReadOnlyState()
+
+    result = _safe_get_request_headers(mock_request)
+    assert result == {"content-type": "application/json"}

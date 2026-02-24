@@ -541,25 +541,35 @@ def test_different_roles_without_session_names_should_not_share_cache():
     assert cache_key1 != cache_key2
 
 
-def test_eks_irsa_ambient_credentials_used():
+@pytest.mark.parametrize(
+    "role_kwargs,expected_client_kwargs",
+    [
+        ({}, {"verify": True}),
+        ({"aws_region_name": "us-east-1"}, {"region_name": "us-east-1", "verify": True}),
+        (
+            {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
+            {"endpoint_url": "https://sts.eu-west-1.amazonaws.com", "verify": True},
+        ),
+    ],
+    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+)
+def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
     Test that in EKS/IRSA environments, ambient credentials are used when no explicit keys provided.
     This allows web identity tokens to work automatically.
     """
+    # Isolate from ambient AWS_REGION/AWS_DEFAULT_REGION so no_region_or_endpoint is deterministic
+    env_without_aws_region = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
+    }
     base_aws_llm = BaseAWSLLM()
-    
-    # Mock the boto3 STS client
-    mock_sts_client = MagicMock()
-    
-    # Mock the STS response with proper expiration handling
     mock_expiry = MagicMock()
     mock_expiry.tzinfo = timezone.utc
-    current_time = datetime.now(timezone.utc)
-    # Create a timedelta object that returns 3600 when total_seconds() is called
     time_diff = MagicMock()
     time_diff.total_seconds.return_value = 3600
     mock_expiry.__sub__ = MagicMock(return_value=time_diff)
-
     mock_sts_response = {
         "Credentials": {
             "AccessKeyId": "assumed-access-key",
@@ -568,54 +578,82 @@ def test_eks_irsa_ambient_credentials_used():
             "Expiration": mock_expiry,
         }
     }
+    mock_sts_client = MagicMock()
     mock_sts_client.assume_role.return_value = mock_sts_response
-    
-    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-        
-        # Call with no explicit credentials (EKS/IRSA scenario)
-        credentials, ttl = base_aws_llm._auth_with_aws_role(
-            aws_access_key_id=None,
-            aws_secret_access_key=None,
-            aws_session_token=None,
-            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            aws_session_name="test-session"
-        )
-        
-        # Should create STS client without explicit credentials (using ambient credentials)
-        # Note: verify parameter is passed for SSL verification
-        mock_boto3_client.assert_called_once_with("sts", verify=True)
-        
-        # Should call assume_role
-        mock_sts_client.assume_role.assert_called_once_with(
-            RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            RoleSessionName="test-session"
-        )
-        
-        # Verify credentials are returned correctly
-        assert credentials.access_key == "assumed-access-key"
-        assert credentials.secret_key == "assumed-secret-key"
-        assert credentials.token == "assumed-session-token"
-        assert ttl is not None
+
+    with patch.dict(os.environ, env_without_aws_region, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            credentials, ttl = base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                **role_kwargs,
+            )
+            mock_boto3_client.assert_called_once_with(
+                "sts", **expected_client_kwargs
+            )
+            mock_sts_client.assume_role.assert_called_once_with(
+                RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                RoleSessionName="test-session",
+            )
+            assert credentials.access_key == "assumed-access-key"
+            assert ttl is not None
 
 
-def test_explicit_credentials_used_when_provided():
+@pytest.mark.parametrize(
+    "role_kwargs,expected_client_kwargs",
+    [
+        (
+            {},
+            {
+                "aws_access_key_id": "explicit-access-key",
+                "aws_secret_access_key": "explicit-secret-key",
+                "aws_session_token": "assumed-session-token",
+                "verify": True,
+            },
+        ),
+        (
+            {"aws_region_name": "us-east-1"},
+            {
+                "region_name": "us-east-1",
+                "aws_access_key_id": "explicit-access-key",
+                "aws_secret_access_key": "explicit-secret-key",
+                "aws_session_token": "assumed-session-token",
+                "verify": True,
+            },
+        ),
+        (
+            {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
+            {
+                "endpoint_url": "https://sts.eu-west-1.amazonaws.com",
+                "aws_access_key_id": "explicit-access-key",
+                "aws_secret_access_key": "explicit-secret-key",
+                "aws_session_token": "assumed-session-token",
+                "verify": True,
+            },
+        ),
+    ],
+    ids=["no_region_or_endpoint", "regional_sts", "explicit_sts_endpoint"],
+)
+def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
     Test that explicit credentials are used when provided (non-EKS/IRSA scenario).
     """
+    # Isolate from ambient AWS_REGION/AWS_DEFAULT_REGION so no_region_or_endpoint is deterministic
+    env_without_aws_region = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
+    }
     base_aws_llm = BaseAWSLLM()
-    
-    # Mock the boto3 STS client
-    mock_sts_client = MagicMock()
-    
-    # Mock the STS response with proper expiration handling
     mock_expiry = MagicMock()
     mock_expiry.tzinfo = timezone.utc
-    current_time = datetime.now(timezone.utc)
     # Create a timedelta object that returns 3600 when total_seconds() is called
     time_diff = MagicMock()
     time_diff.total_seconds.return_value = 3600
     mock_expiry.__sub__ = MagicMock(return_value=time_diff)
-
     mock_sts_response = {
         "Credentials": {
             "AccessKeyId": "assumed-access-key",
@@ -624,40 +662,30 @@ def test_explicit_credentials_used_when_provided():
             "Expiration": mock_expiry,
         }
     }
+    mock_sts_client = MagicMock()
     mock_sts_client.assume_role.return_value = mock_sts_response
-    
-    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
-        
-        # Call with explicit credentials
-        credentials, ttl = base_aws_llm._auth_with_aws_role(
-            aws_access_key_id="explicit-access-key",
-            aws_secret_access_key="explicit-secret-key",
-            aws_session_token="assumed-session-token",
-            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            aws_session_name="test-session"
-        )
-        
-        # Should create STS client with explicit credentials
-        # Note: verify parameter is passed for SSL verification
-        mock_boto3_client.assert_called_once_with(
-            "sts",
-            aws_access_key_id="explicit-access-key",
-            aws_secret_access_key="explicit-secret-key",
-            aws_session_token="assumed-session-token",
-            verify=True,
-        )
-        
-        # Should call assume_role
-        mock_sts_client.assume_role.assert_called_once_with(
-            RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            RoleSessionName="test-session"
-        )
-        
-        # Verify credentials are returned correctly
-        assert credentials.access_key == "assumed-access-key"
-        assert credentials.secret_key == "assumed-secret-key"
-        assert credentials.token == "assumed-session-token"
-        assert ttl is not None
+
+    with patch.dict(os.environ, env_without_aws_region, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            credentials, ttl = base_aws_llm._auth_with_aws_role(
+                aws_access_key_id="explicit-access-key",
+                aws_secret_access_key="explicit-secret-key",
+                aws_session_token="assumed-session-token",
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+                **role_kwargs,
+            )
+            mock_boto3_client.assert_called_once_with(
+                "sts", **expected_client_kwargs
+            )
+            mock_sts_client.assume_role.assert_called_once_with(
+                RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                RoleSessionName="test-session",
+            )
+            assert credentials.access_key == "assumed-access-key"
+            assert credentials.secret_key == "assumed-secret-key"
+            assert credentials.token == "assumed-session-token"
+            assert ttl is not None
 
 
 def test_partial_credentials_still_use_ambient():

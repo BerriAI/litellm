@@ -58,17 +58,21 @@ class SupportedGuardrailIntegrations(Enum):
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
+    NOMA_V2 = "noma_v2"
     TOOL_PERMISSION = "tool_permission"
     ZSCALER_AI_GUARD = "zscaler_ai_guard"
     JAVELIN = "javelin"
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
+    MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    SEMANTIC_GUARD = "semantic_guard"
+    MCP_END_USER_PERMISSION = "mcp_end_user_permission"
 
 
 class Role(Enum):
@@ -305,6 +309,14 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
             "Entities below the threshold are ignored."
         ),
     )
+    presidio_entities_deny_list: Optional[List[Union[PiiEntityType, str]]] = Field(
+        default=None,
+        description=(
+            "List of entity types to exclude from Presidio detection results. "
+            "Detections of these types will be silently dropped. "
+            "Useful for suppressing false positives (e.g., US_DRIVER_LICENSE on coding routes)."
+        ),
+    )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
@@ -433,6 +445,10 @@ class PillarGuardrailConfigModel(BaseModel):
 class NomaGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Noma Security guardrail"""
 
+    use_v2: Optional[bool] = Field(
+        default=False,
+        description="If True and guardrail='noma', route to the new Noma v2 implementation instead of the legacy implementation.",
+    )
     application_id: Optional[str] = Field(
         default=None,
         description="Application ID for Noma Security. Defaults to 'litellm' if not provided",
@@ -651,6 +667,15 @@ class BaseLitellmParams(
         description="Additional provider-specific parameters for generic guardrail APIs",
     )
 
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
+        description=(
+            "Behavior when a guardrail endpoint is unreachable due to network errors. "
+            "NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. "
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+        ),
+    )
+
     # Custom code guardrail params
     custom_code: Optional[str] = Field(
         default=None,
@@ -692,6 +717,7 @@ class LitellmParams(
         "mode",
         "default_action",
         "on_disallowed_action",
+        "unreachable_fallback",
         mode="before",
         check_fields=False,
     )
@@ -747,6 +773,7 @@ class GuardrailEventHooks(str, Enum):
     logging_only = "logging_only"
     pre_mcp_call = "pre_mcp_call"
     during_mcp_call = "during_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
 
 
 class DynamicGuardrailParams(TypedDict):
