@@ -97,8 +97,9 @@ describe("RouterSettingsForm", () => {
     expect(screen.getByText("Latency-Based Configuration")).toBeInTheDocument();
   });
 
-  it("should call onChange with the updated strategy when the selector changes", () => {
+  it("should call onChange with the updated strategy when the selector changes", async () => {
     const onChange = vi.fn();
+    const user = userEvent.setup();
     const props = {
       ...baseProps,
       onChange,
@@ -106,9 +107,7 @@ describe("RouterSettingsForm", () => {
     };
     render(<RouterSettingsForm {...props} />);
 
-    const select = screen.getByTestId("strategy-select") as HTMLSelectElement;
-    select.value = "latency-based-routing";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await user.selectOptions(screen.getByTestId("strategy-select"), "latency-based-routing");
 
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ selectedStrategy: "latency-based-routing" })

@@ -47,8 +47,7 @@ describe("LatencyBasedConfiguration", () => {
     const args = { ttl: { nested: true } };
     render(<LatencyBasedConfiguration routingStrategyArgs={args} />);
     // HTML input type=text strips newlines, so check that the key/value appears
-    const input = document.querySelector('input[name="ttl"]') as HTMLInputElement;
-    expect(input).not.toBeNull();
+    const input = screen.getByRole("textbox", { name: /ttl/i }) as HTMLInputElement;
     expect(input.value).toContain('"nested"');
     expect(input.value).toContain('true');
   });

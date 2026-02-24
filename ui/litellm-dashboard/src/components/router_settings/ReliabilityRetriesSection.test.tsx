@@ -67,8 +67,7 @@ describe("ReliabilityRetriesSection", () => {
     const settings = { retry_policy: { "rate-limited": 2 } };
     render(<ReliabilityRetriesSection routerSettings={settings} routerFieldsMetadata={{}} />);
     // HTML input type=text strips newlines, so check that the key/value appears
-    const input = document.querySelector('input[name="retry_policy"]') as HTMLInputElement;
-    expect(input).not.toBeNull();
+    const input = screen.getByRole("textbox", { name: /retry_policy/i }) as HTMLInputElement;
     expect(input.value).toContain('"rate-limited"');
     expect(input.value).toContain('2');
   });
