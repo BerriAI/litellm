@@ -167,6 +167,18 @@ class AugmentedAgentCard(AgentCard):
     is_public: bool
 
 
+class AgentLiteLLMParams(TypedDict, total=False):
+    """Typed parameters stored in litellm_params for agent capabilities."""
+
+    model: str
+    make_public: bool
+    max_iterations: int
+    tools: List[str]
+    cost_per_query: float
+    input_cost_per_token: float
+    output_cost_per_token: float
+
+
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]

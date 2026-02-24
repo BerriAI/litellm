@@ -189,6 +189,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
               <Descriptions.Item label="Skills">
                 {agent.agent_card_params?.skills?.length || 0} configured
               </Descriptions.Item>
+              {agent.litellm_params?.max_iterations !== undefined && (
+                <Descriptions.Item label="Max Iterations">{agent.litellm_params.max_iterations}</Descriptions.Item>
+              )}
+              {agent.litellm_params?.tools && agent.litellm_params.tools.length > 0 && (
+                <Descriptions.Item label="Allowed Tools">
+                  {agent.litellm_params.tools.join(", ")}
+                </Descriptions.Item>
+              )}
               {agent.litellm_params?.model && (
                 <Descriptions.Item label="Model">{agent.litellm_params.model}</Descriptions.Item>
               )}
