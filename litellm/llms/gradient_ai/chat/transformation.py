@@ -73,6 +73,11 @@ class GradientAIConfig(OpenAILikeChatConfig):
             "include_guardrails_info",
             "provide_citations",
             "retrieval_method",
+            # Tool calling support
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "response_format"
         ]
         return supported_params
 
@@ -136,6 +141,9 @@ class GradientAIConfig(OpenAILikeChatConfig):
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
+                optional_params[param] = value
+            elif param in ["tools", "tool_choice", "parallel_tool_calls"]:
+                # Allow explicitly if the params definition changes
                 optional_params[param] = value
             elif not drop_params:
                 from litellm.utils import UnsupportedParamsError
