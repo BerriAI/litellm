@@ -79,16 +79,13 @@ async def test_realtime_guardrail_blocks_prompt_injection():
 
     # Simple guardrail that blocks anything with "system update"
     class PromptInjectionGuardrail(CustomGuardrail):
-        async def async_realtime_input_transcription_hook(
-            self,
-            transcription,
-            user_api_key_dict,
-            session_id=None,
-        ):
-            if "system update" in transcription.lower():
-                raise ValueError(
-                    "⚠️ Prompt injection detected. Request blocked by guardrail."
-                )
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            for text in inputs.get("texts", []):
+                if "system update" in text.lower():
+                    raise ValueError(
+                        "⚠️ Prompt injection detected. Request blocked by guardrail."
+                    )
+            return inputs
 
     guardrail = PromptInjectionGuardrail(
         guardrail_name="test_injection_guard",
@@ -125,31 +122,32 @@ async def test_realtime_guardrail_blocks_prompt_injection():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # ASSERT 1: response.create was NOT sent to backend (injection blocked)
+    # ASSERT 1: no bare response.create was sent to backend (injection blocked).
+    # The only response.create allowed is the warning one (has "instructions" field).
     sent_to_backend = [
         json.loads(c.args[0])
         for c in backend_ws.send.call_args_list
         if c.args
     ]
-    response_creates = [
-        e for e in sent_to_backend if e.get("type") == "response.create"
+    bare_response_creates = [
+        e for e in sent_to_backend
+        if e.get("type") == "response.create"
+        and "instructions" not in e.get("response", {})
     ]
-    assert len(response_creates) == 0, (
-        f"Guardrail should prevent response.create for injected content, "
-        f"but got: {response_creates}"
+    assert len(bare_response_creates) == 0, (
+        f"Guardrail should prevent bare response.create for injected content, "
+        f"but got: {bare_response_creates}"
     )
 
-    # ASSERT 2: a warning response was sent to the client
-    sent_to_client = [
-        json.loads(c.args[0]) for c in client_ws.send_text.call_args_list
+    # ASSERT 2: warning response.create was sent to backend (to speak the block message)
+    warning_creates = [
+        e for e in sent_to_backend
+        if e.get("type") == "response.create"
+        and "instructions" in e.get("response", {})
     ]
-    warning_events = [
-        e
-        for e in sent_to_client
-        if e.get("type") == "response.text.delta" and "⚠️" in e.get("delta", "")
-    ]
-    assert len(warning_events) > 0, (
-        f"Client should receive a guardrail warning, but got: {sent_to_client}"
+    assert len(warning_creates) > 0, (
+        f"Backend should receive a response.create with warning instructions, "
+        f"but got: {sent_to_backend}"
     )
 
     litellm.callbacks = []  # cleanup
@@ -166,14 +164,11 @@ async def test_realtime_guardrail_allows_clean_transcript():
     from litellm.types.guardrails import GuardrailEventHooks
 
     class PromptInjectionGuardrail(CustomGuardrail):
-        async def async_realtime_input_transcription_hook(
-            self,
-            transcription,
-            user_api_key_dict,
-            session_id=None,
-        ):
-            if "system update" in transcription.lower():
-                raise ValueError("⚠️ Prompt injection detected.")
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            for text in inputs.get("texts", []):
+                if "system update" in text.lower():
+                    raise ValueError("⚠️ Prompt injection detected.")
+            return inputs
 
     guardrail = PromptInjectionGuardrail(
         guardrail_name="test_injection_guard",
@@ -225,45 +220,58 @@ async def test_realtime_guardrail_allows_clean_transcript():
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_update_forces_create_response_false():
+async def test_realtime_session_created_injects_create_response_false():
     """
-    Test that session.update with create_response=True is rewritten to
-    create_response=False so the guardrail controls when LLM responds.
+    Test that when session.created arrives from the backend and realtime guardrails
+    are registered, the proxy injects a session.update with create_response=False
+    so the LLM never auto-responds before the guardrail runs.
     """
     import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class DummyGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    guardrail = DummyGuardrail(
+        guardrail_name="dummy",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
-    client_ws.receive_text = AsyncMock(
+
+    session_created_event = json.dumps({"type": "session.created"}).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
         side_effect=[
-            json.dumps(
-                {
-                    "type": "session.update",
-                    "session": {
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "create_response": True,
-                            "threshold": 0.5,
-                        }
-                    },
-                }
-            ),
+            session_created_event,
             ConnectionClosed(None, None),
         ]
     )
-
-    backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
 
     logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
-    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
 
-    # ASSERT: forwarded session.update has create_response=False
-    sent_to_backend = backend_ws.send.call_args_list
-    assert len(sent_to_backend) == 1
-    forwarded = json.loads(sent_to_backend[0].args[0])
-    assert forwarded["session"]["turn_detection"]["create_response"] is False, (
-        f"session.update should have create_response rewritten to False, "
-        f"got: {forwarded['session']['turn_detection']}"
+    # ASSERT: proxy injected session.update with create_response=False to backend
+    sent_to_backend = [
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
+    ]
+    session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
+    assert len(session_updates) == 1, (
+        f"Expected proxy to inject session.update, got: {sent_to_backend}"
     )
+    td = session_updates[0]["session"]["turn_detection"]
+    assert td["create_response"] is False, (
+        f"Expected create_response=False, got: {td}"
+    )
+
+    litellm.callbacks = []  # cleanup

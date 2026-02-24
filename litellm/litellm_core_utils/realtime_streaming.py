@@ -160,9 +160,18 @@ class RealTimeStreaming:
                     request_data={"user_api_key_dict": self.user_api_key_dict},
                     input_type="request",
                 )
-            except Exception as e:
+            except (ValueError, Exception) as e:
+                # Only treat HTTPException (guardrail block) and ValueError as intentional blocks.
+                # Re-raise unexpected programming errors so they surface in logs.
+                from fastapi import HTTPException
+
+                if not isinstance(e, (HTTPException, ValueError)):
+                    verbose_logger.exception(
+                        "[realtime guardrail] unexpected error in apply_guardrail: %s", e
+                    )
+                    raise
                 # Extract the human-readable error from HTTPException detail dict,
-                # falling back to str(e) for other exception types.
+                # falling back to str(e) for ValueError.
                 try:
                     detail = e.detail  # type: ignore[attr-defined]
                     safe_msg = (
@@ -239,14 +248,30 @@ class RealTimeStreaming:
                     self.session_configuration_request = returned_object[
                         "session_configuration_request"
                     ]
-                    if isinstance(transformed_response, list):
-                        for event in transformed_response:
-                            event_str = json.dumps(event)
-                            ## LOGGING
+                    events = (
+                        transformed_response
+                        if isinstance(transformed_response, list)
+                        else [transformed_response]
+                    )
+                    for event in events:
+                        event_str = json.dumps(event)
+                        ## GUARDRAIL: run on transcription events in provider_config path too
+                        if (
+                            isinstance(event, dict)
+                            and event.get("type")
+                            == "conversation.item.input_audio_transcription.completed"
+                        ):
+                            transcript = event.get("transcript", "")
                             self.store_message(event_str)
                             await self.websocket.send_text(event_str)
-                    else:
-                        event_str = json.dumps(transformed_response)
+                            blocked = await self.run_realtime_guardrails(
+                                transcript, item_id=event.get("item_id")
+                            )
+                            if not blocked:
+                                await self.backend_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+                            continue
                         ## LOGGING
                         self.store_message(event_str)
                         await self.websocket.send_text(event_str)
