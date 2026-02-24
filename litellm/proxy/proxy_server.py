@@ -713,7 +713,7 @@ async def _initialize_shared_aiohttp_session():
     try:
         from aiohttp import ClientSession, TCPConnector
 
-        connector_kwargs = {
+        connector_kwargs: Dict[str, Any] = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
         }
@@ -1959,6 +1959,65 @@ def _rss_mb_for_log() -> str:
     return f"{rss_mb:.2f}"
 
 
+async def _run_direct_health_check_with_instrumentation(
+    model_list: list,
+    details: Optional[bool],
+    max_concurrency: Optional[int],
+    instrumentation_context: dict,
+):
+    try:
+        return await perform_health_check(
+            model_list=model_list,
+            details=details,
+            max_concurrency=max_concurrency,
+            instrumentation_context=instrumentation_context,
+        )
+    except TypeError as e:
+        if "instrumentation_context" not in str(e):
+            raise
+        # Backward compatibility for monkeypatched or wrapped callables
+        # that do not accept instrumentation_context.
+        return await perform_health_check(
+            model_list=model_list,
+            details=details,
+            max_concurrency=max_concurrency,
+        )
+
+
+def _schedule_background_health_check_db_save(
+    prisma_client,
+    shared_health_manager,
+    model_list: list,
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+):
+    """Fire-and-forget: persist health check results to DB if prisma is available."""
+    if prisma_client is None:
+        return
+    import time as time_module
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _save_background_health_checks_to_db,
+    )
+
+    checked_by = (
+        shared_health_manager.pod_id
+        if shared_health_manager is not None
+        else "background_health_check"
+    )
+    start_time = time_module.time()
+    asyncio.create_task(
+        _save_background_health_checks_to_db(
+            prisma_client,
+            model_list,
+            healthy_endpoints,
+            unhealthy_endpoints,
+            start_time,
+            checked_by=checked_by,
+        )
+    )
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -2053,25 +2112,6 @@ async def _run_background_health_check():
             "cycle_id": cycle_id,
         }
 
-        async def _run_direct_health_check_with_instrumentation():
-            try:
-                return await perform_health_check(
-                    model_list=_llm_model_list,
-                    details=health_check_details,
-                    max_concurrency=health_check_concurrency,
-                    instrumentation_context=instrumentation_context,
-                )
-            except TypeError as e:
-                if "instrumentation_context" not in str(e):
-                    raise
-                # Backward compatibility for monkeypatched or wrapped callables
-                # that do not accept instrumentation_context.
-                return await perform_health_check(
-                    model_list=_llm_model_list,
-                    details=health_check_details,
-                    max_concurrency=health_check_concurrency,
-                )
-
         # Use shared health check if available, otherwise fall back to direct health check
         # Convert health_check_details to bool for perform_shared_health_check (defaults to True if None)
         details_bool = (
@@ -2094,11 +2134,21 @@ async def _run_background_health_check():
                     str(e),
                 )
                 healthy_endpoints, unhealthy_endpoints = (
-                    await _run_direct_health_check_with_instrumentation()
+                    await _run_direct_health_check_with_instrumentation(
+                        _llm_model_list,
+                        health_check_details,
+                        health_check_concurrency,
+                        instrumentation_context,
+                    )
                 )
         else:
             healthy_endpoints, unhealthy_endpoints = (
-                await _run_direct_health_check_with_instrumentation()
+                await _run_direct_health_check_with_instrumentation(
+                    _llm_model_list,
+                    health_check_details,
+                    health_check_concurrency,
+                    instrumentation_context,
+                )
             )
 
         # Update the global variable with the health check results
@@ -2127,32 +2177,13 @@ async def _run_background_health_check():
             )
 
         # Save background health checks to database (non-blocking)
-        if prisma_client is not None:
-            import time as time_module
-
-            from litellm.proxy.health_endpoints._health_endpoints import (
-                _save_background_health_checks_to_db,
-            )
-
-            # Use pod_id or a system identifier for checked_by if shared health check is enabled
-            checked_by = None
-            if shared_health_manager is not None:
-                checked_by = shared_health_manager.pod_id
-            else:
-                # Use a system identifier for background health checks
-                checked_by = "background_health_check"
-
-            start_time = time_module.time()
-            asyncio.create_task(
-                _save_background_health_checks_to_db(
-                    prisma_client,
-                    _llm_model_list,
-                    healthy_endpoints,
-                    unhealthy_endpoints,
-                    start_time,
-                    checked_by=checked_by,
-                )
-            )
+        _schedule_background_health_check_db_save(
+            prisma_client,
+            shared_health_manager,
+            _llm_model_list,
+            healthy_endpoints,
+            unhealthy_endpoints,
+        )
 
         await asyncio.sleep(health_check_interval)
 
