@@ -48,6 +48,7 @@ import {
   getRouterSettingsCall,
   setCallbacksCall,
 } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 const mockCallbacksResponse = {
   router_settings: {
@@ -141,29 +142,34 @@ describe("RouterSettings", () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
+    // Wait for the strategy select to appear — it only renders after getRouterSettingsCall resolves
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     expect(setCallbacksCall).toHaveBeenCalledWith(
       "test-token",
-      expect.objectContaining({ router_settings: expect.any(Object) })
+      expect.objectContaining({
+        router_settings: expect.objectContaining({
+          routing_strategy: "simple-shuffle",
+        }),
+      })
     );
   });
 
   it("should show a success notification after saving", async () => {
-    const NotificationsManager = await import("@/components/molecules/notifications_manager");
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument()
-    );
+    // Wait for data to load before interacting
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    expect(NotificationsManager.default.success).toHaveBeenCalledWith(
+    expect(NotificationsManager.success).toHaveBeenCalledWith(
       "router settings updated successfully"
     );
   });
