@@ -8,6 +8,7 @@ import re
 import litellm
 from litellm._logging import verbose_logger
 from litellm.types.utils import LlmProviders
+from litellm.llms.deepseek.exception_mapping import exception_handler as deepseek_exception_handler
 
 from ..exceptions import (
     APIConnectionError,
@@ -2252,6 +2253,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                         request=httpx.Request(method="POST", url="https://openai.com/"),
                     )
+            elif custom_llm_provider == "deepseek":
+                message = get_error_message(error_obj=original_exception)
+                if message is None:
+                    if hasattr(original_exception, "message"):
+                        message = original_exception.message
+                    else:
+                        message = str(original_exception)
+                status_code = getattr(original_exception, "status_code", None)
+                mapped_exception = deepseek_exception_handler(status_code, message, model=model)
+                if mapped_exception:
+                    exception_mapping_worked = True
+                    raise mapped_exception
             if custom_llm_provider == "openrouter":
                 if hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
