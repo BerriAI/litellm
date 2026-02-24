@@ -14,6 +14,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const [form] = Form.useForm();
   const searchParams = useSearchParams()!;
   const inviteId = searchParams.get("invitation_id");
+  const [claimError, setClaimError] = React.useState<string | null>(null);
 
   const {
     data: credentialsData,
@@ -38,15 +39,20 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const handleSubmit = (formValues: { password: string }) => {
     if (!accessToken || !jwtToken || !userId || !inviteId) return;
 
+    setClaimError(null);
+
     claimToken(
       { accessToken, inviteId, userId, password: formValues.password },
       {
         onSuccess: () => {
-          document.cookie = "token=" + jwtToken;
+          document.cookie = `token=${jwtToken}; path=/; SameSite=Lax`;
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = proxyBaseUrl
             ? `${proxyBaseUrl}/ui/?login=success`
             : "/ui/?login=success";
+        },
+        onError: (error: Error) => {
+          setClaimError(error.message || "Failed to submit. Please try again.");
         },
       }
     );
@@ -127,6 +133,10 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
           >
             <Input.Password />
           </Form.Item>
+
+          {claimError && (
+            <Alert type="error" message={claimError} showIcon className="mb-4" />
+          )}
 
           <div className="mt-10">
             <Button htmlType="submit" loading={isPending}>
