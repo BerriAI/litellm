@@ -411,7 +411,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             )
         else:
             content_type = request.headers.get("content-type", "")
-            if _parsed_body is None and "application/json" not in content_type:
+            if "application/json" not in content_type:
                 # Non-JSON request (e.g. binary upload) — forward raw bytes
                 response = await async_client.request(
                     method=request.method,

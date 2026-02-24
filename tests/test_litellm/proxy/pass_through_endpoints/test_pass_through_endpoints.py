@@ -2374,8 +2374,9 @@ def test_get_registered_pass_through_route_with_custom_root():
 @pytest.mark.asyncio
 async def test_non_streaming_handler_forwards_raw_body_for_binary():
     """
-    Regression test: When _parsed_body is None and content-type is not JSON,
-    the handler should forward raw bytes instead of json=None.
+    Regression test: When content-type is not JSON, the handler should forward
+    raw bytes instead of json=_parsed_body — even when _parsed_body is non-None
+    (caller always injects litellm_logging_obj).
     """
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
@@ -2389,12 +2390,15 @@ async def test_non_streaming_handler_forwards_raw_body_for_binary():
 
     url = httpx.URL("https://api.assemblyai.com/v2/upload")
 
+    # Use a realistic _parsed_body (caller always injects litellm_logging_obj)
+    parsed_body = {"litellm_logging_obj": MagicMock()}
+
     result = await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
         request=mock_request,
         async_client=mock_client,
         url=url,
         headers={"Authorization": "test-key", "content-type": "application/octet-stream"},
-        _parsed_body=None,
+        _parsed_body=parsed_body,
     )
 
     # Should send raw bytes via content=, NOT json=None

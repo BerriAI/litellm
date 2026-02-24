@@ -2382,11 +2382,6 @@ async def test_assemblyai_proxy_route_binary_upload_no_json_parse():
     Regression test: POST with application/octet-stream should NOT call request.json().
     Before fix, this raised UnicodeDecodeError crashing the request.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        assemblyai_proxy_route,
-    )
-
     mock_request = AsyncMock()
     mock_request.method = "POST"
     mock_request.headers = {"content-type": "application/octet-stream"}
