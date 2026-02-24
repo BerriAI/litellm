@@ -28,6 +28,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -70,6 +71,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
     setInputText("");
     setIsLoading(true);
     setStreamingContent("");
+    setStatusMessage(null);
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -82,19 +84,25 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
         updatedMessages.map((m) => ({ role: m.role, content: m.content })),
         selectedModel || "",
         (content: string) => {
+          setStatusMessage(null);
           accumulated += content;
           setStreamingContent(accumulated);
         },
         () => {
+          setStatusMessage(null);
           setMessages((prev) => [...prev, { role: "assistant", content: accumulated }]);
           setStreamingContent("");
         },
         (errorMsg: string) => {
+          setStatusMessage(null);
           setMessages((prev) => [
             ...prev,
             { role: "assistant", content: `Error: ${errorMsg}` },
           ]);
           setStreamingContent("");
+        },
+        (status: string) => {
+          setStatusMessage(status);
         },
         abortController.signal,
       );
@@ -220,8 +228,11 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
 
         {isLoading && !streamingContent && (
           <div className="flex justify-start">
-            <div className="rounded-xl px-3.5 py-2 bg-white border border-gray-200">
+            <div className="rounded-xl px-3.5 py-2 bg-white border border-gray-200 flex items-center gap-2">
               <Spin size="small" />
+              {statusMessage && (
+                <span className="text-xs text-gray-500 italic">{statusMessage}</span>
+              )}
             </div>
           </div>
         )}

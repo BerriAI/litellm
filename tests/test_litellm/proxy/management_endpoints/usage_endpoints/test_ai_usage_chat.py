@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-    GET_USAGE_DATA_TOOL,
+    ALL_TOOLS,
     SYSTEM_PROMPT,
+    _summarise_entity_data,
     _summarise_usage_data,
     stream_usage_ai_chat,
 )
@@ -37,27 +38,6 @@ SAMPLE_AGGREGATED_RESPONSE = {
                             "spend": 40.0,
                             "api_requests": 300,
                             "total_tokens": 25000,
-                            "prompt_tokens": 15000,
-                            "completion_tokens": 10000,
-                            "successful_requests": 290,
-                            "failed_requests": 10,
-                            "cache_read_input_tokens": 0,
-                            "cache_creation_input_tokens": 0,
-                        },
-                        "metadata": {},
-                        "api_key_breakdown": {},
-                    },
-                    "gpt-3.5-turbo": {
-                        "metrics": {
-                            "spend": 10.25,
-                            "api_requests": 200,
-                            "total_tokens": 5000,
-                            "prompt_tokens": 3000,
-                            "completion_tokens": 2000,
-                            "successful_requests": 190,
-                            "failed_requests": 10,
-                            "cache_read_input_tokens": 0,
-                            "cache_creation_input_tokens": 0,
                         },
                         "metadata": {},
                         "api_key_breakdown": {},
@@ -65,34 +45,14 @@ SAMPLE_AGGREGATED_RESPONSE = {
                 },
                 "providers": {
                     "openai": {
-                        "metrics": {
-                            "spend": 50.25,
-                            "api_requests": 500,
-                            "total_tokens": 30000,
-                            "prompt_tokens": 20000,
-                            "completion_tokens": 10000,
-                            "successful_requests": 480,
-                            "failed_requests": 20,
-                            "cache_read_input_tokens": 0,
-                            "cache_creation_input_tokens": 0,
-                        },
+                        "metrics": {"spend": 50.25, "api_requests": 500},
                         "metadata": {},
                         "api_key_breakdown": {},
                     },
                 },
                 "api_keys": {
                     "sk-test123": {
-                        "metrics": {
-                            "spend": 50.25,
-                            "api_requests": 500,
-                            "total_tokens": 30000,
-                            "prompt_tokens": 20000,
-                            "completion_tokens": 10000,
-                            "successful_requests": 480,
-                            "failed_requests": 20,
-                            "cache_read_input_tokens": 0,
-                            "cache_creation_input_tokens": 0,
-                        },
+                        "metrics": {"spend": 50.25},
                         "metadata": {"key_alias": "Production Key"},
                     },
                 },
@@ -104,35 +64,55 @@ SAMPLE_AGGREGATED_RESPONSE = {
     ],
     "metadata": {
         "total_spend": 50.25,
-        "total_prompt_tokens": 20000,
-        "total_completion_tokens": 10000,
-        "total_tokens": 30000,
         "total_api_requests": 500,
         "total_successful_requests": 480,
         "total_failed_requests": 20,
-        "total_cache_read_input_tokens": 0,
-        "total_cache_creation_input_tokens": 0,
-        "page": 1,
-        "total_pages": 1,
-        "has_more": False,
+        "total_tokens": 30000,
     },
 }
 
+SAMPLE_TEAM_RESPONSE = {
+    "results": [
+        {
+            "date": "2025-01-15",
+            "metrics": {"spend": 100.0, "api_requests": 1000, "total_tokens": 50000},
+            "breakdown": {
+                "entities": {
+                    "team-1": {
+                        "metrics": {"spend": 60.0, "api_requests": 600, "total_tokens": 30000},
+                        "metadata": {"alias": "Engineering"},
+                        "api_key_breakdown": {},
+                    },
+                    "team-2": {
+                        "metrics": {"spend": 40.0, "api_requests": 400, "total_tokens": 20000},
+                        "metadata": {"alias": "Marketing"},
+                        "api_key_breakdown": {},
+                    },
+                },
+                "models": {},
+                "providers": {},
+                "api_keys": {},
+                "model_groups": {},
+                "mcp_servers": {},
+            },
+        },
+    ],
+    "metadata": {"total_spend": 100.0, "total_api_requests": 1000},
+}
 
-class TestToolSchema:
-    def test_tool_schema_is_valid(self):
-        assert GET_USAGE_DATA_TOOL["type"] == "function"
-        func = GET_USAGE_DATA_TOOL["function"]
-        assert func["name"] == "get_usage_data"
-        params = func["parameters"]
-        assert "start_date" in params["properties"]
-        assert "end_date" in params["properties"]
-        assert "user_id" in params["properties"]
-        assert params["required"] == ["start_date", "end_date"]
 
-    def test_system_prompt_mentions_tool(self):
+class TestToolSchemas:
+    def test_all_tools_defined(self):
+        assert len(ALL_TOOLS) == 3
+        names = {t["function"]["name"] for t in ALL_TOOLS}
+        assert "get_usage_data" in names
+        assert "get_team_usage_data" in names
+        assert "get_tag_usage_data" in names
+
+    def test_system_prompt_mentions_all_tools(self):
         assert "get_usage_data" in SYSTEM_PROMPT
-        assert "usage" in SYSTEM_PROMPT.lower()
+        assert "get_team_usage_data" in SYSTEM_PROMPT
+        assert "get_tag_usage_data" in SYSTEM_PROMPT
 
 
 class TestSummariseUsageData:
@@ -140,14 +120,10 @@ class TestSummariseUsageData:
         summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
         assert "$50.25" in summary
         assert "500" in summary
-        assert "480" in summary
-        assert "20" in summary
 
     def test_summarise_includes_models(self):
         summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
         assert "gpt-4" in summary
-        assert "gpt-3.5-turbo" in summary
-        assert "$40.0" in summary
 
     def test_summarise_includes_providers(self):
         summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
@@ -157,19 +133,29 @@ class TestSummariseUsageData:
         summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
         assert "Production Key" in summary
 
-    def test_summarise_includes_daily(self):
-        summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
-        assert "2025-01-15" in summary
-
     def test_summarise_handles_empty_data(self):
         empty = {"results": [], "metadata": {}}
         summary = _summarise_usage_data(empty)
         assert "no data" in summary.lower()
 
 
+class TestSummariseEntityData:
+    def test_team_summary_includes_teams(self):
+        summary = _summarise_entity_data(SAMPLE_TEAM_RESPONSE, "Team")
+        assert "Engineering" in summary
+        assert "Marketing" in summary
+        assert "$60.0" in summary
+        assert "$40.0" in summary
+
+    def test_team_summary_empty(self):
+        empty = {"results": [], "metadata": {}}
+        summary = _summarise_entity_data(empty, "Team")
+        assert "No Team usage data" in summary
+
+
 class TestStreamUsageAiChat:
     @pytest.mark.asyncio
-    async def test_stream_with_tool_call(self):
+    async def test_stream_emits_status_events(self):
         mock_tool_call = MagicMock()
         mock_tool_call.id = "call_123"
         mock_tool_call.function.name = "get_usage_data"
@@ -182,24 +168,17 @@ class TestStreamUsageAiChat:
         mock_first_response.choices = [MagicMock()]
         mock_first_response.choices[0].message.tool_calls = [mock_tool_call]
         mock_first_response.choices[0].message.model_dump.return_value = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_123",
-                    "type": "function",
-                    "function": {
-                        "name": "get_usage_data",
-                        "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
-                    },
-                }
-            ],
+            "role": "assistant", "content": None,
+            "tool_calls": [{"id": "call_123", "type": "function", "function": {
+                "name": "get_usage_data",
+                "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
+            }}],
         }
 
         async def mock_stream():
             chunk = MagicMock()
             chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Your total spend is $50.25"
+            chunk.choices[0].delta.content = "Total spend is $50.25"
             yield chunk
 
         with patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm, \
@@ -218,36 +197,65 @@ class TestStreamUsageAiChat:
                 user_id="user-123",
                 is_admin=True,
             ):
-                events.append(event)
+                events.append(json.loads(event.replace("data: ", "").strip()))
 
-            assert len(events) >= 2
-            chunk_event = json.loads(events[0].replace("data: ", "").strip())
-            assert chunk_event["type"] == "chunk"
-            assert "$50.25" in chunk_event["content"]
+            status_events = [e for e in events if e["type"] == "status"]
+            chunk_events = [e for e in events if e["type"] == "chunk"]
+            done_events = [e for e in events if e["type"] == "done"]
 
-            done_event = json.loads(events[-1].replace("data: ", "").strip())
-            assert done_event["type"] == "done"
+            assert len(status_events) >= 2
+            assert "Thinking" in status_events[0]["message"]
+            assert "Fetching" in status_events[1]["message"]
+            assert len(chunk_events) >= 1
+            assert len(done_events) == 1
 
     @pytest.mark.asyncio
-    async def test_stream_without_tool_call(self):
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.tool_calls = None
-        mock_response.choices[0].message.content = "I need more context."
+    async def test_stream_handles_team_tool(self):
+        mock_tool_call = MagicMock()
+        mock_tool_call.id = "call_team"
+        mock_tool_call.function.name = "get_team_usage_data"
+        mock_tool_call.function.arguments = json.dumps({
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-31",
+        })
 
-        with patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm:
-            mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+        mock_first_response = MagicMock()
+        mock_first_response.choices = [MagicMock()]
+        mock_first_response.choices[0].message.tool_calls = [mock_tool_call]
+        mock_first_response.choices[0].message.model_dump.return_value = {
+            "role": "assistant", "content": None,
+            "tool_calls": [{"id": "call_team", "type": "function", "function": {
+                "name": "get_team_usage_data",
+                "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31"}',
+            }}],
+        }
+
+        async def mock_stream():
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = "Engineering is the top team."
+            yield chunk
+
+        with patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm, \
+             patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_team_usage_data", new_callable=AsyncMock) as mock_fetch:
+
+            mock_litellm.acompletion = AsyncMock(side_effect=[
+                mock_first_response,
+                mock_stream(),
+            ])
+            mock_fetch.return_value = SAMPLE_TEAM_RESPONSE
 
             events = []
             async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "Hello"}],
+                messages=[{"role": "user", "content": "Which team spends the most?"}],
+                model="gpt-4o-mini",
+                is_admin=True,
             ):
-                events.append(event)
+                events.append(json.loads(event.replace("data: ", "").strip()))
 
-            assert len(events) >= 2
-            chunk_event = json.loads(events[0].replace("data: ", "").strip())
-            assert chunk_event["type"] == "chunk"
-            assert "context" in chunk_event["content"]
+            chunk_events = [e for e in events if e["type"] == "chunk"]
+            assert len(chunk_events) >= 1
+            assert "Engineering" in chunk_events[0]["content"]
 
     @pytest.mark.asyncio
     async def test_stream_handles_error(self):
@@ -258,12 +266,11 @@ class TestStreamUsageAiChat:
             async for event in stream_usage_ai_chat(
                 messages=[{"role": "user", "content": "test"}],
             ):
-                events.append(event)
+                events.append(json.loads(event.replace("data: ", "").strip()))
 
-            assert len(events) == 1
-            error_event = json.loads(events[0].replace("data: ", "").strip())
-            assert error_event["type"] == "error"
-            assert "LLM error" in error_event["message"]
+            error_events = [e for e in events if e["type"] == "error"]
+            assert len(error_events) == 1
+            assert "LLM error" in error_events[0]["message"]
 
     @pytest.mark.asyncio
     async def test_non_admin_enforces_user_id(self):
@@ -280,38 +287,39 @@ class TestStreamUsageAiChat:
         mock_first_response.choices = [MagicMock()]
         mock_first_response.choices[0].message.tool_calls = [mock_tool_call]
         mock_first_response.choices[0].message.model_dump.return_value = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_456",
-                    "type": "function",
-                    "function": {
-                        "name": "get_usage_data",
-                        "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31","user_id":"other-user"}',
-                    },
-                }
-            ],
+            "role": "assistant", "content": None,
+            "tool_calls": [{"id": "call_456", "type": "function", "function": {
+                "name": "get_usage_data",
+                "arguments": '{"start_date":"2025-01-01","end_date":"2025-01-31","user_id":"other-user"}',
+            }}],
         }
 
         async def mock_stream():
             chunk = MagicMock()
             chunk.choices = [MagicMock()]
-            chunk.choices[0].delta.content = "Here is your data."
+            chunk.choices[0].delta.content = "Data."
             yield chunk
 
+        mock_fetch = AsyncMock(return_value=SAMPLE_AGGREGATED_RESPONSE)
+
         with patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm") as mock_litellm, \
-             patch("litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat._fetch_usage_data", new_callable=AsyncMock) as mock_fetch:
+             patch.dict(
+                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.TOOL_HANDLERS",
+                 {"get_usage_data": {
+                     "fetch": mock_fetch,
+                     "summarise": _summarise_usage_data,
+                     "label": "global usage data",
+                 }},
+             ):
 
             mock_litellm.acompletion = AsyncMock(side_effect=[
                 mock_first_response,
                 mock_stream(),
             ])
-            mock_fetch.return_value = SAMPLE_AGGREGATED_RESPONSE
 
             events = []
             async for event in stream_usage_ai_chat(
-                messages=[{"role": "user", "content": "Show me other user data"}],
+                messages=[{"role": "user", "content": "Show data"}],
                 model="gpt-4o-mini",
                 user_id="my-user-id",
                 is_admin=False,

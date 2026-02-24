@@ -5914,6 +5914,7 @@ export const usageAiChatStream = async (
   onChunk: (content: string) => void,
   onDone: () => void,
   onError?: (error: string) => void,
+  onStatus?: (message: string) => void,
   signal?: AbortSignal,
 ) => {
   const url = proxyBaseUrl
@@ -5957,6 +5958,8 @@ export const usageAiChatStream = async (
         const event = JSON.parse(line.slice(6));
         if (event.type === "chunk") {
           onChunk(event.content);
+        } else if (event.type === "status") {
+          onStatus?.(event.message);
         } else if (event.type === "done") {
           onDone();
         } else if (event.type === "error") {
