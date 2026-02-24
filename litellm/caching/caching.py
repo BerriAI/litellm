@@ -108,6 +108,7 @@ class Cache:
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        qdrant_semantic_cache_vector_size: Optional[int] = None,
         # GCP IAM authentication parameters
         gcp_service_account: Optional[str] = None,
         gcp_ssl_ca_certs: Optional[str] = None,
@@ -207,6 +208,7 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 quantization_config=qdrant_quantization_config,
                 embedding_model=qdrant_semantic_cache_embedding_model,
+                vector_size=qdrant_semantic_cache_vector_size,
             )
         elif type == LiteLLMCacheType.LOCAL:
             self.cache = InMemoryCache()
