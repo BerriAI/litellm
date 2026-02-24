@@ -309,6 +309,14 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
             "Entities below the threshold are ignored."
         ),
     )
+    presidio_entities_deny_list: Optional[List[Union[PiiEntityType, str]]] = Field(
+        default=None,
+        description=(
+            "List of entity types to exclude from Presidio detection results. "
+            "Detections of these types will be silently dropped. "
+            "Useful for suppressing false positives (e.g., US_DRIVER_LICENSE on coding routes)."
+        ),
+    )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
@@ -765,6 +773,7 @@ class GuardrailEventHooks(str, Enum):
     logging_only = "logging_only"
     pre_mcp_call = "pre_mcp_call"
     during_mcp_call = "during_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
 
 
 class DynamicGuardrailParams(TypedDict):
