@@ -1221,7 +1221,7 @@ def create_pass_through_route(
                 forward_headers=cast(Optional[bool], param_forward_headers),
                 merge_query_params=cast(Optional[bool], param_merge_query_params),
                 query_params=final_query_params,
-                default_query_params=param_default_query_params,
+                default_query_params=cast(Optional[dict], param_default_query_params),
                 stream=is_streaming_request or stream,
                 custom_body=final_custom_body,
                 cost_per_request=cast(Optional[float], param_cost_per_request),

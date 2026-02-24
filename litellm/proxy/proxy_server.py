@@ -30,6 +30,7 @@ from typing import (
     get_type_hints,
 )
 
+import anyio
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
@@ -388,10 +389,10 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.project_endpoints import (
     router as project_router,
 )
-from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -901,6 +902,15 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             await prisma_client.db.stop_token_refresh_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping token refresh task: {e}")
+
+    # Shutdown event - stop Prisma DB health watchdog task
+    if prisma_client is not None and hasattr(
+        prisma_client, "stop_db_health_watchdog_task"
+    ):
+        try:
+            await prisma_client.stop_db_health_watchdog_task()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -3151,6 +3161,7 @@ class ProxyConfig:
             alert_types=general_settings.get("alert_types", None),
             alert_to_webhook_url=general_settings.get("alert_to_webhook_url", None),
             alerting_args=general_settings.get("alerting_args", None),
+            alert_type_config=general_settings.get("alert_type_config", None),
             redis_cache=redis_usage_cache,
         )
 
@@ -3588,9 +3599,6 @@ class ProxyConfig:
             parsed = value
         elif isinstance(value, str):
             import json
-
-            import yaml
-
             try:
                 parsed = yaml.safe_load(value)
             except (yaml.YAMLError, json.JSONDecodeError):
@@ -4378,6 +4386,9 @@ class ProxyConfig:
                 litellm.model_cost = new_model_cost_map
                 # Invalidate case-insensitive lookup map since model_cost was replaced
                 _invalidate_model_cost_lowercase_map()
+                # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
+                # wildcard patterns like "anthropic/*" include any newly added models.
+                litellm.add_known_models(model_cost_map=new_model_cost_map)
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -5159,6 +5170,20 @@ async def async_data_generator(
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
+    finally:
+        # Close the response stream to release the underlying HTTP connection
+        # back to the connection pool. This prevents pool exhaustion when
+        # clients disconnect mid-stream.
+        # Shield from cancellation so the close awaits can complete.
+        with anyio.CancelScope(shield=True):
+            if hasattr(response, "aclose"):
+                try:
+                    await response.aclose()
+                except BaseException as e:
+                    verbose_proxy_logger.debug(
+                        "async_data_generator: error closing response stream: %s",
+                        e,
+                    )
 
 
 def select_data_generator(
@@ -5829,6 +5854,9 @@ class ProxyStartupEvent:
                     is not True
                 ):
                     await prisma_client.health_check()
+
+                if hasattr(prisma_client, "start_db_health_watchdog_task"):
+                    await prisma_client.start_db_health_watchdog_task()
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
@@ -7167,6 +7195,7 @@ async def realtime_websocket_endpoint(
             model=model,
             route_type="_arealtime",
         )
+        data["user_api_key_dict"] = user_api_key_dict
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",
@@ -10694,12 +10723,22 @@ async def get_image():
     cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
     cache_path = os.path.join(cache_dir, "cached_logo.jpg")
 
-    # [OPTIMIZATION] Check if the cached image exists first
-    if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
-
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
+
+    # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
+    if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
+        if os.path.exists(logo_path):
+            return FileResponse(logo_path, media_type="image/jpeg")
+        # Custom path doesn't exist — fall back to default
+        verbose_proxy_logger.warning(
+            f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
+        )
+        logo_path = default_logo
+
+    # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
+    if os.path.exists(cache_path):
+        return FileResponse(cache_path, media_type="image/jpeg")
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
@@ -10730,6 +10769,81 @@ async def get_image():
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
         return FileResponse(logo_path, media_type="image/jpeg")
+
+
+@app.get("/get_favicon", include_in_schema=False)
+async def get_favicon():
+    """Get custom favicon for the admin UI."""
+    from fastapi.responses import Response
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    default_favicon = os.path.join(
+        current_dir, "_experimental", "out", "favicon.ico"
+    )
+
+    favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
+
+    if not favicon_url:
+        if os.path.exists(default_favicon):
+            return FileResponse(default_favicon, media_type="image/x-icon")
+        raise HTTPException(
+            status_code=404, detail="Default favicon not found"
+        )
+
+    if favicon_url.startswith(("http://", "https://")):
+        try:
+            from litellm.llms.custom_httpx.http_handler import (
+                get_async_httpx_client,
+            )
+            from litellm.types.llms.custom_http import httpxSpecialProvider
+
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
+            response = await async_client.get(favicon_url)
+            if response.status_code == 200:
+                content_type = response.headers.get(
+                    "content-type", "image/x-icon"
+                )
+                return Response(
+                    content=response.content,
+                    media_type=content_type,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "Failed to fetch favicon from %s: status %s",
+                    favicon_url,
+                    response.status_code,
+                )
+                if os.path.exists(default_favicon):
+                    return FileResponse(
+                        default_favicon, media_type="image/x-icon"
+                    )
+                raise HTTPException(
+                    status_code=404, detail="Favicon not found"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Error downloading favicon from %s: %s", favicon_url, e
+            )
+            if os.path.exists(default_favicon):
+                return FileResponse(
+                    default_favicon, media_type="image/x-icon"
+                )
+            raise HTTPException(
+                status_code=404, detail="Favicon not found"
+            )
+    else:
+        if os.path.exists(favicon_url):
+            return FileResponse(favicon_url, media_type="image/x-icon")
+        if os.path.exists(default_favicon):
+            return FileResponse(default_favicon, media_type="image/x-icon")
+        raise HTTPException(
+            status_code=404, detail="Favicon not found"
+        )
 
 
 #### INVITATION MANAGEMENT ####
@@ -11365,6 +11479,7 @@ async def get_config_list(
         "mcp_internal_ip_ranges": {"type": "List"},
         "mcp_trusted_proxy_ranges": {"type": "List"},
         "always_include_stream_usage": {"type": "Boolean"},
+        "forward_client_headers_to_llm_api": {"type": "Boolean"},
     }
 
     return_val = []
@@ -11852,6 +11967,9 @@ async def reload_model_cost_map(
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
+        # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
+        # wildcard patterns like "anthropic/*" include any newly added models.
+        litellm.add_known_models(model_cost_map=new_model_cost_map)
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
@@ -12103,6 +12221,55 @@ async def get_model_cost_map_reload_status(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get model cost map reload status: {str(e)}",
+        )
+
+
+@router.get(
+    "/model/cost_map/source",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def get_model_cost_map_source(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Returns information about where the current model cost/pricing data was loaded from.
+
+    Response fields:
+    - source: "local" (bundled backup) or "remote" (fetched from URL)
+    - url: the remote URL that was attempted (null when env-forced local)
+    - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
+    - fallback_reason: human-readable reason why remote failed (null on success)
+    - model_count: number of models in the currently loaded cost map
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map_source_info,
+        )
+
+        source_info = get_model_cost_map_source_info()
+        model_count = len(litellm.model_cost) if litellm.model_cost else 0
+
+        return {
+            **source_info,
+            "model_count": model_count,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to get model cost map source info: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get model cost map source info: {str(e)}",
         )
 
 

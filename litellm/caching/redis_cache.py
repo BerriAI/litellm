@@ -1105,6 +1105,10 @@ class RedisCache(BaseCache):
 
     async def disconnect(self):
         await self.async_redis_conn_pool.disconnect(inuse_connections=True)
+        try:
+            self.redis_client.close()
+        except Exception as e:
+            verbose_logger.debug("Error closing sync Redis client: %s", e)
     
     async def test_connection(self) -> dict:
         """

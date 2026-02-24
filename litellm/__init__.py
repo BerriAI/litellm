@@ -98,6 +98,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "openmeter",
     "logfire",
     "literalai",
+    "litellm_agent",
     "dynamic_rate_limiter",
     "dynamic_rate_limiter_v3",
     "langsmith",
@@ -338,6 +339,10 @@ model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
 )
+blog_posts_url: str = os.getenv(
+    "LITELLM_BLOG_POSTS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/blog_posts.json",
+)
 anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
@@ -404,6 +409,7 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
 disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
@@ -613,8 +619,9 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def add_known_models():
-    for key, value in model_cost.items():
+def add_known_models(model_cost_map: Optional[Dict] = None):
+    _map = model_cost_map if model_cost_map is not None else model_cost
+    for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):

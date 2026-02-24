@@ -827,7 +827,7 @@ def function_setup(  # noqa: PLR0915
             )
             get_set_callbacks = getattr(sys.modules[__name__], "get_set_callbacks")
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
-        ## ASYNC CALLBACKS
+        ## ASYNC CALLBACKS - safety net for callbacks added via direct append
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
@@ -5719,6 +5719,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 annotation_cost_per_page=_model_info.get(
                     "annotation_cost_per_page", None
                 ),
+                provider_specific_entry=_model_info.get(
+                    "provider_specific_entry", None
+                ),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
@@ -7664,6 +7667,23 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
         elif isinstance(tool, dict):
             new_tools.append(tool)
     return new_tools
+
+
+def validate_and_fix_thinking_param(
+    thinking: Optional["AnthropicThinkingParam"],
+) -> Optional["AnthropicThinkingParam"]:
+    """
+    Normalizes camelCase keys in the thinking param to snake_case.
+    Handles clients that send budgetTokens instead of budget_tokens.
+    """
+    if thinking is None or not isinstance(thinking, dict):
+        return thinking
+    normalized = dict(thinking)
+    if "budgetTokens" in normalized and "budget_tokens" not in normalized:
+        normalized["budget_tokens"] = normalized.pop("budgetTokens")
+    elif "budgetTokens" in normalized and "budget_tokens" in normalized:
+        normalized.pop("budgetTokens")
+    return cast("AnthropicThinkingParam", normalized)
 
 
 def cleanup_none_field_in_message(message: AllMessageValues):

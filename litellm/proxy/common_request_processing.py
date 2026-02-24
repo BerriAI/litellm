@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import traceback
 from datetime import datetime
 from typing import (
@@ -24,6 +25,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    LITELLM_DETAILED_TIMING,
+    MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -434,6 +437,27 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-overhead-duration-ms": str(
                 hidden_params.get("litellm_overhead_time_ms", None)
             ),
+            "x-litellm-callback-duration-ms": str(
+                hidden_params.get("callback_duration_ms", None)
+            ),
+            **(
+                {
+                    "x-litellm-timing-pre-processing-ms": str(
+                        hidden_params.get("timing_pre_processing_ms", None)
+                    ),
+                    "x-litellm-timing-llm-api-ms": str(
+                        hidden_params.get("timing_llm_api_ms", None)
+                    ),
+                    "x-litellm-timing-post-processing-ms": str(
+                        hidden_params.get("timing_post_processing_ms", None)
+                    ),
+                    "x-litellm-timing-message-copy-ms": str(
+                        hidden_params.get("timing_message_copy_ms", None)
+                    ),
+                }
+                if LITELLM_DETAILED_TIMING
+                else {}
+            ),
             "x-litellm-fastest_response_batch_completion": (
                 str(fastest_response_batch_completion)
                 if fastest_response_batch_completion is not None
@@ -549,16 +573,6 @@ class ProxyBaseLLMRequestProcessing:
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
-        # Calculate request queue time if arrival_time is available
-        # Use start_time.timestamp() to avoid extra time.time() call for better performance
-        proxy_server_request = self.data.get("proxy_server_request", {})
-        arrival_time = proxy_server_request.get("arrival_time")
-        queue_time_seconds = None
-        if arrival_time is not None:
-            # Convert start_time (datetime) to timestamp for calculation
-            processing_start_time = start_time.timestamp()
-            queue_time_seconds = processing_start_time - arrival_time
-
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -567,6 +581,15 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+
+        # Calculate request queue time after add_litellm_data_to_request
+        # which sets arrival_time in proxy_server_request
+        proxy_server_request = self.data.get("proxy_server_request", {})
+        arrival_time = proxy_server_request.get("arrival_time")
+        queue_time_seconds = None
+        if arrival_time is not None:
+            processing_start_time = time.time()
+            queue_time_seconds = processing_start_time - arrival_time
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
@@ -619,7 +642,7 @@ class ProxyBaseLLMRequestProcessing:
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())
         )
-        
+
         ### AUTO STREAM USAGE TRACKING ###
         # If always_include_stream_usage is enabled and this is a streaming request
         # automatically add stream_options={'include_usage': True} if not already set
@@ -635,7 +658,7 @@ class ProxyBaseLLMRequestProcessing:
                 and "include_usage" not in self.data["stream_options"]
             ):
                 self.data["stream_options"]["include_usage"] = True
-        
+
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -684,6 +707,26 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
         return model_id
+
+    def _debug_log_request_payload(self) -> None:
+        """Log request payload at DEBUG level, truncating if too large."""
+        if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            return
+        _payload_str = json.dumps(self.data, default=str)
+        if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
+                len(_payload_str),
+                MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
+                list(self.data.keys())
+                if isinstance(self.data, dict)
+                else type(self.data).__name__,
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "Request received by LiteLLM:\n%s",
+                json.dumps(self.data, indent=4, default=str),
+            )
 
     async def base_process_llm_request(
         self,
@@ -769,12 +812,7 @@ class ProxyBaseLLMRequestProcessing:
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
-        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
-            verbose_proxy_logger.debug(
-                "Request received by LiteLLM:\n{}".format(
-                    json.dumps(self.data, indent=4, default=str)
-                ),
-            )
+        self._debug_log_request_payload()
 
         self.data, logging_obj = await self.common_processing_pre_call_logic(
             request=request,
@@ -885,9 +923,9 @@ class ProxyBaseLLMRequestProcessing:
             # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
             # what the client sent.
             if requested_model_from_client:
-                self.data["_litellm_client_requested_model"] = (
-                    requested_model_from_client
-                )
+                self.data[
+                    "_litellm_client_requested_model"
+                ] = requested_model_from_client
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):
@@ -1482,9 +1520,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

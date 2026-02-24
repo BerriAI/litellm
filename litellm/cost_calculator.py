@@ -119,6 +119,42 @@ if TYPE_CHECKING:
 else:
     LitellmLoggingObject = Any
 
+# Pre-resolved CallTypes enum values for fast membership checks
+_A2A_CALL_TYPES = frozenset({
+    CallTypes.asend_message.value,
+    CallTypes.send_message.value,
+})
+
+_VIDEO_CALL_TYPES = frozenset({
+    CallTypes.create_video.value,
+    CallTypes.acreate_video.value,
+    CallTypes.video_remix.value,
+    CallTypes.avideo_remix.value,
+})
+
+_SPEECH_CALL_TYPES = frozenset({
+    CallTypes.speech.value,
+    CallTypes.aspeech.value,
+})
+
+_TRANSCRIPTION_CALL_TYPES = frozenset({
+    CallTypes.atranscription.value,
+    CallTypes.transcription.value,
+})
+
+_RERANK_CALL_TYPES = frozenset({
+    CallTypes.rerank.value,
+    CallTypes.arerank.value,
+})
+
+_SEARCH_CALL_TYPES = frozenset({
+    CallTypes.search.value,
+    CallTypes.asearch.value,
+})
+
+_AREALTIME_CALL_TYPE = CallTypes.arealtime.value
+_MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
+
 
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
@@ -444,6 +480,7 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage_block,
+                service_tier=service_tier,
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
@@ -464,7 +501,9 @@ def cost_per_token(  # noqa: PLR0915
             model=model, usage=usage_block, response_time_ms=response_time_ms
         )
     elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(model=model, usage=usage_block)
+        return gemini_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
@@ -666,6 +705,36 @@ def _get_response_model(completion_response: Any) -> Optional[str]:
         return completion_response.get("model", None)
 
     return None
+
+
+_GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: dict = {
+    # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
+    "ON_DEMAND_PRIORITY": "priority",
+    # FLEX / BATCH maps to "flex" — selects input_cost_per_token_flex, etc.
+    "FLEX": "flex",
+    "BATCH": "flex",
+    # ON_DEMAND is standard pricing — no service_tier suffix applied
+    "ON_DEMAND": None,
+}
+
+
+def _map_traffic_type_to_service_tier(traffic_type: Optional[str]) -> Optional[str]:
+    """
+    Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
+
+    This allows the same `_priority` / `_flex` cost-key suffix logic used for
+    OpenAI/Azure to work for Gemini and Vertex AI models.
+
+    trafficType values seen in practice
+    ------------------------------------
+    ON_DEMAND          -> standard pricing  (service_tier = None)
+    ON_DEMAND_PRIORITY -> priority pricing  (service_tier = "priority")
+    FLEX / BATCH       -> batch/flex pricing (service_tier = "flex")
+    """
+    if traffic_type is None:
+        return None
+    service_tier = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(traffic_type.upper())
+    return service_tier
 
 
 def _get_usage_object(
@@ -1109,6 +1178,20 @@ def completion_cost(  # noqa: PLR0915
                             "custom_llm_provider", custom_llm_provider or None
                         )
                         region_name = hidden_params.get("region_name", region_name)
+
+                        # For Gemini/Vertex AI responses, trafficType is stored in
+                        # provider_specific_fields.  Map it to the service_tier used
+                        # by the cost key lookup (_priority / _flex suffixes) so that
+                        # ON_DEMAND_PRIORITY requests are billed at priority prices.
+                        if service_tier is None:
+                            provider_specific = (
+                                hidden_params.get("provider_specific_fields") or {}
+                            )
+                            raw_traffic_type = provider_specific.get("traffic_type")
+                            if raw_traffic_type:
+                                service_tier = _map_traffic_type_to_service_tier(
+                                    raw_traffic_type
+                                )
                 else:
                     if model is None:
                         raise ValueError(
@@ -1121,10 +1204,7 @@ def completion_cost(  # noqa: PLR0915
                     completion_tokens = token_counter(model=model, text=completion)
 
                 # Handle A2A calls before model check - A2A doesn't require a model
-                if call_type in (
-                    CallTypes.asend_message.value,
-                    CallTypes.send_message.value,
-                ):
+                if call_type in _A2A_CALL_TYPES:
                     from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 
                     return A2ACostCalculator.calculate_a2a_cost(
@@ -1160,12 +1240,7 @@ def completion_cost(  # noqa: PLR0915
                         optional_params=optional_params,
                         call_type=call_type,
                     )
-                elif (
-                    call_type == CallTypes.create_video.value
-                    or call_type == CallTypes.acreate_video.value
-                    or call_type == CallTypes.video_remix.value
-                    or call_type == CallTypes.avideo_remix.value
-                ):
+                elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
                     usage_obj = getattr(completion_response, "usage", None)
                     if completion_response is not None and usage_obj:
@@ -1194,22 +1269,13 @@ def completion_cost(  # noqa: PLR0915
                         duration_seconds=0.0,  # Default to 0 if no duration available
                         custom_llm_provider=custom_llm_provider,
                     )
-                elif (
-                    call_type == CallTypes.speech.value
-                    or call_type == CallTypes.aspeech.value
-                ):
+                elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
-                elif (
-                    call_type == CallTypes.atranscription.value
-                    or call_type == CallTypes.transcription.value
-                ):
+                elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     audio_transcription_file_duration = getattr(
                         completion_response, "duration", 0.0
                     )
-                elif (
-                    call_type == CallTypes.rerank.value
-                    or call_type == CallTypes.arerank.value
-                ):
+                elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(
                         completion_response, RerankResponse
                     ):
@@ -1228,10 +1294,7 @@ def completion_cost(  # noqa: PLR0915
                             billed_units.get("search_units") or 1
                         )  # cohere charges per request by default.
                         completion_tokens = search_units
-                elif (
-                    call_type == CallTypes.search.value
-                    or call_type == CallTypes.asearch.value
-                ):
+                elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
 
                     # Extract number_of_queries from optional_params or default to 1
@@ -1300,7 +1363,7 @@ def completion_cost(  # noqa: PLR0915
                     )
 
                     return _final_cost
-                elif call_type == CallTypes.arealtime.value and isinstance(
+                elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
                     if (
@@ -1319,7 +1382,7 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                     )
-                elif call_type == CallTypes.call_mcp_tool.value:
+                elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
@@ -1393,7 +1456,7 @@ def completion_cost(  # noqa: PLR0915
                     cache_creation_input_tokens=cache_creation_input_tokens,
                     cache_read_input_tokens=cache_read_input_tokens,
                     usage_object=cost_per_token_usage_object,
-                    call_type=cast(CallTypesLiteral, call_type),
+                    call_type=call_type,
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
@@ -1401,12 +1464,17 @@ def completion_cost(  # noqa: PLR0915
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                additional_costs = _get_additional_costs(
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                )
+                # Only azure_ai implements additional costs
+                if custom_llm_provider == "azure_ai":
+                    additional_costs = _get_additional_costs(
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
+                else:
+                    additional_costs = None
+
 
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar

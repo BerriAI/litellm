@@ -226,6 +226,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]
     tpm: Optional[int]
     rpm: Optional[int]
+    provider_specific_entry: Optional[Dict[str, float]]
 
 
 class ModelInfo(ModelInfoBase, total=False):
@@ -2917,8 +2918,9 @@ all_litellm_params = (
         "api_key",
         "api_version",
         "prompt_id",
-        "provider_specific_header",
         "prompt_variables",
+        "litellm_system_prompt",
+        "provider_specific_header",
         "prompt_version",
         "api_base",
         "force_timeout",
@@ -3172,6 +3174,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    LITELLM_AGENT = "litellm_agent"
 
 
 # Create a set of all provider values for quick lookup
@@ -3201,6 +3204,7 @@ class SearchProviders(str, Enum):
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
+
 
 # Create a set of all search provider values for quick lookup
 SearchProvidersSet = {provider.value for provider in SearchProviders}

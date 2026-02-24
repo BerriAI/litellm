@@ -79,7 +79,27 @@ cp -r out/* ../../litellm/proxy/_experimental/out/
 
 Then restart the proxy and access the UI at `http://localhost:4000/ui`
 
-## 4. Submitting a PR
+## 4. Pre-PR Checklist
+
+Before submitting your pull request, make sure the following pass locally from `ui/litellm-dashboard/`:
+
+**Run tests related to your changes:**
+
+```bash
+npx vitest run src/components/path/to/YourComponent.test.tsx
+```
+
+Tests are co-located with components (e.g., `TeamInfo.tsx` → `TeamInfo.test.tsx`). If you add a new component, add a corresponding `.test.tsx` file next to it.
+
+**Run the build:**
+
+```bash
+npm run build
+```
+
+These map to the `ui_tests` and `ui_build` CI checks.
+
+## 5. Submitting a PR
 
 1. Create a new branch for your changes:
 ```bash
