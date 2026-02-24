@@ -147,6 +147,7 @@ from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
 from ..integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from ..integrations.langsmith import LangsmithLogger
+from ..integrations.litellm_agent import LiteLLMAgentModelResolver
 from ..integrations.literal_ai import LiteralAILogger
 from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
@@ -585,6 +586,11 @@ class Logging(LiteLLMLoggingBaseClass):
         Return True if prompt management hooks should be run
         """
         if prompt_id:
+            return True
+
+        # Check if model uses litellm_agent prefix (model replacement without prompt_id)
+        model = non_default_params.get("model", "")
+        if isinstance(model, str) and model.startswith("litellm_agent/"):
             return True
 
         if self._should_run_prompt_management_hooks_without_prompt_id(
@@ -1632,8 +1638,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details["litellm_params"]["metadata"] = {}
                 self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(logging_result, "_hidden_params", {})  # type: ignore
 
-        if "response_cost" in hidden_params:
+        if self.model_call_details.get("cache_hit") is True:
+            self.model_call_details["response_cost"] = 0.0
+        elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
+        elif self.model_call_details.get("response_cost") is not None:
+            # Preserve response_cost if already calculated (e.g., by pass-through
+            # handlers like Gemini/Vertex which call completion_cost directly)
+            pass
         else:
             self.model_call_details["response_cost"] = self._response_cost_calculator(
                 result=logging_result
@@ -2494,23 +2506,29 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self.model_call_details["async_complete_streaming_response"] = result
 
-            # cost calculation not possible for pass-through
-            self.model_call_details["response_cost"] = None
+            # Only set response_cost to None if not already calculated by
+            # pass-through handlers (e.g. Gemini/Vertex handlers already
+            # compute cost via completion_cost)
+            if self.model_call_details.get("response_cost") is None:
+                self.model_call_details["response_cost"] = None
 
-            ## STANDARDIZED LOGGING PAYLOAD
-            self.model_call_details[
-                "standard_logging_object"
-            ] = self._build_standard_logging_payload(
-                result, start_time, end_time
-            )
-
-            # print standard logging payload
-            if (
-                standard_logging_payload := self.model_call_details.get(
+            # Only build standard_logging_object if not already built by
+            # _success_handler_helper_fn
+            if self.model_call_details.get("standard_logging_object") is None:
+                ## STANDARDIZED LOGGING PAYLOAD
+                self.model_call_details[
                     "standard_logging_object"
+                ] = self._build_standard_logging_payload(
+                    result, start_time, end_time
                 )
-            ) is not None:
-                emit_standard_logging_payload(standard_logging_payload)
+
+                # print standard logging payload
+                if (
+                    standard_logging_payload := self.model_call_details.get(
+                        "standard_logging_object"
+                    )
+                ) is not None:
+                    emit_standard_logging_payload(standard_logging_payload)
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -3617,6 +3635,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _literalai_logger = LiteralAILogger()
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
+        elif logging_integration == "litellm_agent":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LiteLLMAgentModelResolver):
+                    return callback  # type: ignore
+
+            _litellm_agent_resolver = LiteLLMAgentModelResolver()
+            _in_memory_loggers.append(_litellm_agent_resolver)
+            return _litellm_agent_resolver  # type: ignore
         elif logging_integration == "prometheus":
             PrometheusLogger = _get_cached_prometheus_logger()
 
@@ -4171,6 +4197,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, LiteralAILogger):
                     return callback
+        elif logging_integration == "litellm_agent":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, LiteLLMAgentModelResolver):
+                    return callback
         elif logging_integration == "prometheus":
             PrometheusLogger = _get_cached_prometheus_logger()
             for callback in _in_memory_loggers:
@@ -4679,6 +4709,7 @@ class StandardLoggingPayloadSetup:
         custom_pricing: Optional[bool],
         custom_llm_provider: Optional[str],
         init_response_obj: Union[Any, BaseModel, dict],
+        api_base: Optional[str] = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
             model=None,
@@ -4693,7 +4724,9 @@ class StandardLoggingPayloadSetup:
         else:
             try:
                 _model_cost_information = litellm.get_model_info(
-                    model=model_cost_name, custom_llm_provider=custom_llm_provider
+                    model=model_cost_name,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
                 )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name,
@@ -5206,6 +5239,7 @@ def get_standard_logging_object_payload(
             custom_pricing=custom_pricing,
             custom_llm_provider=kwargs.get("custom_llm_provider"),
             init_response_obj=init_response_obj,
+            api_base=litellm_params.get("api_base"),
         )
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 

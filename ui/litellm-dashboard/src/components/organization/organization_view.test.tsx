@@ -102,6 +102,34 @@ test("renders organization view after loading data", async () => {
   });
 });
 
+test("should display empty state when organization has no members", async () => {
+  const { organizationInfoCall } = await import("../networking");
+  (organizationInfoCall as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockOrg);
+
+  const user = userEvent.setup();
+  render(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+      editOrg={false}
+    />,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByText("Acme Corp")).toBeInTheDocument();
+  });
+
+  await user.click(screen.getByRole("tab", { name: "Members" }));
+
+  await waitFor(() => {
+    expect(screen.getByText("No members found")).toBeInTheDocument();
+  });
+});
+
 test("should display team aliases when teams are available", async () => {
   const { organizationInfoCall } = await import("../networking");
   const orgWithTeams = {

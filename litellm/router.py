@@ -1536,7 +1536,7 @@ class Router:
             )
             raise e
 
-    async def _acompletion_streaming_iterator(
+    async def _acompletion_streaming_iterator(  # noqa: PLR0915
         self,
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
@@ -1559,6 +1559,9 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
+                # Preserve hidden params (including litellm_overhead_time_ms) from original response
+                if hasattr(model_response, "_hidden_params"):
+                    self._hidden_params = model_response._hidden_params.copy()
 
             def __aiter__(self):
                 return self
@@ -1996,12 +1999,11 @@ class Router:
         When both have tools, concatenate them (deployment tools first, then request tools).
         tool_choice: use request value if provided, else deployment's.
         """
-        dep_params = deployment.get("litellm_params", {}) or {}
-        dep_params = (
-            dep_params.model_dump(exclude_none=True)
-            if hasattr(dep_params, "model_dump")
-            else dep_params
-        )
+        dep_params_raw = deployment.get("litellm_params", {}) or {}
+        if isinstance(dep_params_raw, dict):
+            dep_params = dep_params_raw
+        else:
+            dep_params = dep_params_raw.model_dump(exclude_none=True)
         dep_tools = dep_params.get("tools") or []
         req_tools = kwargs.get("tools") or []
         if dep_tools or req_tools:
@@ -2573,6 +2575,12 @@ class Router:
 
         litellm_model = data.get("model", None)
 
+        # litellm_agent/ prefix only strips the model name, no prompt_id needed
+        is_litellm_agent_model = (
+            isinstance(litellm_model, str)
+            and litellm_model.startswith("litellm_agent/")
+        )
+
         prompt_id = kwargs.get("prompt_id") or prompt_management_deployment[
             "litellm_params"
         ].get("prompt_id", None)
@@ -2585,7 +2593,9 @@ class Router:
             "litellm_params"
         ].get("prompt_label", None)
 
-        if prompt_id is None or not isinstance(prompt_id, str):
+        if not is_litellm_agent_model and (
+            prompt_id is None or not isinstance(prompt_id, str)
+        ):
             raise ValueError(
                 f"Prompt ID is not set or not a string. Got={prompt_id}, type={type(prompt_id)}"
             )
@@ -6975,9 +6985,9 @@ class Router:
             raise ValueError("Deployment not found")
 
         ## GET BASE MODEL
-        base_model = deployment.get("model_info", {}).get("base_model", None)
+        base_model = (deployment.get("model_info") or {}).get("base_model", None)
         if base_model is None:
-            base_model = deployment.get("litellm_params", {}).get("base_model", None)
+            base_model = (deployment.get("litellm_params") or {}).get("base_model", None)
 
         model = base_model
 
@@ -6992,7 +7002,7 @@ class Router:
             raise ValueError(
                 f"Deployment missing valid litellm_params. "
                 f"Got: {type(litellm_params_data).__name__}, "
-                f"deployment_id: {deployment.get('model_info', {}).get('id', 'unknown')}"
+                f"deployment_id: {(deployment.get('model_info') or {}).get('id', 'unknown')}"
             )
         _model, custom_llm_provider, _, _ = litellm.get_llm_provider(
             model=litellm_params.model,
@@ -7012,10 +7022,10 @@ class Router:
                 if potential_models is not None:
                     for potential_model in potential_models:
                         try:
-                            if potential_model.get("model_info", {}).get(
+                            if (potential_model.get("model_info") or {}).get(
                                 "id"
-                            ) == deployment.get("model_info", {}).get("id"):
-                                model = potential_model.get("litellm_params", {}).get(
+                            ) == (deployment.get("model_info") or {}).get("id"):
+                                model = (potential_model.get("litellm_params") or {}).get(
                                     "model"
                                 )
                                 break
@@ -7036,9 +7046,10 @@ class Router:
         model_info = litellm.get_model_info(model=model_info_name)
 
         ## CHECK USER SET MODEL INFO
-        user_model_info = deployment.get("model_info", {})
+        user_model_info = deployment.get("model_info") or {}
 
-        model_info.update(user_model_info)
+        if model_info is not None:
+            model_info.update(user_model_info)
 
         return model_info
 

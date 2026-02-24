@@ -70,7 +70,7 @@ export const handleAddAutoRouterSubmit = async (values: any, accessToken: string
 
     // Show success notification
     const routerTypeName = values.model_type === "complexity_router" ? "Complexity Router" : "Semantic Router";
-    NotificationManager.fromBackend(`Successfully created ${routerTypeName}: ${values.auto_router_name}`);
+    NotificationManager.success(`Successfully created ${routerTypeName}: ${values.auto_router_name}`);
 
     // Reset the form
     form.resetFields();

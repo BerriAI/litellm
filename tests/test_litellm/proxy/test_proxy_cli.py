@@ -583,6 +583,7 @@ class TestHealthAppFactory:
         assert isinstance(health_app_2, fastapi.FastAPI)
 
     @patch("subprocess.run")
+    @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
@@ -591,14 +592,11 @@ class TestHealthAppFactory:
         mock_should_update_schema,
         mock_check_schema_diff,
         mock_setup_database,
+        mock_atexit_register,
         mock_subprocess_run,
     ):
         """Test that use_prisma_db_push flag correctly controls PrismaManager.setup_database use_migrate parameter"""
-        from click.testing import CliRunner
-
         from litellm.proxy.proxy_cli import run_server
-
-        runner = CliRunner()
 
         # Mock subprocess.run to simulate prisma being available
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -613,9 +611,6 @@ class TestHealthAppFactory:
             save_worker_config=MagicMock(),
         )
 
-        # Strip DIRECT_URL and set DATABASE_URL to a test value so Click's
-        # CliRunner doesn't encounter real DB env vars (causes stream lifecycle
-        # issues with Click 8.3.x in CI environments).
         clean_env = {
             k: v
             for k, v in os.environ.items()
@@ -640,11 +635,15 @@ class TestHealthAppFactory:
                 "port": 8000,
             }
 
+            # Use standalone_mode=False to bypass Click's CliRunner stream
+            # isolation which causes flaky "I/O operation on closed file"
+            # errors in CI environments (Click 8.3.x stream lifecycle issue).
+
             # Test 1: Without --use_prisma_db_push flag (default behavior)
             # use_prisma_db_push should be False (default), so use_migrate should be True
-            result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
-
-            assert result.exit_code == 0
+            run_server.main(
+                ["--local", "--skip_server_startup"], standalone_mode=False
+            )
             mock_setup_database.assert_called_with(use_migrate=True)
 
             # Reset mocks
@@ -654,9 +653,8 @@ class TestHealthAppFactory:
 
             # Test 2: With --use_prisma_db_push flag set
             # use_prisma_db_push should be True, so use_migrate should be False
-            result = runner.invoke(
-                run_server, ["--local", "--skip_server_startup", "--use_prisma_db_push"]
+            run_server.main(
+                ["--local", "--skip_server_startup", "--use_prisma_db_push"],
+                standalone_mode=False,
             )
-
-            assert result.exit_code == 0
             mock_setup_database.assert_called_with(use_migrate=False)
