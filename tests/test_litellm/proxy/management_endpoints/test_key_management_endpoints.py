@@ -1468,6 +1468,106 @@ async def test_validate_key_team_change_with_member_permissions():
                     )
 
 
+@pytest.mark.asyncio
+async def test_validate_key_team_change_with_special_model_names():
+    """
+    Test that validate_key_team_change skips validation for special model names
+    like 'all-team-models', 'all-proxy-models', and 'no-default-models'.
+
+    These are placeholder values, not real model names, so they should not be
+    checked against the team's actual model list.
+
+    Related: https://github.com/BerriAI/litellm/issues/21880
+    """
+    mock_key = MagicMock()
+    mock_key.user_id = "test-user-123"
+    mock_key.models = ["all-team-models"]
+    mock_key.tpm_limit = None
+    mock_key.rpm_limit = None
+
+    mock_team = MagicMock()
+    mock_team.team_id = "test-team-456"
+    mock_team.members_with_roles = []
+    mock_team.tpm_limit = None
+    mock_team.rpm_limit = None
+
+    mock_change_initiator = MagicMock()
+    mock_change_initiator.user_id = "test-user-123"
+    mock_change_initiator.user_role = LitellmUserRoles.PROXY_ADMIN.value
+
+    mock_router = MagicMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model",
+        new_callable=AsyncMock,
+    ) as mock_can_access:
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
+        ) as mock_get_user:
+            mock_get_user.return_value = MagicMock()
+
+            # Should NOT raise - "all-team-models" should be skipped
+            await validate_key_team_change(
+                key=mock_key,
+                team=mock_team,
+                change_initiated_by=mock_change_initiator,
+                llm_router=mock_router,
+            )
+
+            # can_team_access_model should NOT have been called
+            mock_can_access.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_validate_key_team_change_special_models_mixed_with_real():
+    """
+    Test that when a key has both special and real model names,
+    only real model names are validated against the team.
+
+    Related: https://github.com/BerriAI/litellm/issues/21880
+    """
+    mock_key = MagicMock()
+    mock_key.user_id = "test-user-123"
+    mock_key.models = ["all-team-models", "gpt-4"]
+    mock_key.tpm_limit = None
+    mock_key.rpm_limit = None
+
+    mock_team = MagicMock()
+    mock_team.team_id = "test-team-456"
+    mock_team.members_with_roles = []
+    mock_team.tpm_limit = None
+    mock_team.rpm_limit = None
+
+    mock_change_initiator = MagicMock()
+    mock_change_initiator.user_id = "test-user-123"
+    mock_change_initiator.user_role = LitellmUserRoles.PROXY_ADMIN.value
+
+    mock_router = MagicMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model",
+        new_callable=AsyncMock,
+    ) as mock_can_access:
+        with patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
+        ) as mock_get_user:
+            mock_get_user.return_value = MagicMock()
+
+            await validate_key_team_change(
+                key=mock_key,
+                team=mock_team,
+                change_initiated_by=mock_change_initiator,
+                llm_router=mock_router,
+            )
+
+            # Should only be called for "gpt-4", not "all-team-models"
+            mock_can_access.assert_called_once_with(
+                model="gpt-4",
+                team_object=mock_team,
+                llm_router=mock_router,
+            )
+
+
 def test_key_rotation_fields_helper():
     """
     Test the key data update logic for rotation fields.

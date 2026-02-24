@@ -2165,8 +2165,11 @@ async def validate_key_team_change(
     - The person initiating the change must be either Proxy Admin or Team Admin
     """
     # Check if the team has access to the key's models
+    _special_model_names = {e.value for e in SpecialModelNames}
     if len(key.models) > 0:
         for model in key.models:
+            if model in _special_model_names:
+                continue
             await can_team_access_model(
                 model=model,
                 team_object=team,
