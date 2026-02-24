@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import RoutingStrategySelector from "./RoutingStrategySelector";
 
 // Ant Design's Select is complex to drive in JSDOM; swap it for a plain
@@ -77,21 +78,16 @@ describe("RoutingStrategySelector", () => {
 
   it("should not render a description for a strategy that has none", () => {
     render(<RoutingStrategySelector {...baseProps} />);
-    // "least-busy" has no entry in routingStrategyDescriptions
-    const select = screen.getByTestId("strategy-select");
-    const leastBusyOption = Array.from(select.querySelectorAll("option")).find(
-      (o) => o.value === "least-busy"
-    );
-    expect(leastBusyOption).toBeInTheDocument();
+    // "least-busy" has no entry in routingStrategyDescriptions — it still renders without crashing
+    expect(screen.getByText("least-busy")).toBeInTheDocument();
   });
 
-  it("should call onStrategyChange with the selected strategy value", () => {
+  it("should call onStrategyChange with the selected strategy value", async () => {
     const onStrategyChange = vi.fn();
+    const user = userEvent.setup();
     render(<RoutingStrategySelector {...baseProps} onStrategyChange={onStrategyChange} />);
 
-    const select = screen.getByTestId("strategy-select") as HTMLSelectElement;
-    select.value = "latency-based-routing";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await user.selectOptions(screen.getByTestId("strategy-select"), "latency-based-routing");
 
     expect(onStrategyChange).toHaveBeenCalledWith("latency-based-routing");
   });
