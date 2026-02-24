@@ -122,7 +122,8 @@ SYSTEM_PROMPT = (
     "- When comparing entities, show a ranked list.\n"
     "- If data is empty or no results found, say so clearly.\n"
     "- Do not hallucinate data — only use what the tools return.\n"
-    "- Today's date is available in the data context. Use recent dates if the user says 'this week' or 'this month'."
+    "- Today's date will be provided below. Use it to interpret relative dates "
+    "like 'this week', 'this month', 'last 7 days', etc."
 )
 
 
@@ -392,8 +393,13 @@ async def stream_usage_ai_chat(
     model = model.strip() if model else ""
     model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
+    from datetime import date as date_type
+
+    today = date_type.today().isoformat()
+    system_content = f"{SYSTEM_PROMPT}\n\nToday's date: {today}"
+
     chat_messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_content},
         *messages,
     ]
 
