@@ -79,23 +79,27 @@ describe("buildCallbackPayload", () => {
   ];
 
   describe("websearch_interception", () => {
-    it("should build litellm_settings.callbacks when adding", () => {
+    it("should build litellm_settings.callbacks and callback_settings when adding", () => {
       const payload = buildCallbackPayload(
         { enabled_providers: "bedrock, azure", search_tool_name: "perplexity-search" },
         "websearch_interception",
         [],
         false
       );
-      expect(payload).toEqual({
-        litellm_settings: {
-          callbacks: [
-            {
-              websearch_interception: {
-                enabled_providers: ["bedrock", "azure"],
-                search_tool_name: "perplexity-search",
-              },
-            },
-          ],
+      expect(getCallbacks(payload)).toEqual([
+        {
+          websearch_interception: {
+            enabled_providers: ["bedrock", "azure"],
+            search_tool_name: "perplexity-search",
+          },
+        },
+      ]);
+      expect(payload.callback_settings).toEqual({
+        websearch_interception: {
+          callback_type: "websearch_interception",
+          event_types: ["llm_api_success", "llm_api_failure"],
+          enabled_providers: ["bedrock", "azure"],
+          search_tool_name: "perplexity-search",
         },
       });
     });
@@ -148,16 +152,21 @@ describe("buildCallbackPayload", () => {
         [],
         false
       );
-      expect(payload).toEqual({
-        litellm_settings: {
-          callbacks: [{ websearch_interception: { enabled_providers: [] } }],
+      expect(getCallbacks(payload)).toEqual([
+        { websearch_interception: { enabled_providers: [] } },
+      ]);
+      expect(payload.callback_settings).toEqual({
+        websearch_interception: {
+          callback_type: "websearch_interception",
+          event_types: ["llm_api_success", "llm_api_failure"],
+          enabled_providers: [],
         },
       });
     });
   });
 
   describe("non-websearch callbacks", () => {
-    it("should build environment_variables and success_callback", () => {
+    it("should build environment_variables, success_callback, and callback_settings", () => {
       const payload = buildCallbackPayload(
         { LANGFUSE_PUBLIC_KEY: "pk", LANGFUSE_SECRET_KEY: "sk" },
         "langfuse",
@@ -167,6 +176,9 @@ describe("buildCallbackPayload", () => {
       expect(payload).toEqual({
         environment_variables: { LANGFUSE_PUBLIC_KEY: "pk", LANGFUSE_SECRET_KEY: "sk" },
         litellm_settings: { success_callback: ["langfuse"] },
+        callback_settings: {
+          langfuse: { callback_type: "langfuse", event_types: ["llm_api_success"] },
+        },
       });
     });
   });

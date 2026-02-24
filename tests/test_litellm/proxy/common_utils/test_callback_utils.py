@@ -6,6 +6,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    get_callbacks_from_callback_settings,
     get_model_group_from_request_data,
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
@@ -168,6 +169,45 @@ def test_normalize_callback_names_lowercases_strings_preserves_non_strings():
     """Iterable with non-string items leaves them unchanged (e.g. [1, 'SQS'] -> [1, 'sqs'])."""
     assert normalize_callback_names([1, "SQS"]) == [1, "sqs"]
     assert normalize_callback_names(["a", None, "B"]) == ["a", None, "b"]
+
+
+def test_get_callbacks_from_callback_settings_default_both():
+    """Callbacks without event_types default to both success and failure."""
+    settings = {
+        "custom_api": {
+            "callback_type": "generic_api",
+            "endpoint": "https://example.com",
+        },
+    }
+    both, success, failure = get_callbacks_from_callback_settings(settings)
+    assert both == ["custom_api"]
+    assert success == []
+    assert failure == []
+
+
+def test_get_callbacks_from_callback_settings_event_types_routing():
+    """event_types routes callbacks to success_only, failure_only, or both."""
+    settings = {
+        "success_only": {"callback_type": "langfuse", "event_types": ["llm_api_success"]},
+        "failure_only": {"callback_type": "sentry", "event_types": ["llm_api_failure"]},
+        "both": {"callback_type": "otel", "event_types": ["llm_api_success", "llm_api_failure"]},
+    }
+    both, success, failure = get_callbacks_from_callback_settings(settings)
+    assert both == ["both"]
+    assert success == ["success_only"]
+    assert failure == ["failure_only"]
+
+
+def test_get_callbacks_from_callback_settings_skips_non_dict():
+    """Non-dict config entries are skipped."""
+    settings = {
+        "valid": {"callback_type": "generic_api", "endpoint": "https://x.com"},
+        "invalid": "not a dict",
+    }
+    both, success, failure = get_callbacks_from_callback_settings(settings)
+    assert both == ["valid"]
+    assert success == []
+    assert failure == []
 
 
 

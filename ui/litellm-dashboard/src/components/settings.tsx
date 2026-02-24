@@ -208,6 +208,7 @@ const getDynamicParamsForCallback = (
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
+  const [callbackSettings, setCallbackSettings] = useState<Record<string, unknown>>({});
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [addForm] = Form.useForm();
@@ -301,6 +302,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       .then((data) => {
         setCallbacks(data.callbacks);
         setAllCallbacks(data.available_callbacks);
+        setCallbackSettings(data.callback_settings ?? {});
         // setCallbacks(callbacks_data);
 
         let alerts_data = data.alerts;
@@ -338,7 +340,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit);
+    const payload = buildCallbackPayload(formValues, callbackName, callbacks, isEdit, undefined, callbackSettings);
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -361,6 +363,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       if (userID && userRole) {
         const updatedData = await getCallbacksCall(accessToken, userID, userRole);
         setCallbacks(updatedData.callbacks);
+        setCallbackSettings(updatedData.callback_settings ?? {});
       }
     } catch (error) {
       NotificationsManager.fromBackend(error);

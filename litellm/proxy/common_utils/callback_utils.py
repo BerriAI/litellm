@@ -14,6 +14,48 @@ from litellm.types.utils import (
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
 
+# Event type constants for callback_settings routing
+CALLBACK_EVENT_SUCCESS = "llm_api_success"
+CALLBACK_EVENT_FAILURE = "llm_api_failure"
+
+
+def get_callbacks_from_callback_settings(
+    callback_settings: Dict[str, Any],
+) -> tuple[List[Union[str, Dict[str, Any]]], List[str], List[str]]:
+    """
+    Derive enabled callbacks from callback_settings keys (model_list pattern).
+    Callbacks defined in callback_settings are auto-enabled.
+
+    Returns:
+        (callbacks_both, success_only, failure_only)
+        - callbacks_both: run on success and failure
+        - success_only: run on success only
+        - failure_only: run on failure only
+    """
+    callbacks_both: List[Union[str, Dict[str, Any]]] = []
+    success_only: List[str] = []
+    failure_only: List[str] = []
+
+    for callback_name, config in callback_settings.items():
+        if not isinstance(config, dict):
+            continue
+        event_types = config.get("event_types")
+        if isinstance(event_types, list):
+            has_success = CALLBACK_EVENT_SUCCESS in event_types
+            has_failure = CALLBACK_EVENT_FAILURE in event_types
+            if has_success and has_failure:
+                callbacks_both.append(callback_name)
+            elif has_success:
+                success_only.append(callback_name)
+            elif has_failure:
+                failure_only.append(callback_name)
+        else:
+            # Default: both success and failure (current behavior)
+            callbacks_both.append(callback_name)
+
+    return (callbacks_both, success_only, failure_only)
+
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 

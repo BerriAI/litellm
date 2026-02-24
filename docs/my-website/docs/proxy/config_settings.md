@@ -16,10 +16,10 @@ model_list:
       additionalProp1: {}
 
 litellm_settings:
-  # Logging/Callback settings
-  success_callback: ["langfuse"]  # list of success callbacks
-  failure_callback: ["sentry"]  # list of failure callbacks
-  callbacks: ["otel"]  # list of callbacks - runs on success and failure
+  # Logging/Callback settings (DEPRECATED - use callback_settings instead)
+  success_callback: ["langfuse"]  # deprecated - use callback_settings with event_types
+  failure_callback: ["sentry"]  # deprecated - use callback_settings with event_types
+  callbacks: ["otel"]  # deprecated - use callback_settings (callbacks defined there are auto-enabled)
   service_callbacks: ["datadog", "prometheus"]  # logs redis, postgres failures on datadog, prometheus
   turn_off_message_logging: boolean  # prevent the messages and responses from being logged to on your callbacks, but request metadata will still be logged. Useful for privacy/compliance when handling sensitive data.
   redact_user_api_key_info: boolean  # Redact information about the user api key (hashed token, user_id, team id, etc.), from logs. Currently supported for Langfuse, OpenTelemetry, Logfire, ArizeAI logging.
@@ -97,8 +97,19 @@ litellm_settings:
     disable_copilot_system_to_assistant: False # DEPRECATED - GitHub Copilot API supports system prompts.
 
 callback_settings:
+  # Primary way to configure callbacks (model_list pattern). Callbacks defined here are auto-enabled.
+  custom_api_name:
+    callback_type: generic_api
+    endpoint: https://your-endpoint.com/logs
+    headers:
+      Authorization: Bearer sk-1234
+    event_types: [llm_api_success, llm_api_failure]  # optional, defaults to both
+  langfuse:
+    callback_type: langfuse
+    event_types: [llm_api_success]
   otel:
-    message_logging: boolean # OTEL logging callback specific settings
+    callback_type: otel
+    message_logging: boolean
 
 general_settings:
   completion_model: string

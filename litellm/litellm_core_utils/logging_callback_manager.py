@@ -183,13 +183,13 @@ class LoggingCallbackManager:
             and callback_config.get("callback_type") == "generic_api"
         ):
             endpoint = callback_config.get("endpoint")
-            headers = callback_config.get("headers")
+            headers = callback_config.get("headers") or {}
             event_types = callback_config.get("event_types")
             log_format = callback_config.get("log_format")
 
-            if endpoint is None or headers is None:
+            if endpoint is None:
                 verbose_logger.warning(
-                    "generic_api callback '%s' is missing endpoint or headers, skipping.",
+                    "generic_api callback '%s' is missing endpoint, skipping.",
                     callback,
                 )
                 return callback
