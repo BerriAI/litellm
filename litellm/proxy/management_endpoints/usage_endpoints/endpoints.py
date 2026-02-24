@@ -4,7 +4,7 @@ USAGE AI CHAT ENDPOINTS
 /usage/ai/chat - Stream AI chat responses about usage data
 """
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 class ChatMessage(BaseModel):
-    role: str
+    role: Literal["user", "assistant"]
     content: str
 
 

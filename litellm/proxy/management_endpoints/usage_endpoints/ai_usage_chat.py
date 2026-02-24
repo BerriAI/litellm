@@ -88,72 +88,81 @@ _DATE_PARAMS = {
     "end_date": {"type": "string", "description": "End date in YYYY-MM-DD format"},
 }
 
-ALL_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_usage_data",
-            "description": (
-                "Fetch aggregated global usage/spend data. Returns daily spend, "
-                "token counts, request counts, and breakdowns by model, provider, "
-                "and API key. Use for overall spend, top models, top providers."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    **_DATE_PARAMS,
-                    "user_id": {
-                        "type": "string",
-                        "description": "Optional user ID filter. Omit for global view.",
-                    },
+_TOOL_USAGE = {
+    "type": "function",
+    "function": {
+        "name": "get_usage_data",
+        "description": (
+            "Fetch aggregated global usage/spend data. Returns daily spend, "
+            "token counts, request counts, and breakdowns by model, provider, "
+            "and API key. Use for overall spend, top models, top providers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                **_DATE_PARAMS,
+                "user_id": {
+                    "type": "string",
+                    "description": "Optional user ID filter. Omit for global view.",
                 },
-                "required": ["start_date", "end_date"],
             },
+            "required": ["start_date", "end_date"],
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_team_usage_data",
-            "description": (
-                "Fetch usage/spend data broken down by team. Use for questions "
-                "like 'which team spends the most' or 'show me team X usage'."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    **_DATE_PARAMS,
-                    "team_ids": {
-                        "type": "string",
-                        "description": "Optional comma-separated team IDs. Omit for all teams.",
-                    },
+}
+
+_TOOL_TEAM = {
+    "type": "function",
+    "function": {
+        "name": "get_team_usage_data",
+        "description": (
+            "Fetch usage/spend data broken down by team. Use for questions "
+            "like 'which team spends the most' or 'show me team X usage'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                **_DATE_PARAMS,
+                "team_ids": {
+                    "type": "string",
+                    "description": "Optional comma-separated team IDs. Omit for all teams.",
                 },
-                "required": ["start_date", "end_date"],
             },
+            "required": ["start_date", "end_date"],
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_tag_usage_data",
-            "description": (
-                "Fetch usage/spend data broken down by tag. Tags are labels "
-                "attached to requests (features, environments, credentials)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    **_DATE_PARAMS,
-                    "tags": {
-                        "type": "string",
-                        "description": "Optional comma-separated tag names. Omit for all tags.",
-                    },
+}
+
+_TOOL_TAG = {
+    "type": "function",
+    "function": {
+        "name": "get_tag_usage_data",
+        "description": (
+            "Fetch usage/spend data broken down by tag. Tags are labels "
+            "attached to requests (features, environments, credentials)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                **_DATE_PARAMS,
+                "tags": {
+                    "type": "string",
+                    "description": "Optional comma-separated tag names. Omit for all tags.",
                 },
-                "required": ["start_date", "end_date"],
             },
+            "required": ["start_date", "end_date"],
         },
     },
-]
+}
+
+TOOLS_BASE = [_TOOL_USAGE]
+TOOLS_ADMIN = [_TOOL_USAGE, _TOOL_TEAM, _TOOL_TAG]
+
+
+def get_tools_for_role(is_admin: bool) -> List[Dict[str, Any]]:
+    """Return the tool list appropriate for the user's role."""
+    return TOOLS_ADMIN if is_admin else TOOLS_BASE
+
 
 SYSTEM_PROMPT = (
     "You are an AI assistant embedded in the LiteLLM Usage dashboard. "
@@ -508,10 +517,11 @@ async def stream_usage_ai_chat(
 
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
+        tools = get_tools_for_role(is_admin)
         response = await litellm.acompletion(
             model=resolved_model,
             messages=chat_messages,
-            tools=ALL_TOOLS,
+            tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
         )
         choice = response.choices[0]  # type: ignore

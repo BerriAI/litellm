@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-    ALL_TOOLS,
     SYSTEM_PROMPT,
     TOOL_HANDLERS,
+    TOOLS_ADMIN,
+    TOOLS_BASE,
     _summarise_entity_data,
     _summarise_usage_data,
     stream_usage_ai_chat,
@@ -111,12 +112,16 @@ SAMPLE_TEAM_RESPONSE = {
 
 
 class TestToolSchemas:
-    def test_all_tools_defined(self):
-        assert len(ALL_TOOLS) == 3
-        names = {t["function"]["name"] for t in ALL_TOOLS}
+    def test_admin_tools_include_all(self):
+        assert len(TOOLS_ADMIN) == 3
+        names = {t["function"]["name"] for t in TOOLS_ADMIN}
         assert "get_usage_data" in names
         assert "get_team_usage_data" in names
         assert "get_tag_usage_data" in names
+
+    def test_base_tools_restricted_to_usage_only(self):
+        assert len(TOOLS_BASE) == 1
+        assert TOOLS_BASE[0]["function"]["name"] == "get_usage_data"
 
     def test_system_prompt_mentions_all_tools(self):
         assert "get_usage_data" in SYSTEM_PROMPT
