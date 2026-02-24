@@ -351,11 +351,12 @@ class DBSpendUpdateWriter:
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Spend tracking - failed to enqueue team member spend update. "
-                    "team_id=%s, user_id=%s, response_cost=%s - %s",
+                    "team_id=%s, user_id=%s, response_cost=%s - %s\n%s",
                     team_id,
                     user_id,
                     response_cost,
                     str(e),
+                    traceback.format_exc(),
                 )
         except Exception as e:
             verbose_proxy_logger.error(
