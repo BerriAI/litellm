@@ -80,11 +80,7 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded"}
 
 
-async def _perform_health_check(model_list: list, details: Optional[bool] = True):
-    """
-    Perform a health check for each model in the list.
-    """
-
+async def _execute_individual_health_checks(model_list: list):
     tasks = []
     for model in model_list:
         litellm_params = model["litellm_params"]
@@ -108,6 +104,15 @@ async def _perform_health_check(model_list: list, details: Optional[bool] = True
         tasks.append(task)
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
+    return results
+
+
+async def _perform_health_check(model_list: list, details: Optional[bool] = True):
+    """
+    Perform a health check for each model in the list.
+    """
+
+    results = await _execute_individual_health_checks(model_list)
 
     healthy_endpoints = []
     unhealthy_endpoints = []
