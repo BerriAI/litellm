@@ -172,13 +172,15 @@ class AssemblyAIPassthroughLoggingHandler:
     async def _get_assembly_transcript(
         self,
         transcript_id: str,
+        client: httpx.AsyncClient,
         request_region: Optional[Literal["eu"]] = None,
     ) -> Optional[dict]:
         """
         Get the transcript details from AssemblyAI API
 
         Args:
-            response_body (dict): Response containing the transcript ID
+            transcript_id (str): The transcript ID to poll
+            client (httpx.AsyncClient): Reusable HTTP client for polling
 
         Returns:
             Optional[dict]: Transcript details if successful, None otherwise
@@ -201,13 +203,12 @@ class AssemblyAIPassthroughLoggingHandler:
         try:
             url = f"{_base_url}/v2/transcript/{transcript_id}"
             headers = {
-                "Authorization": f"{_api_key}",
+                "Authorization": _api_key,
                 "Content-Type": "application/json",
             }
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
 
             return response.json()
         except Exception as e:
@@ -224,23 +225,25 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         Poll the status of the transcript until it is completed or timeout (30 minutes)
         """
-        for _ in range(
-            self.max_polling_attempts
-        ):  # 180 attempts * 10s = 30 minutes max
-            transcript = await self._get_assembly_transcript(
-                request_region=AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(
-                    url=url_route
-                ),
-                transcript_id=transcript_id,
-            )
-            if transcript is None:
-                return None
-            if (
-                transcript.get("status") == "completed"
-                or transcript.get("status") == "error"
-            ):
-                return AssemblyAITranscriptResponse(**transcript)
-            await asyncio.sleep(self.polling_interval)
+        async with httpx.AsyncClient() as client:
+            for _ in range(
+                self.max_polling_attempts
+            ):  # 180 attempts * 10s = 30 minutes max
+                transcript = await self._get_assembly_transcript(
+                    request_region=AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(
+                        url=url_route
+                    ),
+                    transcript_id=transcript_id,
+                    client=client,
+                )
+                if transcript is None:
+                    return None
+                if (
+                    transcript.get("status") == "completed"
+                    or transcript.get("status") == "error"
+                ):
+                    return AssemblyAITranscriptResponse(**transcript)
+                await asyncio.sleep(self.polling_interval)
         return None
 
     @staticmethod

@@ -60,23 +60,21 @@ async def test_get_assembly_transcript(assembly_handler, mock_transcript_respons
         mock_response.json.return_value = mock_transcript_response
         mock_response.raise_for_status.return_value = None
 
-        with patch("httpx.AsyncClient") as MockClient:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get.return_value = mock_response
-            mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
-            mock_client_instance.__aexit__ = AsyncMock(return_value=False)
-            MockClient.return_value = mock_client_instance
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
 
-            transcript = await assembly_handler._get_assembly_transcript("test-transcript-id")
-            assert transcript == mock_transcript_response
+        transcript = await assembly_handler._get_assembly_transcript(
+            "test-transcript-id", client=mock_client
+        )
+        assert transcript == mock_transcript_response
 
-            mock_client_instance.get.assert_called_once_with(
-                "https://api.assemblyai.com/v2/transcript/test-transcript-id",
-                headers={
-                    "Authorization": "test-key",
-                    "Content-Type": "application/json",
-                },
-            )
+        mock_client.get.assert_called_once_with(
+            "https://api.assemblyai.com/v2/transcript/test-transcript-id",
+            headers={
+                "Authorization": "test-key",
+                "Content-Type": "application/json",
+            },
+        )
 
 
 @pytest.mark.asyncio
