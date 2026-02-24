@@ -14,6 +14,7 @@ from litellm.proxy._types import (AddTeamCallback, CommonProxyErrors,
                                   LitellmDataForBackendLLMCall,
                                   LitellmUserRoles, SpecialHeaders,
                                   TeamCallbackMetadata, UserAPIKeyAuth)
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -824,7 +825,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
-    _raw_headers: Dict[str, str] = dict(request.headers)
+    _raw_headers: Dict[str, str] = _safe_get_request_headers(request)
     _headers: Dict[str, str] = clean_headers(
         request.headers,
         litellm_key_header_name=(
