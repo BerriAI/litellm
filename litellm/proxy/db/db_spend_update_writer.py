@@ -659,22 +659,6 @@ class DBSpendUpdateWriter:
         db_spend_update_transactions = (
             await self.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
         )
-        if any(
-            len(v) > 0
-            for v in db_spend_update_transactions.values()
-            if isinstance(v, dict)
-        ):
-            verbose_proxy_logger.info(
-                "Spend tracking - committing spend updates to DB (no Redis buffer): "
-                "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d",
-                len(db_spend_update_transactions.get("key_list_transactions") or {}),
-                len(db_spend_update_transactions.get("user_list_transactions") or {}),
-                len(db_spend_update_transactions.get("team_list_transactions") or {}),
-                len(db_spend_update_transactions.get("org_list_transactions") or {}),
-                len(db_spend_update_transactions.get("end_user_list_transactions") or {}),
-                len(db_spend_update_transactions.get("team_member_list_transactions") or {}),
-                len(db_spend_update_transactions.get("tag_list_transactions") or {}),
-            )
         await self._commit_spend_updates_to_db(
             prisma_client=prisma_client,
             n_retry_times=n_retry_times,
