@@ -61,8 +61,8 @@ describe("OnboardingFormBody", () => {
 
   it("shows a loading indicator on the submit button when isPending is true", () => {
     render(<OnboardingFormBody {...defaultProps} isPending={true} />);
-    // antd Button with loading={true} adds .ant-btn-loading class
-    expect(document.querySelector(".ant-btn-loading")).toBeInTheDocument();
+    // antd v5 renders a loading icon with aria-label="loading" inside the button
+    expect(screen.getByRole("img", { name: "loading" })).toBeInTheDocument();
   });
 
   it("calls onSubmit with the typed password on form submit", async () => {
