@@ -920,8 +920,13 @@ follow_up = await router.aresponses(
 To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks` in your proxy config.yaml.
 
 - `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
+- `encrypted_content_affinity`: **[Recommended]** content-aware routing for encrypted items (e.g., `rs_...` reasoning items)
 - `session_affinity`: sticky sessions based on session id (takes priority over `deployment_affinity`)
 - `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
+
+:::tip Recommended: Use `encrypted_content_affinity`
+For Responses API with load balancing across deployments with **different API keys**, use `encrypted_content_affinity` instead of `deployment_affinity`. It only pins requests that contain encrypted content, avoiding quota reduction while preventing `invalid_encrypted_content` errors.
+:::
 
 Notes:
 - User-key affinity is keyed on `metadata.user_api_key_hash` (the API key hash). The OpenAI `user` request parameter is an end-user identifier and is intentionally not used for deployment affinity.
@@ -982,6 +987,156 @@ follow_up = client.responses.create(
 
 </TabItem>
 </Tabs>
+
+## Encrypted Content Affinity (Multi-Region Load Balancing)
+
+When load balancing Responses API across deployments with **different API keys** (e.g., different Azure regions or OpenAI organizations), encrypted content items (like `rs_...` reasoning items) can only be decrypted by the API key that created them.
+
+### The Problem
+
+```json
+{
+  "error": {
+    "message": "The encrypted content for item rs_0d09d6e56879e76500699d6feee41c8197bd268aae76141f87 could not be verified. Reason: Encrypted content organization_id did not match the target organization.",
+    "type": "invalid_request_error",
+    "code": "invalid_encrypted_content"
+  }
+}
+```
+
+This error occurs when:
+1. Initial request goes to Deployment A (API Key 1) → produces encrypted item `rs_xyz`
+2. Follow-up request with `rs_xyz` in input gets load balanced to Deployment B (API Key 2)
+3. Deployment B cannot decrypt content created by Deployment A → **request fails**
+
+### The Solution: `encrypted_content_affinity`
+
+The `encrypted_content_affinity` pre-call check intelligently tracks encrypted content and routes follow-up requests to the originating deployment **only when necessary**.
+
+**Key Benefits:**
+- ✅ **No quota reduction**: Unlike `deployment_affinity`, only pins requests that contain tracked encrypted items
+- ✅ **Bypasses rate limits**: When encrypted content requires a specific deployment, RPM/TPM limits are bypassed (the request would fail on any other deployment anyway)
+- ✅ **No `previous_response_id` required**: Works by tracking item IDs in response output and matching them in request input
+- ✅ **Globally safe**: Can be enabled for all models; non-Responses-API calls (chat, embeddings) are unaffected
+
+### How It Works
+
+1. **Tracking Phase** (after successful response):
+   - Extracts all item IDs from response `output` (e.g., `msg_abc`, `rs_xyz`)
+   - Caches mapping: `item_id` → `deployment_id` (default TTL: 24 hours)
+
+2. **Routing Phase** (before request):
+   - Scans request `input` for item IDs
+   - If tracked item found → pins to originating deployment, bypasses rate limits
+   - If no tracked items → normal load balancing
+
+### Configuration
+
+<Tabs>
+<TabItem value="sdk" label="Python SDK">
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=[
+        {
+            "model_name": "gpt-5.1-codex",
+            "litellm_params": {
+                "model": "openai/gpt-5.1-codex",
+                "api_key": "org-1-api-key",  # Different API key
+            },
+            "model_info": {"id": "deployment-us-east"},
+        },
+        {
+            "model_name": "gpt-5.1-codex",
+            "litellm_params": {
+                "model": "openai/gpt-5.1-codex",
+                "api_key": "org-2-api-key",  # Different API key
+            },
+            "model_info": {"id": "deployment-eu-west"},
+        },
+    ],
+    optional_pre_call_checks=["encrypted_content_affinity"],
+    deployment_affinity_ttl_seconds=86400,  # 24 hours (default)
+)
+
+# Initial request - routes to any deployment
+response1 = await router.aresponses(
+    model="gpt-5.1-codex",
+    input="Explain quantum computing",
+)
+
+# Follow-up with encrypted items - automatically routes to same deployment
+response2 = await router.aresponses(
+    model="gpt-5.1-codex",
+    input=response1.output,  # Contains encrypted items from response1
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy Server">
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://eastus.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_EASTUS
+      rpm: 600
+      tpm: 100000
+    model_info:
+      id: "gpt-5.1-codex-eastus"
+
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://westeurope.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_WESTEUROPE
+      rpm: 600
+      tpm: 100000
+    model_info:
+      id: "gpt-5.1-codex-westeurope"
+
+router_settings:
+  routing_strategy: usage-based-routing-v2
+  enable_pre_call_checks: true
+  optional_pre_call_checks:
+    - encrypted_content_affinity
+  deployment_affinity_ttl_seconds: 86400  # Optional, default is 86400 (24 hours)
+```
+
+**Start proxy:**
+```bash
+litellm --config config.yaml
+```
+
+</TabItem>
+</Tabs>
+
+### When to Use Each Affinity Type
+
+| Affinity Type | Use Case | Scope | Quota Impact |
+|---------------|----------|-------|--------------|
+| **`encrypted_content_affinity`** | **[Recommended]** Multi-region Responses API with different API keys | Only requests with tracked encrypted items | ✅ None (surgical pinning) |
+| `responses_api_deployment_check` | When `previous_response_id` is available | Requests with `previous_response_id` | ✅ None |
+| `session_affinity` | Session-based applications | All requests with same `session_id` | ⚠️ Reduces quota by # of sessions |
+| `deployment_affinity` | Simple sticky sessions | All requests from same API key | ❌ Reduces quota by # of users |
+
+### Multi-Instance Deployment (Redis)
+
+For multiple LiteLLM proxy instances, use Redis to share affinity state:
+
+```yaml
+router_settings:
+  optional_pre_call_checks:
+    - encrypted_content_affinity
+  redis_host: redis.example.com
+  redis_port: 6379
+  redis_password: your-password
+```
+
 
 ## Calling non-Responses API endpoints (`/responses` to `/chat/completions` Bridge)
 
