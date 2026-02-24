@@ -2463,8 +2463,8 @@ class MCPServerManager:
         # Check if we should skip health check based on auth configuration
         should_skip_health_check = False
 
-        # Skip if auth_type is oauth2
-        if server.needs_user_oauth_token:
+        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
+        if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
         elif (
