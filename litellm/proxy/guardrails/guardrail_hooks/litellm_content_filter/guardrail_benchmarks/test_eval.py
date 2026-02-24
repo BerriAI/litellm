@@ -123,7 +123,7 @@ def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) 
     else:
         safe_label = f"{topic}_{method_name}"
     safe_label = safe_label.replace(" ", "_")
-    safe_label = re.sub(r"[^a-z0-9_\-]", "", safe_label)
+    safe_label = re.sub(r"[^a-z0-9_.\-]", "", safe_label)
     safe_label = re.sub(r"_+", "_", safe_label).strip("_")
     result = {
         "label": label,
