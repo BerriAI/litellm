@@ -129,6 +129,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     },
     onTokenReceived: (token) => {
       setOauthAccessToken(token?.access_token ?? null);
+      
+      if (token?.access_token) {
+        const credentials = {
+          access_token: token.access_token,
+          ...(token.refresh_token && { refresh_token: token.refresh_token }),
+          ...(token.expires_in && { expires_in: token.expires_in }),
+          ...(token.scope && { scope: token.scope }),
+        };
+        
+        form.setFieldsValue({ credentials });
+        
+        NotificationsManager.success(
+          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration."
+        );
+      }
     },
     onBeforeRedirect: persistCreateUiState,
   });
