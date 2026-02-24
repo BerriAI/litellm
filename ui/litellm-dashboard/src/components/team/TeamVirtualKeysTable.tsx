@@ -571,7 +571,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     enableSorting: true,
-    manualSorting: false,
+    manualSorting: true, // Server sorts via useKeys. Avoid redundant client-side sort
     manualPagination: true,
     pageCount: pageCount,
   });

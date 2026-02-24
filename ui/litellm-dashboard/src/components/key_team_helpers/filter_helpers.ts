@@ -8,9 +8,13 @@ export interface TeamFilterOptions {
   userIds: Array<{ id: string; email: string }>;
 }
 
+const FILTER_OPTIONS_PAGE_SIZE = 100; // API max per page
+const MAX_PAGES = 50; // Cap at 5000 keys to avoid unbounded fetches
+
 /**
- * Fetches filter options (key aliases, org IDs, user IDs) scoped to a team's keys.
- * Used by TeamVirtualKeysTable to show only relevant filter options.
+ * Fetches filter options (key aliases, org IDs, user IDs) from all team keys.
+ * Paginates through pages to build complete dropdowns. Capped at 50 pages
+ * (5000 keys) to limit load for very large teams.
  */
 export const fetchTeamFilterOptions = async (
   accessToken: string | null,
@@ -23,10 +27,8 @@ export const fetchTeamFilterOptions = async (
   try {
     const keyAliases = new Set<string>();
     const organizationIds = new Set<string>();
-    const userMap = new Map<string, string>(); // user_id -> user_email
+    const userMap = new Map<string, string>();
 
-    const MAX_PAGES = 1; // Cap at 20 keys on load to avoid heavy fetches
-    const PAGE_SIZE = 20;
     let page = 1;
     let totalPages = 1;
 
@@ -39,7 +41,7 @@ export const fetchTeamFilterOptions = async (
         null,
         null,
         page,
-        PAGE_SIZE,
+        FILTER_OPTIONS_PAGE_SIZE,
         null,
         null,
         "user",
