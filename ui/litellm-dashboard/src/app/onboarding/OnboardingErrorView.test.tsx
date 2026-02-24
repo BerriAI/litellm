@@ -4,19 +4,19 @@ import { describe, it, expect } from "vitest";
 import { OnboardingErrorView } from "./OnboardingErrorView";
 
 describe("OnboardingErrorView", () => {
-  it("shows the failed to load invitation message", () => {
+  it("should show the failed to load invitation message", () => {
     render(<OnboardingErrorView />);
     expect(screen.getByText("Failed to load invitation")).toBeInTheDocument();
   });
 
-  it("shows the expiry description", () => {
+  it("should show the expiry description", () => {
     render(<OnboardingErrorView />);
     expect(
       screen.getByText("The invitation link may be invalid or expired.")
     ).toBeInTheDocument();
   });
 
-  it("renders a Back to Login link pointing to /ui/login", () => {
+  it("should render a Back to Login link pointing to /ui/login", () => {
     render(<OnboardingErrorView />);
     // antd Button with href renders as an <a> element
     const link = screen.getByRole("link", { name: "Back to Login" });

@@ -4,12 +4,12 @@ import { describe, it, expect } from "vitest";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 
 describe("OnboardingLoadingView", () => {
-  it("renders a spinner container", () => {
+  it("should render a spinner container", () => {
     const { container } = render(<OnboardingLoadingView />);
     expect(container.firstChild).toBeInTheDocument();
   });
 
-  it("applies centering layout classes", () => {
+  it("should apply centering layout classes", () => {
     const { container } = render(<OnboardingLoadingView />);
     expect(container.firstChild).toHaveClass("flex", "justify-center");
   });
