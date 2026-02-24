@@ -58,12 +58,12 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
@@ -1474,6 +1474,9 @@ class Router:
                     logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
+                # Preserve hidden params (including litellm_overhead_time_ms) from original response
+                if hasattr(model_response, "_hidden_params"):
+                    self._hidden_params = model_response._hidden_params.copy()
 
             def __aiter__(self):
                 return self
@@ -6582,16 +6585,28 @@ class Router:
             raise ValueError("Deployment not found")
 
         ## GET BASE MODEL
-        base_model = deployment.get("model_info", {}).get("base_model", None)
+        base_model = (deployment.get("model_info") or {}).get("base_model", None)
         if base_model is None:
-            base_model = deployment.get("litellm_params", {}).get("base_model", None)
+            base_model = (deployment.get("litellm_params") or {}).get("base_model", None)
 
         model = base_model
 
-        ## GET PROVIDER
+        ## GET PROVIDER - reuse LiteLLM_Params if already constructed
+        litellm_params_data = deployment.get("litellm_params")
+        litellm_params: LiteLLM_Params
+        if isinstance(litellm_params_data, LiteLLM_Params):
+            litellm_params = litellm_params_data
+        elif isinstance(litellm_params_data, dict) and "model" in litellm_params_data:
+            litellm_params = LiteLLM_Params(**litellm_params_data)
+        else:
+            raise ValueError(
+                f"Deployment missing valid litellm_params. "
+                f"Got: {type(litellm_params_data).__name__}, "
+                f"deployment_id: {(deployment.get('model_info') or {}).get('id', 'unknown')}"
+            )
         _model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=deployment.get("litellm_params", {}).get("model", ""),
-            litellm_params=LiteLLM_Params(**deployment.get("litellm_params", {})),
+            model=litellm_params.model,
+            litellm_params=litellm_params,
         )
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
@@ -6607,10 +6622,10 @@ class Router:
                 if potential_models is not None:
                     for potential_model in potential_models:
                         try:
-                            if potential_model.get("model_info", {}).get(
+                            if (potential_model.get("model_info") or {}).get(
                                 "id"
-                            ) == deployment.get("model_info", {}).get("id"):
-                                model = potential_model.get("litellm_params", {}).get(
+                            ) == (deployment.get("model_info") or {}).get("id"):
+                                model = (potential_model.get("litellm_params") or {}).get(
                                     "model"
                                 )
                                 break
@@ -6631,9 +6646,10 @@ class Router:
         model_info = litellm.get_model_info(model=model_info_name)
 
         ## CHECK USER SET MODEL INFO
-        user_model_info = deployment.get("model_info", {})
+        user_model_info = deployment.get("model_info") or {}
 
-        model_info.update(user_model_info)
+        if model_info is not None:
+            model_info.update(user_model_info)
 
         return model_info
 
