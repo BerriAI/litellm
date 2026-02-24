@@ -4,6 +4,8 @@ import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import respx
+from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -143,7 +145,8 @@ async def test_encrypted_content_affinity_no_effect_on_chat_completions():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_key": os.environ.get("OPENAI_API_KEY", "test-key"),
+                    "api_key": "test-key",
+                    "mock_response": "Hello from chat completion!",
                 },
                 "model_info": {"id": "chat-deployment-1"},
             },
@@ -151,41 +154,20 @@ async def test_encrypted_content_affinity_no_effect_on_chat_completions():
         optional_pre_call_checks=["encrypted_content_affinity"],
     )
 
-    mock_chat_response = {
-        "id": "chatcmpl-123",
-        "object": "chat.completion",
-        "created": 1677652288,
-        "model": "gpt-3.5-turbo",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "Hello!"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
-    }
+    # Multiple chat completion requests should work normally
+    response1 = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello"}],
+    )
+    response2 = await router.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello again"}],
+    )
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = MockResponse(mock_chat_response, 200)
-
-        # Multiple chat completion requests should work normally
-        response1 = await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello"}],
-        )
-        response2 = await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello again"}],
-        )
-
-        # Both should succeed (no affinity interference)
-        # Check that responses have IDs (litellm may modify them)
-        assert response1.id is not None
-        assert response2.id is not None
+    # Both should succeed (no affinity interference)
+    # Check that responses have IDs
+    assert response1.id is not None
+    assert response2.id is not None
 
 
 @pytest.mark.asyncio
