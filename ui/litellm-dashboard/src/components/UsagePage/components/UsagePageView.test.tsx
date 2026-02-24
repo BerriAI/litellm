@@ -100,8 +100,8 @@ vi.mock("../../EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
-vi.mock("./UsageAIChatModal", () => ({
-  default: () => <div data-testid="usage-ai-chat-modal">Usage AI Chat Modal</div>,
+vi.mock("./UsageAIChatPanel", () => ({
+  default: () => <div data-testid="usage-ai-chat-panel">Usage AI Chat Panel</div>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
@@ -1005,14 +1005,14 @@ describe("UsagePage", () => {
       expect(screen.getByText("Ask AI")).toBeInTheDocument();
     });
 
-    it("should render AI chat modal component", async () => {
+    it("should render AI chat panel component", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByTestId("usage-ai-chat-modal")).toBeInTheDocument();
+      expect(screen.getByTestId("usage-ai-chat-panel")).toBeInTheDocument();
     });
   });
 

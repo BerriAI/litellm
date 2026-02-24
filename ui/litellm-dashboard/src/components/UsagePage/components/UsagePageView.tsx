@@ -50,7 +50,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
-import UsageAIChatModal from "./UsageAIChatModal";
+import UsageAIChatPanel from "./UsageAIChatPanel";
 
 interface UsagePageProps {
   teams: Team[];
@@ -940,10 +940,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         customTitle="Export Usage Data"
       />
 
-      {/* AI Chat Modal */}
-      <UsageAIChatModal
-        visible={isAiChatOpen}
-        onCancel={() => setIsAiChatOpen(false)}
+      {/* AI Chat Panel */}
+      <UsageAIChatPanel
+        open={isAiChatOpen}
+        onClose={() => setIsAiChatOpen(false)}
         accessToken={accessToken}
         userSpendData={userSpendData}
         dateRange={dateValue}
