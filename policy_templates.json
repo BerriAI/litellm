@@ -2022,20 +2022,20 @@
     "iconColor": "text-red-500",
     "iconBg": "bg-red-50",
     "guardrails": [
-      "pdpa-sg-pii-identifiers",
-      "pdpa-sg-contact-information",
-      "pdpa-sg-financial-data",
-      "pdpa-sg-business-identifiers",
-      "pdpa-sg-personal-identifiers",
-      "pdpa-sg-sensitive-data",
-      "pdpa-sg-do-not-call",
-      "pdpa-sg-data-transfer",
-      "pdpa-sg-profiling-automated-decisions"
+      "sg-pdpa-pii-identifiers",
+      "sg-pdpa-contact-information",
+      "sg-pdpa-financial-data",
+      "sg-pdpa-business-identifiers",
+      "sg-pdpa-personal-identifiers",
+      "sg-pdpa-sensitive-data",
+      "sg-pdpa-do-not-call",
+      "sg-pdpa-data-transfer",
+      "sg-pdpa-profiling-automated-decisions"
     ],
     "complexity": "High",
     "guardrailDefinitions": [
       {
-        "guardrail_name": "pdpa-sg-pii-identifiers",
+        "guardrail_name": "sg-pdpa-pii-identifiers",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2058,7 +2058,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-contact-information",
+        "guardrail_name": "sg-pdpa-contact-information",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2086,7 +2086,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-financial-data",
+        "guardrail_name": "sg-pdpa-financial-data",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2109,7 +2109,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-business-identifiers",
+        "guardrail_name": "sg-pdpa-business-identifiers",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2127,7 +2127,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-personal-identifiers",
+        "guardrail_name": "sg-pdpa-personal-identifiers",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2146,7 +2146,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-sensitive-data",
+        "guardrail_name": "sg-pdpa-sensitive-data",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2165,7 +2165,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-do-not-call",
+        "guardrail_name": "sg-pdpa-do-not-call",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2184,7 +2184,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-data-transfer",
+        "guardrail_name": "sg-pdpa-data-transfer",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2203,7 +2203,7 @@
         }
       },
       {
-        "guardrail_name": "pdpa-sg-profiling-automated-decisions",
+        "guardrail_name": "sg-pdpa-profiling-automated-decisions",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2226,15 +2226,15 @@
       "policy_name": "pdpa-singapore",
       "description": "Singapore PDPA compliance policy. Covers personal identifier protection (s.13), sensitive data profiling (Advisory Guidelines), Do Not Call Registry (Part IX), overseas data transfers (s.26), and automated profiling (Model AI Governance Framework). Includes regex-based PII detection for NRIC/FIN, phone numbers, postal codes, passports, UEN, and bank accounts.",
       "guardrails_add": [
-        "pdpa-sg-pii-identifiers",
-        "pdpa-sg-contact-information",
-        "pdpa-sg-financial-data",
-        "pdpa-sg-business-identifiers",
-        "pdpa-sg-personal-identifiers",
-        "pdpa-sg-sensitive-data",
-        "pdpa-sg-do-not-call",
-        "pdpa-sg-data-transfer",
-        "pdpa-sg-profiling-automated-decisions"
+        "sg-pdpa-pii-identifiers",
+        "sg-pdpa-contact-information",
+        "sg-pdpa-financial-data",
+        "sg-pdpa-business-identifiers",
+        "sg-pdpa-personal-identifiers",
+        "sg-pdpa-sensitive-data",
+        "sg-pdpa-do-not-call",
+        "sg-pdpa-data-transfer",
+        "sg-pdpa-profiling-automated-decisions"
       ],
       "guardrails_remove": []
     },
@@ -2253,16 +2253,16 @@
     "iconColor": "text-blue-600",
     "iconBg": "bg-blue-50",
     "guardrails": [
-      "mas-sg-fairness-bias",
-      "mas-sg-transparency-explainability",
-      "mas-sg-human-oversight",
-      "mas-sg-data-governance",
-      "mas-sg-model-security"
+      "sg-mas-fairness-bias",
+      "sg-mas-transparency-explainability",
+      "sg-mas-human-oversight",
+      "sg-mas-data-governance",
+      "sg-mas-model-security"
     ],
     "complexity": "High",
     "guardrailDefinitions": [
       {
-        "guardrail_name": "mas-sg-fairness-bias",
+        "guardrail_name": "sg-mas-fairness-bias",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2281,7 +2281,7 @@
         }
       },
       {
-        "guardrail_name": "mas-sg-transparency-explainability",
+        "guardrail_name": "sg-mas-transparency-explainability",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2300,7 +2300,7 @@
         }
       },
       {
-        "guardrail_name": "mas-sg-human-oversight",
+        "guardrail_name": "sg-mas-human-oversight",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2319,7 +2319,7 @@
         }
       },
       {
-        "guardrail_name": "mas-sg-data-governance",
+        "guardrail_name": "sg-mas-data-governance",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2338,7 +2338,7 @@
         }
       },
       {
-        "guardrail_name": "mas-sg-model-security",
+        "guardrail_name": "sg-mas-model-security",
         "litellm_params": {
           "guardrail": "litellm_content_filter",
           "mode": "pre_call",
@@ -2361,11 +2361,11 @@
       "policy_name": "mas-ai-risk-management",
       "description": "Guidelines on Artificial Intelligence Risk Management (MAS) for Financial Institutions alignment. Covers fairness & bias, transparency & explainability, human oversight, data governance, and model security. Aligned with the 2018 FEAT Principles, Project MindForge, and NIST AI RMF.",
       "guardrails_add": [
-        "mas-sg-fairness-bias",
-        "mas-sg-transparency-explainability",
-        "mas-sg-human-oversight",
-        "mas-sg-data-governance",
-        "mas-sg-model-security"
+        "sg-mas-fairness-bias",
+        "sg-mas-transparency-explainability",
+        "sg-mas-human-oversight",
+        "sg-mas-data-governance",
+        "sg-mas-model-security"
       ],
       "guardrails_remove": []
     },
