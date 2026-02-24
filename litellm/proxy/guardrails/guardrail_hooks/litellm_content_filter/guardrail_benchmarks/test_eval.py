@@ -277,6 +277,101 @@ class TestInvestmentContentFilter:
         )
 
 
+class TestMilitaryStatusContentFilter:
+    """Military status discrimination eval with production ContentFilterGuardrail + military_status.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("military_status")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_military_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Military Discrimination — ContentFilter (military_status.yaml)",
+        )
+
+
+class TestDisabilityContentFilter:
+    """Disability discrimination eval with production ContentFilterGuardrail + disability.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("disability")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_disability_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Disability Discrimination — ContentFilter (disability.yaml)",
+        )
+
+
+class TestAgeDiscriminationContentFilter:
+    """Age discrimination eval with production ContentFilterGuardrail + age_discrimination.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("age_discrimination")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_age_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Age Discrimination — ContentFilter (age_discrimination.yaml)",
+        )
+
+
+class TestReligionContentFilter:
+    """Religion discrimination eval with production ContentFilterGuardrail + religion.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("religion")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_religion_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Religion Discrimination — ContentFilter (religion.yaml)",
+        )
+
+
+class TestGenderContentFilter:
+    """Gender/sexual orientation discrimination eval with production ContentFilterGuardrail + gender_sexual_orientation.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("gender_sexual_orientation")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_gender_discrimination.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Gender Discrimination — ContentFilter (gender_sexual_orientation.yaml)",
+        )
+
+
 # ── LLM-as-judge baselines ───────────────────────────────────────
 
 LLM_JUDGE_SYSTEM_PROMPT = """\
