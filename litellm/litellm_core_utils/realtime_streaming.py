@@ -150,25 +150,23 @@ class RealTimeStreaming:
                 safe_msg = (
                     str(e)
                     if str(e)
-                    else "⚠️ Request blocked by guardrail."
+                    else "I'm sorry, that request was blocked by the content filter."
                 )
-                rid = f"guardrail_{id(transcript)}"
-                for evt in [
-                    {
-                        "type": "response.created",
-                        "response": {"id": rid, "status": "in_progress"},
-                    },
-                    {
-                        "type": "response.text.delta",
-                        "response_id": rid,
-                        "delta": safe_msg,
-                    },
-                    {
-                        "type": "response.done",
-                        "response": {"id": rid, "status": "completed"},
-                    },
-                ]:
-                    await self.websocket.send_text(json.dumps(evt))
+                # Ask OpenAI to speak the warning — TTS audio plays naturally in the client
+                await self.backend_ws.send(
+                    json.dumps(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "modalities": ["text", "audio"],
+                                "instructions": (
+                                    f"Say exactly and only: \"{safe_msg}\". "
+                                    "Do not add anything else."
+                                ),
+                            },
+                        }
+                    )
+                )
                 verbose_logger.warning(
                     "[realtime guardrail] BLOCKED transcript: %r",
                     transcript[:80],
