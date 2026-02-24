@@ -425,7 +425,6 @@ async def stream_usage_ai_chat(
 
                 handler = TOOL_HANDLERS.get(fn_name)
                 if not handler:
-                    yield _sse({"type": "status", "message": f"Unknown tool: {fn_name}"})
                     chat_messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -434,8 +433,11 @@ async def stream_usage_ai_chat(
                     continue
 
                 yield _sse({
-                    "type": "status",
-                    "message": f"Fetching {handler['label']} ({fn_args.get('start_date', '')} to {fn_args.get('end_date', '')})..."
+                    "type": "tool_call",
+                    "tool_name": fn_name,
+                    "tool_label": handler["label"],
+                    "arguments": fn_args,
+                    "status": "running",
                 })
 
                 try:
@@ -458,8 +460,24 @@ async def stream_usage_ai_chat(
 
                     raw_data = await handler["fetch"](**fetch_kwargs)
                     tool_result = handler["summarise"](raw_data)
+
+                    yield _sse({
+                        "type": "tool_call",
+                        "tool_name": fn_name,
+                        "tool_label": handler["label"],
+                        "arguments": fn_args,
+                        "status": "complete",
+                    })
                 except Exception as e:
                     tool_result = f"Error fetching {handler['label']}: {str(e)}"
+                    yield _sse({
+                        "type": "tool_call",
+                        "tool_name": fn_name,
+                        "tool_label": handler["label"],
+                        "arguments": fn_args,
+                        "status": "error",
+                        "error": str(e),
+                    })
 
                 chat_messages.append({
                     "role": "tool",

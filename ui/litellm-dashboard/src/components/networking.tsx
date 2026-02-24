@@ -5907,6 +5907,14 @@ export const enrichPolicyTemplateStream = async (
   }
 };
 
+export interface UsageAiToolCallEvent {
+  tool_name: string;
+  tool_label: string;
+  arguments: Record<string, string>;
+  status: "running" | "complete" | "error";
+  error?: string;
+}
+
 export const usageAiChatStream = async (
   accessToken: string,
   messages: { role: string; content: string }[],
@@ -5915,6 +5923,7 @@ export const usageAiChatStream = async (
   onDone: () => void,
   onError?: (error: string) => void,
   onStatus?: (message: string) => void,
+  onToolCall?: (event: UsageAiToolCallEvent) => void,
   signal?: AbortSignal,
 ) => {
   const url = proxyBaseUrl
@@ -5960,6 +5969,8 @@ export const usageAiChatStream = async (
           onChunk(event.content);
         } else if (event.type === "status") {
           onStatus?.(event.message);
+        } else if (event.type === "tool_call") {
+          onToolCall?.(event as UsageAiToolCallEvent);
         } else if (event.type === "done") {
           onDone();
         } else if (event.type === "error") {

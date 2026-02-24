@@ -42,7 +42,7 @@ describe("UsageAIChatPanel", () => {
   it("should render model selector", () => {
     renderWithProviders(<UsageAIChatPanel {...defaultProps} />);
 
-    expect(screen.getByText("Select a model")).toBeInTheDocument();
+    expect(screen.getByText("Select a model (optional, defaults to gpt-4o-mini)")).toBeInTheDocument();
   });
 
   it("should render empty state message when no conversation", () => {

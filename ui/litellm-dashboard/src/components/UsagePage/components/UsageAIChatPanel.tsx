@@ -1,13 +1,23 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Select, Input, Spin } from "antd";
 import { Button } from "@tremor/react";
-import { modelHubCall, usageAiChatStream } from "../../networking";
+import ReactMarkdown from "react-markdown";
+import { modelHubCall, usageAiChatStream, UsageAiToolCallEvent } from "../../networking";
 
 const { TextArea } = Input;
+
+interface ToolCallStep {
+  tool_name: string;
+  tool_label: string;
+  arguments: Record<string, string>;
+  status: "running" | "complete" | "error";
+  error?: string;
+}
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  toolCalls?: ToolCallStep[];
 }
 
 interface UsageAIChatPanelProps {
@@ -15,6 +25,83 @@ interface UsageAIChatPanelProps {
   onClose: () => void;
   accessToken: string | null;
 }
+
+const TOOL_ICONS: Record<string, string> = {
+  get_usage_data: "📊",
+  get_team_usage_data: "👥",
+  get_tag_usage_data: "🏷️",
+};
+
+const ToolCallDisplay: React.FC<{ step: ToolCallStep }> = ({ step }) => {
+  const icon = TOOL_ICONS[step.tool_name] || "🔧";
+  const args = step.arguments;
+  const dateRange = args.start_date && args.end_date
+    ? `${args.start_date} → ${args.end_date}`
+    : "";
+  const filter = args.team_ids || args.tags || args.user_id || "";
+
+  return (
+    <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-100 border border-gray-200 text-xs">
+      <span className="flex-shrink-0 mt-0.5">
+        {step.status === "running" ? (
+          <Spin size="small" />
+        ) : step.status === "error" ? (
+          <span className="text-red-500">✗</span>
+        ) : (
+          <span className="text-green-600">✓</span>
+        )}
+      </span>
+      <div className="min-w-0">
+        <div className="font-medium text-gray-700">
+          {icon} {step.tool_label}
+        </div>
+        {dateRange && (
+          <div className="text-gray-500 mt-0.5">{dateRange}</div>
+        )}
+        {filter && (
+          <div className="text-gray-500 mt-0.5">Filter: {filter}</div>
+        )}
+        {step.status === "error" && step.error && (
+          <div className="text-red-600 mt-0.5">{step.error}</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const MarkdownContent: React.FC<{ content: string }> = ({ content }) => (
+  <ReactMarkdown
+    components={{
+      p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+      ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
+      ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
+      li: ({ children }) => <li>{children}</li>,
+      h1: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
+      h2: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
+      h3: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
+      code: ({ children, className }) => {
+        const isBlock = className?.includes("language-");
+        return isBlock ? (
+          <pre className="bg-gray-100 rounded p-2 my-1 overflow-x-auto text-xs">
+            <code>{children}</code>
+          </pre>
+        ) : (
+          <code className="px-1 py-0.5 rounded bg-gray-100 text-xs font-mono">{children}</code>
+        );
+      },
+      table: ({ children }) => (
+        <div className="overflow-x-auto my-2">
+          <table className="text-xs border-collapse w-full">{children}</table>
+        </div>
+      ),
+      th: ({ children }) => <th className="border border-gray-200 px-2 py-1 bg-gray-50 font-medium text-left">{children}</th>,
+      td: ({ children }) => <td className="border border-gray-200 px-2 py-1">{children}</td>,
+    }}
+  >
+    {content}
+  </ReactMarkdown>
+);
 
 const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
   open,
@@ -29,6 +116,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [activeToolCalls, setActiveToolCalls] = useState<ToolCallStep[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -42,7 +130,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
     if (typeof messagesEndRef.current?.scrollIntoView === "function") {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, activeToolCalls, statusMessage]);
 
   const loadModels = async () => {
     if (!accessToken) return;
@@ -72,11 +160,13 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
     setIsLoading(true);
     setStreamingContent("");
     setStatusMessage(null);
+    setActiveToolCalls([]);
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
     let accumulated = "";
+    const toolCalls: ToolCallStep[] = [];
 
     try {
       await usageAiChatStream(
@@ -90,11 +180,16 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
         },
         () => {
           setStatusMessage(null);
-          setMessages((prev) => [...prev, { role: "assistant", content: accumulated }]);
+          setActiveToolCalls([]);
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: accumulated, toolCalls: toolCalls.length > 0 ? [...toolCalls] : undefined },
+          ]);
           setStreamingContent("");
         },
         (errorMsg: string) => {
           setStatusMessage(null);
+          setActiveToolCalls([]);
           setMessages((prev) => [
             ...prev,
             { role: "assistant", content: `Error: ${errorMsg}` },
@@ -103,6 +198,15 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
         },
         (status: string) => {
           setStatusMessage(status);
+        },
+        (event: UsageAiToolCallEvent) => {
+          const idx = toolCalls.findIndex((tc) => tc.tool_name === event.tool_name);
+          if (idx >= 0) {
+            toolCalls[idx] = { ...event };
+          } else {
+            toolCalls.push({ ...event });
+          }
+          setActiveToolCalls([...toolCalls]);
         },
         abortController.signal,
       );
@@ -139,6 +243,8 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
   const handleClear = () => {
     setMessages([]);
     setStreamingContent("");
+    setActiveToolCalls([]);
+    setStatusMessage(null);
   };
 
   return (
@@ -175,11 +281,12 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
       {/* Model selector */}
       <div className="px-5 py-3 border-b border-gray-100 flex-shrink-0">
         <Select
-          placeholder="Select a model"
+          placeholder="Select a model (optional, defaults to gpt-4o-mini)"
           value={selectedModel}
           onChange={(value) => setSelectedModel(value)}
           loading={isLoadingModels}
           showSearch
+          allowClear
           size="small"
           className="w-full"
           options={availableModels.map((m) => ({ label: m, value: m }))}
@@ -191,7 +298,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
 
       {/* Chat messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
-        {messages.length === 0 && !streamingContent && (
+        {messages.length === 0 && !streamingContent && !isLoading && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <svg className="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
@@ -202,38 +309,53 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
         )}
 
         {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[88%] rounded-xl px-3.5 py-2 text-sm leading-relaxed ${
-                msg.role === "user"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white border border-gray-200 text-gray-800"
-              }`}
-            >
-              <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-            </div>
+          <div key={idx}>
+            {msg.role === "user" ? (
+              <div className="flex justify-end">
+                <div className="max-w-[88%] rounded-xl px-3.5 py-2 text-sm leading-relaxed bg-blue-600 text-white">
+                  {msg.content}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {/* Tool calls for this message */}
+                {msg.toolCalls && msg.toolCalls.length > 0 && (
+                  <div className="space-y-1.5">
+                    {msg.toolCalls.map((tc, tcIdx) => (
+                      <ToolCallDisplay key={tcIdx} step={tc} />
+                    ))}
+                  </div>
+                )}
+                {/* Response */}
+                <div className="max-w-[95%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed bg-white border border-gray-200 text-gray-800">
+                  <MarkdownContent content={msg.content} />
+                </div>
+              </div>
+            )}
           </div>
         ))}
 
-        {streamingContent && (
-          <div className="flex justify-start">
-            <div className="max-w-[88%] rounded-xl px-3.5 py-2 text-sm leading-relaxed bg-white border border-gray-200 text-gray-800">
-              <div className="whitespace-pre-wrap break-words">{streamingContent}</div>
-            </div>
+        {/* Active tool calls (in-progress) */}
+        {isLoading && activeToolCalls.length > 0 && (
+          <div className="space-y-1.5">
+            {activeToolCalls.map((tc, idx) => (
+              <ToolCallDisplay key={idx} step={tc} />
+            ))}
           </div>
         )}
 
+        {/* Status / spinner */}
         {isLoading && !streamingContent && (
-          <div className="flex justify-start">
-            <div className="rounded-xl px-3.5 py-2 bg-white border border-gray-200 flex items-center gap-2">
-              <Spin size="small" />
-              {statusMessage && (
-                <span className="text-xs text-gray-500 italic">{statusMessage}</span>
-              )}
-            </div>
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500">
+            <Spin size="small" />
+            <span className="italic">{statusMessage || "Thinking..."}</span>
+          </div>
+        )}
+
+        {/* Streaming response */}
+        {streamingContent && (
+          <div className="max-w-[95%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed bg-white border border-gray-200 text-gray-800">
+            <MarkdownContent content={streamingContent} />
           </div>
         )}
 

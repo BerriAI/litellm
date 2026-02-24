@@ -200,12 +200,15 @@ class TestStreamUsageAiChat:
                 events.append(json.loads(event.replace("data: ", "").strip()))
 
             status_events = [e for e in events if e["type"] == "status"]
+            tool_call_events = [e for e in events if e["type"] == "tool_call"]
             chunk_events = [e for e in events if e["type"] == "chunk"]
             done_events = [e for e in events if e["type"] == "done"]
 
-            assert len(status_events) >= 2
+            assert len(status_events) >= 1
             assert "Thinking" in status_events[0]["message"]
-            assert "Fetching" in status_events[1]["message"]
+            assert len(tool_call_events) >= 1
+            assert tool_call_events[0]["tool_name"] == "get_usage_data"
+            assert tool_call_events[0]["status"] in ("running", "complete")
             assert len(chunk_events) >= 1
             assert len(done_events) == 1
 
