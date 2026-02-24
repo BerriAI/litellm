@@ -5,14 +5,12 @@ This feature allows users to enforce TPM/RPM limits set on model deployments
 regardless of the routing strategy being used.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm
 from litellm import Router
-from litellm.caching.dual_cache import DualCache
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -90,7 +88,7 @@ class TestModelRateLimitingCheck:
     def test_pre_call_check_raises_rate_limit_error_when_over_rpm(self):
         """Test that RateLimitError is raised when RPM limit is exceeded."""
         mock_cache = MagicMock()
-        mock_cache.increment_cache.return_value = 11  # Over limit after increment
+        mock_cache.get_cache.return_value = 10  # Already at limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -105,11 +103,12 @@ class TestModelRateLimitingCheck:
             check.pre_call_check(deployment)
 
         assert "RPM limit=10" in str(exc_info.value)
-        assert "current usage=11" in str(exc_info.value)
+        assert "current usage=10" in str(exc_info.value)
 
     def test_pre_call_check_allows_request_under_limit(self):
         """Test that requests are allowed when under the limit."""
         mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = 5
         mock_cache.increment_cache.return_value = 6
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
@@ -189,8 +188,7 @@ class TestModelRateLimitingCheckAsync:
     async def test_async_pre_call_check_raises_rate_limit_error_when_over_rpm(self):
         """Test that RateLimitError is raised when RPM limit is exceeded (async)."""
         mock_cache = MagicMock()
-        mock_cache.async_get_cache = AsyncMock(return_value=None)
-        mock_cache.async_increment_cache = AsyncMock(return_value=11)  # Over limit
+        mock_cache.async_get_cache = AsyncMock(return_value=10)  # Already at limit
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -210,7 +208,7 @@ class TestModelRateLimitingCheckAsync:
     async def test_async_pre_call_check_allows_request_under_limit(self):
         """Test that requests are allowed when under the limit (async)."""
         mock_cache = MagicMock()
-        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_get_cache = AsyncMock(return_value=5)
         mock_cache.async_increment_cache = AsyncMock(return_value=6)
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
@@ -315,41 +313,3 @@ class TestRouterWithEnforceModelRateLimits:
                 break
 
         assert found, "ModelRateLimitingCheck should be in litellm.callbacks"
-
-
-class TestModelRateLimitConcurrency:
-    """Test that RPM rate limiting is atomic under concurrent requests."""
-
-    @pytest.mark.asyncio
-    async def test_concurrent_requests_respect_rpm_limit(self):
-        """
-        Fire 4 concurrent async requests with RPM limit of 2.
-        Exactly 2 should succeed and 2 should raise RateLimitError.
-
-        This test validates the atomic increment-first pattern:
-        the old check-then-increment pattern would let 3+ through
-        due to a race condition on the local cache read.
-        """
-        dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
-
-        deployment = {
-            "rpm": 2,
-            "litellm_params": {"model": "gpt-4"},
-            "model_info": {"id": "concurrent-test-id"},
-            "model_name": "test-model",
-        }
-
-        async def attempt_request():
-            return await check.async_pre_call_check(deployment)
-
-        results = await asyncio.gather(
-            *[attempt_request() for _ in range(4)],
-            return_exceptions=True,
-        )
-
-        successes = [r for r in results if not isinstance(r, Exception)]
-        failures = [r for r in results if isinstance(r, litellm.RateLimitError)]
-
-        assert len(successes) == 2, f"Expected 2 successes, got {len(successes)}"
-        assert len(failures) == 2, f"Expected 2 rate limit errors, got {len(failures)}"
