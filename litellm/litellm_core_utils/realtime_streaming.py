@@ -155,10 +155,10 @@ class RealTimeStreaming:
             ):
                 continue
             try:
-                await callback.async_realtime_input_transcription_hook(
-                    transcription=transcript,
-                    user_api_key_dict=self.user_api_key_dict,
-                    session_id=item_id,
+                await callback.apply_guardrail(
+                    inputs={"texts": [transcript], "images": []},
+                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    input_type="request",
                 )
             except Exception as e:
                 # Extract the human-readable error from HTTPException detail dict,

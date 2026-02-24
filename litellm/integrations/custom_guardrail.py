@@ -334,21 +334,6 @@ class CustomGuardrail(CustomLogger):
 
         return kwargs
 
-    async def async_realtime_input_transcription_hook(
-        self,
-        transcription: str,
-        user_api_key_dict: Optional[Any],
-        session_id: Optional[str] = None,
-    ) -> None:
-        """
-        Called when a user's voice transcription completes in a Realtime API session,
-        before the LLM generates a response.
-
-        Raise an exception to block the response.
-        Return None to allow the LLM to respond.
-        """
-        return None
-
     async def async_post_call_success_deployment_hook(
         self,
         request_data: dict,

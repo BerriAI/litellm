@@ -1921,22 +1921,6 @@ class ContentFilterGuardrail(CustomGuardrail):
             # We already reached the end of the generator
             pass
 
-    async def async_realtime_input_transcription_hook(
-        self,
-        transcription: str,
-        user_api_key_dict,
-        session_id=None,
-    ) -> None:
-        """
-        Run content filter checks on a Realtime API speech transcription.
-        Raises ValueError if the transcription contains blocked content.
-        """
-        await self.apply_guardrail(
-            inputs={"texts": [transcription], "images": []},
-            request_data={},
-            input_type="request",
-        )
-
     @staticmethod
     def get_config_model():
         from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
