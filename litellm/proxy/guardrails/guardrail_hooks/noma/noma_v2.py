@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
@@ -237,6 +237,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
         return inputs
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
