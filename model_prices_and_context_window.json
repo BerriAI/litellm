@@ -11366,6 +11366,7 @@
         "supports_tool_choice": true
     },
     "deepseek/deepseek-r1": {
+        "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 5.5e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
         "litellm_provider": "deepseek",
@@ -11378,8 +11379,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true,
-        "output_cost_per_reasoning_token": 2.19e-06
+        "supports_tool_choice": true
     },
     "deepseek/deepseek-reasoner": {
         "cache_read_input_token_cost": 2.8e-08,
