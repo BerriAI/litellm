@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Button } from "@tremor/react";
 import { Modal } from "antd";
 import { getAgentsList, deleteAgentCall } from "./networking";
-import AddAgentForm from "./agents/add_agent_form";
+import AddAgentWizard from "./agents/add_agent_wizard";
 import AgentTable from "./agents/agent_table";
 import { isAdminRole } from "@/utils/roles";
 import AgentInfoView from "./agents/agent_info";
@@ -12,13 +12,14 @@ import { Agent } from "./agents/types";
 interface AgentsPanelProps {
   accessToken: string | null;
   userRole?: string;
+  userID?: string | null;
 }
 
 interface AgentsResponse {
   agents: Agent[];
 }
 
-const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
+const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, userID }) => {
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -120,10 +121,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
         />
       )}
 
-      <AddAgentForm
+      <AddAgentWizard
         visible={isAddModalVisible}
         onClose={handleCloseModal}
         accessToken={accessToken}
+        userID={userID || undefined}
         onSuccess={handleSuccess}
       />
 

@@ -484,7 +484,7 @@ function CreateKeyPageContent() {
                   ) : page == "policies" ? (
                     <PoliciesPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "agents" ? (
-                    <AgentsPanel accessToken={accessToken} userRole={userRole} />
+                    <AgentsPanel accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "prompts" ? (
                     <PromptsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "transform-request" ? (
