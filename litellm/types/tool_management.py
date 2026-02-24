@@ -15,6 +15,7 @@ class LiteLLM_ToolTableRow(BaseModel):
     tool_name: str
     origin: Optional[str] = None
     call_policy: ToolCallPolicy = "untrusted"
+    call_count: int = 0
     assignments: Optional[Dict] = None
     key_hash: Optional[str] = None
     team_id: Optional[str] = None

@@ -1057,6 +1057,7 @@ model LiteLLM_ToolTable {
   tool_name   String   @unique   // e.g. "huggingface_remote-mcp__dynamic_space"
   origin      String?            // MCP server name or "user_defined"
   call_policy String   @default("untrusted")  // "trusted" | "untrusted" | "dual_llm" | "blocked"
+  call_count  Int      @default(0)            // cumulative number of times this tool was seen
   assignments Json?    @default("{}")
   key_hash    String?            // hash of the virtual key that first called this tool
   team_id     String?            // team that first called this tool

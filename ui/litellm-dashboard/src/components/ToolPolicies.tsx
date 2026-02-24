@@ -27,7 +27,7 @@ type PolicyValue = "trusted" | "blocked";
 const policyStyle = (p: string) =>
   POLICY_OPTIONS.find((o) => o.value === p) ?? POLICY_OPTIONS[1];
 
-type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at";
+type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
 
 interface FilterValues {
   [key: string]: string;
@@ -324,6 +324,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
               <TableHeaderCell className="py-1 h-8"><SortHeader label="Discovered" field="created_at" /></TableHeaderCell>
               <TableHeaderCell className="py-1 h-8"><SortHeader label="Tool Name" field="tool_name" /></TableHeaderCell>
               <TableHeaderCell className="py-1 h-8"><SortHeader label="Policy" field="call_policy" /></TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8"><SortHeader label="# Calls" field="call_count" /></TableHeaderCell>
               <TableHeaderCell className="py-1 h-8"><SortHeader label="Team Name" field="team_id" /></TableHeaderCell>
               <TableHeaderCell className="py-1 h-8">Key Hash</TableHeaderCell>
               <TableHeaderCell className="py-1 h-8"><SortHeader label="Key Name" field="key_alias" /></TableHeaderCell>
@@ -333,11 +334,11 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-8 text-center text-gray-500">Loading tools…</TableCell>
+                <TableCell colSpan={8} className="h-8 text-center text-gray-500">Loading tools…</TableCell>
               </TableRow>
             ) : paginated.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-8 text-center text-gray-500">
+                <TableCell colSpan={8} className="h-8 text-center text-gray-500">
                   No tools discovered yet. Make a chat completion that returns tool_calls to start auto-discovery.
                 </TableCell>
               </TableRow>
@@ -361,6 +362,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                       saving={saving === tool.tool_name}
                       onChange={handlePolicyChange}
                     />
+                  </TableCell>
+                  <TableCell className="py-0.5 max-h-8 text-right tabular-nums text-sm font-mono text-gray-700">
+                    {(tool.call_count ?? 0).toLocaleString()}
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.team_id ?? "-"}>

@@ -267,12 +267,16 @@ class DBSpendUpdateWriter:
         team_id: Optional[str] = None,
     ) -> None:
         """
-        Extract tool names from the LLM response and enqueue them for upsert
-        into LiteLLM_ToolTable via ToolDiscoveryQueue.
+        Extract tool names from the LLM request and response and enqueue them
+        for upsert into LiteLLM_ToolTable via ToolDiscoveryQueue.
 
-        Handles two sources:
+        Handles four sources:
         - MCP tools: standard_logging_object.mcp_tool_call_metadata.namespaced_tool_name
-        - Regular function calls: completion_response.choices[].message.tool_calls[].function.name
+        - Response tool_calls (OpenAI / Anthropic pass-through converted to OpenAI format):
+            completion_response.choices[].message.tool_calls[].function.name
+        - Request tools array (OpenAI format): kwargs["tools"][].function.name
+        - Request tools array (Anthropic /messages format): kwargs["passthrough_logging_payload"]
+            ["request_body"]["tools"][].name
         """
         try:
             if kwargs is None:
@@ -284,6 +288,17 @@ class DBSpendUpdateWriter:
             _metadata = _litellm_params.get("metadata") or {}
             key_alias = _metadata.get("user_api_key_alias") or None
 
+            def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
+                self.tool_discovery_queue.add_update(
+                    ToolDiscoveryQueueItem(
+                        tool_name=tool_name,
+                        origin=origin,
+                        key_hash=hashed_token,
+                        team_id=team_id,
+                        key_alias=key_alias,
+                    )
+                )
+
             # --- MCP tool calls ---
             sl_object = kwargs.get("standard_logging_object")
             if sl_object is not None:
@@ -294,17 +309,34 @@ class DBSpendUpdateWriter:
                     tool_name = mcp_metadata.get("namespaced_tool_name") or mcp_metadata.get("name")
                     mcp_server_name = mcp_metadata.get("mcp_server_name")
                     if tool_name:
-                        self.tool_discovery_queue.add_update(
-                            ToolDiscoveryQueueItem(
-                                tool_name=tool_name,
-                                origin=mcp_server_name or "user_defined",
-                                key_hash=hashed_token,
-                                team_id=team_id,
-                                key_alias=key_alias,
-                            )
-                        )
+                        _enqueue(tool_name, origin=mcp_server_name or "user_defined")
 
-            # --- Regular function/tool calls in LLM response ---
+            # --- Tools from request body (OpenAI format: tools[].function.name) ---
+            request_tools = kwargs.get("tools") or []
+            for tool_def in request_tools:
+                if not isinstance(tool_def, dict):
+                    continue
+                fn = tool_def.get("function") or {}
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if name:
+                    _enqueue(name)
+
+            # --- Tools from Anthropic /messages pass-through request body
+            #     (Anthropic format: tools[].name, no "function" wrapper) ---
+            passthrough_payload = kwargs.get("passthrough_logging_payload") or {}
+            request_body = (
+                passthrough_payload.get("request_body")
+                if isinstance(passthrough_payload, dict)
+                else None
+            ) or {}
+            for tool_def in request_body.get("tools") or []:
+                if not isinstance(tool_def, dict):
+                    continue
+                name = tool_def.get("name")
+                if name:
+                    _enqueue(name)
+
+            # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
             if completion_response is not None and hasattr(completion_response, "choices"):
                 for choice in completion_response.choices or []:
                     message = getattr(choice, "message", None)
@@ -319,15 +351,7 @@ class DBSpendUpdateWriter:
                             continue
                         tool_name = getattr(fn, "name", None)
                         if tool_name:
-                            self.tool_discovery_queue.add_update(
-                                ToolDiscoveryQueueItem(
-                                    tool_name=tool_name,
-                                    origin="user_defined",
-                                    key_hash=hashed_token,
-                                    team_id=team_id,
-                                    key_alias=key_alias,
-                                )
-                            )
+                            _enqueue(tool_name)
         except Exception as e:
             verbose_proxy_logger.debug(
                 "_enqueue_tool_registry_upsert error (non-blocking): %s", e

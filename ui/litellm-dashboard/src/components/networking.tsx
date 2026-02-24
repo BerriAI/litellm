@@ -9860,7 +9860,11 @@ export interface ToolRow {
   tool_name: string;
   origin?: string;
   call_policy: string;
+  call_count?: number;
   assignments?: Record<string, any>;
+  key_hash?: string;
+  team_id?: string;
+  key_alias?: string;
   created_at?: string;
   updated_at?: string;
   created_by?: string;

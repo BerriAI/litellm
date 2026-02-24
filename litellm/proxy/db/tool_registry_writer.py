@@ -25,6 +25,7 @@ def _row_to_model(row: dict) -> LiteLLM_ToolTableRow:
         tool_name=row.get("tool_name", ""),
         origin=row.get("origin"),
         call_policy=row.get("call_policy", "untrusted"),
+        call_count=int(row.get("call_count") or 0),
         assignments=row.get("assignments"),
         key_hash=row.get("key_hash"),
         team_id=row.get("team_id"),
@@ -43,18 +44,13 @@ async def batch_upsert_tools(
     """
     Batch-upsert tool registry rows via raw SQL.
 
-    Uses INSERT ON CONFLICT DO NOTHING so that:
-    - First insert sets call_policy to "untrusted" (the schema default).
-    - Subsequent upserts are no-ops (existing policy is preserved).
+    On first insert: sets call_policy = "untrusted" (schema default), call_count = 1.
+    On conflict: increments call_count; preserves existing call_policy.
     """
     if not items:
         return
     try:
-        data = [
-            item
-            for item in items
-            if item.get("tool_name")
-        ]
+        data = [item for item in items if item.get("tool_name")]
         if not data:
             return
         for item in data:
@@ -66,9 +62,11 @@ async def batch_upsert_tools(
             key_alias = item.get("key_alias")
             await prisma_client.db.execute_raw(
                 'INSERT INTO "LiteLLM_ToolTable" '
-                "(tool_id, tool_name, origin, call_policy, created_by, updated_by, key_hash, team_id, key_alias) "
-                "VALUES (gen_random_uuid()::text, $1, $2, 'untrusted', $3, $3, $4, $5, $6) "
-                "ON CONFLICT (tool_name) DO NOTHING",
+                "(tool_id, tool_name, origin, call_policy, call_count, created_by, updated_by, key_hash, team_id, key_alias) "
+                "VALUES (gen_random_uuid()::text, $1, $2, 'untrusted', 1, $3, $3, $4, $5, $6) "
+                "ON CONFLICT (tool_name) DO UPDATE SET "
+                "call_count = \"LiteLLM_ToolTable\".call_count + 1, "
+                "updated_at = NOW()",
                 tool_name,
                 origin,
                 created_by,
@@ -91,14 +89,14 @@ async def list_tools(
     try:
         if call_policy is not None:
             rows = await prisma_client.db.query_raw(
-                'SELECT tool_id, tool_name, origin, call_policy, assignments, '
+                'SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, '
                 'key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by '
                 'FROM "LiteLLM_ToolTable" WHERE call_policy = $1 ORDER BY created_at DESC',
                 call_policy,
             )
         else:
             rows = await prisma_client.db.query_raw(
-                'SELECT tool_id, tool_name, origin, call_policy, assignments, '
+                'SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, '
                 'key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by '
                 'FROM "LiteLLM_ToolTable" ORDER BY created_at DESC',
             )
@@ -115,7 +113,7 @@ async def get_tool(
     """Return a single tool row by tool_name."""
     try:
         rows = await prisma_client.db.query_raw(
-            'SELECT tool_id, tool_name, origin, call_policy, assignments, '
+            'SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, '
             'key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by '
             'FROM "LiteLLM_ToolTable" WHERE tool_name = $1',
             tool_name,
