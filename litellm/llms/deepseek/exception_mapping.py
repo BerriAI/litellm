@@ -1,4 +1,4 @@
-﻿import litellm
+import litellm
 
 def exception_handler(status_code, message, model=None):
     """
