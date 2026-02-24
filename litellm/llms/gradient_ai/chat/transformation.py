@@ -138,6 +138,15 @@ class GradientAIConfig(OpenAILikeChatConfig):
         drop_params: bool = False,
         replace_max_completion_tokens_with_max_tokens: bool = False,
     ) -> dict:
+        
+        optional_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
+        )
+        
         supported_openai_params = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
