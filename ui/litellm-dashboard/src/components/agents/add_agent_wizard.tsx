@@ -115,7 +115,7 @@ const ToolCard: React.FC<{
       <div className="text-sm font-medium text-gray-900">{tool.name}</div>
       <div className="text-xs text-gray-500">{tool.description}</div>
     </div>
-    <Switch checked={selected} onChange={onToggle} size="small" />
+    <Switch checked={selected} size="small" onClick={(_, e) => e.stopPropagation()} onChange={onToggle} />
   </div>
 );
 
@@ -134,7 +134,7 @@ const SkillCard: React.FC<{
   >
     <div className="flex items-center justify-between">
       <span className="text-sm font-medium text-gray-900">{skill.name}</span>
-      <Switch checked={selected} onChange={onToggle} size="small" />
+      <Switch checked={selected} size="small" onClick={(_, e) => e.stopPropagation()} onChange={onToggle} />
     </div>
     <div className="text-xs text-gray-500 mt-1">{skill.description}</div>
   </div>
