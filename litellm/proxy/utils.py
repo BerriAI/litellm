@@ -4332,23 +4332,6 @@ async def update_spend_logs_job(
         db_writer_client=db_writer_client,
     )
 
-<<<<<<< HEAD
-=======
-    # Guardrail/policy usage tracking (same batch, outside spend-logs update)
-    try:
-        from litellm.proxy.guardrails.usage_tracking import \
-            process_spend_logs_guardrail_usage
-        await process_spend_logs_guardrail_usage(
-            prisma_client=prisma_client,
-            logs_to_process=logs_to_process,
-        )
-    except Exception as guardrail_tracking_err:
-        verbose_proxy_logger.warning(
-            "Spend tracking - guardrail usage tracking failed (non-fatal): %s",
-            guardrail_tracking_err,
-        )
-
->>>>>>> 80ebe722d9 (Merge pull request #22029 from BerriAI/litellm_spend_tracking_logging)
 
 async def _monitor_spend_logs_queue(
     prisma_client: PrismaClient,
