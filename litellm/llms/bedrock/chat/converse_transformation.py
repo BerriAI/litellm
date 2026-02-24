@@ -1644,9 +1644,10 @@ class AmazonConverseConfig(BaseConfig):
         if "cacheWriteInputTokens" in usage:
             cache_creation_input_tokens = usage["cacheWriteInputTokens"]
             input_tokens += cache_creation_input_tokens
-        # Recalculate total_tokens to include cache tokens added to input_tokens
-        # The API's totalTokens doesn't include cache hits/writes, but prompt_tokens does
-        total_tokens = input_tokens + output_tokens
+        # Only recalculate total_tokens if we added cache tokens to input_tokens
+        # Otherwise, trust the API's totalTokens (which may include other token categories)
+        if cache_read_input_tokens > 0 or cache_creation_input_tokens > 0:
+            total_tokens = input_tokens + output_tokens
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens
         )
