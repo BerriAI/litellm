@@ -4226,9 +4226,17 @@ class ProxyUpdateSpend:
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES:
+                except DB_CONNECTION_ERROR_TYPES as e:
                     if i is None:
                         i = 0
+                    verbose_proxy_logger.warning(
+                        "Spend tracking - DB connection error writing spend logs, "
+                        "retry %d/%d. logs_count=%d, error=%s",
+                        i + 1,
+                        n_retry_times,
+                        len(logs_to_process),
+                        str(e),
+                    )
                     if i >= n_retry_times:
                         raise
                     await asyncio.sleep(2**i)
