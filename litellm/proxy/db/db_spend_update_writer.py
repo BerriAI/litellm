@@ -225,7 +225,8 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("Runs spend update on all tables")
         except Exception:
             verbose_proxy_logger.error(
-                "Spend tracking - update_database failed. All spend updates for this request will be lost. "
+                "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
+                "may not have completed for this request. "
                 "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s - %s",
                 response_cost,
                 token,

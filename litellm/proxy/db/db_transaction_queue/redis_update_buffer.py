@@ -101,7 +101,7 @@ class RedisUpdateBuffer:
                 key=redis_key,
                 values=list_of_transactions,
             )
-            verbose_proxy_logger.info(
+            verbose_proxy_logger.debug(
                 "Spend tracking - pushed spend updates to Redis buffer. "
                 "redis_key=%s, buffer_size=%s",
                 redis_key,
@@ -118,7 +118,6 @@ class RedisUpdateBuffer:
                 redis_key,
                 str(e),
             )
-            raise
 
     async def store_in_memory_spend_updates_in_redis(
         self,
