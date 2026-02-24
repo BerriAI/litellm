@@ -1,0 +1,45 @@
+name: Scan Duplicate Issues (One-Time)
+
+on:
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: "Similarity threshold (0-1)"
+        required: false
+        default: "0.85"
+      close:
+        description: "Actually close duplicates (false = dry run)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Scan for duplicate issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CLOSE_FLAG=""
+          if [ "${{ inputs.close }}" = "true" ]; then
+            CLOSE_FLAG="--close"
+          fi
+          python3 .github/scripts/close_duplicate_issues.py \
+            --scan \
+            --repo ${{ github.repository }} \
+            --threshold ${{ inputs.threshold }} \
+            $CLOSE_FLAG
