@@ -160,26 +160,23 @@ class RealTimeStreaming:
                     request_data={"user_api_key_dict": self.user_api_key_dict},
                     input_type="request",
                 )
-            except (ValueError, Exception) as e:
-                # Only treat HTTPException (guardrail block) and ValueError as intentional blocks.
-                # Re-raise unexpected programming errors so they surface in logs.
-                from fastapi import HTTPException
-
-                if not isinstance(e, (HTTPException, ValueError)):
+            except Exception as e:
+                # Re-raise unexpected errors (no status_code/detail = programming bug, not a block).
+                # HTTPException and guardrail-raised exceptions have a status_code or detail attr.
+                is_guardrail_block = hasattr(e, "status_code") or isinstance(e, ValueError)
+                if not is_guardrail_block:
                     verbose_logger.exception(
                         "[realtime guardrail] unexpected error in apply_guardrail: %s", e
                     )
                     raise
-                # Extract the human-readable error from HTTPException detail dict,
-                # falling back to str(e) for ValueError.
-                try:
-                    detail = e.detail  # type: ignore[attr-defined]
-                    safe_msg = (
-                        detail.get("error")
-                        if isinstance(detail, dict)
-                        else str(detail)
-                    ) or "I'm sorry, that request was blocked by the content filter."
-                except AttributeError:
+                # Extract the human-readable error from the detail dict (HTTPException)
+                # or fall back to str(e) for plain ValueError.
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, dict):
+                    safe_msg = detail.get("error") or str(e)
+                elif detail is not None:
+                    safe_msg = str(detail)
+                else:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
                 # Cancel any in-flight response before speaking the warning.
                 # This handles the race where create_response fired before we could intercept.
@@ -254,6 +251,23 @@ class RealTimeStreaming:
                         else [transformed_response]
                     )
                     for event in events:
+                        ## GUARDRAIL: inject create_response=false on session.created
+                        if isinstance(event, dict) and event.get("type") == "session.created":
+                            if self._has_realtime_guardrails():
+                                await self.backend_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "session.update",
+                                            "session": {
+                                                "turn_detection": {
+                                                    "type": "server_vad",
+                                                    "create_response": False,
+                                                }
+                                            },
+                                        }
+                                    )
+                                )
+                    for event in events:
                         event_str = json.dumps(event)
                         ## GUARDRAIL: run on transcription events in provider_config path too
                         if (
@@ -308,6 +322,8 @@ class RealTimeStreaming:
                             == "conversation.item.input_audio_transcription.completed"
                         ):
                             transcript = event_obj.get("transcript", "")
+                            ## LOGGING — must happen before continue below
+                            self.store_message(raw_response)
                             # Forward transcript to client so user sees what they said
                             await self.websocket.send_text(raw_response)
                             blocked = await self.run_realtime_guardrails(
