@@ -115,6 +115,20 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
+    def _has_realtime_guardrails(self) -> bool:
+        """Return True if any callback is registered for realtime_input_transcription."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return any(
+            isinstance(cb, CustomGuardrail)
+            and cb.should_run_guardrail(
+                data={},
+                event_type=GuardrailEventHooks.realtime_input_transcription,
+            )
+            for cb in litellm.callbacks
+        )
+
     async def run_realtime_guardrails(
         self,
         transcript: str,
@@ -158,6 +172,9 @@ class RealTimeStreaming:
                     ) or "I'm sorry, that request was blocked by the content filter."
                 except AttributeError:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+                # Cancel any in-flight response before speaking the warning.
+                # This handles the race where create_response fired before we could intercept.
+                await self.backend_ws.send(json.dumps({"type": "response.cancel"}))
                 # Ask OpenAI to speak the warning — TTS audio plays naturally in the client
                 await self.backend_ws.send(
                     json.dumps(
@@ -238,6 +255,29 @@ class RealTimeStreaming:
                     ## GUARDRAIL: intercept transcription events before triggering LLM
                     try:
                         event_obj = json.loads(raw_response)
+
+                        if event_obj.get("type") == "session.created":
+                            # If any realtime guardrails are registered, proactively
+                            # set create_response=false so the LLM never auto-responds
+                            # before our guardrail has a chance to run.
+                            if self._has_realtime_guardrails():
+                                await self.backend_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "session.update",
+                                            "session": {
+                                                "turn_detection": {
+                                                    "type": "server_vad",
+                                                    "create_response": False,
+                                                }
+                                            },
+                                        }
+                                    )
+                                )
+                                verbose_logger.debug(
+                                    "[realtime guardrail] injected create_response=false into session"
+                                )
+
                         if (
                             event_obj.get("type")
                             == "conversation.item.input_audio_transcription.completed"
@@ -275,22 +315,12 @@ class RealTimeStreaming:
             while True:
                 message = await self.websocket.receive_text()
 
-                ## GUARDRAIL: intercept session.update to force create_response=False
-                ## so the LLM doesn't auto-respond before the guardrail runs.
-                ## Also intercept conversation.item.create for text-based injection.
+                ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 try:
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
 
-                    if msg_type == "session.update":
-                        turn_detection = msg_obj.get("session", {}).get(
-                            "turn_detection"
-                        )
-                        if turn_detection is not None:
-                            turn_detection["create_response"] = False
-                            message = json.dumps(msg_obj)
-
-                    elif msg_type == "conversation.item.create":
+                    if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
                         item = msg_obj.get("item", {})
                         if item.get("role") == "user":
