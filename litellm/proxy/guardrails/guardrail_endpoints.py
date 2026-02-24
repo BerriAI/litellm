@@ -2,6 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
+import concurrent.futures
 import inspect
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 
@@ -11,9 +12,16 @@ from pydantic import BaseModel
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
+    CustomCodeValidationError,
+    validate_custom_code,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
+    get_custom_code_primitives,
+)
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
@@ -243,7 +251,6 @@ class CreateGuardrailRequest(BaseModel):
 @router.post(
     "/guardrails",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def create_guardrail(
     request: CreateGuardrailRequest,
@@ -298,7 +305,6 @@ async def create_guardrail(
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.proxy._types import LitellmUserRoles
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -342,7 +348,6 @@ class UpdateGuardrailRequest(BaseModel):
 @router.put(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def update_guardrail(
     guardrail_id: str,
@@ -398,7 +403,6 @@ async def update_guardrail(
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.proxy._types import LitellmUserRoles
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -450,7 +454,6 @@ async def update_guardrail(
 @router.delete(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_guardrail(
     guardrail_id: str,
@@ -476,7 +479,6 @@ async def delete_guardrail(
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.proxy._types import LitellmUserRoles
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -526,7 +528,6 @@ async def delete_guardrail(
 @router.patch(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def patch_guardrail(
     guardrail_id: str,
@@ -580,7 +581,6 @@ async def patch_guardrail(
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.proxy._types import LitellmUserRoles
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -1406,7 +1406,6 @@ class TestCustomCodeGuardrailResponse(BaseModel):
 @router.post(
     "/guardrails/test_custom_code",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=TestCustomCodeGuardrailResponse,
 )
 async def test_custom_code_guardrail(
@@ -1485,12 +1484,6 @@ async def test_custom_code_guardrail(
     }
     ```
     """
-    import concurrent.futures
-
-    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
-        get_custom_code_primitives,
-    )
-    from litellm.proxy._types import LitellmUserRoles
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
@@ -1502,10 +1495,6 @@ async def test_custom_code_guardrail(
 
     try:
         # Step 0: Security validation - check for forbidden patterns
-        from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
-            validate_custom_code,
-            CustomCodeValidationError,
-        )
 
         try:
             validate_custom_code(request.custom_code)

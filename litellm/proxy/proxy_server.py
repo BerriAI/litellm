@@ -2994,7 +2994,7 @@ class ProxyConfig:
                 litellm_master_key_hash = hash_token(master_key)
             else:
                 verbose_proxy_logger.critical(
-                    "LITELLM_MASTER_KEY is not set! All unauthenticated requests will be treated as INTERNAL_USER. This is insecure for production."
+                    "LITELLM_MASTER_KEY is not set! All requests will be treated as INTERNAL_USER with no admin access. Set LITELLM_MASTER_KEY for production use."
                 )
             ### USER API KEY CACHE IN-MEMORY TTL ###
             user_api_key_cache_ttl = general_settings.get(
