@@ -193,6 +193,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
                 GuardrailEventHooks.during_call,
+                GuardrailEventHooks.realtime_input_transcription,
             ],
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
@@ -1919,6 +1920,22 @@ class ContentFilterGuardrail(CustomGuardrail):
         if yielded_masked_text_len < len(accumulated_full_text):
             # We already reached the end of the generator
             pass
+
+    async def async_realtime_input_transcription_hook(
+        self,
+        transcription: str,
+        user_api_key_dict,
+        session_id=None,
+    ) -> None:
+        """
+        Run content filter checks on a Realtime API speech transcription.
+        Raises ValueError if the transcription contains blocked content.
+        """
+        await self.apply_guardrail(
+            inputs={"texts": [transcription], "images": []},
+            request_data={},
+            input_type="request",
+        )
 
     @staticmethod
     def get_config_model():
