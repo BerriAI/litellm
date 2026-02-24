@@ -48,6 +48,7 @@ async def test_encrypted_content_affinity_tracks_and_routes():
                 "type": "reasoning",
                 "id": "rs_encrypted_item_456",
                 "status": "completed",
+                "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
             },
         ],
         "parallel_tool_calls": True,
@@ -118,7 +119,7 @@ async def test_encrypted_content_affinity_tracks_and_routes():
             model=model_group,
             input=[
                 {"type": "message", "id": "msg_abc123", "role": "assistant"},
-                {"type": "reasoning", "id": "rs_encrypted_item_456"},
+                {"type": "reasoning", "id": "rs_encrypted_item_456", "encrypted_content": "gAAAAABpnW_yEYmSNEyOG..."},
             ],
         )
         second_model_id = second_response._hidden_params["model_id"]
@@ -204,6 +205,7 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
                 "type": "reasoning",
                 "id": "rs_encrypted_must_pin",
                 "status": "completed",
+                "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
             },
         ],
         "usage": {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
@@ -255,7 +257,7 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
         second_response = await router.aresponses(
             model="openai.gpt-5.1-codex",
             input=[
-                {"type": "reasoning", "id": "rs_encrypted_must_pin"},
+                {"type": "reasoning", "id": "rs_encrypted_must_pin", "encrypted_content": "gAAAAABpnW_yEYmSNEyOG..."},
             ],
         )
         second_model_id = second_response._hidden_params["model_id"]
