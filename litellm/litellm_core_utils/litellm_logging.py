@@ -4709,6 +4709,7 @@ class StandardLoggingPayloadSetup:
         custom_pricing: Optional[bool],
         custom_llm_provider: Optional[str],
         init_response_obj: Union[Any, BaseModel, dict],
+        api_base: Optional[str] = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
             model=None,
@@ -4723,7 +4724,9 @@ class StandardLoggingPayloadSetup:
         else:
             try:
                 _model_cost_information = litellm.get_model_info(
-                    model=model_cost_name, custom_llm_provider=custom_llm_provider
+                    model=model_cost_name,
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
                 )
                 model_cost_information = StandardLoggingModelInformation(
                     model_map_key=model_cost_name,
@@ -5236,6 +5239,7 @@ def get_standard_logging_object_payload(
             custom_pricing=custom_pricing,
             custom_llm_provider=kwargs.get("custom_llm_provider"),
             init_response_obj=init_response_obj,
+            api_base=litellm_params.get("api_base"),
         )
         response_cost: float = kwargs.get("response_cost", 0) or 0.0
 

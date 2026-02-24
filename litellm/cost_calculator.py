@@ -1242,6 +1242,16 @@ def completion_cost(  # noqa: PLR0915
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
+                    # Extract custom model_info for deployment-specific pricing
+                    _video_model_info: Optional[ModelInfo] = None
+                    if custom_pricing and litellm_logging_obj is not None:
+                        _litellm_params = getattr(
+                            litellm_logging_obj, "litellm_params", None
+                        )
+                        if _litellm_params is not None:
+                            _metadata = _litellm_params.get("metadata", {}) or {}
+                            _video_model_info = _metadata.get("model_info", None)
+
                     usage_obj = getattr(completion_response, "usage", None)
                     if completion_response is not None and usage_obj:
                         # Handle both dict and Pydantic Usage object
@@ -1262,12 +1272,14 @@ def completion_cost(  # noqa: PLR0915
                                 model=model,
                                 duration_seconds=duration_seconds,
                                 custom_llm_provider=custom_llm_provider,
+                                model_info=_video_model_info,
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
                         model=model,
                         duration_seconds=0.0,  # Default to 0 if no duration available
                         custom_llm_provider=custom_llm_provider,
+                        model_info=_video_model_info,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
@@ -1892,6 +1904,7 @@ def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
     custom_llm_provider: Optional[str] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -1900,6 +1913,9 @@ def default_video_cost_calculator(
         model (str): Model name
         duration_seconds (float): Duration of the generated video in seconds
         custom_llm_provider (Optional[str]): Custom LLM provider
+        model_info (Optional[ModelInfo]): Deployment-level model info containing
+            custom video pricing. When provided, used before falling back to
+            the global litellm.model_cost lookup.
 
     Returns:
         float: Cost in USD for the video generation
@@ -1907,42 +1923,47 @@ def default_video_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Build model names for cost lookup
-    base_model_name = model
-    model_name_without_custom_llm_provider: Optional[str] = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(
-            f"{custom_llm_provider}/", ""
-        )
-        base_model_name = (
-            f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
-        )
-
-    verbose_logger.debug(f"Looking up cost for video model: {base_model_name}")
-
-    model_without_provider = model.split("/")[-1]
-
-    # Try model with provider first, fall back to base model name
+    # Use custom model_info pricing if provided (deployment-specific pricing)
     cost_info: Optional[dict] = None
-    models_to_check: List[Optional[str]] = [
-        base_model_name,
-        model,
-        model_without_provider,
-        model_name_without_custom_llm_provider,
-    ]
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
-            break
+    if model_info is not None:
+        cost_info = dict(model_info)
+    else:
+        # Build model names for cost lookup
+        base_model_name = model
+        model_name_without_custom_llm_provider: Optional[str] = None
+        if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+            model_name_without_custom_llm_provider = model.replace(
+                f"{custom_llm_provider}/", ""
+            )
+            base_model_name = (
+                f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
+            )
 
-    # If still not found, try with custom_llm_provider prefix
-    if cost_info is None and custom_llm_provider:
-        prefixed_model = f"{custom_llm_provider}/{model}"
-        if prefixed_model in litellm.model_cost:
-            cost_info = litellm.model_cost[prefixed_model]
+        verbose_logger.debug(f"Looking up cost for video model: {base_model_name}")
+
+        model_without_provider = model.split("/")[-1]
+
+        # Try model with provider first, fall back to base model name
+        models_to_check: List[Optional[str]] = [
+            base_model_name,
+            model,
+            model_without_provider,
+            model_name_without_custom_llm_provider,
+        ]
+        for _model in models_to_check:
+            if _model is not None and _model in litellm.model_cost:
+                cost_info = litellm.model_cost[_model]
+                break
+
+        # If still not found, try with custom_llm_provider prefix
+        if cost_info is None and custom_llm_provider:
+            prefixed_model = f"{custom_llm_provider}/{model}"
+            if prefixed_model in litellm.model_cost:
+                cost_info = litellm.model_cost[prefixed_model]
+
     if cost_info is None:
         raise Exception(
-            f"Model not found in cost map. Tried checking {models_to_check}"
+            f"Model not found in cost map for model={model}"
         )
 
     # Check for video-specific cost per second first
