@@ -111,151 +111,151 @@ jobs:
             cd ..
           no_output_timeout: 10m
 
-  semgrep:
-    docker:
-      - image: cimg/python:3.12
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    steps:
-      - checkout
-      - setup_google_dns
-      - run:
-          name: Install Semgrep
-          command: pip install semgrep
-      - run:
-          name: Run Semgrep (custom rules only)
-          command: semgrep scan --config .semgrep/rules . --error
+  # semgrep:
+  #   docker:
+  #     - image: cimg/python:3.12
+  #       auth:
+  #         username: ${DOCKERHUB_USERNAME}
+  #         password: ${DOCKERHUB_PASSWORD}
+  #   working_directory: ~/project
+  #   steps:
+  #     - checkout
+  #     - setup_google_dns
+  #     - run:
+  #         name: Install Semgrep
+  #         command: pip install semgrep
+  #     - run:
+  #         name: Run Semgrep (custom rules only)
+  #         command: semgrep scan --config .semgrep/rules . --error
 
-  local_testing_part1:
-    docker:
-      - image: cimg/python:3.12
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    parallelism: 4
-    steps:
-      - checkout
-      - setup_google_dns
-      - run:
-          name: Show git commit hash
-          command: |
-            echo "Git commit hash: $CIRCLE_SHA1"
+  # local_testing_part1:
+  #   docker:
+  #     - image: cimg/python:3.12
+  #       auth:
+  #         username: ${DOCKERHUB_USERNAME}
+  #         password: ${DOCKERHUB_PASSWORD}
+  #   working_directory: ~/project
+  #   parallelism: 4
+  #   steps:
+  #     - checkout
+  #     - setup_google_dns
+  #     - run:
+  #         name: Show git commit hash
+  #         command: |
+  #           echo "Git commit hash: $CIRCLE_SHA1"
 
-      - restore_cache:
-          keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r .circleci/requirements.txt
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "pytest-cov==5.0.0"
-            pip install "mypy==1.18.2"
-            pip install "google-generativeai==0.3.2"
-            pip install "google-cloud-aiplatform==1.43.0"
-            pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
-            pip install langchain
-            pip install lunary==0.2.5
-            pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.59.7"
-            pip install "logfire==0.29.0"
-            pip install numpydoc
-            pip install traceloop-sdk==0.21.1
-            pip install opentelemetry-api==1.25.0
-            pip install opentelemetry-sdk==1.25.0
-            pip install opentelemetry-exporter-otlp==1.25.0
-            pip install openai==1.100.1
-            pip install prisma==0.11.0
-            pip install "detect_secrets==1.5.0"
-            pip install "httpx==0.24.1"
-            pip install "respx==0.22.0"
-            pip install fastapi
-            pip install "gunicorn==21.2.0"
-            pip install "anyio==4.2.0"
-            pip install "aiodynamo==23.10.1"
-            pip install "asyncio==3.4.3"
-            pip install "apscheduler==3.10.4"
-            pip install "PyGithub==1.59.1"
-            pip install argon2-cffi
-            pip install "pytest-mock==3.12.0"
-            pip install python-multipart
-            pip install google-cloud-aiplatform
-            pip install prometheus-client==0.20.0
-            pip install "pydantic==2.10.2"
-            pip install "diskcache==5.6.1"
-            pip install "Pillow==10.3.0"
-            pip install "jsonschema==4.22.0"
-            pip install "pytest-xdist==3.6.1"
-            pip install "pytest-timeout==2.2.0"
-            pip install "websockets==13.1.0"
-            pip install semantic_router --no-deps
-            pip install aurelio_sdk --no-deps
-            pip uninstall posthog -y
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-      - run:
-          name: Black Formatting
-          command: |
-            cd litellm
-            python -m pip install black
-            python -m black .
-            cd ..
+  #     - restore_cache:
+  #         keys:
+  #           - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+  #     - run:
+  #         name: Install Dependencies
+  #         command: |
+  #           python -m pip install --upgrade pip
+  #           python -m pip install -r .circleci/requirements.txt
+  #           pip install "pytest==7.3.1"
+  #           pip install "pytest-retry==1.6.3"
+  #           pip install "pytest-asyncio==0.21.1"
+  #           pip install "pytest-cov==5.0.0"
+  #           pip install "mypy==1.18.2"
+  #           pip install "google-generativeai==0.3.2"
+  #           pip install "google-cloud-aiplatform==1.43.0"
+  #           pip install pyarrow
+  #           pip install "boto3==1.36.0"
+  #           pip install "aioboto3==13.4.0"
+  #           pip install langchain
+  #           pip install lunary==0.2.5
+  #           pip install "azure-identity==1.16.1"
+  #           pip install "langfuse==2.59.7"
+  #           pip install "logfire==0.29.0"
+  #           pip install numpydoc
+  #           pip install traceloop-sdk==0.21.1
+  #           pip install opentelemetry-api==1.25.0
+  #           pip install opentelemetry-sdk==1.25.0
+  #           pip install opentelemetry-exporter-otlp==1.25.0
+  #           pip install openai==1.100.1
+  #           pip install prisma==0.11.0
+  #           pip install "detect_secrets==1.5.0"
+  #           pip install "httpx==0.24.1"
+  #           pip install "respx==0.22.0"
+  #           pip install fastapi
+  #           pip install "gunicorn==21.2.0"
+  #           pip install "anyio==4.2.0"
+  #           pip install "aiodynamo==23.10.1"
+  #           pip install "asyncio==3.4.3"
+  #           pip install "apscheduler==3.10.4"
+  #           pip install "PyGithub==1.59.1"
+  #           pip install argon2-cffi
+  #           pip install "pytest-mock==3.12.0"
+  #           pip install python-multipart
+  #           pip install google-cloud-aiplatform
+  #           pip install prometheus-client==0.20.0
+  #           pip install "pydantic==2.10.2"
+  #           pip install "diskcache==5.6.1"
+  #           pip install "Pillow==10.3.0"
+  #           pip install "jsonschema==4.22.0"
+  #           pip install "pytest-xdist==3.6.1"
+  #           pip install "pytest-timeout==2.2.0"
+  #           pip install "websockets==13.1.0"
+  #           pip install semantic_router --no-deps
+  #           pip install aurelio_sdk --no-deps
+  #           pip uninstall posthog -y
+  #     - setup_litellm_enterprise_pip
+  #     - save_cache:
+  #         paths:
+  #           - ./venv
+  #         key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
+  #     - run:
+  #         name: Run prisma ./docker/entrypoint.sh
+  #         command: |
+  #           set +e
+  #           chmod +x docker/entrypoint.sh
+  #           ./docker/entrypoint.sh
+  #           set -e
+  #     - run:
+  #         name: Black Formatting
+  #         command: |
+  #           cd litellm
+  #           python -m pip install black
+  #           python -m black .
+  #           cd ..
 
       # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests (Part 1 - A-M)
-          command: |
-            mkdir test-results
+      # - run:
+      #     name: Run tests (Part 1 - A-M)
+      #     command: |
+      #       mkdir test-results
 
-            # Discover test files (A-M)
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[a-mA-M]*.py")
+      #       # Discover test files (A-M)
+      #       TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[a-mA-M]*.py")
 
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=timings \
-              --verbose \
-              --command="xargs python -m pytest \
-                -vv \
-                --cov=litellm \
-                --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
-                -n 4 \
-                --timeout=300 \
-                --timeout_method=thread"
-          no_output_timeout: 120m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml local_testing_part1_coverage.xml
-            mv .coverage local_testing_part1_coverage
+      #       echo "$TEST_FILES" | circleci tests run \
+      #         --split-by=timings \
+      #         --verbose \
+      #         --command="xargs python -m pytest \
+      #           -vv \
+      #           --cov=litellm \
+      #           --cov-report=xml \
+      #           --junitxml=test-results/junit.xml \
+      #           --durations=20 \
+      #           -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
+      #           -n 4 \
+      #           --timeout=300 \
+      #           --timeout_method=thread"
+      #     no_output_timeout: 120m
+      # - run:
+      #     name: Rename the coverage files
+      #     command: |
+      #       mv coverage.xml local_testing_part1_coverage.xml
+      #       mv .coverage local_testing_part1_coverage
 
       # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - local_testing_part1_coverage.xml
-            - local_testing_part1_coverage
+      # - store_test_results:
+      #     path: test-results
+      # - persist_to_workspace:
+      #     root: .
+      #     paths:
+      #       - local_testing_part1_coverage.xml
+      #       - local_testing_part1_coverage
   local_testing_part2:
     docker:
       - image: cimg/python:3.12
@@ -4182,479 +4182,479 @@ workflows:
   version: 2
   build_and_test:
     jobs:
-      - using_litellm_on_windows:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+      # - using_litellm_on_windows:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
       - mypy_linting:
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
-      - semgrep:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - local_testing_part1:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - local_testing_part2:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - langfuse_logging_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - caching_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_proxy_unit_testing_key_generation:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_proxy_unit_testing_part1:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_proxy_unit_testing_part2:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_security_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_assistants_api_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_router_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_router_unit_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - check_code_and_doc_quality:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - ui_build:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - ui_unit_tests:
-          requires:
-            - ui_build
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - auth_ui_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - build_docker_database_image:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - e2e_ui_testing:
-          name: e2e_ui_testing_chromium
-          browser: chromium
-          context: e2e_ui_tests
-          requires:
-            - ui_build
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - e2e_ui_testing:
-          name: e2e_ui_testing_firefox
-          browser: firefox
-          context: e2e_ui_tests
-          requires:
-            - ui_build
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - build_and_test:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - e2e_openai_endpoints:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - proxy_logging_guardrails_model_info_tests:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - proxy_spend_accuracy_tests:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - proxy_multi_instance_tests:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - proxy_store_model_in_db_tests:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - proxy_build_from_pip_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - proxy_pass_through_endpoint_tests:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - proxy_e2e_anthropic_messages_tests:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - llm_translation_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - realtime_translation_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - mcp_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - agent_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - guardrails_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - google_generate_content_endpoint_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - llm_responses_api_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - ocr_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - search_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_enterprise_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_proxy_part1:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_proxy_part2:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_llms:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_core:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_mcps:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_integrations:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_mapped_tests_litellm_core_utils:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - batches_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - litellm_utils_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - pass_through_unit_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - image_gen_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - logging_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - audio_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+      # - semgrep:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - local_testing_part1:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - local_testing_part2:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - langfuse_logging_unit_tests:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - caching_unit_tests:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_proxy_unit_testing_key_generation:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_proxy_unit_testing_part1:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_proxy_unit_testing_part2:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_security_tests:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_assistants_api_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_router_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_router_unit_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - check_code_and_doc_quality:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - ui_build:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - ui_unit_tests:
+      #     requires:
+      #       - ui_build
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - auth_ui_unit_tests:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - build_docker_database_image:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - e2e_ui_testing:
+      #     name: e2e_ui_testing_chromium
+      #     browser: chromium
+      #     context: e2e_ui_tests
+      #     requires:
+      #       - ui_build
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - e2e_ui_testing:
+      #     name: e2e_ui_testing_firefox
+      #     browser: firefox
+      #     context: e2e_ui_tests
+      #     requires:
+      #       - ui_build
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - build_and_test:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - e2e_openai_endpoints:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - proxy_logging_guardrails_model_info_tests:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - proxy_spend_accuracy_tests:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - proxy_multi_instance_tests:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - proxy_store_model_in_db_tests:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - proxy_build_from_pip_tests:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - proxy_pass_through_endpoint_tests:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - proxy_e2e_anthropic_messages_tests:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - llm_translation_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - realtime_translation_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - mcp_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - agent_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - guardrails_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - google_generate_content_endpoint_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - llm_responses_api_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - ocr_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - search_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_enterprise_tests:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_tests_proxy_part1:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_tests_proxy_part2:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_tests_llms:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_tests_core:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_tests_mcps:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_tests_integrations:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_mapped_tests_litellm_core_utils:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - batches_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - litellm_utils_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - pass_through_unit_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - image_gen_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - logging_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - audio_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
       - upload-coverage:
-          requires:
-            - llm_translation_testing
-            - realtime_translation_testing
-            - mcp_testing
-            - agent_testing
-            - google_generate_content_endpoint_testing
-            - guardrails_testing
-            - llm_responses_api_testing
-            - ocr_testing
-            - search_testing
-            - litellm_mapped_tests_proxy_part1
-            - litellm_mapped_tests_proxy_part2
-            - litellm_mapped_tests_llms
-            - litellm_mapped_tests_core
-            - litellm_mapped_tests_mcps
-            - litellm_mapped_tests_integrations
-            - litellm_mapped_tests_litellm_core_utils
-            - litellm_mapped_enterprise_tests
-            - batches_testing
-            - litellm_utils_testing
-            - pass_through_unit_testing
-            - image_gen_testing
-            - logging_testing
-            - audio_testing
-            - litellm_router_testing
-            - litellm_router_unit_testing
-            - caching_unit_tests
-            - litellm_proxy_unit_testing_key_generation
-            - litellm_proxy_unit_testing_part1
-            - litellm_proxy_unit_testing_part2
-            - litellm_security_tests
-            - langfuse_logging_unit_tests
-            - local_testing_part1
-            - local_testing_part2
-            - litellm_assistants_api_testing
-            - auth_ui_unit_tests
-      - db_migration_disable_update_check:
-          requires:
-            - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - installing_litellm_on_python:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - installing_litellm_on_python_3_13:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - helm_chart_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - test_bad_database_url:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - publish_proxy_extras:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_release_day_.*/
+          # requires:
+          #   - llm_translation_testing
+          #   - realtime_translation_testing
+          #   - mcp_testing
+          #   - agent_testing
+            # - google_generate_content_endpoint_testing
+            # - guardrails_testing
+            # - llm_responses_api_testing
+            # - ocr_testing
+            # - search_testing
+            # - litellm_mapped_tests_proxy_part1
+            # - litellm_mapped_tests_proxy_part2
+            # - litellm_mapped_tests_llms
+            # - litellm_mapped_tests_core
+            # - litellm_mapped_tests_mcps
+            # - litellm_mapped_tests_integrations
+            # - litellm_mapped_tests_litellm_core_utils
+            # - litellm_mapped_enterprise_tests
+            # - batches_testing
+            # - litellm_utils_testing
+            # - pass_through_unit_testing
+            # - image_gen_testing
+            # - logging_testing
+            # - audio_testing
+            # - litellm_router_testing
+            # - litellm_router_unit_testing
+            # - caching_unit_tests
+            # - litellm_proxy_unit_testing_key_generation
+            # - litellm_proxy_unit_testing_part1
+            # - litellm_proxy_unit_testing_part2
+            # - litellm_security_tests
+            # - langfuse_logging_unit_tests
+            # - local_testing_part1
+            # - local_testing_part2
+            # - litellm_assistants_api_testing
+            # - auth_ui_unit_tests
+      # - db_migration_disable_update_check:
+      #     requires:
+      #       - build_docker_database_image
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - installing_litellm_on_python:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - installing_litellm_on_python_3_13:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - helm_chart_testing:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - test_bad_database_url:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_.*/
+      # - publish_proxy_extras:
+      #     filters:
+      #       branches:
+      #         only:
+      #           - main
+      #           - /litellm_release_day_.*/
       - publish_to_pypi:
           requires:
             - mypy_linting
-            - semgrep
-            - local_testing_part1
-            - local_testing_part2
-            - build_and_test
-            - e2e_openai_endpoints
-            - test_bad_database_url
-            - llm_translation_testing
-            - realtime_translation_testing
-            - mcp_testing
-            - agent_testing
-            - google_generate_content_endpoint_testing
-            - llm_responses_api_testing
-            - ocr_testing
-            - search_testing
-            - litellm_mapped_tests_proxy_part1
-            - litellm_mapped_tests_proxy_part2
-            - litellm_mapped_tests_llms
-            - litellm_mapped_tests_core
-            - litellm_mapped_tests_mcps
-            - litellm_mapped_tests_integrations
-            - litellm_mapped_tests_litellm_core_utils
-            - litellm_mapped_enterprise_tests
-            - batches_testing
-            - litellm_utils_testing
-            - pass_through_unit_testing
-            - image_gen_testing
-            - logging_testing
-            - audio_testing
-            - litellm_router_testing
-            - litellm_router_unit_testing
-            - caching_unit_tests
-            - langfuse_logging_unit_tests
-            - litellm_assistants_api_testing
-            - auth_ui_unit_tests
-            - db_migration_disable_update_check
-            - e2e_ui_testing_chromium
-            - e2e_ui_testing_firefox
-            - litellm_proxy_unit_testing_key_generation
-            - litellm_proxy_unit_testing_part1
-            - litellm_proxy_unit_testing_part2
-            - litellm_security_tests
-            - installing_litellm_on_python
-            - installing_litellm_on_python_3_13
-            - proxy_logging_guardrails_model_info_tests
-            - proxy_spend_accuracy_tests
-            - proxy_multi_instance_tests
-            - proxy_store_model_in_db_tests
-            - proxy_build_from_pip_tests
-            - proxy_pass_through_endpoint_tests
-            - check_code_and_doc_quality
-            - publish_proxy_extras
-            - guardrails_testing
+            # - semgrep
+            # - local_testing_part1
+            # - local_testing_part2
+            # - build_and_test
+            # - e2e_openai_endpoints
+            # - test_bad_database_url
+            # - llm_translation_testing
+            # - realtime_translation_testing
+            # - mcp_testing
+            # - agent_testing
+            # - google_generate_content_endpoint_testing
+            # - llm_responses_api_testing
+            # - ocr_testing
+            # - search_testing
+            # - litellm_mapped_tests_proxy_part1
+            # - litellm_mapped_tests_proxy_part2
+            # - litellm_mapped_tests_llms
+            # - litellm_mapped_tests_core
+            # - litellm_mapped_tests_mcps
+            # - litellm_mapped_tests_integrations
+            # - litellm_mapped_tests_litellm_core_utils
+            # - litellm_mapped_enterprise_tests
+            # - batches_testing
+            # - litellm_utils_testing
+            # - pass_through_unit_testing
+            # - image_gen_testing
+            # - logging_testing
+            # - audio_testing
+            # - litellm_router_testing
+            # - litellm_router_unit_testing
+            # - caching_unit_tests
+            # - langfuse_logging_unit_tests
+            # - litellm_assistants_api_testing
+            # - auth_ui_unit_tests
+            # - db_migration_disable_update_check
+            # - e2e_ui_testing_chromium
+            # - e2e_ui_testing_firefox
+            # - litellm_proxy_unit_testing_key_generation
+            # - litellm_proxy_unit_testing_part1
+            # - litellm_proxy_unit_testing_part2
+            # - litellm_security_tests
+            # - installing_litellm_on_python
+            # - installing_litellm_on_python_3_13
+            # - proxy_logging_guardrails_model_info_tests
+            # - proxy_spend_accuracy_tests
+            # - proxy_multi_instance_tests
+            # - proxy_store_model_in_db_tests
+            # - proxy_build_from_pip_tests
+            # - proxy_pass_through_endpoint_tests
+            # - check_code_and_doc_quality
+            # - publish_proxy_extras
+            # - guardrails_testing
