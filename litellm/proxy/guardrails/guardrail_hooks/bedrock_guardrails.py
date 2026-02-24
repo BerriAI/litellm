@@ -242,11 +242,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         messages: Optional[List[AllMessageValues]],
     ) -> GuardrailMessageFilterResult:
-        """Return payload + merge metadata for the latest user message."""
+        """Return payload + merge metadata for the latest user message.
+
+        If the proxy has already filtered the messages (e.g. len == 1), this avoids
+        redundant calculation of original_messages/indices.
+        """
         if messages is None:
             return GuardrailMessageFilterResult(None, None, None)
 
         if self.experimental_use_latest_role_message_only is not True:
+            return GuardrailMessageFilterResult(messages, None, None)
+
+        # If the Proxy already filtered this to a single message, don't re-filter
+        # This prevents redundant nested merging.
+        if len(messages) == 1 and messages[0].get("role") == "user":
             return GuardrailMessageFilterResult(messages, None, None)
 
         (
