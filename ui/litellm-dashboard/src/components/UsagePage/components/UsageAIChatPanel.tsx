@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Select, Input, Spin } from "antd";
-import { Button } from "@tremor/react";
+import { Button, Select, Input, Spin } from "antd";
 import ReactMarkdown from "react-markdown";
 import { modelHubCall, usageAiChatStream, UsageAiToolCallEvent } from "../../networking";
 
@@ -375,6 +374,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
             disabled={isLoading}
           />
           <Button
+            type="primary"
             onClick={handleSend}
             disabled={!inputText.trim() || isLoading}
             loading={isLoading}
