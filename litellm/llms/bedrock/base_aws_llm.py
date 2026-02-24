@@ -234,6 +234,8 @@ class BaseAWSLLM:
                     aws_session_token=aws_session_token,
                     aws_role_name=aws_role_name,
                     aws_session_name=aws_session_name,
+                    aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
                     aws_external_id=aws_external_id,
                     ssl_verify=ssl_verify,
                 )
@@ -733,6 +735,7 @@ class BaseAWSLLM:
         region: str,
         web_identity_token_file: str,
         aws_external_id: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
         """Handle cross-account role assumption for IRSA."""
@@ -744,11 +747,13 @@ class BaseAWSLLM:
         with open(web_identity_token_file, "r") as f:
             web_identity_token = f.read().strip()
 
+        irsa_sts_kwargs: dict = {"region_name": region, "verify": self._get_ssl_verify(ssl_verify)}
+        if aws_sts_endpoint is not None:
+            irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
+
         # Create an STS client without credentials
         with tracer.trace("boto3.client(sts) for manual IRSA"):
-            sts_client = boto3.client(
-                "sts", region_name=region, verify=self._get_ssl_verify(ssl_verify)
-            )
+            sts_client = boto3.client("sts", **irsa_sts_kwargs)
 
         # Manually assume the IRSA role with the session name
         verbose_logger.debug(
@@ -767,11 +772,10 @@ class BaseAWSLLM:
         with tracer.trace("boto3.client(sts) with manual IRSA credentials"):
             sts_client_with_creds = boto3.client(
                 "sts",
-                region_name=region,
                 aws_access_key_id=irsa_creds["AccessKeyId"],
                 aws_secret_access_key=irsa_creds["SecretAccessKey"],
                 aws_session_token=irsa_creds["SessionToken"],
-                verify=self._get_ssl_verify(ssl_verify),
+                **irsa_sts_kwargs,
             )
 
         # Get current caller identity for debugging
@@ -804,16 +808,19 @@ class BaseAWSLLM:
         aws_session_name: str,
         region: str,
         aws_external_id: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
         """Handle same-account role assumption for IRSA."""
         import boto3
 
+        irsa_sts_kwargs: dict = {"region_name": region, "verify": self._get_ssl_verify(ssl_verify)}
+        if aws_sts_endpoint is not None:
+            irsa_sts_kwargs["endpoint_url"] = aws_sts_endpoint
+
         verbose_logger.debug("Same account role assumption, using automatic IRSA")
         with tracer.trace("boto3.client(sts) with automatic IRSA"):
-            sts_client = boto3.client(
-                "sts", region_name=region, verify=self._get_ssl_verify(ssl_verify)
-            )
+            sts_client = boto3.client("sts", **irsa_sts_kwargs)
 
         # Get current caller identity for debugging
         try:
@@ -867,6 +874,8 @@ class BaseAWSLLM:
         aws_session_token: Optional[str],
         aws_role_name: str,
         aws_session_name: str,
+        aws_region_name: Optional[str] = None,
+        aws_sts_endpoint: Optional[str] = None,
         aws_external_id: Optional[str] = None,
         ssl_verify: Optional[Union[bool, str]] = None,
     ) -> Tuple[Credentials, Optional[int]]:
@@ -879,6 +888,8 @@ class BaseAWSLLM:
         # Check if we're in an EKS/IRSA environment
         web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
         irsa_role_arn = os.getenv("AWS_ROLE_ARN")
+
+        region = aws_region_name or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
 
         # If we have IRSA environment variables and no explicit credentials,
         # we need to use the web identity token flow
@@ -895,12 +906,8 @@ class BaseAWSLLM:
             )
 
             try:
-                # Get region from environment
-                region = (
-                    os.getenv("AWS_REGION")
-                    or os.getenv("AWS_DEFAULT_REGION")
-                    or "us-east-1"
-                )
+                # Use passed-in region when set, else env, else default (align with AssumeRole path)
+                region = region or "us-east-1"
 
                 # Check if we need to do cross-account role assumption
                 if aws_role_name != irsa_role_arn:
@@ -911,6 +918,7 @@ class BaseAWSLLM:
                         region,
                         web_identity_token_file,
                         aws_external_id,
+                        aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                     )
                 else:
@@ -919,6 +927,7 @@ class BaseAWSLLM:
                         aws_session_name,
                         region,
                         aws_external_id,
+                        aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                     )
 
@@ -940,11 +949,14 @@ class BaseAWSLLM:
 
         # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
         # This allows the web identity token to work automatically
+        sts_client_kwargs: dict = {"verify": self._get_ssl_verify(ssl_verify)}
+        if region is not None:
+            sts_client_kwargs["region_name"] = region
+        if aws_sts_endpoint is not None:
+            sts_client_kwargs["endpoint_url"] = aws_sts_endpoint
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
-                sts_client = boto3.client(
-                    "sts", verify=self._get_ssl_verify(ssl_verify)
-                )
+                sts_client = boto3.client("sts", **sts_client_kwargs)
         else:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client(
@@ -952,7 +964,7 @@ class BaseAWSLLM:
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
                     aws_session_token=aws_session_token,
-                    verify=self._get_ssl_verify(ssl_verify),
+                    **sts_client_kwargs,
                 )
 
         assume_role_params = {

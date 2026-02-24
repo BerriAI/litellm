@@ -25,31 +25,23 @@ from typing import (
 )
 
 from litellm import _custom_logger_compatible_callbacks_literal
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
-from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
-    CommonProxyErrors,
-    ProxyErrorTypes,
-    ProxyException,
-    SpendLogsMetadata,
-    SpendLogsPayload,
-)
+from litellm.constants import (DEFAULT_MODEL_CREATED_AT_TIME,
+                               MAX_TEAM_LIST_LIMIT)
+from litellm.proxy._types import (DB_CONNECTION_ERROR_TYPES, CommonProxyErrors,
+                                  ProxyErrorTypes, ProxyException,
+                                  SpendLogsMetadata, SpendLogsPayload)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 try:
-    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-        BaseEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-        ResendEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-        SendGridEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-        SMTPEmailLogger,
-    )
+    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import \
+        BaseEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import \
+        ResendEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import \
+        SendGridEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import \
+        SMTPEmailLogger
 except ImportError:
     BaseEmailLogger = None  # type: ignore
     SendGridEmailLogger = None  # type: ignore
@@ -68,70 +60,56 @@ from fastapi import HTTPException, status
 import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm import (
-    EmbeddingResponse,
-    ImageResponse,
-    ModelResponse,
-    ModelResponseStream,
-    Router,
-)
+from litellm import (EmbeddingResponse, ImageResponse, ModelResponse,
+                     ModelResponseStream, Router)
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.exceptions import RejectedRequestError
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    ModifyResponseException,
-)
+from litellm.integrations.custom_guardrail import (CustomGuardrail,
+                                                   ModifyResponseException)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.integrations.SlackAlerting.utils import \
+    _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import (
-    AlertType,
-    CallInfo,
-    LiteLLM_VerificationTokenView,
-    Member,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import (AlertType, CallInfo,
+                                  LiteLLM_VerificationTokenView, Member,
+                                  UserAPIKeyAuth)
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.db.create_views import (
-    create_missing_views,
-    should_create_missing_views,
-)
+from litellm.proxy.db.create_views import (create_missing_views,
+                                           should_create_missing_views)
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-    UnifiedLLMGuardrails,
-)
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import \
+    UnifiedLLMGuardrails
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
-from litellm.proxy.hooks.parallel_request_limiter import (
-    _PROXY_MaxParallelRequestsHandler,
-)
+from litellm.proxy.hooks.parallel_request_limiter import \
+    _PROXY_MaxParallelRequestsHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
-from litellm.types.mcp import (
-    MCPDuringCallResponseObject,
-    MCPPreCallRequestObject,
-    MCPPreCallResponseObject,
-)
-from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
+from litellm.types.mcp import (MCPDuringCallResponseObject,
+                               MCPPreCallRequestObject,
+                               MCPPreCallResponseObject)
+from litellm.types.proxy.policy_engine.pipeline_types import \
+    PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
 
     Span = Union[_Span, Any]
 else:
@@ -387,6 +365,7 @@ class ProxyLogging:
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
         alert_to_webhook_url: Optional[dict] = None,
+        alert_type_config: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
         if alerting is not None:
@@ -401,6 +380,8 @@ class ProxyLogging:
         if alert_to_webhook_url is not None:
             self.alert_to_webhook_url = alert_to_webhook_url
             updated_slack_alerting = True
+        if alert_type_config is not None:
+            updated_slack_alerting = True
 
         if updated_slack_alerting is True:
             self.slack_alerting_instance.update_values(
@@ -409,6 +390,7 @@ class ProxyLogging:
                 alert_types=self.alert_types,
                 alerting_args=alerting_args,
                 alert_to_webhook_url=self.alert_to_webhook_url,
+                alert_type_config=alert_type_config,
             )
 
             if self.alerting is not None and "slack" in self.alerting:
@@ -1070,10 +1052,9 @@ class ProxyLogging:
         """Process prompt template if applicable."""
 
         from litellm.proxy.prompts.prompt_endpoints import (
-            construct_versioned_prompt_id,
-            get_latest_version_prompt_id,
-        )
-        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+            construct_versioned_prompt_id, get_latest_version_prompt_id)
+        from litellm.proxy.prompts.prompt_registry import \
+            IN_MEMORY_PROMPT_REGISTRY
         from litellm.utils import get_non_default_completion_params
 
         if prompt_version is None:
@@ -1123,9 +1104,8 @@ class ProxyLogging:
 
     def _process_guardrail_metadata(self, data: dict) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
+        from litellm.proxy.common_utils.callback_utils import \
+            add_guardrail_to_applied_guardrails_header
 
         metadata_standard = data.get("metadata") or {}
         metadata_litellm = data.get("litellm_metadata") or {}
@@ -2022,7 +2002,8 @@ class ProxyLogging:
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
         elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
-            from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+            from litellm.llms.a2a.common_utils import \
+                extract_text_from_a2a_response
 
             response_str = extract_text_from_a2a_response(response)
         if response_str is not None:
@@ -2031,7 +2012,8 @@ class ProxyLogging:
                     _callback: Optional[CustomLogger] = None
                     if isinstance(callback, CustomGuardrail):
                         # Main - V2 Guardrails implementation
-                        from litellm.types.guardrails import GuardrailEventHooks
+                        from litellm.types.guardrails import \
+                            GuardrailEventHooks
 
                         ## CHECK FOR MODEL-LEVEL GUARDRAILS
                         modified_data = _check_and_merge_model_level_guardrails(
@@ -4166,20 +4148,24 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         db_writer_client: Optional[AsyncHTTPHandler],
         proxy_logging_obj: ProxyLogging,
+        logs_to_process: Optional[List[Dict[str, Any]]] = None,
     ):
         BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL = (
             10000  # Maximum number of logs to flush in a single interval
         )
-        # Atomically read and remove logs to process (protected by lock)
-        async with prisma_client._spend_log_transactions_lock:
-            logs_to_process = prisma_client.spend_log_transactions[
-                :MAX_LOGS_PER_INTERVAL
-            ]
-            # Remove the logs we're about to process
-            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                len(logs_to_process) :
-            ]
+        popped_batch = False
+        if logs_to_process is None:
+            # Atomically read and remove logs to process (protected by lock)
+            async with prisma_client._spend_log_transactions_lock:
+                logs_to_process = prisma_client.spend_log_transactions[
+                    :MAX_LOGS_PER_INTERVAL
+                ]
+                # Remove the logs we're about to process
+                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
+                    len(logs_to_process) :
+                ]
+            popped_batch = True
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -4239,8 +4225,9 @@ class ProxyUpdateSpend:
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
         finally:
-            # Clean up logs_to_process after all processing is complete
-            del logs_to_process
+            # Clean up logs_to_process only if we popped it (caller-owned otherwise)
+            if popped_batch:
+                del logs_to_process
 
     @staticmethod
     def disable_spend_updates() -> bool:
@@ -4306,23 +4293,46 @@ async def update_spend_logs_job(
     Job to process spend_log_transactions queue.
 
     This job is triggered based on queue size rather than time.
-    Processes spend log transactions when the queue reaches a threshold.
+    Pops the batch once, writes spend logs, then runs guardrail usage tracking.
     """
     n_retry_times = 3
+    MAX_LOGS_PER_INTERVAL = 10000
 
-    # Check queue size with lock protection
+    # Atomically pop batch from queue
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-
     if queue_size == 0:
         return
+
+    async with prisma_client._spend_log_transactions_lock:
+        logs_to_process = prisma_client.spend_log_transactions[
+            :MAX_LOGS_PER_INTERVAL
+        ]
+        prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
+            len(logs_to_process) :
+        ]
 
     await ProxyUpdateSpend.update_spend_logs(
         n_retry_times=n_retry_times,
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
         db_writer_client=db_writer_client,
+        logs_to_process=logs_to_process,
     )
+
+    # Guardrail/policy usage tracking (same batch, outside spend-logs update)
+    try:
+        from litellm.proxy.guardrails.usage_tracking import \
+            process_spend_logs_guardrail_usage
+        await process_spend_logs_guardrail_usage(
+            prisma_client=prisma_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception as guardrail_tracking_err:
+        verbose_proxy_logger.debug(
+            "Guardrail usage tracking failed (non-fatal): %s",
+            guardrail_tracking_err,
+        )
 
 
 async def _monitor_spend_logs_queue(
@@ -4339,10 +4349,8 @@ async def _monitor_spend_logs_queue(
         db_writer_client: Optional HTTP handler for external spend logs endpoint
         proxy_logging_obj: Proxy logging object
     """
-    from litellm.constants import (
-        SPEND_LOG_QUEUE_POLL_INTERVAL,
-        SPEND_LOG_QUEUE_SIZE_THRESHOLD,
-    )
+    from litellm.constants import (SPEND_LOG_QUEUE_POLL_INTERVAL,
+                                   SPEND_LOG_QUEUE_SIZE_THRESHOLD)
 
     threshold = SPEND_LOG_QUEUE_SIZE_THRESHOLD
     base_interval = SPEND_LOG_QUEUE_POLL_INTERVAL
@@ -4863,12 +4871,11 @@ async def get_available_models_for_user(
         List of model names available to the user
     """
     from litellm.proxy.auth.auth_checks import get_team_object
-    from litellm.proxy.auth.model_checks import (
-        get_complete_model_list,
-        get_key_models,
-        get_team_models,
-    )
-    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
+    from litellm.proxy.auth.model_checks import (get_complete_model_list,
+                                                 get_key_models,
+                                                 get_team_models)
+    from litellm.proxy.management_endpoints.team_endpoints import \
+        validate_membership
 
     # Get proxy model list and access groups
     if llm_router is None:
