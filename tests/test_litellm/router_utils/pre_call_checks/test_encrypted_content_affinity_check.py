@@ -10,10 +10,6 @@ sys.path.insert(0, os.path.abspath("../.."))
 import json
 
 import litellm
-from litellm.caching.dual_cache import DualCache
-from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-    EncryptedContentAffinityCheck,
-)
 
 
 class MockResponse:
