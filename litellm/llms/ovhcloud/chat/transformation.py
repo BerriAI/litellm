@@ -91,7 +91,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
