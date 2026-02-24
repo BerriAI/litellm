@@ -5602,7 +5602,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = video_remix_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
         )
@@ -5684,7 +5684,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = video_remix_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
         )
