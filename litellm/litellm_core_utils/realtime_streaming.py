@@ -42,6 +42,7 @@ class RealTimeStreaming:
         logging_obj: LiteLLMLogging,
         provider_config: Optional[BaseRealtimeConfig] = None,
         model: str = "",
+        user_api_key_dict: Optional[Any] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -63,6 +64,7 @@ class RealTimeStreaming:
         self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
         self.session_configuration_request: Optional[str] = None
+        self.user_api_key_dict = user_api_key_dict
 
     def _should_store_message(
         self,
@@ -113,6 +115,94 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
+    def _has_realtime_guardrails(self) -> bool:
+        """Return True if any callback is registered for realtime_input_transcription."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return any(
+            isinstance(cb, CustomGuardrail)
+            and cb.should_run_guardrail(
+                data={},
+                event_type=GuardrailEventHooks.realtime_input_transcription,
+            )
+            for cb in litellm.callbacks
+        )
+
+    async def run_realtime_guardrails(
+        self,
+        transcript: str,
+        item_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Run registered guardrails on a completed speech transcription.
+
+        Returns True if blocked (synthetic warning already sent to client).
+        Returns False if clean (caller should send response.create to the backend).
+        """
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        for callback in litellm.callbacks:
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            if (
+                callback.should_run_guardrail(
+                    data={"transcript": transcript},
+                    event_type=GuardrailEventHooks.realtime_input_transcription,
+                )
+                is not True
+            ):
+                continue
+            try:
+                await callback.apply_guardrail(
+                    inputs={"texts": [transcript], "images": []},
+                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    input_type="request",
+                )
+            except Exception as e:
+                # Re-raise unexpected errors (no status_code/detail = programming bug, not a block).
+                # HTTPException and guardrail-raised exceptions have a status_code or detail attr.
+                is_guardrail_block = hasattr(e, "status_code") or isinstance(e, ValueError)
+                if not is_guardrail_block:
+                    verbose_logger.exception(
+                        "[realtime guardrail] unexpected error in apply_guardrail: %s", e
+                    )
+                    raise
+                # Extract the human-readable error from the detail dict (HTTPException)
+                # or fall back to str(e) for plain ValueError.
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, dict):
+                    safe_msg = detail.get("error") or str(e)
+                elif detail is not None:
+                    safe_msg = str(detail)
+                else:
+                    safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+                # Cancel any in-flight response before speaking the warning.
+                # This handles the race where create_response fired before we could intercept.
+                await self.backend_ws.send(json.dumps({"type": "response.cancel"}))
+                # Ask OpenAI to speak the warning — TTS audio plays naturally in the client
+                await self.backend_ws.send(
+                    json.dumps(
+                        {
+                            "type": "response.create",
+                            "response": {
+                                "modalities": ["text", "audio"],
+                                "instructions": (
+                                    f"Say exactly and only: \"{safe_msg}\". "
+                                    "Do not add anything else."
+                                ),
+                            },
+                        }
+                    )
+                )
+                verbose_logger.warning(
+                    "[realtime guardrail] BLOCKED transcript: %r",
+                    transcript[:80],
+                )
+                return True
+        return False
+
     async def backend_to_client_send_messages(self):
         import websockets
 
@@ -155,19 +245,99 @@ class RealTimeStreaming:
                     self.session_configuration_request = returned_object[
                         "session_configuration_request"
                     ]
-                    if isinstance(transformed_response, list):
-                        for event in transformed_response:
-                            event_str = json.dumps(event)
-                            ## LOGGING
+                    events = (
+                        transformed_response
+                        if isinstance(transformed_response, list)
+                        else [transformed_response]
+                    )
+                    for event in events:
+                        ## GUARDRAIL: inject create_response=false on session.created
+                        if isinstance(event, dict) and event.get("type") == "session.created":
+                            if self._has_realtime_guardrails():
+                                await self.backend_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "session.update",
+                                            "session": {
+                                                "turn_detection": {
+                                                    "type": "server_vad",
+                                                    "create_response": False,
+                                                }
+                                            },
+                                        }
+                                    )
+                                )
+                    for event in events:
+                        event_str = json.dumps(event)
+                        ## GUARDRAIL: run on transcription events in provider_config path too
+                        if (
+                            isinstance(event, dict)
+                            and event.get("type")
+                            == "conversation.item.input_audio_transcription.completed"
+                        ):
+                            transcript = event.get("transcript", "")
                             self.store_message(event_str)
                             await self.websocket.send_text(event_str)
-                    else:
-                        event_str = json.dumps(transformed_response)
+                            blocked = await self.run_realtime_guardrails(
+                                transcript, item_id=event.get("item_id")
+                            )
+                            if not blocked:
+                                await self.backend_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+                            continue
                         ## LOGGING
                         self.store_message(event_str)
                         await self.websocket.send_text(event_str)
 
                 else:
+                    ## GUARDRAIL: intercept transcription events before triggering LLM
+                    try:
+                        event_obj = json.loads(raw_response)
+
+                        if event_obj.get("type") == "session.created":
+                            # If any realtime guardrails are registered, proactively
+                            # set create_response=false so the LLM never auto-responds
+                            # before our guardrail has a chance to run.
+                            if self._has_realtime_guardrails():
+                                await self.backend_ws.send(
+                                    json.dumps(
+                                        {
+                                            "type": "session.update",
+                                            "session": {
+                                                "turn_detection": {
+                                                    "type": "server_vad",
+                                                    "create_response": False,
+                                                }
+                                            },
+                                        }
+                                    )
+                                )
+                                verbose_logger.debug(
+                                    "[realtime guardrail] injected create_response=false into session"
+                                )
+
+                        if (
+                            event_obj.get("type")
+                            == "conversation.item.input_audio_transcription.completed"
+                        ):
+                            transcript = event_obj.get("transcript", "")
+                            ## LOGGING — must happen before continue below
+                            self.store_message(raw_response)
+                            # Forward transcript to client so user sees what they said
+                            await self.websocket.send_text(raw_response)
+                            blocked = await self.run_realtime_guardrails(
+                                transcript,
+                                item_id=event_obj.get("item_id"),
+                            )
+                            if not blocked:
+                                # Clean — trigger LLM response
+                                await self.backend_ws.send(
+                                    json.dumps({"type": "response.create"})
+                                )
+                            continue
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
                     ## LOGGING
                     self.store_message(raw_response)
                     await self.websocket.send_text(raw_response)
@@ -185,6 +355,32 @@ class RealTimeStreaming:
         try:
             while True:
                 message = await self.websocket.receive_text()
+
+                ## GUARDRAIL: intercept conversation.item.create for text-based injection.
+                try:
+                    msg_obj = json.loads(message)
+                    msg_type = msg_obj.get("type")
+
+                    if msg_type == "conversation.item.create":
+                        # Check user text messages for prompt injection
+                        item = msg_obj.get("item", {})
+                        if item.get("role") == "user":
+                            content_list = item.get("content", [])
+                            texts = [
+                                c.get("text", "")
+                                for c in content_list
+                                if isinstance(c, dict) and c.get("type") == "input_text"
+                            ]
+                            combined_text = " ".join(texts)
+                            if combined_text:
+                                blocked = await self.run_realtime_guardrails(
+                                    combined_text
+                                )
+                                if blocked:
+                                    continue  # don't forward to backend
+
+                except (json.JSONDecodeError, AttributeError):
+                    pass
 
                 ## LOGGING
                 self.store_input(message=message)

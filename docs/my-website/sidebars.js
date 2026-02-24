@@ -45,6 +45,7 @@ const sidebars = {
         "proxy/guardrails/guardrail_load_balancing",
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
+        "proxy/guardrails/realtime_guardrails",
         {
           type: "category",
           label: "Providers",
