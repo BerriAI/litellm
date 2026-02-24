@@ -81,7 +81,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
