@@ -1,12 +1,12 @@
 import React, { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
-import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
+import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, AUTH_TYPE } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 
 import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined, SearchOutlined } from "@ant-design/icons";
-import { Input } from "antd";
+import { RobotOutlined, ToolOutlined, SearchOutlined, LockOutlined, KeyOutlined } from "@ant-design/icons";
+import { Input, Alert, Button as AntdButton } from "antd";
 
 const MCPToolsViewer = ({
   serverId,
@@ -14,23 +14,50 @@ const MCPToolsViewer = ({
   auth_type,
   userRole,
   userID,
-  serverAlias, // Add serverAlias prop
+  serverAlias,
+  extraHeaders,
 }: MCPToolsViewerProps) => {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
+  
+  // State for passthrough headers
+  const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
+  const [showHeaderInput, setShowHeaderInput] = useState(false);
+
+  // Check if this server has extra headers configured
+  const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
+
+  // Build custom headers for MCP server requests
+  const buildCustomHeaders = () => {
+    if (!serverAlias || !hasExtraHeaders) return undefined;
+    
+    const customHeaders: Record<string, string> = {};
+    
+    // Add passthrough headers with server-specific prefix
+    Object.entries(passthroughHeaders).forEach(([headerName, headerValue]) => {
+      if (headerValue && headerValue.trim()) {
+        // Format: x-mcp-{alias}-{header_name}
+        const mcpHeaderName = `x-mcp-${serverAlias}-${headerName.toLowerCase()}`;
+        customHeaders[mcpHeaderName] = headerValue;
+      }
+    });
+    
+    return Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
+  };
 
   // Query to fetch MCP tools
   const {
     data: mcpToolsResponse,
     isLoading: isLoadingTools,
     error: mcpToolsError,
+    refetch: refetchTools,
   } = useQuery({
-    queryKey: ["mcpTools", serverId],
+    queryKey: ["mcpTools", serverId, passthroughHeaders],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
-      return listMCPTools(accessToken, serverId);
+      return listMCPTools(accessToken, serverId, buildCustomHeaders());
     },
     enabled: !!accessToken,
     staleTime: 30000, // Consider data fresh for 30 seconds
@@ -42,7 +69,13 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result: CallMCPToolResponse = await callMCPTool(accessToken, serverId, args.tool.name, args.arguments);
+        const result: CallMCPToolResponse = await callMCPTool(
+          accessToken, 
+          serverId, 
+          args.tool.name, 
+          args.arguments,
+          { customHeaders: buildCustomHeaders() }
+        );
         return result;
       } catch (error) {
         throw error;
@@ -79,6 +112,80 @@ const MCPToolsViewer = ({
             <Title className="text-xl font-semibold mb-6 mt-2">MCP Tools</Title>
 
             <div className="flex flex-col flex-1">
+              {/* Extra Headers Input Section */}
+              {hasExtraHeaders && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center">
+                      <KeyOutlined className="text-blue-600 mr-2" />
+                      <Text className="text-sm font-medium text-blue-800">
+                        Additional Headers
+                      </Text>
+                    </div>
+                    <AntdButton
+                      size="small"
+                      type="link"
+                      onClick={() => setShowHeaderInput(!showHeaderInput)}
+                      className="text-blue-700 p-0 h-auto"
+                    >
+                      {showHeaderInput ? "Hide" : "Configure"}
+                    </AntdButton>
+                  </div>
+                  
+                  {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
+                    <Text className="text-xs text-blue-700">
+                      This server requires additional headers. Click "Configure" to provide values.
+                    </Text>
+                  )}
+                  
+                  {showHeaderInput && (
+                    <div className="mt-3 space-y-2">
+                      {extraHeaders?.map((headerName) => (
+                        <div key={headerName}>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            {headerName}
+                          </label>
+                          <Input
+                            size="small"
+                            placeholder={`Enter ${headerName}`}
+                            value={passthroughHeaders[headerName] || ""}
+                            onChange={(e) => {
+                              setPassthroughHeaders({
+                                ...passthroughHeaders,
+                                [headerName]: e.target.value,
+                              });
+                            }}
+                            prefix={<KeyOutlined className="text-gray-400" />}
+                            className="rounded"
+                          />
+                        </div>
+                      ))}
+                      <AntdButton
+                        size="small"
+                        type="primary"
+                        onClick={() => {
+                          refetchTools();
+                          setShowHeaderInput(false);
+                        }}
+                        disabled={Object.values(passthroughHeaders).every(v => !v || !v.trim())}
+                        className="w-full mt-2"
+                      >
+                        Load Tools
+                      </AntdButton>
+                    </div>
+                  )}
+                  
+                  {!showHeaderInput && Object.keys(passthroughHeaders).length > 0 && (
+                    <div className="mt-2">
+                      <Text className="text-xs text-green-700 flex items-center">
+                        <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                        {Object.keys(passthroughHeaders).length} header(s) configured
+                      </Text>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Tool Selection - Show tools first */}
               <div className="flex flex-col flex-1 min-h-0">
                 <Text className="font-medium block mb-3 text-gray-700 flex items-center">

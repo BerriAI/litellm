@@ -7147,7 +7147,11 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string) => {
+export const listMCPTools = async (
+  accessToken: string, 
+  serverId: string,
+  customHeaders?: Record<string, string>
+) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -7159,6 +7163,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
+      ...customHeaders, // Merge custom headers for passthrough auth
     };
 
     const response = await fetch(url, {
@@ -7194,6 +7199,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 
 export interface CallMCPToolOptions {
   guardrails?: string[];
+  customHeaders?: Record<string, string>;
 }
 
 export const callMCPTool = async (
@@ -7212,6 +7218,7 @@ export const callMCPTool = async (
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
+      ...(options?.customHeaders || {}), // Merge custom headers for passthrough auth
     };
 
     const body: Record<string, any> = {
