@@ -177,6 +177,7 @@ async def stream_usage_ai_chat(
       data: {"type": "done"}
       data: {"type": "error", "message": "..."}
     """
+    model = model.strip() if model else ""
     model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
 
     chat_messages: List[Dict[str, Any]] = [

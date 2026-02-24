@@ -62,7 +62,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
   };
 
   const handleSend = async () => {
-    if (!accessToken || !inputText.trim() || !selectedModel || isLoading) return;
+    if (!accessToken || !inputText.trim() || isLoading) return;
 
     const userMessage: ChatMessage = { role: "user", content: inputText.trim() };
     const updatedMessages = [...messages, userMessage];
@@ -80,7 +80,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
       await usageAiChatStream(
         accessToken,
         updatedMessages.map((m) => ({ role: m.role, content: m.content })),
-        selectedModel,
+        selectedModel || "",
         (content: string) => {
           accumulated += content;
           setStreamingContent(accumulated);
@@ -243,7 +243,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
           />
           <Button
             onClick={handleSend}
-            disabled={!inputText.trim() || !selectedModel || isLoading}
+            disabled={!inputText.trim() || isLoading}
             loading={isLoading}
           >
             Send
