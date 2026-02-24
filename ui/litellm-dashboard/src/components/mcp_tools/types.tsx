@@ -132,6 +132,7 @@ export interface MCPToolsViewerProps {
   userRole: string | null;
   userID: string | null;
   serverAlias?: string | null;
+  extraHeaders?: string[] | null;
 }
 
 export interface MCPServer {
