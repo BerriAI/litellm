@@ -101,7 +101,7 @@ def _truncate_base64_in_value(value: Any) -> Any:
                 if isinstance(v, str):
                     container[k] = _truncate_base64_in_string(v)
                 elif isinstance(v, dict):
-                    copy = {ck: cv for ck, cv in v.items()}
+                    copy: Union[dict, list] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
                     stack.append((copy, depth + 1))
                 elif isinstance(v, list):

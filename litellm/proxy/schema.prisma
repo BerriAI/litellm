@@ -273,7 +273,6 @@ model LiteLLM_MCPServerTable {
   alias        String?
   description  String?
   url          String?
-  spec_path    String?
   transport    String         @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
@@ -614,7 +613,7 @@ model LiteLLM_DailyUserSpend {
 
   @@unique([user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([user_id])
+  @@index([user_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -645,7 +644,7 @@ model LiteLLM_DailyOrganizationSpend {
 
   @@unique([organization_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([organization_id])
+  @@index([organization_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -675,7 +674,7 @@ model LiteLLM_DailyEndUserSpend {
   updated_at          DateTime @updatedAt
   @@unique([end_user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([end_user_id])
+  @@index([end_user_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -705,7 +704,7 @@ model LiteLLM_DailyAgentSpend {
   updated_at          DateTime @updatedAt
   @@unique([agent_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([agent_id])
+  @@index([agent_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -736,7 +735,7 @@ model LiteLLM_DailyTeamSpend {
 
   @@unique([team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([team_id])
+  @@index([team_id, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -768,7 +767,7 @@ model LiteLLM_DailyTagSpend {
 
   @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
   @@index([date])
-  @@index([tag])
+  @@index([tag, date])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])
@@ -813,6 +812,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   file_object Json // Stores the OpenAIFileObject
   file_purpose String // either 'batch' or 'fine-tune'
   status String? // check if batch cost has been tracked  
+  batch_processed Boolean @default(false) // set to true by CheckBatchCost after cost is computed
   created_at DateTime @default(now())
   created_by String?
   updated_at DateTime @updatedAt
@@ -864,6 +864,54 @@ model LiteLLM_GuardrailsTable {
   team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+}
+
+// Daily guardrail metrics for usage dashboard (one row per guardrail per day)
+model LiteLLM_DailyGuardrailMetrics {
+  guardrail_id        String   // logical id; may not FK if guardrail from config
+  date                String   // YYYY-MM-DD
+  requests_evaluated  BigInt   @default(0)
+  passed_count        BigInt   @default(0)
+  blocked_count       BigInt   @default(0)
+  flagged_count       BigInt   @default(0)
+  avg_score           Float?
+  avg_latency_ms      Float?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@id([guardrail_id, date])
+  @@index([date])
+  @@index([guardrail_id])
+}
+
+// Daily policy metrics for usage dashboard (one row per policy per day)
+model LiteLLM_DailyPolicyMetrics {
+  policy_id           String
+  date                String   // YYYY-MM-DD
+  requests_evaluated  BigInt   @default(0)
+  passed_count        BigInt   @default(0)
+  blocked_count       BigInt   @default(0)
+  flagged_count       BigInt   @default(0)
+  avg_score           Float?
+  avg_latency_ms      Float?
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@id([policy_id, date])
+  @@index([date])
+  @@index([policy_id])
+}
+
+// Index for fast "last N logs for guardrail/policy" from SpendLogs
+model LiteLLM_SpendLogGuardrailIndex {
+  request_id   String
+  guardrail_id String
+  policy_id    String?   // set when run as part of a policy pipeline
+  start_time   DateTime
+
+  @@id([request_id, guardrail_id])
+  @@index([guardrail_id, start_time])
+  @@index([policy_id, start_time])
 }
 
 // Prompt table for storing prompt configurations
@@ -963,20 +1011,29 @@ model LiteLLM_SkillsTable {
   updated_by     String?
 }
 
-// Policy table for storing guardrail policies
+// Policy table for storing guardrail policies (versioned)
 model LiteLLM_PolicyTable {
-  policy_id        String    @id @default(uuid())
-  policy_name      String    @unique
-  inherit          String?   // Name of parent policy to inherit from
-  description      String?
-  guardrails_add   String[]  @default([])
-  guardrails_remove String[] @default([])
-  condition        Json?     @default("{}")  // Policy conditions (e.g., model matching)
-  pipeline         Json?     // Optional guardrail pipeline (mode + steps[])
-  created_at       DateTime  @default(now())
-  created_by       String?
-  updated_at       DateTime  @default(now()) @updatedAt
-  updated_by       String?
+  policy_id          String    @id @default(uuid())
+  policy_name        String    // No longer @unique; use @@unique([policy_name, version_number])
+  version_number     Int       @default(1)
+  version_status     String    @default("production")  // "draft" | "published" | "production"
+  parent_version_id  String?
+  is_latest          Boolean   @default(true)
+  published_at       DateTime?
+  production_at      DateTime?
+  inherit            String?   // Name of parent policy to inherit from
+  description        String?
+  guardrails_add     String[]  @default([])
+  guardrails_remove  String[]  @default([])
+  condition          Json?     @default("{}")  // Policy conditions (e.g., model matching)
+  pipeline           Json?     // Optional guardrail pipeline (mode + steps[])
+  created_at         DateTime  @default(now())
+  created_by         String?
+  updated_at         DateTime  @default(now()) @updatedAt
+  updated_by         String?
+
+  @@unique([policy_name, version_number])
+  @@index([policy_name, version_status])
 }
 
 // Policy attachment table for defining where policies apply

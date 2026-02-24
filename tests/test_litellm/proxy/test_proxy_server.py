@@ -3154,6 +3154,163 @@ async def test_get_image_root_case_uses_current_dir(monkeypatch):
         assert mock_file_response.called, "FileResponse should be called"
 
 
+@pytest.mark.asyncio
+async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
+    """
+    Test that when UI_LOGO_PATH is set to a local file, get_image serves it
+    directly and does not return a stale cached_logo.jpg.
+
+    Regression test: previously the cache check ran before reading UI_LOGO_PATH,
+    so a pre-existing cached_logo.jpg (e.g. from the base Docker image) would
+    always be returned, ignoring the user's custom logo.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.setenv("UI_LOGO_PATH", "/app/custom_logo.jpg")
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+
+    calls_to_file_response = []
+
+    def fake_file_response(path, **kwargs):
+        calls_to_file_response.append(path)
+        return MagicMock()
+
+    with patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
+         patch("litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response):
+
+        await get_image()
+
+    assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
+    assert calls_to_file_response[0] == "/app/custom_logo.jpg", (
+        f"Expected custom logo path, got {calls_to_file_response[0]}. "
+        "A stale cached_logo.jpg may have been returned instead."
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_image_default_logo_still_uses_cache(monkeypatch):
+    """
+    Test that when UI_LOGO_PATH is NOT set (default logo), the cache
+    optimization still works — cached_logo.jpg is returned if it exists.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+
+    calls_to_file_response = []
+
+    def fake_file_response(path, **kwargs):
+        calls_to_file_response.append(path)
+        return MagicMock()
+
+    with patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
+         patch("litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response):
+
+        await get_image()
+
+    assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
+    served_path = calls_to_file_response[0]
+    assert served_path.endswith("cached_logo.jpg"), (
+        f"Expected cached_logo.jpg for default logo, got {served_path}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatch):
+    """
+    Test that when UI_LOGO_PATH points to a non-existent local file,
+    get_image falls through to the cache/default logo instead of failing.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.setenv("UI_LOGO_PATH", "/app/nonexistent_logo.jpg")
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+
+    calls_to_file_response = []
+
+    def fake_file_response(path, **kwargs):
+        calls_to_file_response.append(path)
+        return MagicMock()
+
+    def exists_side_effect(path):
+        # The custom logo does NOT exist; cache and default DO exist
+        if path == "/app/nonexistent_logo.jpg":
+            return False
+        return True
+
+    with patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
+         patch("litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response):
+
+        await get_image()
+
+    assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
+    served_path = calls_to_file_response[0]
+    assert served_path != "/app/nonexistent_logo.jpg", (
+        "Should not attempt to serve a non-existent custom logo"
+    )
+    assert served_path.endswith("cached_logo.jpg"), (
+        f"Expected fallback to cached_logo.jpg, got {served_path}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch):
+    """
+    Test that when UI_LOGO_PATH points to a non-existent file AND there is no
+    cached_logo.jpg, get_image serves the default logo instead of the
+    non-existent custom path.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.setenv("UI_LOGO_PATH", "/app/nonexistent_logo.jpg")
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+
+    calls_to_file_response = []
+
+    def fake_file_response(path, **kwargs):
+        calls_to_file_response.append(path)
+        return MagicMock()
+
+    def exists_side_effect(path):
+        # Neither the custom logo nor the cache exist
+        if path == "/app/nonexistent_logo.jpg":
+            return False
+        if "cached_logo.jpg" in path:
+            return False
+        return True
+
+    with patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
+         patch("litellm.proxy.proxy_server.os.access", return_value=True), \
+         patch("litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response):
+
+        await get_image()
+
+    assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
+    served_path = calls_to_file_response[0]
+    assert served_path != "/app/nonexistent_logo.jpg", (
+        "Should not attempt to serve a non-existent custom logo"
+    )
+    assert served_path.endswith("logo.jpg"), (
+        f"Expected fallback to default logo.jpg, got {served_path}"
+    )
+
+
 def test_get_config_normalizes_string_callbacks(monkeypatch):
     """
     Test that /get/config/callbacks normalizes string callbacks to lists.
@@ -3360,6 +3517,157 @@ class TestInvitationEndpoints:
         # ProxyException handler returns {"error": {...}}, HTTPException returns {"detail": {...}}
         error_content = body.get("error", body.get("detail", body))
         assert "not allowed" in str(error_content).lower()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_cleanup_on_early_exit():
+    """
+    Test that async_data_generator calls response.aclose() in the finally block
+    when the generator is abandoned mid-stream (client disconnect).
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+        {"choices": [{"delta": {"content": " more"}}]},
+    ]
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    async def mock_streaming_iterator(*args, **kwargs):
+        for chunk in mock_chunks:
+            yield chunk
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator
+    )
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs.get("response")
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    # Create a mock response with aclose
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        # Consume only the first chunk then abandon the generator (simulates client disconnect)
+        gen = async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        )
+        first_chunk = await gen.__anext__()
+        assert first_chunk.startswith("data: ")
+
+        # Close the generator early (simulates what ASGI does on client disconnect)
+        await gen.aclose()
+
+    # Verify aclose was called on the response to release the HTTP connection
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_cleanup_on_normal_completion():
+    """
+    Test that async_data_generator calls response.aclose() even on normal completion.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+    ]
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    async def mock_streaming_iterator(*args, **kwargs):
+        for chunk in mock_chunks:
+            yield chunk
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator
+    )
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs.get("response")
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    # Should have completed normally with [DONE]
+    assert any("[DONE]" in d for d in yielded_data)
+    # aclose should still be called via finally block
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_cleanup_on_midstream_error():
+    """
+    Test that async_data_generator calls response.aclose() via finally block
+    even when an exception occurs mid-stream.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    async def mock_streaming_iterator_with_error(*args, **kwargs):
+        yield {"choices": [{"delta": {"content": "Hello"}}]}
+        raise RuntimeError("upstream connection reset")
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator_with_error
+    )
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=lambda **kwargs: kwargs.get("response")
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    mock_response = MagicMock()
+    mock_response.aclose = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        yielded_data = []
+        async for data in async_data_generator(
+            mock_response, mock_user_api_key_dict, mock_request_data
+        ):
+            yielded_data.append(data)
+
+    # Should have yielded data chunk and then an error chunk
+    assert len(yielded_data) >= 2
+    assert any("error" in d for d in yielded_data)
+    # aclose must still be called via finally block despite the error
+    mock_response.aclose.assert_awaited_once()
 
 
 # ============================================================================

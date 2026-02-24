@@ -1662,7 +1662,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -2830,69 +2830,84 @@ def test_fast_mode_usage_calculation():
 
 def test_fast_mode_cost_calculation():
     """
-    Test that fast mode correctly prepends 'fast/' to model name for pricing lookup.
+    Test that fast mode applies the 'fast' multiplier from provider_specific_entry
+    on top of the base model cost (1.1x for claude-opus-4-6).
     """
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
-    # Mock the generic_cost_per_token to verify correct model name is passed
-    with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
-        mock_cost.return_value = (0.03, 0.15)  # $30 and $150 per MTok
+    base_prompt = 0.005
+    base_completion = 0.025
 
-        # Test fast mode
+    with patch(
+        "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
+    ) as mock_cost, patch("litellm.get_model_info") as mock_info:
+        mock_cost.return_value = (base_prompt, base_completion)
+        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
+
         usage_fast = Usage(
             prompt_tokens=1000,
             completion_tokens=1000,
-            speed="fast"
+            speed="fast",
         )
 
         prompt_cost, completion_cost = cost_per_token(
             model="claude-opus-4-6",
-            usage=usage_fast
+            usage=usage_fast,
         )
 
-        # Verify that generic_cost_per_token was called with "fast/claude-opus-4-6"
+        # generic_cost_per_token called with the plain base model name
         mock_cost.assert_called_once()
-        call_args = mock_cost.call_args
-        assert call_args[1]['model'] == "fast/claude-opus-4-6"
-        assert call_args[1]['custom_llm_provider'] == "anthropic"
+        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
+        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
+
+        # 1.1x multiplier applied
+        assert abs(prompt_cost - base_prompt * 1.1) < 1e-10
+        assert abs(completion_cost - base_completion * 1.1) < 1e-10
 
 
 def test_fast_mode_with_inference_geo():
     """
-    Test that fast mode works correctly with inference_geo prefix.
-    Expected format: fast/us/claude-opus-4-6
+    Test that fast mode + inference_geo both apply their multipliers from
+    provider_specific_entry (1.1 * 1.1 = 1.21x for claude-opus-4-6).
     """
     from unittest.mock import patch
 
     from litellm.llms.anthropic.cost_calculation import cost_per_token
     from litellm.types.utils import Usage
 
-    # Mock the generic_cost_per_token to verify correct model name is passed
-    with patch('litellm.llms.anthropic.cost_calculation.generic_cost_per_token') as mock_cost:
-        mock_cost.return_value = (0.03, 0.15)
+    base_prompt = 0.005
+    base_completion = 0.025
 
-        # Test with both speed and inference_geo
+    with patch(
+        "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
+    ) as mock_cost, patch("litellm.get_model_info") as mock_info:
+        mock_cost.return_value = (base_prompt, base_completion)
+        mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
+
         usage = Usage(
             prompt_tokens=1000,
             completion_tokens=1000,
             speed="fast",
-            inference_geo="us"
+            inference_geo="us",
         )
 
-        # This should look up "fast/us/claude-opus-4-6" in pricing
         prompt_cost, completion_cost = cost_per_token(
             model="claude-opus-4-6",
-            usage=usage
+            usage=usage,
         )
 
-        # Verify that generic_cost_per_token was called with "fast/us/claude-opus-4-6"
+        # generic_cost_per_token called with the plain base model name
         mock_cost.assert_called_once()
-        call_args = mock_cost.call_args
-        assert call_args[1]['model'] == "fast/us/claude-opus-4-6"
-        assert call_args[1]['custom_llm_provider'] == "anthropic"
+        assert mock_cost.call_args[1]["model"] == "claude-opus-4-6"
+        assert mock_cost.call_args[1]["custom_llm_provider"] == "anthropic"
+
+        # 1.1 (fast) * 1.1 (us) = 1.21x multiplier applied
+        expected_multiplier = 1.1 * 1.1
+        assert abs(prompt_cost - base_prompt * expected_multiplier) < 1e-10
+        assert abs(completion_cost - base_completion * expected_multiplier) < 1e-10
 
 
 def test_fast_mode_parameter_in_supported_params():
@@ -2924,3 +2939,23 @@ def test_fast_mode_parameter_mapping():
 
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_map_openai_params_max_tokens_normalized_to_int():
+    """
+    Test that map_openai_params normalizes max_tokens to an integer (e.g. 0.7 -> 1).
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {"max_tokens": 0.7}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-3-5-sonnet-20241022",
+        drop_params=False,
+    )
+
+    assert "max_tokens" in result
+    assert result["max_tokens"] == 1
