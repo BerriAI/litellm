@@ -16,6 +16,8 @@ identifier_words:
   - "SG resident data"
   - "PDPA data"
   - "Singapore employee data"
+  # PDPA alone implies Singapore regulatory context
+  - "PDPA"
 
 additional_block_words:
   # Transfer actions
