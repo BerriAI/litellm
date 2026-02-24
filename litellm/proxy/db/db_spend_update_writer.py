@@ -224,8 +224,17 @@ class DBSpendUpdateWriter:
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
         except Exception:
-            verbose_proxy_logger.debug(
-                f"Error updating Prisma database: {traceback.format_exc()}"
+            verbose_proxy_logger.error(
+                "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
+                "may not have completed for this request. "
+                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s - %s",
+                response_cost,
+                token,
+                user_id,
+                team_id,
+                org_id,
+                end_user_id,
+                traceback.format_exc(),
             )
 
     async def _update_key_db(
@@ -295,9 +304,14 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                "\033[91m"
-                + f"Update User DB call failed to execute {str(e)}\n{traceback.format_exc()}"
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to enqueue user spend update. "
+                "user_id=%s, end_user_id=%s, response_cost=%s - %s\n%s",
+                user_id,
+                end_user_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     async def _update_team_db(
@@ -334,11 +348,24 @@ class DBSpendUpdateWriter:
                             response_cost=response_cost,
                         )
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Spend tracking - failed to enqueue team member spend update. "
+                    "team_id=%s, user_id=%s, response_cost=%s - %s\n%s",
+                    team_id,
+                    user_id,
+                    response_cost,
+                    str(e),
+                    traceback.format_exc(),
+                )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Update Team DB failed to execute - {str(e)}\n{traceback.format_exc()}"
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to enqueue team spend update. "
+                "team_id=%s, response_cost=%s - %s\n%s",
+                team_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
             raise e
 
@@ -363,8 +390,13 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Update Org DB failed to execute - {str(e)}\n{traceback.format_exc()}"
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to enqueue org spend update. "
+                "org_id=%s, response_cost=%s - %s\n%s",
+                org_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
             raise e
 
@@ -411,8 +443,13 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Update Tag DB failed to execute - {str(e)}\n{traceback.format_exc()}"
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to enqueue tag spend update. "
+                "request_tags=%s, response_cost=%s - %s\n%s",
+                request_tags,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
             raise e
 
@@ -513,6 +550,17 @@ class DBSpendUpdateWriter:
                     await self.redis_update_buffer.get_all_update_transactions_from_redis_buffer()
                 )
                 if db_spend_update_transactions is not None:
+                    verbose_proxy_logger.info(
+                        "Spend tracking - committing spend updates from Redis to DB: "
+                        "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d",
+                        len(db_spend_update_transactions.get("key_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("user_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("team_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("org_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("end_user_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("team_member_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("tag_list_transactions") or {}),
+                    )
                     await self._commit_spend_updates_to_db(
                         prisma_client=prisma_client,
                         n_retry_times=n_retry_times,
@@ -583,7 +631,12 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_agent_spend_update_transactions,
                     )
             except Exception as e:
-                verbose_proxy_logger.error(f"Error committing spend updates: {e}")
+                verbose_proxy_logger.error(
+                    "Spend tracking - failed to commit spend updates from Redis to DB. "
+                    "Data already popped from Redis may be lost. Error: %s\n%s",
+                    str(e),
+                    traceback.format_exc(),
+                )
             finally:
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=DB_SPEND_UPDATE_JOB_NAME,
