@@ -161,7 +161,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
         
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
