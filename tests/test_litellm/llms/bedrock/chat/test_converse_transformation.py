@@ -2616,11 +2616,11 @@ def test_empty_assistant_message_handling():
     empty or whitespace-only content with a placeholder to prevent AWS Bedrock
     Converse API 400 Bad Request errors.
     """
+    # Import the litellm module that factory.py uses to ensure we patch the correct reference
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
-    # Import the litellm module that factory.py uses to ensure we patch the correct reference
-    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -3135,7 +3135,12 @@ def test_native_structured_output_no_fake_stream():
 
 def test_transform_request_with_output_config():
     """Test that outputConfig flows through _transform_request_helper into the final request."""
-    from litellm.types.llms.bedrock import OutputConfigBlock, OutputFormat, OutputFormatStructure, JsonSchemaDefinition
+    from litellm.types.llms.bedrock import (
+        JsonSchemaDefinition,
+        OutputConfigBlock,
+        OutputFormat,
+        OutputFormatStructure,
+    )
 
     config = AmazonConverseConfig()
 
@@ -3375,6 +3380,61 @@ def test_output_config_applies_additional_properties():
     assert parsed["additionalProperties"] is False
     assert parsed["properties"]["nested"]["additionalProperties"] is False
 
+
+
+def test_parallel_tool_calls_in_request_transformation():
+    """Test that parallel_tool_calls is correctly placed in additionalModelRequestFields after full transformation"""
+    config = AmazonConverseConfig()
+    
+    messages = [
+        {"role": "user", "content": "What's the weather in SF and NYC?"}
+    ]
+    
+    non_default_params = {
+        "parallel_tool_calls": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The location to get weather for"
+                            }
+                        },
+                        "required": ["location"]
+                    }
+                }
+            }
+        ],
+        "max_tokens": 100,
+    }
+    
+    optional_params = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model="anthropic.claude-sonnet-4-5-v2:0",
+        drop_params=False,
+    )
+    
+    # Transform the request
+    request_data = config.transform_request(
+        model="anthropic.claude-sonnet-4-5-v2:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    
+    # Verify the structure
+    assert "additionalModelRequestFields" in request_data
+    assert "tool_choice" in request_data["additionalModelRequestFields"]
+    assert "disable_parallel_tool_use" in request_data["additionalModelRequestFields"]["tool_choice"]
+    assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
 
 
 class TestBedrockMinThinkingBudgetTokens:

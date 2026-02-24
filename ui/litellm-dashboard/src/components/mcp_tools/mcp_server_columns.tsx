@@ -47,7 +47,13 @@ export const mcpServerColumns = (
   {
     accessorKey: "transport",
     header: "Transport",
-    cell: ({ getValue }) => <span>{((getValue() as string) || "http").toUpperCase()}</span>,
+    cell: ({ row }) => {
+      const transport = row.original.transport || "http";
+      const specPath = row.original.spec_path;
+      // If server has spec_path, display as "OPENAPI" instead of the raw transport type
+      const displayTransport = specPath && transport !== "stdio" ? "OPENAPI" : transport;
+      return <span>{displayTransport.toUpperCase()}</span>;
+    },
   },
   {
     accessorKey: "auth_type",

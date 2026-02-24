@@ -58,6 +58,7 @@ class SupportedGuardrailIntegrations(Enum):
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
     NOMA = "noma"
+    NOMA_V2 = "noma_v2"
     TOOL_PERMISSION = "tool_permission"
     ZSCALER_AI_GUARD = "zscaler_ai_guard"
     JAVELIN = "javelin"
@@ -70,6 +71,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
 
 
@@ -307,6 +309,14 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
             "Entities below the threshold are ignored."
         ),
     )
+    presidio_entities_deny_list: Optional[List[Union[PiiEntityType, str]]] = Field(
+        default=None,
+        description=(
+            "List of entity types to exclude from Presidio detection results. "
+            "Detections of these types will be silently dropped. "
+            "Useful for suppressing false positives (e.g., US_DRIVER_LICENSE on coding routes)."
+        ),
+    )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
@@ -435,6 +445,10 @@ class PillarGuardrailConfigModel(BaseModel):
 class NomaGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Noma Security guardrail"""
 
+    use_v2: Optional[bool] = Field(
+        default=False,
+        description="If True and guardrail='noma', route to the new Noma v2 implementation instead of the legacy implementation.",
+    )
     application_id: Optional[str] = Field(
         default=None,
         description="Application ID for Noma Security. Defaults to 'litellm' if not provided",
@@ -759,6 +773,7 @@ class GuardrailEventHooks(str, Enum):
     logging_only = "logging_only"
     pre_mcp_call = "pre_mcp_call"
     during_mcp_call = "during_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
 
 
 class DynamicGuardrailParams(TypedDict):

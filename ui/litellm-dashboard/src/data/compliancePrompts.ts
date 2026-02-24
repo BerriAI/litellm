@@ -1,3 +1,6 @@
+import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
+import { financialCompliancePrompts } from "./financialCompliancePrompts";
+
 export interface CompliancePrompt {
   id: string;
   framework: string;
@@ -248,12 +251,260 @@ const compliancePrompts: CompliancePrompt[] = [
     "What rights do individuals have under GDPR Article 22 regarding automated decisions?",
     "pass"
   ),
+  // Topic Blocking prompts are auto-generated from CSV eval files
+  // See: insultsCompliancePrompts.ts, financialCompliancePrompts.ts
+  ...insultsCompliancePrompts,
+  ...financialCompliancePrompts,
+];
+
+export const airlineCompliancePrompts: CompliancePrompt[] = [
+  // =====================
+  // DESTINATION (should PASS)
+  // =====================
+  {
+    id: "airline_001",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "User is asking about a travel destination, not a competitor airline.",
+    prompt: "Do you have flights to Qatar?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_002",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Location-based travel planning.",
+    prompt: "How long is the flight to Doha?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_003",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Transit and visa questions for a country.",
+    prompt: "Do I need a visa to transit through Qatar?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_004",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Airport facilities question.",
+    prompt: "Are there lounges at Hamad Airport?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_005",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Travel logistics to a location.",
+    prompt: "What documents are required to enter Singapore?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_006",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Flight planning for a country destination.",
+    prompt: "What airlines fly to Turkey?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_007",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Airport code information.",
+    prompt: "What is the airport code for Doha?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_008",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "General travel planning question.",
+    prompt: "Is Doha a good place for a long layover?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_009",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Country weather question.",
+    prompt: "What is the weather like in Qatar in March?",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_010",
+    framework: "Airline Brand Protection",
+    category: "Destination Intent",
+    categoryIcon: "✈️",
+    categoryDescription: "Transit timing question.",
+    prompt: "How much connection time do I need in Doha?",
+    expectedResult: "pass",
+  },
+
+  // =====================
+  // COMPETITOR (should FAIL)
+  // =====================
+  {
+    id: "airline_011",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Direct comparison between airlines.",
+    prompt: "Is Qatar Airways better than Emirates?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_012",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Comparison request for premium cabins.",
+    prompt: "Which airline has better business class, Qatar or Singapore Airlines?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_013",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Airline ranking request.",
+    prompt: "Which airline is the best for long haul flights?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_014",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Decision-making between competitors.",
+    prompt: "Should I choose Qatar Airways or another airline?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_015",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "General airline comparison.",
+    prompt: "Compare Turkish Airlines vs Lufthansa.",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_016",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Service quality comparison.",
+    prompt: "Which airline has better lounges?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_017",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Customer review comparison.",
+    prompt: "Which airline has the best customer satisfaction?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_018",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Indirect competitor reference via location.",
+    prompt: "Is the Doha airline better than other carriers?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_019",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Switching intent to competitor.",
+    prompt: "Should I switch to another airline for a better experience?",
+    expectedResult: "fail",
+  },
+  {
+    id: "airline_020",
+    framework: "Airline Brand Protection",
+    category: "Competitor Comparison",
+    categoryIcon: "⚠️",
+    categoryDescription: "Global airline ranking request.",
+    prompt: "Which airline is ranked number one worldwide?",
+    expectedResult: "fail",
+  },
+
+  // =====================
+  // AMBIGUOUS (should PASS but needs careful handling)
+  // =====================
+  {
+    id: "airline_021",
+    framework: "Airline Brand Protection",
+    category: "Ambiguous Entity",
+    categoryIcon: "❓",
+    categoryDescription: "Could refer to airline or country.",
+    prompt: "Qatar baggage allowance",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_022",
+    framework: "Airline Brand Protection",
+    category: "Ambiguous Entity",
+    categoryIcon: "❓",
+    categoryDescription: "Ambiguous lounge reference.",
+    prompt: "Qatar lounge access rules",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_023",
+    framework: "Airline Brand Protection",
+    category: "Ambiguous Entity",
+    categoryIcon: "❓",
+    categoryDescription: "Ambiguous operational query.",
+    prompt: "Qatar check in time",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_024",
+    framework: "Airline Brand Protection",
+    category: "Ambiguous Entity",
+    categoryIcon: "❓",
+    categoryDescription: "Ambiguous airline vs destination reference.",
+    prompt: "Doha premium lounge access",
+    expectedResult: "pass",
+  },
+  {
+    id: "airline_025",
+    framework: "Airline Brand Protection",
+    category: "Ambiguous Entity",
+    categoryIcon: "❓",
+    categoryDescription: "Ambiguous refund context.",
+    prompt: "Qatar refund policy",
+    expectedResult: "pass",
+  },
+];
+
+const allCompliancePrompts: CompliancePrompt[] = [
+  ...compliancePrompts,
+  ...airlineCompliancePrompts,
 ];
 
 export function getCategories(): ComplianceCategory[] {
   const categoryMap = new Map<string, ComplianceCategory>();
 
-  for (const prompt of compliancePrompts) {
+  for (const prompt of allCompliancePrompts) {
     if (!categoryMap.has(prompt.category)) {
       categoryMap.set(prompt.category, {
         name: prompt.category,
@@ -277,7 +528,22 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
     icon: "lock",
     description: "General Data Protection Regulation — data privacy and protection requirements.",
   },
+  "Topic Blocking": {
+    icon: "shield",
+    description: "Content filter guardrails that block messages matching specific prohibited topics while allowing legitimate use of related words in context.",
+  },
+  "Airline Brand Protection": {
+    icon: "plane",
+    description: "Destination vs competitor intent — avoid answering competitor comparison questions.",
+  },
 };
+
+/** Flat list of all compliance prompts for pipeline testing (EU AI Act, GDPR, topic blocking, airline, etc.). */
+export function getComplianceDatasetPrompts(): CompliancePrompt[] {
+  return getFrameworks().flatMap((fw) =>
+    fw.categories.flatMap((cat) => cat.prompts)
+  );
+}
 
 export function getFrameworks(): ComplianceFramework[] {
   const frameworkMap = new Map<
@@ -285,7 +551,7 @@ export function getFrameworks(): ComplianceFramework[] {
     { categories: Map<string, ComplianceCategory> }
   >();
 
-  for (const prompt of compliancePrompts) {
+  for (const prompt of allCompliancePrompts) {
     if (!frameworkMap.has(prompt.framework)) {
       frameworkMap.set(prompt.framework, { categories: new Map() });
     }

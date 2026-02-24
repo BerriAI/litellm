@@ -7,7 +7,7 @@ import { truncateString } from "@/utils/textUtils";
 import { SettingOutlined, SyncOutlined } from "@ant-design/icons";
 import { Row } from "@tanstack/react-table";
 import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
-import { Button, Tooltip } from "antd";
+import { Button, Tag, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
@@ -90,6 +90,11 @@ export default function SpendLogsTable({
 
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+
+  // Tracks whether any filter that uses performSearch (backend) is active.
+  // Used to disable the main query so it doesn't fire redundant unfiltered requests
+  // when time range / sort / page changes while a backend filter is in effect.
+  const [isMainQueryEnabled, setIsMainQueryEnabled] = useState(true);
 
   const queryClient = useQueryClient();
 
@@ -212,7 +217,7 @@ export default function SpendLogsTable({
 
       return response;
     },
-    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs" && isMainQueryEnabled,
     refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
     placeholderData: keepPreviousData,
     refetchIntervalInBackground: true,
@@ -235,6 +240,7 @@ export default function SpendLogsTable({
   const {
     filters,
     filteredLogs,
+    hasBackendFilters,
     allTeams: hookAllTeams,
     allKeyAliases,
     handleFilterChange,
@@ -254,25 +260,6 @@ export default function SpendLogsTable({
     currentPage,
   });
 
-  const fetchKeyHashForAlias = useCallback(
-    async (keyAlias: string) => {
-      if (!accessToken) return;
-
-      try {
-        const response = await keyListCall(accessToken, null, null, keyAlias, null, null, currentPage, pageSize);
-
-        const selectedKey = response.keys.find((key: any) => key.key_alias === keyAlias);
-
-        if (selectedKey) {
-          setSelectedKeyHash(selectedKey.token);
-        }
-      } catch (error) {
-        console.error("Error fetching key hash for alias:", error);
-      }
-    },
-    [accessToken, currentPage, pageSize],
-  );
-
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
     // Reset custom time range to default (last 24 hours)
@@ -283,7 +270,13 @@ export default function SpendLogsTable({
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
-  // Add this effect to update selected filters when filter changes
+  // Disable the main query whenever backend filters are active so it doesn't fire
+  // redundant unfiltered requests when time range / sort / page changes.
+  useEffect(() => {
+    setIsMainQueryEnabled(!hasBackendFilters);
+  }, [hasBackendFilters]);
+
+  // Sync filter state into the individual selectedX state variables used by the main query
   useEffect(() => {
     if (!accessToken) return;
 
@@ -296,14 +289,11 @@ export default function SpendLogsTable({
     setSelectedModelId(filters["Model"] || "");
     setSelectedEndUser(filters["End User"] || "");
 
-    if (filters["Key Hash"]) {
-      setSelectedKeyHash(filters["Key Hash"]);
-    } else if (filters["Key Alias"]) {
-      fetchKeyHashForAlias(filters["Key Alias"]);
-    } else {
-      setSelectedKeyHash("");
-    }
-  }, [filters, accessToken, fetchKeyHashForAlias]);
+    // Key Alias filtering is handled server-side by performSearch via the key_alias param.
+    // We intentionally do not translate the alias to a hash here to avoid firing a
+    // redundant main-query request (api_key=hash) alongside performSearch's key_alias request.
+    setSelectedKeyHash(filters["Key Hash"] || "");
+  }, [filters, accessToken]);
 
   if (!accessToken || !token || !userRole || !userID) {
     return null;
@@ -592,6 +582,7 @@ export default function SpendLogsTable({
                                       className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
                                         }`}
                                       onClick={() => {
+                                        setCurrentPage(1);
                                         setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
                                         setStartTime(
                                           moment()
@@ -694,7 +685,7 @@ export default function SpendLogsTable({
                       </div>
                     </div>
                   </div>
-                  {isLiveTail && currentPage === 1 && (
+                  {isLiveTail && currentPage === 1 && isMainQueryEnabled && (
                     <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
@@ -960,12 +951,28 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
                 <span>{row.original.metadata.litellm_overhead_time_ms} ms</span>
               </div>
             )}
+            <div className="flex">
+              <span className="font-medium w-1/3">Retries:</span>
+              <span>
+                {row.original.metadata?.attempted_retries !== undefined && row.original.metadata?.attempted_retries !== null
+                  ? row.original.metadata.attempted_retries > 0
+                    ? `${row.original.metadata.attempted_retries}${row.original.metadata.max_retries !== undefined && row.original.metadata.max_retries !== null ? ` / ${row.original.metadata.max_retries}` : ''}`
+                    : <Tag color="green">None</Tag>
+                  : '-'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Cost Breakdown - Show if cost breakdown data is available */}
-      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
+      <CostBreakdownViewer
+        costBreakdown={row.original.metadata?.cost_breakdown}
+        totalSpend={row.original.spend ?? 0}
+        promptTokens={row.original.prompt_tokens}
+        completionTokens={row.original.completion_tokens}
+        cacheHit={row.original.cache_hit}
+      />
 
       {/* Configuration Info Message - Show when data is missing */}
       <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />

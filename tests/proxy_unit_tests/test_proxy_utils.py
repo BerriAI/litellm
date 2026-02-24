@@ -1623,6 +1623,7 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
     mock_prisma.health_check = AsyncMock()
     mock_prisma.check_view_exists = AsyncMock()
     mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    mock_prisma.start_db_health_watchdog_task = AsyncMock()
     # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
     mock_db = MagicMock()
     mock_db.start_token_refresh_task = AsyncMock()

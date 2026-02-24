@@ -587,9 +587,10 @@ class CustomGuardrail(CustomLogger):
         elif "litellm_metadata" in request_data:
             _append_guardrail_info(request_data["litellm_metadata"])
         else:
-            verbose_logger.warning(
-                "unable to log guardrail information. No metadata found in request_data"
-            )
+            # Ensure guardrail info is always logged (e.g. proxy may not have set
+            # metadata yet). Attach to "metadata" so spend log / standard logging see it.
+            request_data["metadata"] = {}
+            _append_guardrail_info(request_data["metadata"])
 
     async def apply_guardrail(
         self,

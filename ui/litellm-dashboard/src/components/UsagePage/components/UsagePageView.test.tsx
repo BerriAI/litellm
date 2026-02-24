@@ -645,7 +645,6 @@ describe("UsagePage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Organization usage is a new feature.")).toBeInTheDocument();
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
@@ -1073,17 +1072,8 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Customer usage is a new feature.")).toBeInTheDocument();
-      });
-
-      // Click the close button
-      const closeButton = screen.getByLabelText("Close");
-      act(() => {
-        fireEvent.click(closeButton);
-      });
-
-      await waitFor(() => {
-        expect(screen.queryByText("Customer usage is a new feature.")).not.toBeInTheDocument();
+        const entityUsageElements = screen.getAllByText("Entity Usage");
+        expect(entityUsageElements.length).toBeGreaterThan(0);
       });
     });
   });
@@ -1108,7 +1098,8 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Agent usage (A2A) is a new feature.")).toBeInTheDocument();
+        const entityUsageElements = screen.getAllByText("Entity Usage");
+        expect(entityUsageElements.length).toBeGreaterThan(0);
       });
     });
   });
