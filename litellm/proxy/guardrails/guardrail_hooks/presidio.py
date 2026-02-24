@@ -87,6 +87,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_score_thresholds: Optional[
             Dict[Union[PiiEntityType, str], float]
         ] = None,
+        presidio_entities_deny_list: Optional[List[Union[PiiEntityType, str]]] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -105,6 +106,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
         self.presidio_score_thresholds: Dict[Union[PiiEntityType, str], float] = (
             presidio_score_thresholds or {}
+        )
+        self.presidio_entities_deny_list: List[Union[PiiEntityType, str]] = (
+            presidio_entities_deny_list or []
         )
         self.presidio_language = presidio_language or "en"
         # Shared HTTP session to prevent memory leaks (issue #14540)
@@ -391,9 +395,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
             # contain API keys or other secrets) in error responses.
-            raise Exception(
-                f"Presidio PII analysis failed: {type(e).__name__}"
-            ) from e
+            raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
 
     async def anonymize_text(
         self,
@@ -464,9 +466,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
     ) -> Union[List[PresidioAnalyzeResponseItem], Dict]:
         """
-        Drop detections that fall below configured per-entity score thresholds.
+        Drop detections that fall below configured per-entity score thresholds
+        or match an entity type in the deny list.
         """
-        if not self.presidio_score_thresholds:
+        if not self.presidio_score_thresholds and not self.presidio_entities_deny_list:
             return analyze_results
 
         if not isinstance(analyze_results, list):
@@ -475,17 +478,21 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         filtered_results: List[PresidioAnalyzeResponseItem] = []
         for item in analyze_results:
             entity_type = item.get("entity_type")
-            score = item.get("score")
 
-            threshold = None
-            if entity_type is not None:
-                threshold = self.presidio_score_thresholds.get(entity_type)
-            if threshold is None:
-                threshold = self.presidio_score_thresholds.get("ALL")
+            if entity_type and entity_type in self.presidio_entities_deny_list:
+                continue
 
-            if threshold is not None:
-                if score is None or score < threshold:
-                    continue
+            if self.presidio_score_thresholds:
+                score = item.get("score")
+                threshold = None
+                if entity_type is not None:
+                    threshold = self.presidio_score_thresholds.get(entity_type)
+                if threshold is None:
+                    threshold = self.presidio_score_thresholds.get("ALL")
+
+                if threshold is not None:
+                    if score is None or score < threshold:
+                        continue
 
             filtered_results.append(item)
 
@@ -619,9 +626,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -722,9 +729,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[Tuple[int, Optional[int]]] = (
-                []
-            )  # Track (message_index, content_index) for each task
+            task_mappings: List[
+                Tuple[int, Optional[int]]
+            ] = []  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
@@ -877,66 +884,69 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Process streaming response chunks to unmask PII tokens when needed.
-
-        If PII processing is enabled, this collects all chunks, applies PII unmasking,
-        and returns a reconstructed stream. Otherwise, it passes through the original stream.
         """
-        # If we need to mask model output, collect the full stream, apply masking, and replay it.
+        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.main import stream_chunk_builder
+        from litellm.types.utils import ModelResponse
+
+        # --- Output masking path (apply_to_output=True) ---
         if self.apply_to_output:
-            from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-            from litellm.types.utils import Choices, Message
-
             try:
-                collected_content = ""
-                last_chunk = None
-
+                all_chunks: List[ModelResponseStream] = []
                 async for chunk in response:
-                    last_chunk = chunk
+                    if isinstance(chunk, ModelResponseStream):
+                        all_chunks.append(chunk)
 
-                    if (
-                        hasattr(chunk, "choices")
-                        and chunk.choices
-                        and hasattr(chunk.choices[0], "delta")
-                        and hasattr(chunk.choices[0].delta, "content")
-                        and isinstance(chunk.choices[0].delta.content, str)
-                    ):
-                        collected_content += chunk.choices[0].delta.content
+                if not all_chunks:
+                    return
 
-                if not last_chunk:
-                    async for chunk in response:
+                assembled_model_response = stream_chunk_builder(
+                    chunks=all_chunks, messages=request_data.get("messages")
+                )
+
+                if not isinstance(assembled_model_response, ModelResponse):
+                    for chunk in all_chunks:
                         yield chunk
                     return
 
+                # Apply Presidio masking on the assembled response
                 presidio_config = self.get_presidio_settings_from_request_data(
                     request_data or {}
                 )
+
+                content_to_mask = ""
+                if (
+                    hasattr(assembled_model_response, "choices")
+                    and len(assembled_model_response.choices) > 0
+                ):
+                    if hasattr(
+                        assembled_model_response.choices[0], "message"
+                    ) and hasattr(
+                        assembled_model_response.choices[0].message, "content"
+                    ):
+                        content_to_mask = (
+                            assembled_model_response.choices[0].message.content or ""
+                        )
+
                 masked_content = await self.check_pii(
-                    text=collected_content,
+                    text=content_to_mask,
                     output_parse_pii=False,
                     presidio_config=presidio_config,
                     request_data=request_data,
                 )
 
-                mock_response = MockResponseIterator(
-                    model_response=ModelResponse(
-                        id=last_chunk.id,
-                        object=last_chunk.object,
-                        created=last_chunk.created,
-                        model=last_chunk.model,
-                        choices=[
-                            Choices(
-                                message=Message(
-                                    role="assistant",
-                                    content=masked_content,
-                                ),
-                                index=0,
-                                finish_reason="stop",
-                            )
-                        ],
-                    ),
-                    json_mode=False,
-                )
+                if (
+                    hasattr(assembled_model_response, "choices")
+                    and len(assembled_model_response.choices) > 0
+                ):
+                    if hasattr(assembled_model_response.choices[0], "message"):
+                        assembled_model_response.choices[
+                            0
+                        ].message.content = masked_content
 
+                mock_response = MockResponseIterator(
+                    model_response=assembled_model_response
+                )
                 async for chunk in mock_response:
                     yield chunk
                 return
@@ -945,77 +955,54 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 verbose_proxy_logger.error(
                     f"Error masking streaming PII output: {str(e)}"
                 )
-                async for chunk in response:
+                # Cannot re-iterate `response` — it's already consumed.
+                # If we collected chunks before the error, replay those.
+                for chunk in all_chunks:
                     yield chunk
                 return
 
-        # If PII unmasking not needed, just pass through the original stream
+        # --- PII unmasking path (output_parse_pii=True) ---
         if not (self.output_parse_pii and self.pii_tokens):
             async for chunk in response:
                 yield chunk
             return
 
-        # Import here to avoid circular imports
-        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-        from litellm.types.utils import Choices, Message
-
         try:
-            # Collect all chunks to process them together
-            collected_content = ""
-            last_chunk = None
-
+            remaining_chunks: List[ModelResponseStream] = []
             async for chunk in response:
-                last_chunk = chunk
+                if isinstance(chunk, ModelResponseStream):
+                    remaining_chunks.append(chunk)
 
-                # Extract content safely with proper attribute checks
-                if (
-                    hasattr(chunk, "choices")
-                    and chunk.choices
-                    and hasattr(chunk.choices[0], "delta")
-                    and hasattr(chunk.choices[0].delta, "content")
-                    and isinstance(chunk.choices[0].delta.content, str)
-                ):
-                    collected_content += chunk.choices[0].delta.content
+            if not remaining_chunks:
+                return
 
-            # No need to proceed if we didn't capture a valid chunk
-            if not last_chunk:
-                async for chunk in response:
+            assembled_model_response = stream_chunk_builder(
+                chunks=remaining_chunks, messages=request_data.get("messages")
+            )
+
+            if not isinstance(assembled_model_response, ModelResponse):
+                for chunk in remaining_chunks:
                     yield chunk
                 return
 
-            # Apply PII unmasking to the complete content
-            for token, original_text in self.pii_tokens.items():
-                collected_content = collected_content.replace(token, original_text)
+            # Apply PII unmasking to assembled content
+            for choice in assembled_model_response.choices:
+                if hasattr(choice, "message") and hasattr(choice.message, "content"):
+                    content = choice.message.content
+                    if isinstance(content, str):
+                        for token, original_text in self.pii_tokens.items():
+                            content = content.replace(token, original_text)
+                        choice.message.content = content
 
-            # Reconstruct the response with unmasked content
             mock_response = MockResponseIterator(
-                model_response=ModelResponse(
-                    id=last_chunk.id,
-                    object=last_chunk.object,
-                    created=last_chunk.created,
-                    model=last_chunk.model,
-                    choices=[
-                        Choices(
-                            message=Message(
-                                role="assistant",
-                                content=collected_content,
-                            ),
-                            index=0,
-                            finish_reason="stop",
-                        )
-                    ],
-                ),
-                json_mode=False,
+                model_response=assembled_model_response
             )
-
-            # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
-            # Fallback to original stream on error
-            async for chunk in response:
+            for chunk in remaining_chunks:
                 yield chunk
 
     def get_presidio_settings_from_request_data(
@@ -1076,3 +1063,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.pii_entities_config = litellm_params.pii_entities_config
         if litellm_params.presidio_score_thresholds:
             self.presidio_score_thresholds = litellm_params.presidio_score_thresholds
+        if litellm_params.presidio_entities_deny_list:
+            self.presidio_entities_deny_list = (
+                litellm_params.presidio_entities_deny_list
+            )

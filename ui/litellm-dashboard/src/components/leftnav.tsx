@@ -154,6 +154,13 @@ const menuGroups: MenuGroup[] = [
         label: "Logs",
         icon: <LineChartOutlined />,
       },
+      {
+        key: "guardrails-monitor",
+        page: "guardrails-monitor",
+        label: "Guardrails Monitor",
+        icon: <SafetyOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+      },
     ],
   },
   {

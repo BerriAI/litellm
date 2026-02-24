@@ -827,7 +827,7 @@ def function_setup(  # noqa: PLR0915
             )
             get_set_callbacks = getattr(sys.modules[__name__], "get_set_callbacks")
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
-        ## ASYNC CALLBACKS
+        ## ASYNC CALLBACKS - safety net for callbacks added via direct append
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
@@ -2178,6 +2178,10 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
         enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
     else:
         enc = tokenizer_json["tokenizer"].encode(text)
+    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
+    # extract .ids so the return type is always List[int].
+    if hasattr(enc, "ids"):
+        return enc.ids
     return enc
 
 
@@ -5290,6 +5294,9 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost
             # tracking the cost is better than attributing 0 cost to it.
             return True
+        elif custom_llm_provider == "github":
+            # Allow github/<model> aliases to reuse existing provider metadata.
+            return True
         else:
             return False
 
@@ -5378,14 +5385,18 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _cached_get_model_info_helper(
-    model: str, custom_llm_provider: Optional[str]
+    model: str,
+    custom_llm_provider: Optional[str],
+    api_base: Optional[str] = None,
 ) -> ModelInfoBase:
     """
     _get_model_info_helper wrapped with lru_cache
 
     Speed Optimization to hit high RPS
     """
-    return _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    return _get_model_info_helper(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
 
 
 def get_provider_info(
@@ -5421,7 +5432,9 @@ def _is_potential_model_name_in_model_cost(
 
 
 def _get_model_info_helper(  # noqa: PLR0915
-    model: str, custom_llm_provider: Optional[str] = None
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -5479,7 +5492,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         elif (
             custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat"
         ) and not _is_potential_model_name_in_model_cost(potential_model_names):
-            return litellm.OllamaConfig().get_model_info(model)
+            return litellm.OllamaConfig().get_model_info(model, api_base=api_base)
         else:
             """
             Check if: (in order of specificity)
@@ -5712,11 +5725,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 annotation_cost_per_page=_model_info.get(
                     "annotation_cost_per_page", None
                 ),
+                provider_specific_entry=_model_info.get(
+                    "provider_specific_entry", None
+                ),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
-        if "OllamaError" in str(e):
-            raise e
         raise Exception(
             "This model isn't mapped yet. model={}, custom_llm_provider={}. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.".format(
                 model, custom_llm_provider
@@ -5725,7 +5739,11 @@ def _get_model_info_helper(  # noqa: PLR0915
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
+def get_model_info(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
 
@@ -5803,6 +5821,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
     _model_info = _get_model_info_helper(
         model=model,
         custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
     )
 
     provider_info = get_provider_info(
@@ -5813,8 +5832,8 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
             if value is not None:
                 _model_info[key] = value  # type: ignore
 
-    if verbose_logger.isEnabledFor(logging.DEBUG):
-        verbose_logger.debug(f"model_info: {_model_info}")
+    # if verbose_logger.isEnabledFor(logging.DEBUG):
+        # verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params
@@ -7659,6 +7678,23 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
     return new_tools
 
 
+def validate_and_fix_thinking_param(
+    thinking: Optional["AnthropicThinkingParam"],
+) -> Optional["AnthropicThinkingParam"]:
+    """
+    Normalizes camelCase keys in the thinking param to snake_case.
+    Handles clients that send budgetTokens instead of budget_tokens.
+    """
+    if thinking is None or not isinstance(thinking, dict):
+        return thinking
+    normalized = dict(thinking)
+    if "budgetTokens" in normalized and "budget_tokens" not in normalized:
+        normalized["budget_tokens"] = normalized.pop("budgetTokens")
+    elif "budgetTokens" in normalized and "budget_tokens" in normalized:
+        normalized.pop("budgetTokens")
+    return cast("AnthropicThinkingParam", normalized)
+
+
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
     Cleans up the message by removing the none field.
@@ -8147,6 +8183,8 @@ class ProviderConfigManager:
             return litellm.FireworksAIRerankConfig()
         elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageRerankConfig()
+        elif litellm.LlmProviders.WATSONX == provider:
+            return litellm.IBMWatsonXRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -8264,6 +8302,11 @@ class ProviderConfigManager:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityResponsesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            # Databricks Responses API is only compatible with OpenAI GPT models
+            if model and "gpt" in model.lower():
+                return litellm.DatabricksResponsesAPIConfig()
+            return None
         return None
 
     @staticmethod
@@ -8767,6 +8810,7 @@ class ProviderConfigManager:
         """
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
+        from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
@@ -8789,6 +8833,7 @@ class ProviderConfigManager:
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
+            SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

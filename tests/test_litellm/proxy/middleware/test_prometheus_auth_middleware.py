@@ -127,3 +127,46 @@ def test_no_auth_metrics_when_disabled(app_with_middleware, monkeypatch):
     response = client.get("/metrics")
     assert response.status_code == 200, response.text
     assert response.json() == {"msg": "metrics OK"}
+
+
+def test_non_metrics_requests_pass_through(app_with_middleware):
+    """
+    Test that non-metrics endpoints pass through the middleware unaffected.
+    """
+    litellm.require_auth_for_metrics_endpoint = True
+
+    client = TestClient(app_with_middleware)
+
+    response = client.get("/chat/completions")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "chat completions OK"}
+
+    response = client.get("/embeddings")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "embeddings OK"}
+
+
+def test_non_metrics_requests_dont_trigger_auth(app_with_middleware, monkeypatch):
+    """
+    Test that non-metrics requests never trigger auth, even when auth is enabled
+    and the auth function would reject the request.
+    """
+    litellm.require_auth_for_metrics_endpoint = True
+
+    def should_not_be_called(*args, **kwargs):
+        raise Exception("Auth should not be called for non-metrics requests")
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        should_not_be_called,
+    )
+
+    client = TestClient(app_with_middleware)
+
+    response = client.get("/chat/completions")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "chat completions OK"}
+
+    response = client.get("/embeddings")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "embeddings OK"}

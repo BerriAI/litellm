@@ -642,12 +642,9 @@ async def test_new_user_default_teams_flow(mocker):
         assert response.key == "sk-test-token-123"
 
     finally:
-        # Restore original default params
-        if original_default_params is not None:
-            litellm.default_internal_user_params = original_default_params
-        else:
-            if hasattr(litellm, "default_internal_user_params"):
-                delattr(litellm, "default_internal_user_params")
+        # Restore original default params (always assign, never delattr — the attribute
+        # is defined in litellm/__init__.py and delattr-ing it breaks parallel tests)
+        litellm.default_internal_user_params = original_default_params
 
 
 def test_update_internal_new_user_params_proxy_admin_role():
@@ -694,12 +691,7 @@ def test_update_internal_new_user_params_proxy_admin_role():
         assert result["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
 
     finally:
-        # Restore original default params
-        if original_default_params is not None:
-            litellm.default_internal_user_params = original_default_params
-        else:
-            if hasattr(litellm, "default_internal_user_params"):
-                delattr(litellm, "default_internal_user_params")
+        litellm.default_internal_user_params = original_default_params
 
 
 def test_update_internal_new_user_params_no_role_specified():
@@ -735,12 +727,7 @@ def test_update_internal_new_user_params_no_role_specified():
         assert result["user_email"] == "user@example.com"
 
     finally:
-        # Restore original default params
-        if original_default_params is not None:
-            litellm.default_internal_user_params = original_default_params
-        else:
-            if hasattr(litellm, "default_internal_user_params"):
-                delattr(litellm, "default_internal_user_params")
+        litellm.default_internal_user_params = original_default_params
 
 
 def test_update_internal_new_user_params_internal_user_role():
@@ -780,12 +767,7 @@ def test_update_internal_new_user_params_internal_user_role():
         assert result["user_role"] == LitellmUserRoles.INTERNAL_USER.value
 
     finally:
-        # Restore original default params
-        if original_default_params is not None:
-            litellm.default_internal_user_params = original_default_params
-        else:
-            if hasattr(litellm, "default_internal_user_params"):
-                delattr(litellm, "default_internal_user_params")
+        litellm.default_internal_user_params = original_default_params
 
 
 @pytest.mark.asyncio
