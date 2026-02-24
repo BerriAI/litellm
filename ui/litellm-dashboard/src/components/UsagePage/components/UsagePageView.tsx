@@ -945,8 +945,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         open={isAiChatOpen}
         onClose={() => setIsAiChatOpen(false)}
         accessToken={accessToken}
-        userSpendData={userSpendData}
-        dateRange={dateValue}
       />
     </div>
   );

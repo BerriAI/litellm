@@ -1,9 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Select, Input, Spin } from "antd";
 import { Button } from "@tremor/react";
-import { getProxyBaseUrl, modelHubCall } from "../../networking";
-import { DailyData } from "../types";
-import openai from "openai";
+import { modelHubCall, usageAiChatStream } from "../../networking";
 
 const { TextArea } = Input;
 
@@ -16,103 +14,12 @@ interface UsageAIChatPanelProps {
   open: boolean;
   onClose: () => void;
   accessToken: string | null;
-  userSpendData: {
-    results: DailyData[];
-    metadata: any;
-  };
-  dateRange: {
-    from?: Date;
-    to?: Date;
-  };
 }
-
-function buildUsageSummary(
-  userSpendData: UsageAIChatPanelProps["userSpendData"],
-  dateRange: UsageAIChatPanelProps["dateRange"]
-): string {
-  const meta = userSpendData.metadata || {};
-  const results = userSpendData.results || [];
-
-  const fromStr = dateRange.from?.toLocaleDateString() ?? "N/A";
-  const toStr = dateRange.to?.toLocaleDateString() ?? "N/A";
-
-  const modelSpend: Record<string, { spend: number; requests: number; tokens: number }> = {};
-  const providerSpend: Record<string, { spend: number; requests: number }> = {};
-  const keySpend: Record<string, { spend: number; alias: string | null }> = {};
-
-  for (const day of results) {
-    for (const [model, metrics] of Object.entries(day.breakdown.models || {})) {
-      if (!modelSpend[model]) modelSpend[model] = { spend: 0, requests: 0, tokens: 0 };
-      modelSpend[model].spend += metrics.metrics.spend;
-      modelSpend[model].requests += metrics.metrics.api_requests;
-      modelSpend[model].tokens += metrics.metrics.total_tokens;
-    }
-    for (const [provider, metrics] of Object.entries(day.breakdown.providers || {})) {
-      if (!providerSpend[provider]) providerSpend[provider] = { spend: 0, requests: 0 };
-      providerSpend[provider].spend += metrics.metrics.spend;
-      providerSpend[provider].requests += metrics.metrics.api_requests;
-    }
-    for (const [key, metrics] of Object.entries(day.breakdown.api_keys || {})) {
-      if (!keySpend[key]) keySpend[key] = { spend: 0, alias: metrics.metadata.key_alias };
-      keySpend[key].spend += metrics.metrics.spend;
-    }
-  }
-
-  const topModels = Object.entries(modelSpend)
-    .sort((a, b) => b[1].spend - a[1].spend)
-    .slice(0, 10)
-    .map(([name, d]) => `  - ${name}: $${d.spend.toFixed(4)} (${d.requests} requests, ${d.tokens} tokens)`)
-    .join("\n");
-
-  const topProviders = Object.entries(providerSpend)
-    .sort((a, b) => b[1].spend - a[1].spend)
-    .slice(0, 10)
-    .map(([name, d]) => `  - ${name}: $${d.spend.toFixed(4)} (${d.requests} requests)`)
-    .join("\n");
-
-  const topKeys = Object.entries(keySpend)
-    .sort((a, b) => b[1].spend - a[1].spend)
-    .slice(0, 10)
-    .map(([key, d]) => `  - ${d.alias || key}: $${d.spend.toFixed(4)}`)
-    .join("\n");
-
-  const dailySummary = results
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-    .map((d) => `  - ${d.date}: $${d.metrics.spend.toFixed(4)} (${d.metrics.api_requests} requests)`)
-    .join("\n");
-
-  return `Date Range: ${fromStr} to ${toStr}
-Total Spend: $${(meta.total_spend || 0).toFixed(4)}
-Total Requests: ${meta.total_api_requests || 0}
-Successful Requests: ${meta.total_successful_requests || 0}
-Failed Requests: ${meta.total_failed_requests || 0}
-Total Tokens: ${meta.total_tokens || 0}
-
-Top Models by Spend:
-${topModels || "  (no data)"}
-
-Top Providers by Spend:
-${topProviders || "  (no data)"}
-
-Top API Keys by Spend:
-${topKeys || "  (no data)"}
-
-Daily Spend:
-${dailySummary || "  (no data)"}`;
-}
-
-const SYSTEM_PROMPT = `You are an AI assistant that helps users understand their LLM API usage data. You are embedded in the LiteLLM Usage dashboard.
-
-You have access to the user's current usage data which is provided below. Use it to answer questions about their spending, model usage, API key activity, provider costs, request volumes, and trends.
-
-Be concise and helpful. Use specific numbers from the data. When discussing costs, format them as dollar amounts. If the user asks about something not available in the data, let them know.`;
 
 const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
   open,
   onClose,
   accessToken,
-  userSpendData,
-  dateRange,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
@@ -154,11 +61,6 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
     }
   };
 
-  const usageSummary = useMemo(
-    () => buildUsageSummary(userSpendData, dateRange),
-    [userSpendData, dateRange]
-  );
-
   const handleSend = async () => {
     if (!accessToken || !inputText.trim() || !selectedModel || isLoading) return;
 
@@ -172,44 +74,30 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    let accumulated = "";
+
     try {
-      const proxyBaseUrl = getProxyBaseUrl();
-      const client = new openai.OpenAI({
-        apiKey: accessToken,
-        baseURL: proxyBaseUrl,
-        dangerouslyAllowBrowser: true,
-      });
-
-      const chatHistory = [
-        {
-          role: "system" as const,
-          content: `${SYSTEM_PROMPT}\n\nCurrent Usage Data:\n${usageSummary}`,
+      await usageAiChatStream(
+        accessToken,
+        updatedMessages.map((m) => ({ role: m.role, content: m.content })),
+        selectedModel,
+        (content: string) => {
+          accumulated += content;
+          setStreamingContent(accumulated);
         },
-        ...updatedMessages.map((m) => ({
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        })),
-      ];
-
-      const response = await client.chat.completions.create(
-        {
-          model: selectedModel,
-          stream: true,
-          messages: chatHistory,
+        () => {
+          setMessages((prev) => [...prev, { role: "assistant", content: accumulated }]);
+          setStreamingContent("");
         },
-        { signal: abortController.signal }
+        (errorMsg: string) => {
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: `Error: ${errorMsg}` },
+          ]);
+          setStreamingContent("");
+        },
+        abortController.signal,
       );
-
-      let fullContent = "";
-      for await (const chunk of response) {
-        if (chunk.choices[0]?.delta?.content) {
-          fullContent += chunk.choices[0].delta.content;
-          setStreamingContent(fullContent);
-        }
-      }
-
-      setMessages((prev) => [...prev, { role: "assistant", content: fullContent }]);
-      setStreamingContent("");
     } catch (error: any) {
       if (error?.name === "AbortError" || abortController.signal.aborted) {
         return;
@@ -293,7 +181,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
         />
       </div>
 
-      {/* Chat messages — fills remaining space */}
+      {/* Chat messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
         {messages.length === 0 && !streamingContent && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
@@ -341,7 +229,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input area — pinned to bottom */}
+      {/* Input area */}
       <div className="px-4 py-3 border-t border-gray-200 bg-white flex-shrink-0">
         <div className="flex gap-2">
           <TextArea

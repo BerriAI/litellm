@@ -20,116 +20,13 @@ vi.mock("../../networking", () => ({
       { model_group: "claude-3-opus" },
     ],
   }),
-  getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  usageAiChatStream: vi.fn(),
 }));
-
-vi.mock("openai", () => {
-  return {
-    default: {
-      OpenAI: vi.fn().mockImplementation(() => ({
-        chat: {
-          completions: {
-            create: vi.fn(),
-          },
-        },
-      })),
-    },
-  };
-});
-
-const mockUserSpendData = {
-  results: [
-    {
-      date: "2025-01-01",
-      metrics: {
-        spend: 100.5,
-        api_requests: 1000,
-        successful_requests: 950,
-        failed_requests: 50,
-        total_tokens: 50000,
-        prompt_tokens: 30000,
-        completion_tokens: 20000,
-        cache_read_input_tokens: 0,
-        cache_creation_input_tokens: 0,
-      },
-      breakdown: {
-        models: {
-          "gpt-4": {
-            metrics: {
-              spend: 80.0,
-              api_requests: 800,
-              successful_requests: 780,
-              failed_requests: 20,
-              total_tokens: 40000,
-              prompt_tokens: 24000,
-              completion_tokens: 16000,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          },
-        },
-        model_groups: {},
-        mcp_servers: {},
-        providers: {
-          openai: {
-            metrics: {
-              spend: 100.5,
-              api_requests: 1000,
-              successful_requests: 950,
-              failed_requests: 50,
-              total_tokens: 50000,
-              prompt_tokens: 30000,
-              completion_tokens: 20000,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          },
-        },
-        api_keys: {
-          "sk-test": {
-            metrics: {
-              spend: 100.5,
-              api_requests: 1000,
-              successful_requests: 950,
-              failed_requests: 50,
-              total_tokens: 50000,
-              prompt_tokens: 30000,
-              completion_tokens: 20000,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {
-              key_alias: "Test Key",
-              team_id: null,
-            },
-          },
-        },
-        entities: {},
-      },
-    },
-  ],
-  metadata: {
-    total_spend: 100.5,
-    total_api_requests: 1000,
-    total_successful_requests: 950,
-    total_failed_requests: 50,
-    total_tokens: 50000,
-  },
-};
 
 const defaultProps = {
   open: true,
   onClose: vi.fn(),
   accessToken: "test-token",
-  userSpendData: mockUserSpendData,
-  dateRange: {
-    from: new Date("2025-01-01"),
-    to: new Date("2025-01-07"),
-  },
 };
 
 describe("UsageAIChatPanel", () => {
