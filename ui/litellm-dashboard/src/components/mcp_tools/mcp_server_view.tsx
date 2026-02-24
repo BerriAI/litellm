@@ -131,7 +131,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               <Card>
                 <Text>Transport</Text>
                 <div className="mt-2">
-                  <Title>{handleTransport(mcpServer.transport ?? undefined)}</Title>
+                  <Title>{handleTransport(mcpServer.transport ?? undefined, mcpServer.spec_path ?? undefined).toUpperCase()}</Title>
                 </div>
               </Card>
 
@@ -220,7 +220,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Transport</Text>
-                    <div>{handleTransport(mcpServer.transport)}</div>
+                    <div>{handleTransport(mcpServer.transport, mcpServer.spec_path).toUpperCase()}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Extra Headers</Text>
