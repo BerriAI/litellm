@@ -112,6 +112,7 @@ def prisma_client():
     return prisma_client
 
 
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 @pytest.mark.asyncio()
 async def test_create_audit_log_in_db(prisma_client):
     print("prisma client=", prisma_client)

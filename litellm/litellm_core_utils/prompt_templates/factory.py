@@ -1848,9 +1848,10 @@ def convert_to_anthropic_tool_invoke(
                         break
         else:
             # Regular tool_use
+            sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
                 type="tool_use",
-                id=tool_id,
+                id=sanitized_tool_id,
                 name=tool_name,
                 input=tool_input,
             )

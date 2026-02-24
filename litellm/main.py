@@ -147,6 +147,7 @@ from litellm.utils import (
     token_counter,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
+    validate_and_fix_thinking_param,
     validate_chat_completion_tool_choice,
     validate_openai_optional_params,
 )
@@ -159,6 +160,7 @@ from .litellm_core_utils.fallback_utils import (
     completion_with_fallbacks,
 )
 from .litellm_core_utils.prompt_templates.common_utils import (
+    add_system_prompt_to_messages,
     get_completion_messages,
     update_messages_with_model_file_ids,
 )
@@ -599,7 +601,7 @@ async def acompletion(  # noqa: PLR0915
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
-            
+
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
@@ -939,7 +941,7 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
-        
+
         if web_search_options is not None and custom_llm_provider == "xai":
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
@@ -1102,15 +1104,15 @@ def completion(  # type: ignore # noqa: PLR0915
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
+    # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
+    thinking = validate_and_fix_thinking_param(thinking=thinking)
 
     ######### unpacking kwargs #####################
     args = locals()
 
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
-        from litellm.responses.mcp.chat_completions_handler import (
-            acompletion_with_mcp,
-        )
+        from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )
@@ -1245,6 +1247,7 @@ def completion(  # type: ignore # noqa: PLR0915
     ### PROMPT MANAGEMENT ###
     prompt_id = cast(Optional[str], kwargs.get("prompt_id", None))
     prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
+    litellm_system_prompt = kwargs.get("litellm_system_prompt", None)
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
         messages=messages,
@@ -1274,6 +1277,14 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
+        )
+
+    ### LITELLM SYSTEM PROMPT ###
+    if litellm_system_prompt:
+        messages = add_system_prompt_to_messages(
+            messages=messages,
+            system_prompt=litellm_system_prompt,
+            merge_with_first_system=True,
         )
 
     try:
@@ -1558,7 +1569,9 @@ def completion(  # type: ignore # noqa: PLR0915
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         model_info, model = responses_api_bridge_check(
-            model=model, custom_llm_provider=custom_llm_provider, web_search_options=web_search_options
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            web_search_options=web_search_options,
         )
 
         if model_info.get("mode") == "responses":
@@ -2209,17 +2222,19 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "a2a":
             # A2A (Agent-to-Agent) Protocol
             # Resolve agent configuration from registry if model format is "a2a/<agent-name>"
-            api_base, api_key, headers = litellm.A2AConfig.resolve_agent_config_from_registry(
-                model=model,
-                api_base=api_base,
-                api_key=api_key,
-                headers=headers,
-                optional_params=optional_params,
+            api_base, api_key, headers = (
+                litellm.A2AConfig.resolve_agent_config_from_registry(
+                    model=model,
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=headers,
+                    optional_params=optional_params,
+                )
             )
-            
+
             # Fall back to environment variables and defaults
             api_base = api_base or litellm.api_base or get_secret_str("A2A_API_BASE")
-            
+
             if api_base is None:
                 raise Exception(
                     "api_base is required for A2A provider. "
@@ -2506,10 +2521,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             # Add GitHub Copilot headers (same as /responses endpoint does)
             if custom_llm_provider == "github_copilot":
+                from litellm.llms.github_copilot.authenticator import Authenticator
                 from litellm.llms.github_copilot.common_utils import (
                     get_copilot_default_headers,
                 )
-                from litellm.llms.github_copilot.authenticator import Authenticator
 
                 copilot_auth = Authenticator()
                 copilot_api_key = copilot_auth.get_api_key()
@@ -4783,7 +4798,10 @@ def embedding(  # noqa: PLR0915
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
-            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
+            or (
+                model in litellm.open_ai_embedding_models
+                and custom_llm_provider is None
+            )
         ):
             api_base = (
                 api_base
@@ -7230,6 +7248,79 @@ def stream_chunk_builder(  # noqa: PLR0915
         # Initialize the response dictionary
         response = processor.build_base_response(chunks)
 
+        # Fast path for the common text-only streaming case:
+        # avoid repeated multi-pass list scans over chunks.
+        simple_content_parts: List[str] = []
+        is_simple_text_stream = True
+        for chunk in chunks:
+            if len(chunk["choices"]) == 0:
+                continue
+
+            choice = chunk["choices"][0]
+            delta_obj = (
+                choice.get("delta", {})
+                if isinstance(choice, dict)
+                else getattr(choice, "delta", {})
+            )
+            if isinstance(delta_obj, dict):
+                delta = delta_obj
+            elif hasattr(delta_obj, "model_dump"):
+                delta = cast(Dict[str, Any], delta_obj.model_dump())
+            else:
+                delta = {}
+
+            if (
+                delta.get("tool_calls") is not None
+                or delta.get("function_call") is not None
+                or delta.get("reasoning_content") is not None
+                or delta.get("thinking_blocks") is not None
+                or delta.get("annotations") is not None
+                or delta.get("audio") is not None
+                or delta.get("images") is not None
+                or delta.get("provider_specific_fields") is not None
+            ):
+                is_simple_text_stream = False
+                break
+
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                simple_content_parts.append(content)
+
+        if is_simple_text_stream:
+            if simple_content_parts:
+                response["choices"][0]["message"]["content"] = "".join(
+                    simple_content_parts
+                )
+            completion_output = get_content_from_model_response(response)
+            usage = processor.calculate_usage(
+                chunks=chunks,
+                model=model,
+                completion_output=completion_output,
+                messages=messages,
+                reasoning_tokens=0,
+            )
+            setattr(response, "usage", usage)
+
+            # Propagate provider_specific_fields from chunk hidden params when present.
+            for chunk in reversed(chunks):
+                if isinstance(chunk, dict):
+                    hidden = chunk.get("_hidden_params")
+                else:
+                    hidden = getattr(chunk, "_hidden_params", None)
+                if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
+                    response._hidden_params.setdefault(
+                        "provider_specific_fields", {}
+                    ).update(hidden["provider_specific_fields"])
+                    break
+
+            if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+                setattr(
+                    usage,
+                    "cost",
+                    logging_obj._response_cost_calculator(result=response),
+                )
+            return response
+
         tool_call_chunks = [
             chunk
             for chunk in chunks
@@ -7386,8 +7477,11 @@ def stream_chunk_builder(  # noqa: PLR0915
         # Propagate provider_specific_fields from the last chunk (contains provider
         # metadata like traffic_type set during streaming)
         for chunk in reversed(chunks):
-            hidden = getattr(chunk, "_hidden_params", None)
-            if hidden and "provider_specific_fields" in hidden:
+            if isinstance(chunk, dict):
+                hidden = chunk.get("_hidden_params")
+            else:
+                hidden = getattr(chunk, "_hidden_params", None)
+            if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
                 response._hidden_params.setdefault(
                     "provider_specific_fields", {}
                 ).update(hidden["provider_specific_fields"])
@@ -7436,6 +7530,7 @@ def __getattr__(name: str) -> Any:
         # before loading tiktoken, ensuring the local cache is used
         # instead of downloading from the internet
         from litellm._lazy_imports import _get_default_encoding
+
         _encoding = _get_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys

@@ -6,8 +6,19 @@ import logging
 import threading
 import time
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Union, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
+import anyio
 import httpx
 from pydantic import BaseModel
 
@@ -150,11 +161,32 @@ class CustomStreamWrapper:
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator["ModelResponseStream"]:
         return self
 
-    def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
+
+    async def aclose(self):
+        if self.completion_stream is not None:
+            stream_to_close = self.completion_stream
+            self.completion_stream = None
+            # Shield from anyio cancellation so cleanup awaits can complete.
+            # Without this, CancelledError is thrown into every await during
+            # task group cancellation, preventing HTTP connection release.
+            with anyio.CancelScope(shield=True):
+                try:
+                    if hasattr(stream_to_close, "aclose"):
+                        await stream_to_close.aclose()
+                    elif hasattr(stream_to_close, "close"):
+                        result = stream_to_close.close()
+                        if result is not None:
+                            await result
+                except BaseException as e:
+                    verbose_logger.debug(
+                        "CustomStreamWrapper.aclose: error closing completion_stream: %s",
+                        e,
+                    )
 
     def check_send_stream_usage(self, stream_options: Optional[dict]):
         return (
@@ -1704,7 +1736,7 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
-    def __next__(self):  # noqa: PLR0915
+    def __next__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -1726,7 +1758,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b"":
                     print_verbose(
-                        f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
+                        f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
                     response: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
@@ -1878,7 +1910,7 @@ class CustomStreamWrapper:
 
         return self.completion_stream
 
-    async def __anext__(self):  # noqa: PLR0915
+    async def __anext__(self) -> "ModelResponseStream":  # noqa: PLR0915
         cache_hit = False
         if (
             self.custom_llm_provider is not None
@@ -1974,9 +2006,7 @@ class CustomStreamWrapper:
                     else:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
-                        processed_chunk: Optional[
-                            ModelResponseStream
-                        ] = self.chunk_creator(chunk=chunk)
+                        processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
                             continue
 
