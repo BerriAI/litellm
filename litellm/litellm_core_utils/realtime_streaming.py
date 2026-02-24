@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
@@ -17,12 +17,11 @@ from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 
-if TYPE_CHECKING:
-    from websockets.asyncio.client import ClientConnection
+class WSProtocol(Protocol):
+    async def send(self, data: str) -> None: ...
+    async def recv(self, **kwargs: Any) -> Any: ...
 
-    CLIENT_CONNECTION_CLASS = ClientConnection
-else:
-    CLIENT_CONNECTION_CLASS = Any
+CLIENT_CONNECTION_CLASS = WSProtocol
 
 # Create a thread pool with a maximum of 10 threads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
@@ -262,7 +261,7 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
                 blocked = await self.run_realtime_guardrails(
-                    transcript, item_id=event.get("item_id")
+                    str(transcript), item_id=str(event.get("item_id")) if event.get("item_id") is not None else None
                 )
                 if not blocked:
                     await self.backend_ws.send(
@@ -313,8 +312,8 @@ class RealTimeStreaming:
                 # Forward transcript to client so user sees what they said
                 await self.websocket.send_text(raw_response)
                 blocked = await self.run_realtime_guardrails(
-                    transcript,
-                    item_id=event_obj.get("item_id"),
+                    str(transcript),
+                    item_id=str(event_obj.get("item_id")) if event_obj.get("item_id") is not None else None,
                 )
                 if not blocked:
                     # Clean — trigger LLM response
@@ -380,7 +379,7 @@ class RealTimeStreaming:
                             combined_text = " ".join(texts)
                             if combined_text:
                                 blocked = await self.run_realtime_guardrails(
-                                    combined_text
+                                    str(combined_text)
                                 )
                                 if blocked:
                                     continue  # don't forward to backend
