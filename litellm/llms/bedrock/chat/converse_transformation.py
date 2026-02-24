@@ -348,7 +348,9 @@ class AmazonConverseConfig(BaseConfig):
 
         # Check if the model is a Nova 2 model (matches nova-2-lite, nova-2-pro, etc.)
         # Also check for nova-2/ spec prefix for imported models
-        return model_without_region.startswith("amazon.nova-2-") or model_without_region.startswith("nova-2/")
+        return model_without_region.startswith(
+            "amazon.nova-2-"
+        ) or model_without_region.startswith("nova-2/")
 
     def _map_web_search_options(
         self, web_search_options: dict, model: str
@@ -762,8 +764,7 @@ class AmazonConverseConfig(BaseConfig):
     def _supports_native_structured_outputs(model: str) -> bool:
         """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat)."""
         return any(
-            substring in model
-            for substring in BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS
+            substring in model for substring in BEDROCK_NATIVE_STRUCTURED_OUTPUT_MODELS
         )
 
     @staticmethod
@@ -917,9 +918,7 @@ class AmazonConverseConfig(BaseConfig):
             if param == "parallel_tool_calls":
                 disable_parallel = not value
                 optional_params["_parallel_tool_use_config"] = {
-                    "tool_choice": {
-                        "disable_parallel_tool_use": disable_parallel
-                    }
+                    "tool_choice": {"disable_parallel_tool_use": disable_parallel}
                 }
             if param == "thinking":
                 optional_params["thinking"] = value
@@ -1205,7 +1204,9 @@ class AmazonConverseConfig(BaseConfig):
         if request_metadata is not None:
             self._validate_request_metadata(request_metadata)
 
-        output_config: Optional[OutputConfigBlock] = inference_params.pop("outputConfig", None)
+        output_config: Optional[OutputConfigBlock] = inference_params.pop(
+            "outputConfig", None
+        )
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -1216,11 +1217,17 @@ class AmazonConverseConfig(BaseConfig):
         }
 
         # Handle parallel_tool_calls configuration
-        parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
+        parallel_tool_use_config = additional_request_params.pop(
+            "_parallel_tool_use_config", None
+        )
         if parallel_tool_use_config is not None:
             # Merge the tool_choice config from parallel_tool_calls into additional_request_params
             for key, value in parallel_tool_use_config.items():
-                if key in additional_request_params and isinstance(additional_request_params[key], dict) and isinstance(value, dict):
+                if (
+                    key in additional_request_params
+                    and isinstance(additional_request_params[key], dict)
+                    and isinstance(value, dict)
+                ):
                     # Merge dictionaries
                     additional_request_params[key].update(value)
                 else:
@@ -1301,7 +1308,16 @@ class AmazonConverseConfig(BaseConfig):
                 # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
                 # "computer-use-2024-10-22" for older models
                 model_lower = model.lower()
-                if "opus-4.6" in model_lower or "opus_4.6" in model_lower or "opus-4-6" in model_lower or "opus_4_6" in model_lower or "sonnet-4.6" in model_lower or "sonnet_4.6" in model_lower or "sonnet-4-6" in model_lower or "sonnet_4_6" in model_lower:
+                if (
+                    "opus-4.6" in model_lower
+                    or "opus_4.6" in model_lower
+                    or "opus-4-6" in model_lower
+                    or "opus_4_6" in model_lower
+                    or "sonnet-4.6" in model_lower
+                    or "sonnet_4.6" in model_lower
+                    or "sonnet-4-6" in model_lower
+                    or "sonnet_4_6" in model_lower
+                ):
                     computer_use_header = "computer-use-2025-11-24"
                 elif (
                     "opus-4.5" in model_lower
@@ -1352,10 +1368,16 @@ class AmazonConverseConfig(BaseConfig):
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
 
-        # Set anthropic_beta in additional_request_params if we have any beta features
-        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
+        # Set anthropic_beta in additional_request_params if we have any beta features.
+        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field.
+        # For inference profile ARNs, get_base_model() returns the opaque profile ID — the model family
+        # cannot be determined from the ARN alone. We trust the caller's explicit anthropic-beta header:
+        # if they set it, they know what model is behind their profile. This is consistent with how
+        # get_supported_openai_params() handles ARN models (adds all params without model-family checks).
         base_model = BedrockModelInfo.get_base_model(model)
-        if anthropic_beta_list and base_model.startswith("anthropic"):
+        if anthropic_beta_list and (
+            base_model.startswith("anthropic") or "arn" in model.lower()
+        ):
             additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
