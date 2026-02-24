@@ -2296,11 +2296,14 @@ class UserAPIKeyAuth(
         # If values is already an instance (not a dict), return it as-is
         if not isinstance(values, dict):
             return values
-        # EXTRA BUG FIX #3: only call _safe_hash_litellm_api_key when api_key is str (narrow type for checker)
-        api_key = values.get("api_key")
-        if isinstance(api_key, str):
-            hashed = cls._safe_hash_litellm_api_key(api_key)
-            values.update({"token": hashed, "api_key": hashed})
+        if values.get("api_key") is not None:
+            values.update(
+                {"token": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+            )
+            if isinstance(values.get("api_key"), str):
+                values.update(
+                    {"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+                )
         return values
 
     @classmethod

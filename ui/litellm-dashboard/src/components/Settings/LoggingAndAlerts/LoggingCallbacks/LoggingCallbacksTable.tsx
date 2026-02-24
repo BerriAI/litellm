@@ -57,7 +57,6 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       title: <span className="font-medium text-gray-700">Mode</span>,
       key: "mode",
       render: (_: unknown, record: CallbackRow) => {
-        // BUG FIX #8: added record.type to match backend
         const mode = record.type || record.mode || "success";
         const label = CALLBACK_MODES.find((m) => m.value === mode)?.label || mode;
         const badgeClass =

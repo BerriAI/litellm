@@ -117,12 +117,6 @@ def test_process_callback_without_callback_params_omits_params_key(mock_get_env_
     assert "params" not in result
 
 
-def test_normalize_callback_names_none_returns_empty_list():
-    # EXTRA BUG FIX #2: normalize_callback_names accepts None and returns []
-    assert normalize_callback_names(None) == []
-    assert normalize_callback_names([]) == []
-
-
 def test_normalize_callback_names_lowercases_strings():
     assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == ["sqs", "s3", "custom_callback"]
 

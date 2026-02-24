@@ -5,10 +5,8 @@ import os
 import socket
 import subprocess
 import sys
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -606,8 +604,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     print(f"config_path: {config_path}")
     print(f"os.getenv('CONFIG_FILE_PATH'): {os.getenv('CONFIG_FILE_PATH')}")
-    # EXTRA BUG FIX #1: Existing type error: result is an async context manager (@asynccontextmanager) but typed as generator
-    async with cast(AbstractAsyncContextManager, proxy_startup_event(app)):
+    async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
         assert master_key == test_master_key
@@ -622,8 +619,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
     print("test_env_master_key: {}".format(test_env_master_key))
-    # EXTRA BUG FIX #1: Same (existing type error) as Test Case 1
-    async with cast(AbstractAsyncContextManager, proxy_startup_event(app)):
+    async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
         assert master_key == test_env_master_key
@@ -639,8 +635,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         yaml.dump(test_config_with_prefix, f)
 
     monkeypatch.setenv("CUSTOM_MASTER_KEY", test_resolved_key)
-    # EXTRA BUG FIX #1: Same (existing type error) as Test Case 1
-    async with cast(AbstractAsyncContextManager, proxy_startup_event(app)):
+    async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
         assert master_key == test_resolved_key
@@ -2965,7 +2960,6 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
     
     # Remove any existing "/" route that might interfere
-    # EXTRA BUG FIX #1: Existing type error: BaseRoute stubs omit path/methods; getattr() satisfies the type checker
     routes_to_remove = []
     for route in app.routes:
         path = getattr(route, "path", None)
@@ -2989,111 +2983,6 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == test_redirect_url
-
-
-@pytest.mark.asyncio
-async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
-    """
-    BUG FIX #4
-    Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
-    get_image only calls makedirs when the assets dir does not exist, so we must
-    have exists() return False for that path to trigger the create-dir branch.
-    """
-    from unittest.mock import patch
-
-    from litellm.proxy.proxy_server import get_image
-
-    # Set LITELLM_NON_ROOT to true
-    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
-    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
-
-    def exists_side_effect(path):
-        # Return False for the assets dir so get_image calls makedirs()
-        if path == "/var/lib/litellm/assets":
-            return False
-        return True
-
-    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
-         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
-         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
-         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
-
-        # Setup mock_getenv to return empty string for UI_LOGO_PATH
-        def getenv_side_effect(key, default=""):
-            if key == "UI_LOGO_PATH":
-                return ""
-            elif key == "LITELLM_NON_ROOT":
-                return "true"
-            return default
-
-        mock_getenv.side_effect = getenv_side_effect
-
-        # Call the function
-        await get_image()
-
-        # Verify makedirs was called with /var/lib/litellm/assets
-        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
-
-
-@pytest.mark.asyncio
-async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
-    """
-    BUG FIX #5.
-    Test that get_image falls back to default_site_logo when logo doesn't exist
-    in /var/lib/litellm/assets for non-root case.
-    get_image only calls makedirs when the assets dir does not exist, so we must
-    have exists() return False for that path to trigger the create-dir branch.
-    """
-    from unittest.mock import patch
-
-    from litellm.proxy.proxy_server import get_image
-
-    # Set LITELLM_NON_ROOT to true
-    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
-    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
-
-    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
-    exists_calls = []
-
-    def exists_side_effect(path):
-        exists_calls.append(path)
-        # Return False for assets dir so get_image calls makedirs()
-        if path == "/var/lib/litellm/assets":
-            return False
-        # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
-        if "/var/lib/litellm/assets/logo.jpg" in path or path == "/var/lib/litellm/assets/logo.jpg":
-            return False
-        return True
-
-    # Mock os.path operations
-    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
-         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
-         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
-         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
-
-        # Setup mock_getenv
-        def getenv_side_effect(key, default=""):
-            if key == "UI_LOGO_PATH":
-                return ""
-            elif key == "LITELLM_NON_ROOT":
-                return "true"
-            return default
-
-        mock_getenv.side_effect = getenv_side_effect
-
-        # Call the function
-        await get_image()
-
-        # Verify makedirs was called with /var/lib/litellm/assets
-        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
-
-        # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
-        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
-        assert any(assets_logo_path in str(call) for call in exists_calls), \
-            f"Should check if {assets_logo_path} exists"
-
-        # Verify FileResponse was called (with fallback logo)
-        assert mock_file_response.called, "FileResponse should be called"
 
 
 @pytest.mark.asyncio

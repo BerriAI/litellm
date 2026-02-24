@@ -3476,7 +3476,6 @@ class ProxyConfig:
         """
         Adds callbacks from DB config to litellm
         """
-        # BUG FIX #7: failure callbacks also checked and updated
         litellm_settings = config_data.get("litellm_settings", {}) or {}
         success_callbacks = litellm_settings.get("success_callback", None)
         failure_callbacks = litellm_settings.get("failure_callback", None)

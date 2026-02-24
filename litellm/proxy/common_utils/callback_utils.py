@@ -302,22 +302,12 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 verbose_proxy_logger.debug(
                     f"{blue_color_code} attempting to import custom calback={callback} {reset_color_code}"
                 )
-        # BUG FIX #6: only call get_instance_fn when callback is a string and otherwise append it as is.
-
-                if isinstance(callback, str):
-                    imported_list.append(
-                        get_instance_fn(
-                            value=callback,
-                            config_file_path=config_file_path,
-                        )
+                imported_list.append(
+                    get_instance_fn(
+                        value=callback,
+                        config_file_path=config_file_path,
                     )
-                else:
-                    # Pre-instantiated callback (e.g. from _add_custom_callback_generic_api_str)
-                    # or other non-string type; append as-is.
-                    imported_list.append(callback)
-                    
-        # BUG FIX #6 
-
+                )
         if isinstance(litellm.callbacks, list):
             litellm.callbacks.extend(imported_list)
         else:
@@ -554,11 +544,8 @@ def process_callback(
     return result
 
 
-# EXTRA BUG FIX #2: callbacks parameter now accepts None and returns [] as expected
 def normalize_callback_names(
-    callbacks: Optional[Iterable[Union[str, object]]],
+    callbacks: Iterable[Union[str, object]],
 ) -> List[Union[str, object]]:
     """Lowercase string callback names; pass through non-strings (e.g. from config) unchanged."""
-    if callbacks is None:
-        return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
