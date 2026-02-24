@@ -251,7 +251,7 @@ class GoogleGenAIAdapter:
                 completion_request["temperature"] = config["temperature"]
             if "maxOutputTokens" in config:
                 completion_request["max_tokens"] = config["maxOutputTokens"]
-            if "topP" in config:
+            if "topP" in config and "temperature" not in config:  # Anthropic rejects top_p + temperature together
                 completion_request["top_p"] = config["topP"]
             if "topK" in config:
                 # OpenAI doesn't have direct topK, but we can pass it as extra
