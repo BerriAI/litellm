@@ -926,3 +926,317 @@ def test_get_supported_openai_params():
     assert "stream" in params
     assert "background" in params
     assert "stream" in params
+
+
+class TestPhaseParameter:
+    """Tests for the `phase` parameter on assistant output items (gpt-5.3-codex)."""
+
+    def setup_method(self):
+        self.config = OpenAIResponsesAPIConfig()
+        self.model = "gpt-5.3-codex"
+        self.logging_obj = MagicMock()
+
+    @staticmethod
+    def _make_output_text(text: str):
+        from litellm.types.responses.main import OutputText
+
+        return OutputText(type="output_text", text=text, annotations=[])
+
+    def test_generic_response_output_item_accepts_phase_commentary(self):
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_001",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("Thinking...")],
+            phase="commentary",
+        )
+        assert item.phase == "commentary"
+
+    def test_generic_response_output_item_accepts_phase_final_answer(self):
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_002",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("The answer is 42.")],
+            phase="final_answer",
+        )
+        assert item.phase == "final_answer"
+
+    def test_generic_response_output_item_phase_defaults_to_none(self):
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_003",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("Hello")],
+        )
+        assert item.phase is None
+
+    def test_output_function_tool_call_accepts_phase(self):
+        from litellm.types.responses.main import OutputFunctionToolCall
+
+        item = OutputFunctionToolCall(
+            type="function_call",
+            id="fc_001",
+            arguments='{"query": "test"}',
+            call_id="call_001",
+            name="search",
+            status="completed",
+            phase="commentary",
+        )
+        assert item.phase == "commentary"
+
+    def test_input_passthrough_dict_preserves_phase(self):
+        """Dict input items (the normal HTTP flow) must preserve phase verbatim."""
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Preamble..."}],
+                "phase": "commentary",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Done."}],
+                "phase": "final_answer",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Neutral."}],
+                "phase": None,
+            },
+        ]
+
+        result = self.config._validate_input_param(input_items)
+        assert isinstance(result, list)
+
+        assert "phase" not in result[0]
+        assert result[1]["phase"] == "commentary"
+        assert result[2]["phase"] == "final_answer"
+        assert result[3]["phase"] is None
+
+    def test_input_passthrough_pydantic_preserves_non_null_phase(self):
+        """Pydantic input items must preserve non-null phase values."""
+        from litellm.types.responses.main import GenericResponseOutputItem
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_010",
+            status="completed",
+            role="assistant",
+            content=[self._make_output_text("commentary")],
+            phase="commentary",
+        )
+
+        result = self.config._validate_input_param([item])
+        assert isinstance(result, list)
+        assert result[0]["phase"] == "commentary"
+
+    def test_response_parsing_preserves_phase_on_output(self):
+        """Non-streaming response must preserve phase on output items."""
+        raw_json = {
+            "id": "resp_001",
+            "created_at": 1700000000,
+            "model": "gpt-5.3-codex",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_001",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "preamble"}],
+                    "phase": "commentary",
+                },
+                {
+                    "type": "message",
+                    "id": "msg_002",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "answer"}],
+                    "phase": "final_answer",
+                },
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+        }
+
+        response = ResponsesAPIResponse(**raw_json)
+        assert len(response.output) == 2
+
+        for idx, output_item in enumerate(response.output):
+            if isinstance(output_item, dict):
+                phase = output_item.get("phase")
+            else:
+                phase = getattr(output_item, "phase", None)
+
+            expected = "commentary" if idx == 0 else "final_answer"
+            assert phase == expected, (
+                f"output[{idx}] phase={phase!r}, expected {expected!r}"
+            )
+
+    def test_streaming_output_item_done_preserves_phase(self):
+        """OutputItemDoneEvent must preserve phase on its item."""
+        from litellm.types.llms.openai import (
+            OutputItemDoneEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        chunk = {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 3,
+            "item": {
+                "type": "message",
+                "id": "msg_100",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "done"}],
+                "phase": "final_answer",
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputItemDoneEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        assert getattr(result.item, "phase", None) == "final_answer"
+
+    def test_streaming_output_item_added_preserves_phase(self):
+        """OutputItemAddedEvent must preserve phase on its item."""
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        chunk = {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg_200",
+                "role": "assistant",
+                "phase": "commentary",
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model, parsed_chunk=chunk, logging_obj=self.logging_obj
+        )
+
+        assert isinstance(result, OutputItemAddedEvent)
+        assert result.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        assert getattr(result.item, "phase", None) == "commentary"
+
+    def test_streaming_response_completed_preserves_phase(self):
+        """ResponseCompletedEvent must preserve phase on output items inside the response."""
+        completed_chunk = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_300",
+                "created_at": 1700000000,
+                "model": "gpt-5.3-codex",
+                "object": "response",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_300",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "final"}],
+                        "phase": "final_answer",
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 10,
+                    "total_tokens": 15,
+                },
+            },
+        }
+
+        result = self.config.transform_streaming_response(
+            model=self.model,
+            parsed_chunk=completed_chunk,
+            logging_obj=self.logging_obj,
+        )
+
+        assert result.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        output_item = result.response.output[0]
+        if isinstance(output_item, dict):
+            assert output_item["phase"] == "final_answer"
+        else:
+            assert getattr(output_item, "phase", None) == "final_answer"
+
+    def test_phase_roundtrip_output_to_input(self):
+        """Simulate full round-trip: parse response output, then send items back as input."""
+        raw_json = {
+            "id": "resp_rt",
+            "created_at": 1700000000,
+            "model": "gpt-5.3-codex",
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_rt1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "preamble"}],
+                    "phase": "commentary",
+                },
+                {
+                    "type": "message",
+                    "id": "msg_rt2",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "answer"}],
+                    "phase": "final_answer",
+                },
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+        }
+
+        response = ResponsesAPIResponse(**raw_json)
+
+        input_items = []
+        for item in response.output:
+            if isinstance(item, dict):
+                input_items.append(item)
+            else:
+                input_items.append(
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                )
+
+        input_items.append(
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "next question"}],
+            }
+        )
+
+        validated = self.config._validate_input_param(input_items)
+        assert isinstance(validated, list)
+
+        assert validated[0]["phase"] == "commentary"
+        assert validated[1]["phase"] == "final_answer"
+        assert "phase" not in validated[2]
