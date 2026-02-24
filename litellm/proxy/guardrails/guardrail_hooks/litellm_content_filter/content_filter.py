@@ -214,6 +214,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
             {}
         )  # keyword -> (category, severity, action)
+        # Always-block keywords are checked before exceptions (cannot be bypassed)
+        self.always_block_category_keywords: Dict[
+            str, Tuple[str, str, ContentFilterAction]
+        ] = {}
         # Store conditional categories (identifier_words + block_words)
         self.conditional_categories: Dict[str, Dict[str, Any]] = (
             {}
@@ -452,7 +456,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                         keyword = keyword_data["keyword"].lower()
                         severity = keyword_data.get("severity", "high")
                         if self._should_apply_severity(severity, severity_threshold):
-                            self.category_keywords[keyword] = (
+                            self.always_block_category_keywords[keyword] = (
                                 category_name,
                                 severity,
                                 category_action,
@@ -1064,6 +1068,20 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         text_lower = text.lower()
 
+        # Always-block keywords are matched first — exceptions do not apply to them.
+        for keyword, (category, severity, action) in self.always_block_category_keywords.items():
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
+            if " " in keyword:
+                keyword_found = bool(re.search(keyword_pattern_str, text_lower))
+            else:
+                keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
+                keyword_found = bool(re.search(keyword_pattern, text_lower))
+            if keyword_found:
+                verbose_proxy_logger.debug(
+                    f"Always-block keyword '{keyword}' found in category '{category}'"
+                )
+                return (keyword, category, severity, action)
+
         # First check if any exception applies
         for exception in exceptions:
             if exception in text_lower:
@@ -1571,6 +1589,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             len(self.compiled_patterns)
             + len(self.blocked_words)
             + len(self.category_keywords)
+            + len(self.always_block_category_keywords)
         )
 
     def _get_policy_templates(self) -> Optional[str]:
