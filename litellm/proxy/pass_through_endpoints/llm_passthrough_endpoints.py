@@ -1233,9 +1233,11 @@ async def assemblyai_proxy_route(
     is_streaming_request = False
     # assemblyai is streaming when 'stream' = True is in the body
     if request.method == "POST":
-        _request_body = await request.json()
-        if _request_body.get("stream"):
-            is_streaming_request = True
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            _request_body = await request.json()
+            if _request_body.get("stream"):
+                is_streaming_request = True
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
