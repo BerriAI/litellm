@@ -968,20 +968,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return
 
         try:
-            all_chunks: List[ModelResponseStream] = []
+            remaining_chunks: List[ModelResponseStream] = []
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
-                    all_chunks.append(chunk)
+                    remaining_chunks.append(chunk)
 
-            if not all_chunks:
+            if not remaining_chunks:
                 return
 
             assembled_model_response = stream_chunk_builder(
-                chunks=all_chunks, messages=request_data.get("messages")
+                chunks=remaining_chunks, messages=request_data.get("messages")
             )
 
             if not isinstance(assembled_model_response, ModelResponse):
-                for chunk in all_chunks:
+                for chunk in remaining_chunks:
                     yield chunk
                 return
 
@@ -1002,7 +1002,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
-            for chunk in all_chunks:
+            for chunk in remaining_chunks:
                 yield chunk
 
     def get_presidio_settings_from_request_data(
@@ -1063,3 +1063,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.pii_entities_config = litellm_params.pii_entities_config
         if litellm_params.presidio_score_thresholds:
             self.presidio_score_thresholds = litellm_params.presidio_score_thresholds
+        if litellm_params.presidio_entities_deny_list:
+            self.presidio_entities_deny_list = (
+                litellm_params.presidio_entities_deny_list
+            )
