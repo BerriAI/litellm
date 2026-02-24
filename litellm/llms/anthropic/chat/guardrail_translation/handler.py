@@ -93,6 +93,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         # Track (message_index, content_index) for each text
         # content_index is None for string content, int for list content
 
+        # Preserve the original Anthropic-format tools before guardrail processing.
+        # Guardrails receive tools in OpenAI format (type: "function") for inspection,
+        # but we must not write that format back into the request data because the
+        # downstream Anthropic API expects native tool types (e.g. "bash_20250124").
+        original_anthropic_tools: Optional[list] = data.get("tools")
+
         # Step 1: Extract all text content and images
         for msg_idx, message in enumerate(messages):
             self._extract_input_text_and_images(
@@ -126,7 +132,15 @@ class AnthropicMessagesHandler(BaseTranslation):
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                data["tools"] = guardrailed_tools
+                # Guardrails return tools in OpenAI format (type: "function").
+                # We must map any modifications (e.g. tool removal) back to the
+                # original Anthropic-format tools instead of overwriting with
+                # the OpenAI-format tools, which would break the Anthropic API.
+                data["tools"] = self._reconcile_guardrailed_tools(
+                    original_anthropic_tools=original_anthropic_tools,
+                    openai_tools_before=tools_to_check,
+                    openai_tools_after=guardrailed_tools,
+                )
 
             # Step 3: Map guardrail responses back to original message structure
             await self._apply_guardrail_responses_to_input(
@@ -140,6 +154,58 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
         return data
+
+    @staticmethod
+    def _reconcile_guardrailed_tools(
+        original_anthropic_tools: Optional[list],
+        openai_tools_before: List[ChatCompletionToolParam],
+        openai_tools_after: list,
+    ) -> list:
+        """
+        Map guardrail tool modifications back to original Anthropic-format tools.
+
+        Guardrails receive and return tools in OpenAI format (type: "function").
+        This method detects which tools the guardrail kept/removed and returns
+        the corresponding original Anthropic-format tools so downstream API
+        calls use the correct native format (e.g. type: "bash_20250124").
+
+        If the guardrail returned tools unchanged (same count and names), the
+        original Anthropic tools are returned as-is.  If tools were removed,
+        only the matching Anthropic tools are kept.
+        """
+        if original_anthropic_tools is None:
+            return openai_tools_after
+
+        # Build a set of tool names that survived guardrail processing
+        after_names = set()
+        for tool in openai_tools_after:
+            if isinstance(tool, dict):
+                func = tool.get("function", {})
+                if isinstance(func, dict):
+                    name = func.get("name")
+                    if name:
+                        after_names.add(name)
+
+        # Build a set of tool names that were sent to the guardrail
+        before_names = set()
+        for tool in openai_tools_before:
+            if isinstance(tool, dict):
+                func = tool.get("function", {})
+                if isinstance(func, dict):
+                    name = func.get("name")
+                    if name:
+                        before_names.add(name)
+
+        # If the set of tool names is unchanged, return original tools as-is
+        if after_names == before_names:
+            return original_anthropic_tools
+
+        # Tools were removed by guardrail — filter original Anthropic tools
+        return [
+            tool
+            for tool in original_anthropic_tools
+            if isinstance(tool, dict) and tool.get("name") in after_names
+        ]
 
     def _extract_input_text_and_images(
         self,

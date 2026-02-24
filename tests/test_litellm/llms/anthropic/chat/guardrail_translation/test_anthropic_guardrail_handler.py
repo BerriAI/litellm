@@ -37,6 +37,32 @@ class MockPassThroughGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockToolRemovingGuardrail(CustomGuardrail):
+    """Mock guardrail that removes tools by name - for testing tool reconciliation."""
+
+    def __init__(self, guardrail_name: str, tools_to_remove: List[str]):
+        super().__init__(guardrail_name=guardrail_name)
+        self.tools_to_remove = tools_to_remove
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        """Remove specified tools from the input."""
+        tools = inputs.get("tools")
+        if tools is not None:
+            inputs["tools"] = [
+                t
+                for t in tools
+                if isinstance(t, dict)
+                and t.get("function", {}).get("name") not in self.tools_to_remove
+            ]
+        return inputs
+
+
 class MockDynamicGuardrail(CustomGuardrail):
     """Mock guardrail that records dynamic params from request metadata."""
 
@@ -229,6 +255,270 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
             # Should return the responses
             assert result == responses_so_far
+
+
+class TestReconcileGuardrailedTools:
+    """Test _reconcile_guardrailed_tools preserves Anthropic-native tool format."""
+
+    def test_tools_unchanged_returns_original(self):
+        """When guardrail returns tools unchanged, original Anthropic tools are preserved."""
+        original_anthropic_tools = [
+            {"type": "bash_20250124", "name": "bash"},
+            {"type": "text_editor_20250124", "name": "text_editor"},
+        ]
+        openai_tools_before = [
+            {"type": "function", "function": {"name": "bash", "parameters": {}}},
+            {"type": "function", "function": {"name": "text_editor", "parameters": {}}},
+        ]
+        # Guardrail returns tools unchanged
+        openai_tools_after = list(openai_tools_before)
+
+        result = AnthropicMessagesHandler._reconcile_guardrailed_tools(
+            original_anthropic_tools=original_anthropic_tools,
+            openai_tools_before=openai_tools_before,
+            openai_tools_after=openai_tools_after,
+        )
+
+        assert result == original_anthropic_tools
+        # Verify the native types are preserved
+        assert result[0]["type"] == "bash_20250124"
+        assert result[1]["type"] == "text_editor_20250124"
+
+    def test_tool_removed_by_guardrail(self):
+        """When guardrail removes a tool, corresponding Anthropic tool is removed."""
+        original_anthropic_tools = [
+            {"type": "bash_20250124", "name": "bash"},
+            {"type": "text_editor_20250124", "name": "text_editor"},
+            {"type": "web_search_20260209", "name": "web_search"},
+        ]
+        openai_tools_before = [
+            {"type": "function", "function": {"name": "bash", "parameters": {}}},
+            {"type": "function", "function": {"name": "text_editor", "parameters": {}}},
+            {"type": "function", "function": {"name": "web_search", "parameters": {}}},
+        ]
+        # Guardrail removed "bash" tool
+        openai_tools_after = [
+            {"type": "function", "function": {"name": "text_editor", "parameters": {}}},
+            {"type": "function", "function": {"name": "web_search", "parameters": {}}},
+        ]
+
+        result = AnthropicMessagesHandler._reconcile_guardrailed_tools(
+            original_anthropic_tools=original_anthropic_tools,
+            openai_tools_before=openai_tools_before,
+            openai_tools_after=openai_tools_after,
+        )
+
+        assert len(result) == 2
+        assert result[0]["name"] == "text_editor"
+        assert result[0]["type"] == "text_editor_20250124"
+        assert result[1]["name"] == "web_search"
+        assert result[1]["type"] == "web_search_20260209"
+
+    def test_no_original_tools_returns_guardrail_output(self):
+        """When there are no original Anthropic tools, return guardrail output as-is."""
+        openai_tools_after = [
+            {"type": "function", "function": {"name": "bash", "parameters": {}}},
+        ]
+
+        result = AnthropicMessagesHandler._reconcile_guardrailed_tools(
+            original_anthropic_tools=None,
+            openai_tools_before=[],
+            openai_tools_after=openai_tools_after,
+        )
+
+        assert result == openai_tools_after
+
+    def test_all_tools_removed_by_guardrail(self):
+        """When guardrail removes all tools, return empty list."""
+        original_anthropic_tools = [
+            {"type": "bash_20250124", "name": "bash"},
+        ]
+        openai_tools_before = [
+            {"type": "function", "function": {"name": "bash", "parameters": {}}},
+        ]
+        openai_tools_after: list = []
+
+        result = AnthropicMessagesHandler._reconcile_guardrailed_tools(
+            original_anthropic_tools=original_anthropic_tools,
+            openai_tools_before=openai_tools_before,
+            openai_tools_after=openai_tools_after,
+        )
+
+        assert result == []
+
+    def test_standard_anthropic_tools_preserved(self):
+        """Standard Anthropic tools (without special types) are also preserved."""
+        original_anthropic_tools = [
+            {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            },
+        ]
+        openai_tools_before = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                },
+            },
+        ]
+        openai_tools_after = list(openai_tools_before)
+
+        result = AnthropicMessagesHandler._reconcile_guardrailed_tools(
+            original_anthropic_tools=original_anthropic_tools,
+            openai_tools_before=openai_tools_before,
+            openai_tools_after=openai_tools_after,
+        )
+
+        assert result == original_anthropic_tools
+        # Verify original structure is preserved (input_schema, not parameters)
+        assert "input_schema" in result[0]
+
+
+def _mock_proxy_server():
+    """Create a mock for litellm.proxy.proxy_server when proxy deps aren't installed."""
+    import types
+
+    mock_module = types.ModuleType("litellm.proxy.proxy_server")
+    mock_module.premium_user = True  # type: ignore[attr-defined]
+    return mock_module
+
+
+class TestAnthropicToolFormatPreservation:
+    """Integration tests for Anthropic-native tool format preservation through guardrails."""
+
+    @pytest.mark.asyncio
+    async def test_native_anthropic_tools_preserved_through_passthrough_guardrail(self):
+        """Anthropic-native tools (bash_20250124, etc.) survive guardrail processing unchanged.
+
+        This is the core regression test for the bug where guardrail processing
+        converted Anthropic tools to OpenAI format (type: "function"), causing
+        the Anthropic API to reject the request.
+        """
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "List files in current directory"}],
+            "tools": [
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "text_editor_20250124", "name": "text_editor"},
+            ],
+        }
+
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": _mock_proxy_server()}):
+            result = await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
+
+        # Tools must remain in Anthropic-native format
+        tools = result["tools"]
+        assert len(tools) == 2
+        assert tools[0]["type"] == "bash_20250124"
+        assert tools[0]["name"] == "bash"
+        assert tools[1]["type"] == "text_editor_20250124"
+        assert tools[1]["name"] == "text_editor"
+
+    @pytest.mark.asyncio
+    async def test_native_anthropic_tools_with_removal_guardrail(self):
+        """When a guardrail removes a tool, the remaining tools stay in Anthropic format."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockToolRemovingGuardrail(
+            guardrail_name="test", tools_to_remove=["bash"]
+        )
+
+        data = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "text_editor_20250124", "name": "text_editor"},
+            ],
+        }
+
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": _mock_proxy_server()}):
+            result = await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
+
+        # Only text_editor should remain, in Anthropic format
+        tools = result["tools"]
+        assert len(tools) == 1
+        assert tools[0]["type"] == "text_editor_20250124"
+        assert tools[0]["name"] == "text_editor"
+
+    @pytest.mark.asyncio
+    async def test_mixed_tools_preserved_through_guardrail(self):
+        """Mixed Anthropic-native and standard tools are all preserved."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [
+                {"type": "bash_20250124", "name": "bash"},
+                {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                },
+            ],
+        }
+
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": _mock_proxy_server()}):
+            result = await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
+
+        tools = result["tools"]
+        assert len(tools) == 2
+        assert tools[0]["type"] == "bash_20250124"
+        assert tools[0]["name"] == "bash"
+        # Standard tool preserves its original structure
+        assert tools[1]["name"] == "get_weather"
+        assert "input_schema" in tools[1]
+
+    @pytest.mark.asyncio
+    async def test_web_search_tool_preserved_through_guardrail(self):
+        """Web search tool type is preserved through guardrail processing."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "search the web"}],
+            "tools": [
+                {"type": "web_search_20250305", "name": "web_search"},
+            ],
+        }
+
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": _mock_proxy_server()}):
+            result = await handler.process_input_messages(
+                data=data, guardrail_to_apply=guardrail
+            )
+
+        tools = result["tools"]
+        assert len(tools) == 1
+        assert tools[0]["type"] == "web_search_20250305"
+        assert tools[0]["name"] == "web_search"
 
 
 if __name__ == "__main__":
