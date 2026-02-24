@@ -29,7 +29,7 @@ LiteLLM now supports GPT-5.3-Codex on Day 0, including support for the new assis
 
 `phase` appears on assistant output items and helps distinguish preamble/commentary turns from final closeout responses.
 
-Reference: [Phase parameter docs](https://developers-site-git-alphas-venusaur-api-openai.vercel.app/alphas/venusaur-api/phase-parameter)
+Reference: [Phase parameter docs](https://developers.openai.com/api/reference/overview)
 
 Supported values:
 - `null`
