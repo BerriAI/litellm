@@ -4528,43 +4528,7 @@ workflows:
       #         only:
       #           - main
       #           - /litellm_.*/
-      - upload-coverage:
-          # requires:
-          #   - llm_translation_testing
-          #   - realtime_translation_testing
-          #   - mcp_testing
-          #   - agent_testing
-            # - google_generate_content_endpoint_testing
-            # - guardrails_testing
-            # - llm_responses_api_testing
-            # - ocr_testing
-            # - search_testing
-            # - litellm_mapped_tests_proxy_part1
-            # - litellm_mapped_tests_proxy_part2
-            # - litellm_mapped_tests_llms
-            # - litellm_mapped_tests_core
-            # - litellm_mapped_tests_mcps
-            # - litellm_mapped_tests_integrations
-            # - litellm_mapped_tests_litellm_core_utils
-            # - litellm_mapped_enterprise_tests
-            # - batches_testing
-            # - litellm_utils_testing
-            # - pass_through_unit_testing
-            # - image_gen_testing
-            # - logging_testing
-            # - audio_testing
-            # - litellm_router_testing
-            # - litellm_router_unit_testing
-            # - caching_unit_tests
-            # - litellm_proxy_unit_testing_key_generation
-            # - litellm_proxy_unit_testing_part1
-            # - litellm_proxy_unit_testing_part2
-            # - litellm_security_tests
-            # - langfuse_logging_unit_tests
-            # - local_testing_part1
-            # - local_testing_part2
-            # - litellm_assistants_api_testing
-            # - auth_ui_unit_tests
+      - upload-coverage
       # - db_migration_disable_update_check:
       #     requires:
       #       - build_docker_database_image
