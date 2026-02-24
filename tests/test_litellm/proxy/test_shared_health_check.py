@@ -272,7 +272,7 @@ class TestSharedHealthCheckManager:
             )
         
         # Should call perform_health_check and cache results
-        mock_perform.assert_called_once_with(model_list=model_list, details=True)
+        mock_perform.assert_called_once_with(model_list=model_list, details=True, max_concurrency=None)
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
         
@@ -329,7 +329,7 @@ class TestSharedHealthCheckManager:
         
         # Should fall back to local health check
         mock_sleep.assert_called_once_with(2)
-        mock_perform.assert_called_once_with(model_list=model_list, details=True)
+        mock_perform.assert_called_once_with(model_list=model_list, details=True, max_concurrency=None)
         assert healthy == expected_healthy
         assert unhealthy == expected_unhealthy
 
