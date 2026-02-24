@@ -2454,5 +2454,367 @@
       "Injection Protection"
     ],
     "estimated_latency_ms": 1
+  },
+  {
+    "id": "pdpa-singapore",
+    "title": "Singapore PDPA \u2014 Personal Data Protection",
+    "description": "Singapore Personal Data Protection Act (PDPA) compliance. Covers 5 obligation areas: personal identifier collection (s.13 Consent), sensitive data profiling (Advisory Guidelines), Do Not Call Registry violations (Part IX), overseas data transfers (s.26), and automated profiling without human oversight (Model AI Governance Framework). Also includes regex-based PII detection for NRIC/FIN, Singapore phone numbers, postal codes, passports, UEN, and bank account numbers. Zero-cost keyword-based detection.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-red-500",
+    "iconBg": "bg-red-50",
+    "guardrails": [
+      "sg-pdpa-pii-identifiers",
+      "sg-pdpa-contact-information",
+      "sg-pdpa-financial-data",
+      "sg-pdpa-business-identifiers",
+      "sg-pdpa-personal-identifiers",
+      "sg-pdpa-sensitive-data",
+      "sg-pdpa-do-not-call",
+      "sg-pdpa-data-transfer",
+      "sg-pdpa-profiling-automated-decisions"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "sg-pdpa-pii-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "sg_nric",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "passport_singapore",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Singapore NRIC/FIN and passport numbers for PDPA compliance"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-contact-information",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "sg_phone",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "sg_postal_code",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "email",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Singapore phone numbers, postal codes, and email addresses"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-financial-data",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "sg_bank_account",
+              "action": "MASK"
+            },
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "credit_card",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[{pattern_name}_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Singapore bank account numbers and credit card numbers"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-business-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "patterns": [
+            {
+              "pattern_type": "prebuilt",
+              "pattern_name": "sg_uen",
+              "action": "MASK"
+            }
+          ],
+          "pattern_redaction_format": "[UEN_REDACTED]"
+        },
+        "guardrail_info": {
+          "description": "Masks Singapore Unique Entity Numbers (business registration)"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-personal-identifiers",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_pdpa_personal_identifiers",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_personal_identifiers.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "PDPA s.13 \u2014 Blocks unauthorized collection, harvesting, or extraction of Singapore personal identifiers (NRIC/FIN, SingPass, passports)"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-sensitive-data",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_pdpa_sensitive_data",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_sensitive_data.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "PDPA Advisory Guidelines \u2014 Blocks profiling or inference of sensitive personal data categories (race, religion, health, politics) for Singapore residents"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-do-not-call",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_pdpa_do_not_call",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_do_not_call.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "PDPA Part IX \u2014 Blocks generation of unsolicited marketing lists and DNC Registry bypass attempts for Singapore phone numbers"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-data-transfer",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_pdpa_data_transfer",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_data_transfer.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "PDPA s.26 \u2014 Blocks unprotected overseas transfer of Singapore personal data without adequate safeguards"
+        }
+      },
+      {
+        "guardrail_name": "sg-pdpa-profiling-automated-decisions",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_pdpa_profiling_automated_decisions",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_profiling_automated_decisions.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "PDPA + Model AI Governance Framework \u2014 Blocks automated profiling and decision-making about Singapore residents without human oversight"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "pdpa-singapore",
+      "description": "Singapore PDPA compliance policy. Covers personal identifier protection (s.13), sensitive data profiling (Advisory Guidelines), Do Not Call Registry (Part IX), overseas data transfers (s.26), and automated profiling (Model AI Governance Framework). Includes regex-based PII detection for NRIC/FIN, phone numbers, postal codes, passports, UEN, and bank accounts.",
+      "guardrails_add": [
+        "sg-pdpa-pii-identifiers",
+        "sg-pdpa-contact-information",
+        "sg-pdpa-financial-data",
+        "sg-pdpa-business-identifiers",
+        "sg-pdpa-personal-identifiers",
+        "sg-pdpa-sensitive-data",
+        "sg-pdpa-do-not-call",
+        "sg-pdpa-data-transfer",
+        "sg-pdpa-profiling-automated-decisions"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "PII Protection",
+      "Regulatory",
+      "Singapore"
+    ],
+    "estimated_latency_ms": 1
+  },
+  {
+    "id": "mas-ai-risk-management",
+    "title": "Singapore MAS \u2014 AI Risk Management for Financial Institutions",
+    "description": "Monetary Authority of Singapore (MAS) AI Risk Management for Financial Institutions alignment. Covers 5 enforceable obligation areas: fairness & bias in financial decisions, transparency & explainability of AI models, human oversight for consequential actions, data governance for financial customer data, and model security against adversarial attacks. Based on Guidelines on Artificial Intelligence Risk Management (MAS), and aligned with the 2018 FEAT Principles and Project MindForge. Zero-cost keyword-based detection.",
+    "icon": "ShieldCheckIcon",
+    "iconColor": "text-blue-600",
+    "iconBg": "bg-blue-50",
+    "guardrails": [
+      "sg-mas-fairness-bias",
+      "sg-mas-transparency-explainability",
+      "sg-mas-human-oversight",
+      "sg-mas-data-governance",
+      "sg-mas-model-security"
+    ],
+    "complexity": "High",
+    "guardrailDefinitions": [
+      {
+        "guardrail_name": "sg-mas-fairness-bias",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_fairness_bias",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_fairness_bias.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks discriminatory AI practices in financial services that score, deny, or price based on protected attributes (race, religion, age, gender, nationality)"
+        }
+      },
+      {
+        "guardrail_name": "sg-mas-transparency-explainability",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_transparency_explainability",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_transparency_explainability.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks deployment of opaque or unexplainable AI systems for consequential financial decisions"
+        }
+      },
+      {
+        "guardrail_name": "sg-mas-human-oversight",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_human_oversight",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_human_oversight.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks fully automated financial AI decisions without human-in-the-loop for consequential actions (loans, claims, trading)"
+        }
+      },
+      {
+        "guardrail_name": "sg-mas-data-governance",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_data_governance",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_data_governance.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks unauthorized sharing, exposure, or mishandling of financial customer data without proper governance and data lineage"
+        }
+      },
+      {
+        "guardrail_name": "sg-mas-model-security",
+        "litellm_params": {
+          "guardrail": "litellm_content_filter",
+          "mode": "pre_call",
+          "categories": [
+            {
+              "category": "sg_mas_model_security",
+              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_model_security.yaml",
+              "enabled": true,
+              "action": "BLOCK",
+              "severity_threshold": "medium"
+            }
+          ]
+        },
+        "guardrail_info": {
+          "description": "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks adversarial attacks, model poisoning, inversion, and exfiltration attempts targeting financial AI systems"
+        }
+      }
+    ],
+    "templateData": {
+      "policy_name": "mas-ai-risk-management",
+      "description": "Guidelines on Artificial Intelligence Risk Management (MAS) for Financial Institutions alignment. Covers fairness & bias, transparency & explainability, human oversight, data governance, and model security. Aligned with the 2018 FEAT Principles, Project MindForge, and NIST AI RMF.",
+      "guardrails_add": [
+        "sg-mas-fairness-bias",
+        "sg-mas-transparency-explainability",
+        "sg-mas-human-oversight",
+        "sg-mas-data-governance",
+        "sg-mas-model-security"
+      ],
+      "guardrails_remove": []
+    },
+    "tags": [
+      "Financial Services",
+      "Regulatory",
+      "Singapore"
+    ],
+    "estimated_latency_ms": 1
   }
 ]

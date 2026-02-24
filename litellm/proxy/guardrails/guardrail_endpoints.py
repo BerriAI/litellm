@@ -14,6 +14,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
     ApplyGuardrailRequest,
@@ -1485,17 +1486,49 @@ async def test_custom_code_guardrail(
     ```
     """
     import concurrent.futures
+    import re
 
     from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
         get_custom_code_primitives,
     )
-    from litellm.proxy._types import LitellmUserRoles
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Admin access required to test custom code guardrails",
-        )
+    # Security validation patterns
+    FORBIDDEN_PATTERNS = [
+        # Import statements
+        (r"\bimport\s+", "import statements are not allowed"),
+        (r"\bfrom\s+\w+\s+import\b", "from...import statements are not allowed"),
+        (r"__import__\s*\(", "__import__() is not allowed"),
+        # Dangerous builtins
+        (r"\bexec\s*\(", "exec() is not allowed"),
+        (r"\beval\s*\(", "eval() is not allowed"),
+        (r"\bcompile\s*\(", "compile() is not allowed"),
+        (r"\bopen\s*\(", "open() is not allowed"),
+        (r"\bgetattr\s*\(", "getattr() is not allowed"),
+        (r"\bsetattr\s*\(", "setattr() is not allowed"),
+        (r"\bdelattr\s*\(", "delattr() is not allowed"),
+        (r"\bglobals\s*\(", "globals() is not allowed"),
+        (r"\blocals\s*\(", "locals() is not allowed"),
+        (r"\bvars\s*\(", "vars() is not allowed"),
+        (r"\bdir\s*\(", "dir() is not allowed"),
+        (r"\bbreakpoint\s*\(", "breakpoint() is not allowed"),
+        (r"\binput\s*\(", "input() is not allowed"),
+        # Dangerous dunder access
+        (r"__builtins__", "__builtins__ access is not allowed"),
+        (r"__globals__", "__globals__ access is not allowed"),
+        (r"__code__", "__code__ access is not allowed"),
+        (r"__subclasses__", "__subclasses__ access is not allowed"),
+        (r"__bases__", "__bases__ access is not allowed"),
+        (r"__mro__", "__mro__ access is not allowed"),
+        (r"__class__", "__class__ access is not allowed"),
+        (r"__dict__", "__dict__ access is not allowed"),
+        (r"__getattribute__", "__getattribute__ access is not allowed"),
+        (r"__reduce__", "__reduce__ access is not allowed"),
+        (r"__reduce_ex__", "__reduce_ex__ access is not allowed"),
+        # OS/system access
+        (r"\bos\.", "os module access is not allowed"),
+        (r"\bsys\.", "sys module access is not allowed"),
+        (r"\bsubprocess\.", "subprocess module access is not allowed"),
+    ]
 
     EXECUTION_TIMEOUT_SECONDS = 5
 
@@ -1652,3 +1685,7 @@ async def apply_guardrail(
         )
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+# Usage (dashboard) endpoints: overview, detail, logs
+router.include_router(guardrails_usage_router)
