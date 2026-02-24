@@ -103,15 +103,19 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
     primary_callback = None
 
     if run_input:
-        primary_callback = _make_presidio_callback()
-
+        # When output_parse_pii is True, use a single callback for both pre_call and
+        # post_call so pii_tokens populated during pre_call is available when
+        # unmasking the LLM response in post_call.
         if litellm_params.output_parse_pii:
-            _make_presidio_callback(
-                output_parse_pii=True,
-                event_hook=GuardrailEventHooks.post_call.value,
+            primary_callback = _make_presidio_callback(
+                event_hook=[litellm_params.mode, GuardrailEventHooks.post_call.value],
             )
+        else:
+            primary_callback = _make_presidio_callback()
 
-    if run_output:
+    # When output_parse_pii is True we unmask the response in post_call; do not also
+    # create an output-masking callback or it will re-mask after unmask.
+    if run_output and not (litellm_params.output_parse_pii and run_input):
         output_callback = _make_presidio_callback(
             apply_to_output=True,
             event_hook=GuardrailEventHooks.post_call.value,

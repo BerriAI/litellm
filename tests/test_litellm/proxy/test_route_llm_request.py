@@ -10,7 +10,28 @@ sys.path.insert(
 
 from unittest.mock import MagicMock
 
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import _kwargs_for_llm, route_request
+
+
+def test_kwargs_for_llm_strips_presidio_pii_tokens():
+    """_kwargs_for_llm removes _presidio_pii_tokens so it is not sent to the LLM provider."""
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "_presidio_pii_tokens": {"guardrail_1": {"<PERSON>": "Jane"}},
+    }
+    result = _kwargs_for_llm(data)
+    assert "model" in result
+    assert "messages" in result
+    assert "_presidio_pii_tokens" not in result
+    assert result.get("_presidio_pii_tokens") is None
+
+
+def test_kwargs_for_llm_preserves_other_keys():
+    """_kwargs_for_llm leaves all other keys unchanged."""
+    data = {"model": "gpt-4", "temperature": 0.7, "api_key": "sk-xxx"}
+    result = _kwargs_for_llm(data)
+    assert result == data
 
 
 @pytest.mark.parametrize(
@@ -237,3 +258,131 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["num_retries"] == 10
     # Key/team timeout should be applied since not in request
     assert call_kwargs["timeout"] == 30
+
+
+@pytest.mark.asyncio
+async def test_route_request_user_config_filters_router_args_and_discards(monkeypatch):
+    import litellm
+
+    state = {"init_kwargs": None, "discard_called": False}
+
+    class _FakeRouter:
+        @staticmethod
+        def get_valid_args():
+            return ["model_list", "routing_strategy"]
+
+        def __init__(self, **kwargs):
+            state["init_kwargs"] = kwargs
+
+        async def acompletion(self, **kwargs):
+            return {"ok": True, "kwargs": kwargs}
+
+        def discard(self):
+            state["discard_called"] = True
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "_presidio_pii_tokens": {"guardrail": {"<PERSON>": "Jane"}},
+        "user_config": {
+            "model_list": [
+                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}
+            ],
+            "routing_strategy": "least-busy",
+            "invalid_key": "should_be_ignored",
+        },
+    }
+
+    llm_call = await route_request(data, None, None, "acompletion")
+    result = await llm_call
+
+    assert result["ok"] is True
+    assert "_presidio_pii_tokens" not in result["kwargs"]
+    assert state["init_kwargs"] == {
+        "model_list": [
+            {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}}
+        ],
+        "routing_strategy": "least-busy",
+    }
+    assert state["discard_called"] is True
+
+
+@pytest.mark.asyncio
+async def test_route_request_user_config_batch_does_not_forward_model_kwarg(monkeypatch):
+    import litellm
+
+    state = {"models": None, "kwargs": None}
+
+    class _FakeRouter:
+        @staticmethod
+        def get_valid_args():
+            return []
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def abatch_completion(self, models, **kwargs):
+            state["models"] = models
+            state["kwargs"] = kwargs
+            return "ok"
+
+        def discard(self):
+            pass
+
+    monkeypatch.setattr(litellm, "Router", _FakeRouter)
+
+    data = {
+        "model": "gpt-4o-mini, claude-3-haiku",
+        "messages": [{"role": "user", "content": "hi"}],
+        "user_config": {},
+    }
+
+    llm_call = await route_request(data, None, None, "acompletion")
+    result = await llm_call
+
+    assert result == "ok"
+    assert state["models"] == ["gpt-4o-mini", "claude-3-haiku"]
+    assert "model" not in (state["kwargs"] or {})
+
+
+@pytest.mark.asyncio
+async def test_route_request_batch_with_router_does_not_forward_model_kwarg():
+    data = {
+        "model": "gpt-4o-mini, claude-3-haiku",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    llm_router = MagicMock()
+    llm_router.model_names = []
+    llm_router.abatch_completion.return_value = "ok"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "ok"
+    call_kwargs = llm_router.abatch_completion.call_args[1]
+    assert call_kwargs["models"] == ["gpt-4o-mini", "claude-3-haiku"]
+    assert "model" not in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_route_request_evals_path_strips_internal_keys():
+    import litellm
+
+    data = {
+        "name": "eval-test",
+        "_presidio_pii_tokens": {"guardrail": {"<PERSON>": "Alice"}},
+    }
+    llm_router = MagicMock()
+
+    original_func = litellm.acreate_eval
+    mock_create_eval = MagicMock(return_value={"ok": True})
+    litellm.acreate_eval = mock_create_eval
+    try:
+        response = await route_request(data, llm_router, None, "acreate_eval")
+        assert response == {"ok": True}
+        call_kwargs = mock_create_eval.call_args[1]
+        assert "_presidio_pii_tokens" not in call_kwargs
+        assert call_kwargs["name"] == "eval-test"
+    finally:
+        litellm.acreate_eval = original_func
