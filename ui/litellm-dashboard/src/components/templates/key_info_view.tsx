@@ -595,7 +595,7 @@ export default function KeyInfoView({
             <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
+                {!isEditing && canModifyKey && (
                   <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
