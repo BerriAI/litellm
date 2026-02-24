@@ -57,8 +57,37 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
-        """No mapping applied since inputs are in OpenAI spec already"""
-        return dict(response_api_optional_params)
+        """
+        Apply model-specific parameter validations.
+
+        While inputs are in OpenAI spec, some models have specific constraints
+        that need to be validated (e.g., gpt-5 only accepts temperature=1).
+        """
+        params_dict = dict(response_api_optional_params)
+
+        # Apply gpt-5 specific temperature validation
+        if "gpt-5" in model.lower() and "temperature" in params_dict:
+            from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+            temperature_value = params_dict.pop("temperature")
+
+            # Use the same validation logic as chat completions
+            gpt5_config = OpenAIGPT5Config()
+            non_default_params = {"temperature": temperature_value}
+            optional_params: Dict = {}
+
+            validated_params = gpt5_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params
+            )
+
+            # Merge validated temperature back if it was kept
+            if "temperature" in validated_params:
+                params_dict["temperature"] = validated_params["temperature"]
+
+        return params_dict
 
     def transform_responses_api_request(
         self,

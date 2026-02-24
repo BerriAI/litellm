@@ -926,3 +926,114 @@ def test_get_supported_openai_params():
     assert "stream" in params
     assert "background" in params
     assert "stream" in params
+
+
+class TestGPT5TemperatureValidation:
+    """Test suite for GPT-5 temperature parameter validation in responses API"""
+
+    def setup_method(self):
+        self.config = OpenAIResponsesAPIConfig()
+
+    def test_gpt5_temperature_not_one_with_drop_params_true(self):
+        """Test that temperature != 1 is dropped for gpt-5 when drop_params=True"""
+        test_params = {"input": "Hello", "temperature": 0.7}
+
+        result = self.config.map_openai_params(
+            response_api_optional_params=test_params,
+            model="gpt-5",
+            drop_params=True,
+        )
+
+        # temperature should be dropped
+        assert "temperature" not in result
+        assert result["input"] == "Hello"
+
+    def test_gpt5_temperature_not_one_with_drop_params_false(self):
+        """Test that temperature != 1 raises error for gpt-5 when drop_params=False"""
+        test_params = {"input": "Hello", "temperature": 0.7}
+
+        with pytest.raises(litellm.utils.UnsupportedParamsError) as exc_info:
+            self.config.map_openai_params(
+                response_api_optional_params=test_params,
+                model="gpt-5",
+                drop_params=False,
+            )
+
+        # Verify error message mentions gpt-5 and temperature
+        assert "gpt-5" in str(exc_info.value)
+        assert "temperature" in str(exc_info.value)
+
+    def test_gpt5_temperature_equals_one_is_kept(self):
+        """Test that temperature=1 is kept for gpt-5"""
+        test_params = {"input": "Hello", "temperature": 1}
+
+        result = self.config.map_openai_params(
+            response_api_optional_params=test_params,
+            model="gpt-5",
+            drop_params=False,
+        )
+
+        # temperature=1 should be kept
+        assert result["temperature"] == 1
+        assert result["input"] == "Hello"
+
+    def test_gpt5_codex_temperature_validation(self):
+        """Test that temperature validation also applies to gpt-5-codex"""
+        test_params = {"input": "Hello", "temperature": 0.5}
+
+        result = self.config.map_openai_params(
+            response_api_optional_params=test_params,
+            model="gpt-5-codex",
+            drop_params=True,
+        )
+
+        # temperature should be dropped for gpt-5-codex too
+        assert "temperature" not in result
+
+    def test_gpt5_no_temperature_param(self):
+        """Test that requests without temperature work fine for gpt-5"""
+        test_params = {"input": "Hello", "stream": True}
+
+        result = self.config.map_openai_params(
+            response_api_optional_params=test_params,
+            model="gpt-5",
+            drop_params=False,
+        )
+
+        # Should return params unchanged
+        assert result == test_params
+
+    def test_non_gpt5_model_temperature_not_affected(self):
+        """Test that other models can use any temperature value"""
+        test_params = {"input": "Hello", "temperature": 0.7}
+
+        result = self.config.map_openai_params(
+            response_api_optional_params=test_params,
+            model="gpt-4o",
+            drop_params=False,
+        )
+
+        # temperature should be kept for non-gpt-5 models
+        assert result["temperature"] == 0.7
+        assert result["input"] == "Hello"
+
+    def test_gpt5_with_multiple_params(self):
+        """Test gpt-5 temperature validation with multiple parameters"""
+        test_params = {
+            "input": "Hello",
+            "temperature": 0.8,
+            "stream": True,
+            "background": False,
+        }
+
+        result = self.config.map_openai_params(
+            response_api_optional_params=test_params,
+            model="gpt-5",
+            drop_params=True,
+        )
+
+        # Only temperature should be dropped, other params kept
+        assert "temperature" not in result
+        assert result["input"] == "Hello"
+        assert result["stream"] is True
+        assert result["background"] is False
