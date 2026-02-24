@@ -76,26 +76,31 @@ class EncryptedContentAffinityCheck(CustomLogger):
     def _extract_item_ids_from_output(
         output: list,
     ) -> List[str]:
-        """Extract all item IDs from a Responses API output list."""
+        """Extract item IDs from output items that contain encrypted_content."""
         item_ids: List[str] = []
         for item in output:
             item_id: Optional[str] = None
+            has_encrypted_content = False
+            
             if isinstance(item, dict):
                 item_id = item.get("id")
+                has_encrypted_content = "encrypted_content" in item
             else:
                 item_id = getattr(item, "id", None)
-            if item_id and isinstance(item_id, str):
+                has_encrypted_content = hasattr(item, "encrypted_content")
+            
+            if item_id and isinstance(item_id, str) and has_encrypted_content:
                 item_ids.append(item_id)
         return item_ids
 
     @staticmethod
     def _extract_item_ids_from_input(request_input: Any) -> List[str]:
         """
-        Extract item IDs from the ``input`` field of a Responses API request.
+        Extract item IDs from input items that contain encrypted_content.
 
         ``input`` can be:
         - a plain string  -> no item IDs
-        - a list of items -> each item may have an ``id`` field
+        - a list of items -> only extract IDs from items with encrypted_content
         """
         if not isinstance(request_input, list):
             return []
@@ -104,7 +109,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         for item in request_input:
             if isinstance(item, dict):
                 item_id = item.get("id")
-                if item_id and isinstance(item_id, str):
+                has_encrypted_content = "encrypted_content" in item
+                if item_id and isinstance(item_id, str) and has_encrypted_content:
                     item_ids.append(item_id)
         return item_ids
 
@@ -191,13 +197,13 @@ class EncryptedContentAffinityCheck(CustomLogger):
                     ttl=self.ttl_seconds,
                 )
             except Exception as e:
-                verbose_router_logger.debug(
+                verbose_router_logger.error(
                     "EncryptedContentAffinityCheck: failed to cache item_id=%s error=%s",
                     item_id,
                     e,
                 )
 
-        verbose_router_logger.info(
+        verbose_router_logger.debug(
             "EncryptedContentAffinityCheck: cached %d item IDs -> deployment=%s",
             len(item_ids),
             model_id,
@@ -247,7 +253,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 model_id=cached_model_id,
             )
             if deployment is not None:
-                verbose_router_logger.info(
+                verbose_router_logger.debug(
                     "EncryptedContentAffinityCheck: item_id=%s pinning -> deployment=%s",
                     item_id,
                     cached_model_id,
@@ -257,7 +263,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 ] = True
                 return [deployment]
 
-            verbose_router_logger.info(
+            verbose_router_logger.debug(
                 "EncryptedContentAffinityCheck: cached deployment=%s for item_id=%s "
                 "not found in healthy_deployments",
                 cached_model_id,
