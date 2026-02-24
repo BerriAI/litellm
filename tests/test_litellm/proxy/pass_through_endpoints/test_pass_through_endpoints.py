@@ -2646,7 +2646,10 @@ async def test_non_streaming_handler_forwards_raw_body_for_binary():
         request=mock_request,
         async_client=mock_client,
         url=url,
-        headers={"Authorization": "test-key", "content-type": "application/octet-stream"},
+        headers={
+            "Authorization": "test-key",
+            "content-type": "application/octet-stream",
+        },
         _parsed_body=parsed_body,
     )
 

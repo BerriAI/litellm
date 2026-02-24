@@ -1093,9 +1093,9 @@ class TestVertexAIPassThroughHandler:
 
         assert result is not None
         assert result["result"] is not None
-        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
-            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
-        )
+        assert (
+            result["kwargs"].get("custom_llm_provider") == "gemini"
+        ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 
@@ -2903,17 +2903,22 @@ async def test_assemblyai_proxy_route_binary_upload_no_json_parse():
     mock_request.method = "POST"
     mock_request.headers = {"content-type": "application/octet-stream"}
     mock_request.url = "https://api.assemblyai.com/v2/upload"
-    mock_request.json = AsyncMock(side_effect=UnicodeDecodeError("utf-8", b"", 0, 1, ""))
+    mock_request.json = AsyncMock(
+        side_effect=UnicodeDecodeError("utf-8", b"", 0, 1, "")
+    )
 
     mock_response = MagicMock()
     mock_user_api_key_dict = MagicMock()
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
-        return_value="test-api-key",
-    ), patch(
-        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-    ) as mock_create_route:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="test-api-key",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+        ) as mock_create_route,
+    ):
         mock_endpoint_func = AsyncMock(return_value="ok")
         mock_create_route.return_value = mock_endpoint_func
 
