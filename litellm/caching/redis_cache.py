@@ -1511,6 +1511,11 @@ class RedisCache(BaseCache):
                 raw_results.append(key_results if key_results else None)
                 offset += count
 
+        # Raise on per-command errors (matches _pipeline_rpush_helper behavior)
+        for r in raw_results:
+            if isinstance(r, Exception):
+                raise r
+
         # Decode bytes -> str for each result set
         decoded_results: List[Optional[List[str]]] = []
         for r in raw_results:

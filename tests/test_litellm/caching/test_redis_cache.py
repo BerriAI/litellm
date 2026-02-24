@@ -297,6 +297,36 @@ async def test_async_rpush_pipeline_raises_on_per_command_error(monkeypatch, red
 
 
 @pytest.mark.asyncio
+async def test_async_lpop_pipeline_raises_on_per_command_error(monkeypatch, redis_no_ping):
+    """Verify that per-command errors in LPOP pipeline results are raised, not silently dropped"""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    redis_cache.redis_version = "7.0.0"
+
+    mock_redis_instance = AsyncMock()
+    mock_pipeline = MagicMock()
+    mock_pipeline.__aenter__ = AsyncMock(return_value=mock_pipeline)
+    mock_pipeline.__aexit__ = AsyncMock(return_value=None)
+    mock_pipeline.lpop = MagicMock()
+    # Simulate: first LPOP succeeds, second returns a per-command error
+    mock_pipeline.execute = AsyncMock(
+        return_value=[[b"val1"], Exception("WRONGTYPE")]
+    )
+    mock_redis_instance.pipeline = MagicMock(return_value=mock_pipeline)
+
+    from litellm.types.caching import RedisPipelineLpopOperation
+
+    lpop_list = [
+        RedisPipelineLpopOperation(key="key1", count=10),
+        RedisPipelineLpopOperation(key="key2", count=10),
+    ]
+
+    with patch.object(redis_cache, "init_async_client", return_value=mock_redis_instance):
+        with pytest.raises(Exception, match="WRONGTYPE"):
+            await redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
+
+
+@pytest.mark.asyncio
 async def test_async_lpop_pipeline_empty_list(monkeypatch, redis_no_ping):
     """Empty lpop_list should return empty list without touching Redis"""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
