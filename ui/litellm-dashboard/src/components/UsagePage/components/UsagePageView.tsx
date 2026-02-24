@@ -21,7 +21,7 @@ import {
   Text,
   Title
 } from "@tremor/react";
-import { Alert, Segmented, Select, Tooltip } from "antd";
+import { Alert, Segmented, Select, Tooltip, Typography } from "antd";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import React, { useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
 
@@ -142,10 +142,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [showOrganizationBanner, setShowOrganizationBanner] = useState(true);
-  const [showCustomerBanner, setShowCustomerBanner] = useState(true);
   const [usageView, setUsageView] = useState<UsageOption>("global");
-  const [showAgentBanner, setShowAgentBanner] = useState(true);
+  const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const getAllTags = async () => {
@@ -805,33 +803,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {/* Organization Usage Panel */}
 
           {usageView === "organization" && (
-            <>
-              {showOrganizationBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Organization usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowOrganizationBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="organization"
-                userID={userID}
-                userRole={userRole}
-                dateValue={dateValue}
-                entityList={
-                  organizations?.map((organization) => ({
-                    label: organization.organization_alias,
-                    value: organization.organization_id,
-                  })) || null
-                }
-                premiumUser={premiumUser}
-              />
-            </>
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="organization"
+              userID={userID}
+              userRole={userRole}
+              dateValue={dateValue}
+              entityList={
+                organizations?.map((organization) => ({
+                  label: organization.organization_alias,
+                  value: organization.organization_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+            />
           )}
 
           {/* Team Usage Panel */}
@@ -854,71 +839,64 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
           {/* Customer Usage Panel */}
           {usageView === "customer" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="customer"
+              userID={userID}
+              userRole={userRole}
+              entityList={
+                customers?.map((customer) => ({
+                  label: customer.alias || customer.user_id,
+                  value: customer.user_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
+          )}
+          {/* Tag Usage Panel */}
+          {usageView === "tag" && (
             <>
-              {showCustomerBanner && (
+              {showCredentialBanner && (
                 <Alert
                   banner
                   type="info"
-                  message="Customer usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
+                  message="Reusable credentials are automatically tracked as tags"
+                  description={
+                    <Typography.Text>
+                      When a reusable credential is used, it will appear as a tag prefixed with{" "}
+                      <Typography.Text code>Credential: </Typography.Text>
+                      in this view.
+                    </Typography.Text>
+                  }
                   closable
-                  onClose={() => setShowCustomerBanner(false)}
+                  onClose={() => setShowCredentialBanner(false)}
                   className="mb-5"
                 />
               )}
               <EntityUsage
                 accessToken={accessToken}
-                entityType="customer"
+                entityType="tag"
                 userID={userID}
                 userRole={userRole}
-                entityList={
-                  customers?.map((customer) => ({
-                    label: customer.alias || customer.user_id,
-                    value: customer.user_id,
-                  })) || null
-                }
+                entityList={allTags}
                 premiumUser={premiumUser}
                 dateValue={dateValue}
               />
             </>
           )}
-          {/* Tag Usage Panel */}
-          {usageView === "tag" && (
+          {usageView === "agent" && (
             <EntityUsage
               accessToken={accessToken}
-              entityType="tag"
+              entityType="agent"
               userID={userID}
               userRole={userRole}
-              entityList={allTags}
+              entityList={
+                agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
+              }
               premiumUser={premiumUser}
               dateValue={dateValue}
             />
-          )}
-          {usageView === "agent" && (
-            <>
-              {showAgentBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Agent usage (A2A) is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowAgentBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="agent"
-                userID={userID}
-                userRole={userRole}
-                entityList={
-                  agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
-                }
-                premiumUser={premiumUser}
-                dateValue={dateValue}
-              />{" "}
-            </>
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (

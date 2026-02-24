@@ -642,6 +642,25 @@ model_list:
       model: openai/responses/gpt-5-mini
 ```
 
+**Per-model configuration** (recommended when using Open WebUI or clients that cannot set `extra_body`):
+
+```yaml
+model_list:
+  - model_name: gpt-5.1
+    litellm_params:
+      model: openai/gpt-5.1
+      # String format - uses reasoning_auto_summary for summary when set
+      reasoning_effort: "high"
+    model_info:
+      mode: responses  # if using Responses API bridge
+
+  - model_name: gpt-5.1-with-summary
+    litellm_params:
+      model: openai/gpt-5.1
+      # Dict format - explicit control over effort and summary
+      reasoning_effort: {"effort": "high", "summary": "detailed"}
+```
+
 </TabItem>
 </Tabs>
 

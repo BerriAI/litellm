@@ -472,8 +472,16 @@ def test_max_langfuse_clients_limit():
     """
     Test that the max langfuse clients limit is respected when initializing multiple clients
     """
+    # Mock langfuse package to avoid triggering real import.
+    # The real langfuse import fails on Python 3.14 due to pydantic v1 incompatibility,
+    # and sys.modules["langfuse"] may be absent after other tests in the suite clean up.
+    mock_langfuse = MagicMock()
+    mock_langfuse.version.__version__ = "3.0.0"
     # Set max clients to 2 for testing
-    with patch.object(langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2):
+    original_initialized_langfuse_clients = litellm.initialized_langfuse_clients
+    with patch.dict("sys.modules", {"langfuse": mock_langfuse}), patch.object(
+        langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2
+    ):
         # Reset the counter
         litellm.initialized_langfuse_clients = 0
 
@@ -506,3 +514,5 @@ def test_max_langfuse_clients_limit():
 
         # Counter should still be 2 (third client failed to initialize)
         assert litellm.initialized_langfuse_clients == 2
+
+    litellm.initialized_langfuse_clients = original_initialized_langfuse_clients
