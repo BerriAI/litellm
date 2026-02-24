@@ -1401,6 +1401,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         max_retries=None,
         organization: Optional[str] = None,
+        headers: Optional[dict] = None,
     ):
         response = None
         try:
@@ -1414,6 +1415,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            if headers:
+                data["extra_headers"] = headers
             response = await openai_aclient.images.generate(**data, timeout=timeout)  # type: ignore
             stringified_response = response.model_dump()
             ## LOGGING
@@ -1446,6 +1449,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         aimg_generation=None,
         organization: Optional[str] = None,
+        headers: Optional[dict] = None,
     ) -> ImageResponse:
         data = {}
         try:
@@ -1455,7 +1459,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization)  # type: ignore
+                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization, headers=headers)  # type: ignore
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1480,6 +1484,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
+            if headers:
+                data["extra_headers"] = headers
             _response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
 
             response = _response.model_dump()
