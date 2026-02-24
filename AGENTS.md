@@ -187,4 +187,29 @@ When opening issues or pull requests, follow these templates:
 - Check similar provider implementations
 - Ensure comprehensive test coverage
 - Update documentation appropriately
-- Consider backward compatibility impact 
+- Consider backward compatibility impact
+
+## Cursor Cloud specific instructions
+
+### Services overview
+
+| Service | How to run | Notes |
+|---------|-----------|-------|
+| **LiteLLM Proxy** (backend) | `DATABASE_URL="$DATABASE_URL" LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" STORE_MODEL_IN_DB="True" poetry run litellm --port 4000` | Requires PostgreSQL running and Prisma generated. See `.env.example` for default credential values. |
+| **Dashboard UI** (frontend) | `cd ui/litellm-dashboard && npm run dev` | Next.js dev server on port 3000; auto-proxies API calls to `http://localhost:4000` in dev mode |
+| **PostgreSQL** | `sudo pg_ctlcluster 16 main start` | DB name: `litellm`. Credentials in `.env.example`. |
+
+### Setup prerequisites (already done by update script)
+
+- `poetry install --with dev,proxy-dev --extras proxy` — installs all Python deps
+- `npm install` in `ui/litellm-dashboard/` — installs UI deps
+
+### Non-obvious caveats
+
+- **Prisma must be generated before the proxy starts.** Run `poetry run prisma generate --schema=./litellm/proxy/schema.prisma` and `DATABASE_URL=<your_url> poetry run prisma db push --schema=./litellm/proxy/schema.prisma --accept-data-loss` once after DB setup.
+- **UI login:** username `admin`, password is the `LITELLM_MASTER_KEY` env var value.
+- The Next.js dev server at port 3000 uses `networking.tsx` which defaults `proxyBaseUrl` to `http://localhost:4000` when `NODE_ENV=development`. Do not access the proxy's built-in UI at port 4000 for dev work; use port 3000.
+- UI tests use **Vitest**: `cd ui/litellm-dashboard && npm test`. Python tests: `poetry run pytest tests/test_litellm/ -x -v`.
+- Ruff/Black/MyPy lint commands are in the `Makefile` — see `make lint`, `make format`.
+- `poetry` must be on PATH; the update script installs it to `~/.local/bin`.
+- Poetry 2.x is used (lock file is Poetry 2.3.2 format).
