@@ -81,8 +81,8 @@ class GLMChatConfig(OpenAIGPTConfig):
         api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict = {},
         stream: Optional[bool] = None,
-        litellm_params: Optional[dict] = None,
     ) -> str:
         """Build the full endpoint URL, avoiding double-suffixing."""
         base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
