@@ -156,6 +156,7 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs

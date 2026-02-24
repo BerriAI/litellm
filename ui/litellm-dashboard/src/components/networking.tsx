@@ -466,6 +466,33 @@ export const cancelModelCostMapReload = async (accessToken: string) => {
   }
 };
 
+export const getModelCostMapSource = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/model/cost_map/source`
+      : `/model/cost_map/source`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
+    const jsonData = await response.json();
+    console.log("Model cost map source info:", jsonData);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to get model cost map source info:", error);
+    throw error;
+  }
+};
+
 export const getModelCostMapReloadStatus = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl
@@ -5408,6 +5435,128 @@ export const getGuardrailsList = async (accessToken: string) => {
   }
 };
 
+// Guardrails / Policies usage (dashboard)
+export const getGuardrailsUsageOverview = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/overview` : `/guardrails/usage/overview`;
+    const params = new URLSearchParams();
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get guardrails usage overview:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailsUsageDetail = async (
+  accessToken: string,
+  guardrailId: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/detail/${encodeURIComponent(guardrailId)}` : `/guardrails/usage/detail/${encodeURIComponent(guardrailId)}`;
+    const params = new URLSearchParams();
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get guardrails usage detail:", error);
+    throw error;
+  }
+};
+
+export const getGuardrailsUsageLogs = async (
+  accessToken: string,
+  options: { guardrailId?: string; policyId?: string; page?: number; pageSize?: number; action?: string; startDate?: string; endDate?: string }
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/usage/logs` : `/guardrails/usage/logs`;
+    const params = new URLSearchParams();
+    if (options.guardrailId) params.append("guardrail_id", options.guardrailId);
+    if (options.policyId) params.append("policy_id", options.policyId);
+    if (options.page != null) params.append("page", String(options.page));
+    if (options.pageSize != null) params.append("page_size", String(options.pageSize));
+    if (options.action) params.append("action", options.action);
+    if (options.startDate) params.append("start_date", options.startDate);
+    if (options.endDate) params.append("end_date", options.endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get guardrails usage logs:", error);
+    throw error;
+  }
+};
+
+export const getPoliciesUsageOverview = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string
+) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/policies/usage/overview` : `/policies/usage/overview`;
+    const params = new URLSearchParams();
+    if (startDate) params.append("start_date", startDate);
+    if (endDate) params.append("end_date", endDate);
+    if (params.toString()) url += `?${params.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(deriveErrorMessage(errorData));
+    }
+    return response.json();
+  } catch (error) {
+    console.error("Failed to get policies usage overview:", error);
+    throw error;
+  }
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Policy CRUD API Calls
 // ─────────────────────────────────────────────────────────────────────────────
@@ -6998,7 +7147,11 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string) => {
+export const listMCPTools = async (
+  accessToken: string, 
+  serverId: string,
+  customHeaders?: Record<string, string>
+) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -7010,6 +7163,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
+      ...customHeaders, // Merge custom headers for passthrough auth
     };
 
     const response = await fetch(url, {
@@ -7045,6 +7199,7 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 
 export interface CallMCPToolOptions {
   guardrails?: string[];
+  customHeaders?: Record<string, string>;
 }
 
 export const callMCPTool = async (
@@ -7063,6 +7218,7 @@ export const callMCPTool = async (
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
+      ...(options?.customHeaders || {}), // Merge custom headers for passthrough auth
     };
 
     const body: Record<string, any> = {

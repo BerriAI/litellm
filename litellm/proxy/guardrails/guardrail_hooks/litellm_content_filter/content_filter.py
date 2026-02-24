@@ -193,6 +193,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
                 GuardrailEventHooks.during_call,
+                GuardrailEventHooks.realtime_input_transcription,
             ],
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
@@ -214,6 +215,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
             {}
         )  # keyword -> (category, severity, action)
+        # Always-block keywords are checked after exceptions (exceptions take precedence)
+        self.always_block_category_keywords: Dict[
+            str, Tuple[str, str, ContentFilterAction]
+        ] = {}
         # Store conditional categories (identifier_words + block_words)
         self.conditional_categories: Dict[str, Dict[str, Any]] = (
             {}
@@ -452,7 +457,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                         keyword = keyword_data["keyword"].lower()
                         severity = keyword_data.get("severity", "high")
                         if self._should_apply_severity(severity, severity_threshold):
-                            self.category_keywords[keyword] = (
+                            self.always_block_category_keywords[keyword] = (
                                 category_name,
                                 severity,
                                 category_action,
@@ -1064,13 +1069,27 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         text_lower = text.lower()
 
-        # First check if any exception applies
+        # Check exceptions first — they take precedence over always-block keywords too.
         for exception in exceptions:
             if exception in text_lower:
                 verbose_proxy_logger.debug(
                     f"Exception phrase '{exception}' found, skipping category keyword check"
                 )
                 return None
+
+        # Always-block keywords are checked after exceptions.
+        for keyword, (category, severity, action) in self.always_block_category_keywords.items():
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
+            if " " in keyword:
+                keyword_found = bool(re.search(keyword_pattern_str, text_lower))
+            else:
+                keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
+                keyword_found = bool(re.search(keyword_pattern, text_lower))
+            if keyword_found:
+                verbose_proxy_logger.debug(
+                    f"Always-block keyword '{keyword}' found in category '{category}'"
+                )
+                return (keyword, category, severity, action)
 
         # Check category keywords
         for keyword, (category, severity, action) in self.category_keywords.items():
@@ -1571,6 +1590,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             len(self.compiled_patterns)
             + len(self.blocked_words)
             + len(self.category_keywords)
+            + len(self.always_block_category_keywords)
         )
 
     def _get_policy_templates(self) -> Optional[str]:

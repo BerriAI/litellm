@@ -25,9 +25,14 @@ export const TRANSPORT = {
   OPENAPI: "openapi",
 };
 
-export const handleTransport = (transport?: string | null): string => {
+export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
   if (transport === null || transport === undefined) {
     return TRANSPORT.SSE;
+  }
+
+  // If server has spec_path, display as "openapi" instead of the raw transport type
+  if (specPath && transport !== TRANSPORT.STDIO) {
+    return TRANSPORT.OPENAPI;
   }
 
   return transport;
@@ -132,6 +137,7 @@ export interface MCPToolsViewerProps {
   userRole: string | null;
   userID: string | null;
   serverAlias?: string | null;
+  extraHeaders?: string[] | null;
 }
 
 export interface MCPServer {

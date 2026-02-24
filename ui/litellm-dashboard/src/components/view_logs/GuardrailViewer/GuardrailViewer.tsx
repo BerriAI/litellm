@@ -77,8 +77,10 @@ const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set([
   "litellm_content_filter",
 ]);
 
-const formatMode = (mode: string): string => {
-  return mode.replace(/_/g, "-").toUpperCase();
+const formatMode = (mode: unknown): string => {
+  if (mode == null || mode === "") return "—";
+  const s = typeof mode === "string" ? mode : String(mode);
+  return s.replace(/_/g, "-").toUpperCase();
 };
 
 const formatDurationMs = (seconds: number): string => {

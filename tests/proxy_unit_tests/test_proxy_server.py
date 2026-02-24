@@ -2330,7 +2330,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     test_model_list_2 = [{"model_name": "model-b"}]
     called_model_lists = []
 
-    async def fake_perform_health_check(model_list, details):
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None
+    ):
         called_model_lists.append(copy.deepcopy(model_list))
         return (["healthy"], ["unhealthy"])
 
@@ -2378,7 +2380,9 @@ async def test_background_health_check_skip_disabled_models(monkeypatch):
     ]
     called_model_lists = []
 
-    async def fake_perform_health_check(model_list, details):
+    async def fake_perform_health_check(
+        model_list, details, max_concurrency=None
+    ):
         called_model_lists.append(copy.deepcopy(model_list))
         return (["healthy"], [])
 
