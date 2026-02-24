@@ -2604,6 +2604,7 @@ class MCPServerManager:
                 server.mcp_info.get("description") if server.mcp_info else None
             ),
             url=server.url,
+            spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
             created_at=datetime.now(),

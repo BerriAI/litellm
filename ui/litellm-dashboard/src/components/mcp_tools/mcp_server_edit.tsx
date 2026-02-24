@@ -159,9 +159,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   }, [mcpServer.env]);
 
 
-  // If server has spec_path and no url, show it as "openapi" transport in the UI
+  // If server has spec_path, show it as "openapi" transport in the UI
   const effectiveTransport = React.useMemo(() => {
-    if (mcpServer.spec_path && !mcpServer.url && mcpServer.transport !== "stdio") {
+    if (mcpServer.spec_path && mcpServer.transport !== "stdio") {
       return TRANSPORT.OPENAPI;
     }
     return mcpServer.transport;
