@@ -1,3 +1,5 @@
+import asyncio
+import json
 import time
 import types
 from typing import (
@@ -339,6 +341,68 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def __init__(self) -> None:
         super().__init__()
 
+    @staticmethod
+    def _is_stream_required_error(e: Exception) -> bool:
+        message = getattr(e, "message", None) or getattr(e, "text", None) or str(e)
+        if isinstance(message, dict):
+            message = json.dumps(message)
+        return "stream must be set to true" in str(message).lower()
+
+    @staticmethod
+    def _merge_stream_hidden_params(
+        response: ModelResponse, streamwrapper: CustomStreamWrapper
+    ) -> None:
+        hidden = getattr(streamwrapper, "_hidden_params", None)
+        if not isinstance(hidden, dict):
+            return
+        response_hidden = getattr(response, "_hidden_params", None)
+        if response_hidden is None:
+            response._hidden_params = {}
+            response_hidden = response._hidden_params
+        response_hidden.update(hidden)
+
+    def _build_complete_response_from_streaming(
+        self, streamwrapper: CustomStreamWrapper, messages: Optional[list]
+    ) -> ModelResponse:
+        chunks: List[ModelResponseStream] = []
+        for chunk in streamwrapper:
+            chunks.append(chunk)
+        complete_response = litellm.stream_chunk_builder(
+            chunks=chunks, messages=messages
+        )
+        if complete_response is None:
+            raise OpenAIError(
+                status_code=500,
+                message="Failed to assemble streaming response for forced stream.",
+            )
+        complete_response = cast(ModelResponse, complete_response)
+        self._merge_stream_hidden_params(complete_response, streamwrapper)
+        return complete_response
+
+    async def _abuild_complete_response_from_streaming(
+        self,
+        streamwrapper_or_coro: Union[CustomStreamWrapper, Coroutine],
+        messages: Optional[list],
+    ) -> ModelResponse:
+        if asyncio.iscoroutine(streamwrapper_or_coro):
+            streamwrapper = await streamwrapper_or_coro
+        else:
+            streamwrapper = streamwrapper_or_coro
+        chunks: List[ModelResponseStream] = []
+        async for chunk in streamwrapper:
+            chunks.append(chunk)
+        complete_response = litellm.stream_chunk_builder(
+            chunks=chunks, messages=messages
+        )
+        if complete_response is None:
+            raise OpenAIError(
+                status_code=500,
+                message="Failed to assemble streaming response for forced stream.",
+            )
+        complete_response = cast(ModelResponse, complete_response)
+        self._merge_stream_hidden_params(complete_response, streamwrapper)
+        return complete_response
+
     def _set_dynamic_params_on_client(
         self,
         client: Union[OpenAI, AsyncOpenAI],
@@ -635,6 +699,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
             stream: Optional[bool] = inference_params.pop("stream", False)
             provider_config: Optional[BaseConfig] = None
+            return_complete_response: bool = False
 
             if custom_llm_provider is not None and model is not None:
                 try:
@@ -652,7 +717,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 fake_stream = provider_config.should_fake_stream(
                     model=model, custom_llm_provider=custom_llm_provider, stream=stream
                 )
-
             if headers:
                 inference_params["extra_headers"] = headers
             if model is None or messages is None:
@@ -676,7 +740,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries = inference_params.pop("max_retries", 2)
                     if acompletion is True:
                         if stream is True and fake_stream is False:
-                            return self.async_streaming(
+                            streaming_response = self.async_streaming(
                                 logging_obj=logging_obj,
                                 headers=headers,
                                 messages=messages,
@@ -695,6 +759,28 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 stream_options=stream_options,
                                 shared_session=shared_session,
                             )
+                            if return_complete_response:
+                                async def _finalize_forced_streaming():
+                                    complete_response = await self._abuild_complete_response_from_streaming(
+                                        streaming_response, messages
+                                    )
+                                    agentic_response = await self._call_agentic_completion_hooks_openai(
+                                        response=complete_response,
+                                        model=model,
+                                        messages=messages,
+                                        optional_params=inference_params,
+                                        logging_obj=logging_obj,
+                                        stream=False,
+                                        litellm_params=litellm_params,
+                                    )
+                                    return (
+                                        agentic_response
+                                        if agentic_response is not None
+                                        else complete_response
+                                    )
+
+                                return _finalize_forced_streaming()
+                            return streaming_response
                         else:
                             return self.acompletion(
                                 messages=messages,
@@ -725,7 +811,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         headers=headers or {},
                     )
                     if stream is True and fake_stream is False:
-                        return self.streaming(
+                        streaming_response = self.streaming(
                             logging_obj=logging_obj,
                             headers=headers,
                             data=data,
@@ -739,6 +825,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             organization=organization,
                             stream_options=stream_options,
                         )
+                        if return_complete_response:
+                            return self._build_complete_response_from_streaming(
+                                streaming_response, messages
+                            )
+                        return streaming_response
                     else:
                         if not isinstance(max_retries, int):
                             raise OpenAIError(
@@ -841,6 +932,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         e
                     ):
                         litellm.remove_index_from_tool_calls(messages=messages)
+                    elif (
+                        stream is False
+                        and return_complete_response is False
+                        and self._is_stream_required_error(e)
+                    ):
+                        stream = True
+                        return_complete_response = True
+                        continue
                     else:
                         raise e
         except OpenAIError as e:
