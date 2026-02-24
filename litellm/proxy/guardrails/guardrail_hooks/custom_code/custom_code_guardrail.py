@@ -144,6 +144,33 @@ class CustomCodeGuardrail(CustomGuardrail):
         """Returns the config model for the UI."""
         return CustomCodeGuardrailConfigModel
 
+    def _do_compile(self) -> None:
+        """Internal compilation method without lock. Expected to run inside _compile_lock."""
+        # Create a restricted execution environment
+        # Only include our safe primitives
+        exec_globals = get_custom_code_primitives().copy()
+
+        # CRITICAL: Restrict __builtins__ to prevent sandbox escape
+        exec_globals["__builtins__"] = {}
+
+        # Execute the user code in the restricted environment
+        exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)
+
+        # Extract the apply_guardrail function
+        if "apply_guardrail" not in exec_globals:
+            raise CustomCodeCompilationError(
+                "Custom code must define an 'apply_guardrail' function. "
+                "Expected signature: apply_guardrail(inputs, request_data, input_type)"
+            )
+
+        apply_fn = exec_globals["apply_guardrail"]
+        if not callable(apply_fn):
+            raise CustomCodeCompilationError(
+                "'apply_guardrail' must be a callable function"
+            )
+
+        self._compiled_function = apply_fn
+
     def _compile_custom_code(self) -> None:
         """
         Compile the custom code and extract the apply_guardrail function.
@@ -161,30 +188,8 @@ class CustomCodeGuardrail(CustomGuardrail):
                 except CustomCodeValidationError as e:
                     raise CustomCodeCompilationError(str(e)) from e
 
-                # Create a restricted execution environment
-                # Only include our safe primitives
-                exec_globals = get_custom_code_primitives().copy()
-
-                # CRITICAL: Restrict __builtins__ to prevent sandbox escape
-                exec_globals["__builtins__"] = {}
-
-                # Execute the user code in the restricted environment
-                exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)
-
-                # Extract the apply_guardrail function
-                if "apply_guardrail" not in exec_globals:
-                    raise CustomCodeCompilationError(
-                        "Custom code must define an 'apply_guardrail' function. "
-                        "Expected signature: apply_guardrail(inputs, request_data, input_type)"
-                    )
-
-                apply_fn = exec_globals["apply_guardrail"]
-                if not callable(apply_fn):
-                    raise CustomCodeCompilationError(
-                        "'apply_guardrail' must be a callable function"
-                    )
-
-                self._compiled_function = apply_fn
+                # Step 2: Compile logic
+                self._do_compile()
                 verbose_proxy_logger.debug(
                     f"Custom code guardrail '{self.guardrail_name}' compiled successfully"
                 )
@@ -415,25 +420,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
             try:
                 self.custom_code = new_code
-                # Inline compilation instead of calling _compile_custom_code()
-                # to avoid deadlock (re-acquiring self._compile_lock)
-                exec_globals = get_custom_code_primitives().copy()
-                exec_globals["__builtins__"] = {}
-                exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)
-
-                if "apply_guardrail" not in exec_globals:
-                    raise CustomCodeCompilationError(
-                        "Custom code must define an 'apply_guardrail' function. "
-                        "Expected signature: apply_guardrail(inputs, request_data, input_type)"
-                    )
-
-                apply_fn = exec_globals["apply_guardrail"]
-                if not callable(apply_fn):
-                    raise CustomCodeCompilationError(
-                        "'apply_guardrail' must be a callable function"
-                    )
-
-                self._compiled_function = apply_fn
+                self._do_compile()
                 verbose_proxy_logger.info(
                     f"Custom code guardrail '{self.guardrail_name}': Code updated successfully"
                 )

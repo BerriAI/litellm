@@ -37,6 +37,10 @@ FORBIDDEN_PATTERNS: List[Tuple[str, str]] = [
     (r"\bos\.", "os module access is not allowed"),
     (r"\bsys\.", "sys module access is not allowed"),
     (r"\bsubprocess\.", "subprocess module access is not allowed"),
+    (r"\bshutil\.", "shutil module access is not allowed"),
+    (r"\bctypes\.", "ctypes module access is not allowed"),
+    (r"\bsocket\.", "socket module access is not allowed"),
+    (r"\bpickle\.", "pickle module access is not allowed"),
 ]
 
 
