@@ -201,7 +201,7 @@ class RedisUpdateBuffer:
             (db_spend_update_transactions, REDIS_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_SPEND_UPDATE_QUEUE),
             (daily_spend_update_transactions, REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE),
             (daily_team_spend_update_transactions, REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE),
-            (daily_org_spend_update_transactions, REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE),
+            (daily_org_spend_update_transactions, REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_ORG_SPEND_UPDATE_QUEUE),
             (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_END_USER_SPEND_UPDATE_QUEUE),
             (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE),
             (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE),
