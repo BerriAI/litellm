@@ -53,7 +53,7 @@ describe("BlogDropdown", () => {
   });
 
   describe("when blog posts are disabled", () => {
-    it("renders nothing", () => {
+    it("should render nothing", () => {
       mockDisableBlogPosts = true;
       const { container } = renderWithProviders(<BlogDropdown />);
       expect(container).toBeEmptyDOMElement();
@@ -61,13 +61,13 @@ describe("BlogDropdown", () => {
   });
 
   describe("when blog posts are enabled", () => {
-    it("renders the Blog trigger button", () => {
+    it("should render the Blog trigger button", () => {
       renderWithProviders(<BlogDropdown />);
       expect(screen.getByRole("button", { name: /blog/i })).toBeInTheDocument();
     });
 
     describe("loading state", () => {
-      it("shows a loading spinner", async () => {
+      it("should show a loading spinner", async () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isLoading: true };
         renderWithProviders(<BlogDropdown />);
 
@@ -84,7 +84,7 @@ describe("BlogDropdown", () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, isError: true };
       });
 
-      it("shows an error message", async () => {
+      it("should show an error message", async () => {
         renderWithProviders(<BlogDropdown />);
 
         await openDropdown();
@@ -94,7 +94,7 @@ describe("BlogDropdown", () => {
         });
       });
 
-      it("shows a Retry button", async () => {
+      it("should show a Retry button", async () => {
         renderWithProviders(<BlogDropdown />);
 
         await openDropdown();
@@ -104,7 +104,7 @@ describe("BlogDropdown", () => {
         });
       });
 
-      it("calls refetch when Retry is clicked", async () => {
+      it("should call refetch when Retry is clicked", async () => {
         const user = userEvent.setup();
         renderWithProviders(<BlogDropdown />);
 
@@ -121,7 +121,7 @@ describe("BlogDropdown", () => {
     });
 
     describe("empty state", () => {
-      it("shows 'No posts available' when data is null", async () => {
+      it("should show 'No posts available' when data is null", async () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: null };
         renderWithProviders(<BlogDropdown />);
 
@@ -132,7 +132,7 @@ describe("BlogDropdown", () => {
         });
       });
 
-      it("shows 'No posts available' when posts array is empty", async () => {
+      it("should show 'No posts available' when posts array is empty", async () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: [] } };
         renderWithProviders(<BlogDropdown />);
 
@@ -149,7 +149,7 @@ describe("BlogDropdown", () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS.slice(0, 3) } };
       });
 
-      it("renders post titles", async () => {
+      it("should render post titles", async () => {
         renderWithProviders(<BlogDropdown />);
 
         await openDropdown();
@@ -161,7 +161,7 @@ describe("BlogDropdown", () => {
         });
       });
 
-      it("renders post descriptions", async () => {
+      it("should render post descriptions", async () => {
         renderWithProviders(<BlogDropdown />);
 
         await openDropdown();
@@ -171,7 +171,7 @@ describe("BlogDropdown", () => {
         });
       });
 
-      it("renders post links with correct attributes", async () => {
+      it("should render post links with correct attributes", async () => {
         renderWithProviders(<BlogDropdown />);
 
         await openDropdown();
@@ -184,7 +184,7 @@ describe("BlogDropdown", () => {
         });
       });
 
-      it("renders formatted post dates", async () => {
+      it("should render formatted post dates", async () => {
         mockUseBlogPostsResult = {
           ...mockUseBlogPostsResult,
           data: { posts: [{ title: "Date Post", date: "2026-02-15", description: "Desc", url: "https://example.com" }] },
@@ -198,7 +198,7 @@ describe("BlogDropdown", () => {
         });
       });
 
-      it("renders the 'View all posts' link", async () => {
+      it("should render the 'View all posts' link", async () => {
         renderWithProviders(<BlogDropdown />);
 
         await openDropdown();
@@ -213,7 +213,7 @@ describe("BlogDropdown", () => {
     });
 
     describe("post limit", () => {
-      it("renders at most 5 posts when more than 5 are provided", async () => {
+      it("should render at most 5 posts when more than 5 are provided", async () => {
         mockUseBlogPostsResult = { ...mockUseBlogPostsResult, data: { posts: MOCK_POSTS } };
         renderWithProviders(<BlogDropdown />);
 
