@@ -244,6 +244,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
 
   return (
     <div className="p-6 w-full">
+      <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
       <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
 
         {/* Toolbar */}

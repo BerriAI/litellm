@@ -1067,7 +1067,6 @@ model LiteLLM_ToolTable {
   updated_at  DateTime @default(now()) @updatedAt
   updated_by  String?
 
-  @@index([tool_name])
   @@index([call_policy])
   @@index([team_id])
 }

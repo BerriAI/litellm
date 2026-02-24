@@ -1,13 +1,17 @@
 """
 Unit tests for tool management endpoints (/v1/tool/*).
 Uses FastAPI TestClient with mocked DB functions.
+
+Patches target the source modules (litellm.proxy.db.tool_registry_writer.*
+and litellm.proxy.proxy_server.prisma_client) because the endpoint code
+imports these inside function bodies to avoid circular imports.
 """
 
 import os
 import sys
 from datetime import datetime, timezone
 from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -51,6 +55,10 @@ def _override_auth():
     return UserAPIKeyAuth(api_key="sk-test", user_id="admin")
 
 
+# A real (non-None) prisma stub for truthiness checks.
+_MOCK_PRISMA = MagicMock()
+
+
 # --- test class ---
 
 
@@ -62,14 +70,13 @@ class TestToolManagementEndpoints:
         app.dependency_overrides[user_api_key_auth] = _override_auth
         self.client = TestClient(app, raise_server_exceptions=True)
 
-    @patch("litellm.proxy.management_endpoints.tool_management_endpoints.db_list_tools")
     @patch(
-        "litellm.proxy.management_endpoints.tool_management_endpoints.prisma_client",
-        new_callable=MagicMock,
+        "litellm.proxy.db.tool_registry_writer.list_tools",
+        new_callable=AsyncMock,
     )
-    def test_list_tools_returns_200(self, mock_prisma, mock_db_list):
+    @patch("litellm.proxy.proxy_server.prisma_client", _MOCK_PRISMA)
+    def test_list_tools_returns_200(self, mock_db_list):
         mock_db_list.return_value = [_make_tool_row()]
-        mock_prisma.__bool__ = MagicMock(return_value=True)
 
         resp = self.client.get("/v1/tool/list")
         assert resp.status_code == 200
@@ -77,54 +84,48 @@ class TestToolManagementEndpoints:
         assert body["total"] == 1
         assert body["tools"][0]["tool_name"] == "my_tool"
 
-    @patch("litellm.proxy.management_endpoints.tool_management_endpoints.db_list_tools")
     @patch(
-        "litellm.proxy.management_endpoints.tool_management_endpoints.prisma_client",
-        new_callable=MagicMock,
+        "litellm.proxy.db.tool_registry_writer.list_tools",
+        new_callable=AsyncMock,
     )
-    def test_list_tools_with_policy_filter(self, mock_prisma, mock_db_list):
+    @patch("litellm.proxy.proxy_server.prisma_client", _MOCK_PRISMA)
+    def test_list_tools_with_policy_filter(self, mock_db_list):
         mock_db_list.return_value = [_make_tool_row(call_policy="blocked")]
-        mock_prisma.__bool__ = MagicMock(return_value=True)
 
         resp = self.client.get("/v1/tool/list?call_policy=blocked")
         assert resp.status_code == 200
         assert resp.json()["tools"][0]["call_policy"] == "blocked"
 
-    @patch("litellm.proxy.management_endpoints.tool_management_endpoints.db_get_tool")
     @patch(
-        "litellm.proxy.management_endpoints.tool_management_endpoints.prisma_client",
-        new_callable=MagicMock,
+        "litellm.proxy.db.tool_registry_writer.get_tool",
+        new_callable=AsyncMock,
     )
-    def test_get_tool_found(self, mock_prisma, mock_db_get):
+    @patch("litellm.proxy.proxy_server.prisma_client", _MOCK_PRISMA)
+    def test_get_tool_found(self, mock_db_get):
         mock_db_get.return_value = _make_tool_row(tool_name="tool_a")
-        mock_prisma.__bool__ = MagicMock(return_value=True)
 
         resp = self.client.get("/v1/tool/tool_a")
         assert resp.status_code == 200
         assert resp.json()["tool_name"] == "tool_a"
 
-    @patch("litellm.proxy.management_endpoints.tool_management_endpoints.db_get_tool")
     @patch(
-        "litellm.proxy.management_endpoints.tool_management_endpoints.prisma_client",
-        new_callable=MagicMock,
+        "litellm.proxy.db.tool_registry_writer.get_tool",
+        new_callable=AsyncMock,
     )
-    def test_get_tool_not_found_returns_404(self, mock_prisma, mock_db_get):
+    @patch("litellm.proxy.proxy_server.prisma_client", _MOCK_PRISMA)
+    def test_get_tool_not_found_returns_404(self, mock_db_get):
         mock_db_get.return_value = None
-        mock_prisma.__bool__ = MagicMock(return_value=True)
 
         resp = self.client.get("/v1/tool/nonexistent", follow_redirects=True)
         assert resp.status_code == 404
 
     @patch(
-        "litellm.proxy.management_endpoints.tool_management_endpoints.db_update_tool_policy"
+        "litellm.proxy.db.tool_registry_writer.update_tool_policy",
+        new_callable=AsyncMock,
     )
-    @patch(
-        "litellm.proxy.management_endpoints.tool_management_endpoints.prisma_client",
-        new_callable=MagicMock,
-    )
-    def test_update_tool_policy_blocked(self, mock_prisma, mock_db_update):
+    @patch("litellm.proxy.proxy_server.prisma_client", _MOCK_PRISMA)
+    def test_update_tool_policy_blocked(self, mock_db_update):
         mock_db_update.return_value = _make_tool_row(call_policy="blocked")
-        mock_prisma.__bool__ = MagicMock(return_value=True)
 
         resp = self.client.post(
             "/v1/tool/policy",
@@ -135,10 +136,7 @@ class TestToolManagementEndpoints:
         assert body["call_policy"] == "blocked"
         assert body["updated"] is True
 
-    @patch(
-        "litellm.proxy.management_endpoints.tool_management_endpoints.prisma_client",
-        None,
-    )
+    @patch("litellm.proxy.proxy_server.prisma_client", None)
     def test_list_tools_no_db_returns_500(self):
         resp = self.client.get("/v1/tool/list")
         assert resp.status_code == 500
