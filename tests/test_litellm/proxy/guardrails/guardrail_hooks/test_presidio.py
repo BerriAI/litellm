@@ -1360,3 +1360,87 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     assert not bg_session.closed, "Background session should remain open for reuse"
 
     print("✓ Session iterator thread safety test passed")
+
+
+from litellm.types.utils import ModelResponseStream
+
+
+@pytest.mark.asyncio
+async def test_streaming_with_bytes_chunks_does_not_crash(mock_user_api_key):
+    """
+    Regression test: async_post_call_streaming_iterator_hook should
+    gracefully handle raw bytes in the stream instead of crashing with
+    'bytes' object has no attribute 'id'.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "redacted"},
+    )
+
+    async def mock_stream():
+        yield b'data: {"id":"chatcmpl-1"}\n\n'  # raw bytes
+        yield ModelResponseStream(
+            id="chatcmpl-1",
+            choices=[],
+            created=1,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+        )  # proper chunk
+
+    chunks = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        chunks.append(chunk)
+
+    # Should not crash, should produce at least one valid chunk
+    assert len(chunks) >= 1
+
+
+def test_entity_deny_list_filters_detections():
+    """
+    Verify presidio_entities_deny_list removes matching entity types.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_entities_deny_list=["US_DRIVER_LICENSE"],
+    )
+
+    results = [
+        {"entity_type": "US_DRIVER_LICENSE", "start": 0, "end": 2, "score": 0.6},
+        {"entity_type": "CREDIT_CARD", "start": 10, "end": 26, "score": 0.95},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(results)
+
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == "CREDIT_CARD"
+
+
+def test_deny_list_and_score_threshold_combined():
+    """
+    Verify deny list + score threshold work together correctly.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        presidio_entities_deny_list=["US_DRIVER_LICENSE"],
+        presidio_score_thresholds={"ALL": 0.8},
+    )
+
+    results = [
+        {"entity_type": "US_DRIVER_LICENSE", "start": 0, "end": 2, "score": 0.95},
+        {"entity_type": "CREDIT_CARD", "start": 10, "end": 26, "score": 0.6},
+        {"entity_type": "EMAIL_ADDRESS", "start": 30, "end": 50, "score": 0.9},
+    ]
+
+    filtered = guardrail.filter_analyze_results_by_score(results)
+
+    # US_DRIVER_LICENSE excluded by deny list (even though score > 0.8)
+    # CREDIT_CARD excluded by score threshold (0.6 < 0.8)
+    # EMAIL_ADDRESS passes both filters
+    assert len(filtered) == 1
+    assert filtered[0]["entity_type"] == "EMAIL_ADDRESS"
