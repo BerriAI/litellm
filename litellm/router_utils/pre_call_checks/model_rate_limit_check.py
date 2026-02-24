@@ -129,8 +129,27 @@ class ModelRateLimitingCheck(CustomLogger):
                         ),
                     )
 
-            # Check RPM limit (atomic increment-first to avoid race conditions)
+            # Check RPM limit
             if rpm_limit is not None:
+                # First check local cache
+                current_rpm = self.dual_cache.get_cache(key=rpm_key, local_only=True)
+                if current_rpm >= rpm_limit:
+                    raise litellm.RateLimitError(
+                        message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
+                        llm_provider="",
+                        model=model_name,
+                        response=httpx.Response(
+                            status_code=429,
+                            content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={rpm_limit}. current usage={current_rpm}. id={model_id}, model_group={model_group}",
+                            headers={"retry-after": str(60)},
+                            request=httpx.Request(
+                                method="model_rate_limit_check",
+                                url="https://github.com/BerriAI/litellm",
+                            ),
+                        ),
+                    )
+
+                # Check redis cache and increment
                 current_rpm = self.dual_cache.increment_cache(
                     key=rpm_key, value=1, ttl=RoutingArgs.ttl
                 )
@@ -207,8 +226,30 @@ class ModelRateLimitingCheck(CustomLogger):
                         num_retries=0,  # Don't retry - return 429 immediately
                     )
 
-            # Check RPM limit (atomic increment-first to avoid race conditions)
+            # Check RPM limit
             if rpm_limit is not None:
+                # First check local cache
+                current_rpm = await self.dual_cache.async_get_cache(
+                    key=rpm_key, local_only=True
+                )
+                if current_rpm is not None and current_rpm >= rpm_limit:
+                    raise litellm.RateLimitError(
+                        message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
+                        llm_provider="",
+                        model=model_name,
+                        response=httpx.Response(
+                            status_code=429,
+                            content=f"{RouterErrors.user_defined_ratelimit_error.value} rpm limit={rpm_limit}. current usage={current_rpm}. id={model_id}, model_group={model_group}",
+                            headers={"retry-after": str(60)},
+                            request=httpx.Request(
+                                method="model_rate_limit_check",
+                                url="https://github.com/BerriAI/litellm",
+                            ),
+                        ),
+                        num_retries=0,  # Don't retry - return 429 immediately
+                    )
+
+                # Check redis cache and increment
                 current_rpm = await self.dual_cache.async_increment_cache(
                     key=rpm_key,
                     value=1,
