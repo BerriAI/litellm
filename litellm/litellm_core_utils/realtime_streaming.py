@@ -203,8 +203,9 @@ class RealTimeStreaming:
                 return True
         return False
 
-    async def _handle_with_provider_config(self, raw_response):
-        returned_object = self.provider_config.transform_realtime_response(
+    async def _handle_provider_config_message(self, raw_response) -> None:
+        """Process a backend message when a provider_config is set (transformed path)."""
+        returned_object = self.provider_config.transform_realtime_response(  # type: ignore[union-attr]
             raw_response,
             self.model,
             self.logging_obj,
@@ -220,19 +221,13 @@ class RealTimeStreaming:
         )
 
         transformed_response = returned_object["response"]
-        self.current_output_item_id = returned_object[
-            "current_output_item_id"
-        ]
+        self.current_output_item_id = returned_object["current_output_item_id"]
         self.current_response_id = returned_object["current_response_id"]
         self.current_delta_chunks = returned_object["current_delta_chunks"]
-        self.current_conversation_id = returned_object[
-            "current_conversation_id"
-        ]
+        self.current_conversation_id = returned_object["current_conversation_id"]
         self.current_item_chunks = returned_object["current_item_chunks"]
         self.current_delta_type = returned_object["current_delta_type"]
-        self.session_configuration_request = returned_object[
-            "session_configuration_request"
-        ]
+        self.session_configuration_request = returned_object["session_configuration_request"]
         events = (
             transformed_response
             if isinstance(transformed_response, list)
@@ -278,8 +273,11 @@ class RealTimeStreaming:
             self.store_message(event_str)
             await self.websocket.send_text(event_str)
 
-    async def _handle_without_provider_config(self, raw_response):
-        ## GUARDRAIL: intercept transcription events before triggering LLM
+    async def _handle_raw_backend_message(self, raw_response) -> bool:
+        """Process a backend message without provider_config (raw path).
+
+        Returns True if the caller should skip the default store+forward (i.e. continue the loop).
+        """
         try:
             event_obj = json.loads(raw_response)
 
@@ -323,12 +321,10 @@ class RealTimeStreaming:
                     await self.backend_ws.send(
                         json.dumps({"type": "response.create"})
                     )
-                return
+                return True
         except (json.JSONDecodeError, AttributeError):
             pass
-        ## LOGGING
-        self.store_message(raw_response)
-        await self.websocket.send_text(raw_response)
+        return False
 
     async def backend_to_client_send_messages(self):
         import websockets
@@ -343,9 +339,14 @@ class RealTimeStreaming:
                     raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
 
                 if self.provider_config:
-                    await self._handle_with_provider_config(raw_response)
+                    await self._handle_provider_config_message(raw_response)
                 else:
-                    await self._handle_without_provider_config(raw_response)
+                    handled = await self._handle_raw_backend_message(raw_response)
+                    if handled:
+                        continue
+                    ## LOGGING
+                    self.store_message(raw_response)
+                    await self.websocket.send_text(raw_response)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.exception(
