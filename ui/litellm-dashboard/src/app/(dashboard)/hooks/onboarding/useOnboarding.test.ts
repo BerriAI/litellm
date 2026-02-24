@@ -21,7 +21,12 @@ describe("useOnboardingCredentials", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
     vi.clearAllMocks();
     mockUseUIConfig.mockReturnValue({ isLoading: false });
   });
@@ -77,7 +82,12 @@ describe("useClaimOnboardingToken", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
     vi.clearAllMocks();
     mockUseUIConfig.mockReturnValue({ isLoading: false });
   });
