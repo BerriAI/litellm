@@ -64,3 +64,21 @@ def test_map_openai_params_stop_filtering():
         drop_params=False
     )
     assert optional_params["stopSequences"] == ["valid"]
+
+        # Test valid string stop - this would fail if stop block is outside the for loop
+    config.map_openai_params(
+        non_default_params={"stop": "END"},
+        optional_params=optional_params,
+        model="bedrock/anthropic.claude-3",
+        drop_params=False
+    )
+    assert optional_params["stopSequences"] == ["END"]
+
+    # Test valid list of stop strings
+    config.map_openai_params(
+        non_default_params={"stop": ["STOP1", "STOP2"]},
+        optional_params=optional_params,
+        model="bedrock/anthropic.claude-3",
+        drop_params=False
+    )
+    assert optional_params["stopSequences"] == ["STOP1", "STOP2"]
