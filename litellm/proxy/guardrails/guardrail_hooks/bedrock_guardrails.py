@@ -243,33 +243,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         messages: Optional[List[AllMessageValues]],
     ) -> GuardrailMessageFilterResult:
         """Return payload + merge metadata for the latest user message."""
-        # NOTE: This logic probably belongs in CustomGuardrail once other guardrails adopt the feature.
-
         if messages is None:
             return GuardrailMessageFilterResult(None, None, None)
 
         if self.experimental_use_latest_role_message_only is not True:
             return GuardrailMessageFilterResult(messages, None, None)
 
-        latest_index = self._find_latest_message_index(messages, target_role="user")
-        if latest_index is None:
-            return GuardrailMessageFilterResult(None, None, None)
-
-        original_messages = list(messages)
-        payload_messages = [messages[latest_index]]
+        (
+            filtered_messages,
+            original_messages,
+            target_indices,
+        ) = self.filter_messages_for_latest_role(messages, target_role="user")
         return GuardrailMessageFilterResult(
-            payload_messages=payload_messages,
+            payload_messages=filtered_messages,
             original_messages=original_messages,
-            target_indices=[latest_index],
+            target_indices=target_indices,
         )
-
-    def _find_latest_message_index(
-        self, messages: List[AllMessageValues], target_role: str
-    ) -> Optional[int]:
-        for index in range(len(messages) - 1, -1, -1):
-            if messages[index].get("role", None) == target_role:
-                return index
-        return None
 
     def _merge_filtered_messages(
         self,
@@ -277,25 +266,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         updated_target_messages: List[AllMessageValues],
         target_indices: Optional[List[int]],
     ) -> List[AllMessageValues]:
-        if not target_indices:
+        if not target_indices or original_messages is None:
             return updated_target_messages
 
-        if not original_messages:
-            original_messages = []
-
-        merged_messages = list(original_messages)
-        if not merged_messages:
-            merged_messages = list(updated_target_messages)
-        for replacement_index, updated_message in zip(
-            target_indices, updated_target_messages
-        ):
-            if replacement_index < len(merged_messages):
-                merged_messages[replacement_index] = updated_message
-
-        return merged_messages
-
-    # NOTE: Consider moving these helpers to CustomGuardrail when the filtering
-    # logic becomes shared across providers.
+        return self.merge_filtered_messages(
+            original_messages=original_messages,
+            updated_target_messages=updated_target_messages,
+            target_indices=target_indices,
+        )
 
     #### CALL HOOKS - proxy only ####
     def _load_credentials(
@@ -470,9 +448,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             response = getattr(e, "response", None)
             if isinstance(response, httpx.Response):
                 try:
-                    status_code, detail_message = (
-                        self._parse_bedrock_guardrail_error_response(response)
-                    )
+                    (
+                        status_code,
+                        detail_message,
+                    ) = self._parse_bedrock_guardrail_error_response(response)
                     self.add_standard_logging_guardrail_information_to_request_data(
                         guardrail_provider=self.guardrail_provider,
                         guardrail_json_response={"error": detail_message},
@@ -795,9 +774,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -867,9 +846,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data

@@ -870,27 +870,56 @@ class ProxyLogging:
 
         target = unified_guardrail if use_unified else callback
 
-        if hook_type == "pre_call":
-            return await target.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                cache=self.call_details["user_api_key_cache"],
-                data=data,
-                call_type=call_type,
+        # Filter messages if the flag is enabled
+        original_messages = None
+        target_indices = None
+        if (
+            hook_type == "pre_call"
+            and hasattr(callback, "experimental_use_latest_role_message_only")
+            and callback.experimental_use_latest_role_message_only
+            and isinstance(data.get("messages"), list)
+        ):
+            (
+                filtered,
+                original_messages,
+                target_indices,
+            ) = callback.filter_messages_for_latest_role(data["messages"])
+            verbose_proxy_logger.debug(
+                "Filtered messages for latest role: %s", filtered
             )
-        elif hook_type == "during_call":
-            return await target.async_moderation_hook(
-                data=data,
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                call_type=call_type,
-            )
-        elif hook_type == "post_call":
-            return await target.async_post_call_success_hook(
-                user_api_key_dict=user_api_key_dict,  # type: ignore
-                data=data,
-                response=response,  # type: ignore
-            )
-        else:
-            raise ValueError(f"Unknown hook_type: {hook_type}")
+            if filtered is not None:
+                data["messages"] = filtered
+
+        try:
+            if hook_type == "pre_call":
+                result = await target.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,
+                    call_type=call_type,
+                )
+            elif hook_type == "during_call":
+                result = await target.async_moderation_hook(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    call_type=call_type,
+                )
+            elif hook_type == "post_call":
+                result = await target.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict,  # type: ignore
+                    data=data,
+                    response=response,  # type: ignore
+                )
+            else:
+                raise ValueError(f"Unknown hook_type: {hook_type}")
+        finally:
+            # Restore original messages with modifications merged back
+            if original_messages is not None and target_indices is not None:
+                data["messages"] = callback.merge_filtered_messages(
+                    original_messages, data["messages"], target_indices
+                )
+
+        return result
 
     async def _execute_guardrail_with_load_balancing(
         self,
@@ -3551,6 +3580,7 @@ class PrismaClient:
         Run a reconnect cycle with direct db operations and a single overall timeout
         budget to avoid long retries on hot paths (e.g. auth).
         """
+
         async def _do_direct_reconnect() -> None:
             try:
                 await self.db.disconnect()
