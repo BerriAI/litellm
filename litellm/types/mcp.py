@@ -35,6 +35,7 @@ class MCPAuth(str, enum.Enum):
     basic = "basic"
     authorization = "authorization"
     oauth2 = "oauth2"
+    oauth2_token_exchange = "oauth2_token_exchange"
 
 
 # MCP Literals
@@ -50,6 +51,7 @@ MCPAuthType = Optional[
         MCPAuth.basic,
         MCPAuth.authorization,
         MCPAuth.oauth2,
+        MCPAuth.oauth2_token_exchange,
     ]
 ]
 
@@ -89,6 +91,22 @@ class MCPCredentials(TypedDict, total=False):
     scopes: Optional[List[str]]
     """
     OAuth 2.0 scopes to request when exchanging the client credentials
+    """
+
+    audience: Optional[str]
+    """
+    Target audience for OAuth 2.0 Token Exchange (RFC 8693)
+    """
+
+    token_exchange_endpoint: Optional[str]
+    """
+    IDP token endpoint for OAuth 2.0 Token Exchange (RFC 8693)
+    """
+
+    subject_token_type: Optional[str]
+    """
+    Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
+    Default: urn:ietf:params:oauth:token-type:access_token
     """
 
 

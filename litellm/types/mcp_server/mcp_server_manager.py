@@ -46,6 +46,10 @@ class MCPServer(BaseModel):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    # Token Exchange (OBO) fields — RFC 8693
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -65,3 +69,12 @@ class MCPServer(BaseModel):
     def needs_user_oauth_token(self) -> bool:
         """True if this is an OAuth2 server that relies on per-user tokens (no client_credentials)."""
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
+
+    @property
+    def has_token_exchange_config(self) -> bool:
+        """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
+        return (
+            self.auth_type == MCPAuth.oauth2_token_exchange
+            and bool(self.client_id and self.client_secret)
+            and bool(self.token_exchange_endpoint or self.token_url)
+        )

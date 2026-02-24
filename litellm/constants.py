@@ -129,6 +129,11 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
+# MCP OAuth2 Token Exchange (OBO) Defaults
+MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", "500")
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
