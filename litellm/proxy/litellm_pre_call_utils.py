@@ -251,10 +251,8 @@ def clean_headers(
     )    
     for header, value in headers.items():
         header_lower = header.lower()
-        verbose_proxy_logger.debug(f"header: {header}")
         
         if header_lower == "authorization" and is_anthropic_oauth_key(value):
-            verbose_proxy_logger.debug(f"Adding Anthropic OAuth header: {header}")
             clean_headers[header] = value
         elif forward_llm_provider_auth_headers and header_lower in _SPECIAL_HEADERS_CACHE:
             if litellm_key_lower and header_lower == litellm_key_lower:
@@ -266,7 +264,6 @@ def clean_headers(
         elif header_lower not in _SPECIAL_HEADERS_CACHE and (
             litellm_key_lower is None or header_lower != litellm_key_lower
         ):
-            verbose_proxy_logger.debug(f"Adding header and value: {header} {value}")
             clean_headers[header] = value
     return clean_headers
 
