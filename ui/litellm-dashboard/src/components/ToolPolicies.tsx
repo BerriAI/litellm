@@ -2,7 +2,6 @@
 
 import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { Select, Switch, Tooltip } from "antd";
-import { Select, Tooltip } from "antd";
 import {
   Table,
   TableHead,
