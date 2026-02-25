@@ -66,6 +66,300 @@ def test_realtime_streaming_store_message():
     assert len(streaming.messages) == 2  # Should not store the new message
 
 
+def test_collect_user_input_from_text_conversation_item():
+    """
+    Test that conversation.item.create with input_text content is collected as user input.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    msg = json.dumps({
+        "type": "conversation.item.create",
+        "item": {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Hello, how are you?"}
+            ]
+        }
+    })
+    streaming.store_input(msg)
+
+    assert len(streaming.input_messages) == 1
+    assert streaming.input_messages[0]["role"] == "user"
+    assert streaming.input_messages[0]["content"] == "Hello, how are you?"
+
+
+def test_collect_user_input_from_session_update_instructions():
+    """
+    Test that session.update with instructions is collected as system input.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    msg = json.dumps({
+        "type": "session.update",
+        "session": {
+            "instructions": "You are a helpful assistant."
+        }
+    })
+    streaming.store_input(msg)
+
+    assert len(streaming.input_messages) == 1
+    assert streaming.input_messages[0]["role"] == "system"
+    assert streaming.input_messages[0]["content"] == "You are a helpful assistant."
+
+
+def test_collect_user_input_from_transcription_event():
+    """
+    Test that conversation.item.input_audio_transcription.completed events
+    are collected as user input from backend events.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    event_obj = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "transcript": "What is the weather today?",
+        "item_id": "item_123",
+    }
+    streaming._collect_user_input_from_backend_event(event_obj)
+
+    assert len(streaming.input_messages) == 1
+    assert streaming.input_messages[0]["role"] == "user"
+    assert streaming.input_messages[0]["content"] == "What is the weather today?"
+
+
+def test_collect_user_input_ignores_irrelevant_events():
+    """
+    Test that irrelevant client events don't get collected as user input.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    # input_audio_buffer.append should not be collected
+    msg = json.dumps({"type": "input_audio_buffer.append", "audio": "base64data"})
+    streaming.store_input(msg)
+    assert len(streaming.input_messages) == 0
+
+    # response.create should not be collected
+    msg = json.dumps({"type": "response.create"})
+    streaming.store_input(msg)
+    assert len(streaming.input_messages) == 0
+
+
+def test_collect_user_input_empty_transcript_not_collected():
+    """
+    Test that transcription events with empty transcripts are not collected.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    event_obj = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "transcript": "",
+        "item_id": "item_123",
+    }
+    streaming._collect_user_input_from_backend_event(event_obj)
+    assert len(streaming.input_messages) == 0
+
+
+@pytest.mark.asyncio
+async def test_log_messages_sets_input_messages_on_logging_obj():
+    """
+    Test that log_messages() sets input_messages on the logging object's model_call_details.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"messages": "default-message-value"}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    streaming.input_messages = [
+        {"role": "user", "content": "Hello from voice"},
+        {"role": "user", "content": "Tell me a joke"},
+    ]
+
+    await streaming.log_messages()
+
+    assert logging_obj.model_call_details["messages"] == [
+        {"role": "user", "content": "Hello from voice"},
+        {"role": "user", "content": "Tell me a joke"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_transcription_captured_in_backend_to_client():
+    """
+    Test that conversation.item.input_audio_transcription.completed events
+    from the backend are captured as user input during the WebSocket session.
+    """
+    import litellm
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    transcript_event = json.dumps({
+        "type": "conversation.item.input_audio_transcription.completed",
+        "transcript": "What are the opening hours?",
+        "item_id": "item_789",
+    }).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            transcript_event,
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"messages": "default-message-value"}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    assert len(streaming.input_messages) == 1
+    assert streaming.input_messages[0]["role"] == "user"
+    assert streaming.input_messages[0]["content"] == "What are the opening hours?"
+    assert logging_obj.model_call_details["messages"] == streaming.input_messages
+
+
+def test_collect_session_tools_from_session_update():
+    """
+    Test that tools from session.update events are collected.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    msg = json.dumps({
+        "type": "session.update",
+        "session": {
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get the current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                }
+            ],
+            "instructions": "You are a weather assistant."
+        }
+    })
+    streaming.store_input(msg)
+
+    assert len(streaming.session_tools) == 1
+    assert streaming.session_tools[0]["name"] == "get_weather"
+    assert len(streaming.input_messages) == 1
+    assert streaming.input_messages[0]["role"] == "system"
+
+
+def test_collect_tool_calls_from_response_done():
+    """
+    Test that function_call items are extracted from response.done events.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+    streaming.logged_real_time_event_types = "*"
+
+    response_done = json.dumps({
+        "type": "response.done",
+        "event_id": "evt_123",
+        "response": {
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_abc123",
+                    "name": "get_weather",
+                    "arguments": '{"location": "Paris"}',
+                }
+            ]
+        }
+    })
+    streaming.store_message(response_done)
+
+    assert len(streaming.tool_calls) == 1
+    assert streaming.tool_calls[0]["id"] == "call_abc123"
+    assert streaming.tool_calls[0]["type"] == "function"
+    assert streaming.tool_calls[0]["function"]["name"] == "get_weather"
+    assert streaming.tool_calls[0]["function"]["arguments"] == '{"location": "Paris"}'
+
+
+def test_tool_calls_not_collected_from_non_function_call_output():
+    """
+    Test that non-function_call output items in response.done are not collected.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+    streaming.logged_real_time_event_types = "*"
+
+    response_done = json.dumps({
+        "type": "response.done",
+        "event_id": "evt_456",
+        "response": {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello!"}]
+                }
+            ]
+        }
+    })
+    streaming.store_message(response_done)
+
+    assert len(streaming.tool_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_log_messages_includes_tools_in_model_call_details():
+    """
+    Test that log_messages() sets session_tools and tool_calls on the logging object.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"messages": "default-message-value"}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    streaming.session_tools = [
+        {"type": "function", "name": "get_weather", "description": "Get weather"}
+    ]
+    streaming.tool_calls = [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'}}
+    ]
+
+    await streaming.log_messages()
+
+    assert logging_obj.model_call_details["realtime_tools"] == streaming.session_tools
+    assert logging_obj.model_call_details["realtime_tool_calls"] == streaming.tool_calls
+
+
 @pytest.mark.asyncio
 async def test_realtime_guardrail_blocks_prompt_injection():
     """
