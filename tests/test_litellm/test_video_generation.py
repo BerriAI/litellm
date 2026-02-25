@@ -243,6 +243,77 @@ class TestVideoGeneration:
                 custom_llm_provider="openai"
             )
 
+    def test_video_generation_cost_with_custom_model_info(self):
+        """Test that custom model_info pricing is applied for video generation.
+
+        When a deployment has custom pricing via model_info, it should be used
+        instead of looking up the global litellm.model_cost map.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        model_info = {
+            "output_cost_per_video_per_second": 0.05,
+        }
+        cost = default_video_cost_calculator(
+            model="my-custom-video-model",
+            duration_seconds=10.0,
+            model_info=model_info,
+        )
+        assert cost == 0.5
+
+    def test_video_generation_cost_custom_model_info_fallback_to_per_second(self):
+        """Test that output_cost_per_second is used as fallback when
+        output_cost_per_video_per_second is not set in custom model_info.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        model_info = {
+            "output_cost_per_second": 0.10,
+        }
+        cost = default_video_cost_calculator(
+            model="my-custom-video-model",
+            duration_seconds=5.0,
+            model_info=model_info,
+        )
+        assert cost == 0.5
+
+    def test_video_generation_cost_custom_pricing_through_completion_cost(self):
+        """Test that custom video pricing flows through completion_cost via litellm_logging_obj.
+
+        This tests the full cost calculation path: completion_cost extracts model_info
+        from litellm_logging_obj.litellm_params.metadata.model_info and passes it to
+        the video cost calculator.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        from litellm.cost_calculator import completion_cost
+
+        # Create mock response with usage containing duration_seconds
+        mock_response = MagicMock()
+        mock_response.usage = MagicMock()
+        mock_response.usage.duration_seconds = 10.0
+        type(mock_response)._hidden_params = {}
+
+        # Create mock litellm_logging_obj with custom pricing
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_video_per_second": 0.05,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="openai/hunyuanvideo",
+            call_type="create_video",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert cost == 0.5
+
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""
         config = OpenAIVideoConfig()

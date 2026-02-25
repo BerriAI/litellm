@@ -98,6 +98,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     return modelDataResponse.data.map((model: any) => model.model_name);
   }, [modelDataResponse?.data]);
 
+  const allModelIdsOnProxy = useMemo<string[]>(() => {
+    if (!modelDataResponse?.data) return [];
+    return modelDataResponse.data
+      .map((model: any) => model.model_info?.id)
+      .filter((id: string | undefined): id is string => Boolean(id));
+  }, [modelDataResponse?.data]);
+
   const getProviderFromModel = (model: string) => {
     if (modelCostMapData !== null && modelCostMapData !== undefined) {
       if (typeof modelCostMapData == "object" && model in modelCostMapData) {
@@ -397,7 +404,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                   <HealthCheckComponent
                     accessToken={accessToken}
                     modelData={processedModelData}
-                    all_models_on_proxy={allModelsOnProxy}
+                    all_models_on_proxy={allModelIdsOnProxy}
                     getDisplayModelName={getDisplayModelName}
                     setSelectedModelId={setSelectedModelId}
                     teams={teams}

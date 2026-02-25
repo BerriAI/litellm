@@ -20562,6 +20562,39 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "gpt-5.3-codex": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "input_cost_per_token": 1.75e-06,
+        "input_cost_per_token_priority": 3.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1.4e-05,
+        "output_cost_per_token_priority": 2.8e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "gpt-5-mini": {
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -26555,65 +26588,124 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "perplexity/preset/fast-search": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_preset": true,
+        "supports_function_calling": true
+    },
     "perplexity/preset/pro-search": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_preset": true
+        "supports_preset": true,
+        "supports_function_calling": true
     },
-    "perplexity/openai/gpt-4o": {
+    "perplexity/preset/deep-research": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": false
+        "supports_preset": true,
+        "supports_function_calling": true
     },
-    "perplexity/openai/gpt-4o-mini": {
+    "perplexity/preset/advanced-deep-research": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": false
+        "supports_preset": true,
+        "supports_function_calling": true
     },
     "perplexity/openai/gpt-5.2": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_function_calling": true
     },
-    "perplexity/anthropic/claude-3-5-sonnet-20241022": {
+    "perplexity/openai/gpt-5.1": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_function_calling": true
     },
-    "perplexity/anthropic/claude-3-5-haiku-20241022": {
+    "perplexity/openai/gpt-5-mini": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_function_calling": true
     },
-    "perplexity/google/gemini-2.0-flash-exp": {
+    "perplexity/anthropic/claude-opus-4-6": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_function_calling": true
     },
-    "perplexity/google/gemini-2.0-flash-thinking-exp": {
+    "perplexity/anthropic/claude-opus-4-5": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": true
+        "supports_reasoning": false,
+        "supports_function_calling": true
     },
-    "perplexity/xai/grok-2-1212": {
+    "perplexity/anthropic/claude-sonnet-4-5": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_function_calling": true
     },
-    "perplexity/xai/grok-2-vision-1212": {
+    "perplexity/anthropic/claude-haiku-4-5": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
-        "supports_reasoning": false
+        "supports_reasoning": false,
+        "supports_function_calling": true
+    },
+    "perplexity/google/gemini-3-pro-preview": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+    },
+    "perplexity/google/gemini-3-flash-preview": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+    },
+    "perplexity/google/gemini-2.5-pro": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+    },
+    "perplexity/google/gemini-2.5-flash": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+    },
+    "perplexity/xai/grok-4-1-fast-non-reasoning": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
+    },
+    "perplexity/perplexity/sonar": {
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "supports_web_search": true,
+        "supports_reasoning": false,
+        "supports_function_calling": true
     },
     "publicai/aisingapore/Qwen-SEA-LION-v4-32B-IT": {
         "input_cost_per_token": 0.0,

@@ -374,6 +374,7 @@ enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
+prometheus_emit_stream_label: bool = False
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
