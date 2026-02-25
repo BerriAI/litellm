@@ -157,8 +157,8 @@ async def test_async_anthropic_messages_handler_extra_headers():
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_header_priority():
     """
-    Test that async_anthropic_messages_handler respects header priority:
-    forwarded < extra_headers < provider_specific
+    Test that async_anthropic_messages_handler respects header priority for non-beta
+    headers: forwarded < provider_specific < extra_headers (deployment config wins).
     """
     handler = BaseLLMHTTPHandler()
     
@@ -209,9 +209,90 @@ async def test_async_anthropic_messages_handler_header_priority():
         except Exception:
             pass
         
-        # Verify priority: provider_specific should win
-        assert captured_headers["X-Priority"] == "provider"
-        # Verify all unique headers from different sources are present
+        # Deployment config (extra_headers) wins over provider_specific for non-beta headers
+        assert captured_headers["X-Priority"] == "extra"
+        # All unique headers from all sources must still be present
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_anthropic_beta_accumulation():
+    """
+    Test that anthropic-beta header values from all three sources (forwarded_headers,
+    provider_specific_headers, extra_headers from deployment config) are accumulated
+    rather than last-write-wins, so that the deployment-configured beta flag is never
+    silently dropped by the client's forwarded headers.
+
+    Regression test for: extra_headers={'anthropic-beta': 'context-1m-2025-08-07'}
+    being overwritten by provider_specific_headers carrying the client's
+    anthropic-beta value.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_client = AsyncMock()
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_environment_variables = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    # Simulate the real-world scenario:
+    #   - client forwards anthropic-beta with interleaved-thinking + context-management
+    #   - deployment config adds context-1m-2025-08-07 via extra_headers
+    #   - provider_specific_header also carries the client's forwarded anthropic-beta
+    kwargs = {
+        "headers": {
+            "anthropic-beta": "interleaved-thinking-2025-05-14,context-management-2025-06-27",
+        },
+        "extra_headers": {
+            "anthropic-beta": "context-1m-2025-08-07",
+        },
+    }
+
+    with patch(
+        "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
+    ) as mock_provider_headers:
+        # provider_specific_headers mirrors the client-forwarded anthropic-beta
+        mock_provider_headers.return_value = {
+            "anthropic-beta": "interleaved-thinking-2025-05-14,context-management-2025-06-27",
+        }
+
+        captured_headers = {}
+
+        def capture_validate(*args, **kwargs):
+            captured_headers.update(kwargs.get("headers", {}))
+            return ({}, "https://api.anthropic.com")
+
+        mock_config.validate_anthropic_messages_environment = capture_validate
+        mock_config.transform_anthropic_messages_request = Mock(
+            return_value={"model": "claude-sonnet-4-5", "messages": []}
+        )
+
+        try:
+            await handler.async_anthropic_messages_handler(
+                model="claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params={},
+                custom_llm_provider="bedrock",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=mock_logging_obj,
+                client=mock_client,
+                kwargs=kwargs,
+            )
+        except Exception:
+            pass
+
+        assert "anthropic-beta" in captured_headers
+        beta_values = set(captured_headers["anthropic-beta"].split(","))
+        # All three values must be present – none should be silently dropped
+        assert "context-1m-2025-08-07" in beta_values, (
+            "Deployment-configured 'context-1m-2025-08-07' was overwritten by client headers"
+        )
+        assert "interleaved-thinking-2025-05-14" in beta_values
+        assert "context-management-2025-06-27" in beta_values
+        # No duplicates
+        raw_values = captured_headers["anthropic-beta"].split(",")
+        assert len(raw_values) == len(beta_values), "Duplicate beta values found"
