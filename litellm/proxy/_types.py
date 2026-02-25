@@ -183,6 +183,7 @@ class LitellmTableNames(str, enum.Enum):
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
     MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
+    TOOL_TABLE_NAME = "LiteLLM_ToolTable"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -4121,6 +4122,15 @@ class SpendUpdateQueueItem(TypedDict, total=False):
     entity_type: Litellm_EntityType
     entity_id: str
     response_cost: Optional[float]
+
+
+class ToolDiscoveryQueueItem(TypedDict, total=False):
+    tool_name: str
+    origin: Optional[str]   # MCP server name or "user_defined"
+    created_by: Optional[str]
+    key_hash: Optional[str]   # hash of virtual key that triggered discovery
+    team_id: Optional[str]    # team that triggered discovery
+    key_alias: Optional[str]  # human-readable key alias
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
