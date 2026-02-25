@@ -7508,14 +7508,19 @@ async def responses_websocket_endpoint(
 
         await llm_call
     except Exception as e:
-        from websockets.exceptions import InvalidStatusCode
+        try:
+            from websockets.exceptions import InvalidStatus
 
-        if isinstance(e, InvalidStatusCode):
-            verbose_proxy_logger.exception("Invalid status code")
-            await websocket.close(code=e.status_code, reason="Invalid status code")
-        else:
-            verbose_proxy_logger.exception("Internal server error")
-            await websocket.close(code=1011, reason="Internal server error")
+            if isinstance(e, InvalidStatus):
+                verbose_proxy_logger.exception("Invalid status code")
+                await websocket.close(
+                    code=e.response.status_code, reason="Invalid status code"
+                )
+                return
+        except ImportError:
+            pass
+        verbose_proxy_logger.exception("Internal server error")
+        await websocket.close(code=1011, reason="Internal server error")
 
 
 ######################################################################

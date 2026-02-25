@@ -107,8 +107,11 @@ class OpenAIResponsesWebSocket:
                 )
                 await streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
-            await websocket.close(code=e.status_code, reason=str(e))
+        except websockets.exceptions.InvalidStatus as e:  # type: ignore
+            status = getattr(
+                getattr(e, "response", None), "status_code", 1011
+            )
+            await websocket.close(code=status, reason=str(e))
         except Exception as e:
             try:
                 await websocket.close(
