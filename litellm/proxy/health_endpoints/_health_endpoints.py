@@ -746,7 +746,7 @@ async def _perform_health_check_and_save(
         cli_model=cli_model,
         model=target_model,
         details=details,
-        max_concurrency=max_concurrency,,
+        max_concurrency=max_concurrency,
         model_id=model_id,
     )
 
