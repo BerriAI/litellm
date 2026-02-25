@@ -1498,8 +1498,8 @@ async def get_users(
     - sso_ids: Optional[str] - Get list of users by sso_ids. Comma separated list of sso_ids.
     - user_email: Optional[str] - Filter users by partial email match
     - team: Optional[str] - Filter users by team id. Will match if user has this team in their teams array.
-    - page: Optional[int] - The page number to return
-    - page_size: Optional[int] - The number of items per page
+    - page: int - The page number to return
+    - page_size: int - The number of items per page
     - sort_by: Optional[str] - Column to sort by (e.g. 'user_id', 'user_email', 'created_at', 'spend')
     - sort_order: Optional[str] - Sort order ('asc' or 'desc')
     """
