@@ -4457,6 +4457,11 @@ class ProxyUpdateSpend:
                     len(logs_to_process) :
                 ]
             popped_batch = True
+        if len(logs_to_process) > 0:
+            verbose_proxy_logger.info(
+                "Spend tracking - processing %d spend logs for DB write",
+                len(logs_to_process),
+            )
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -4503,9 +4508,17 @@ class ProxyUpdateSpend:
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES:
+                except DB_CONNECTION_ERROR_TYPES as e:
                     if i is None:
                         i = 0
+                    verbose_proxy_logger.warning(
+                        "Spend tracking - DB connection error writing spend logs, "
+                        "retry %d/%d. logs_count=%d, error=%s",
+                        i + 1,
+                        n_retry_times,
+                        len(logs_to_process),
+                        str(e),
+                    )
                     if i >= n_retry_times:
                         raise
                     await asyncio.sleep(2**i)
@@ -4620,8 +4633,8 @@ async def update_spend_logs_job(
             logs_to_process=logs_to_process,
         )
     except Exception as guardrail_tracking_err:
-        verbose_proxy_logger.debug(
-            "Guardrail usage tracking failed (non-fatal): %s",
+        verbose_proxy_logger.warning(
+            "Spend tracking - guardrail usage tracking failed (non-fatal): %s",
             guardrail_tracking_err,
         )
 
