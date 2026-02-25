@@ -189,4 +189,24 @@ When opening issues or pull requests, follow these templates:
 - Check similar provider implementations
 - Ensure comprehensive test coverage
 - Update documentation appropriately
-- Consider backward compatibility impact 
+- Consider backward compatibility impact
+
+## Cursor Cloud specific instructions
+
+### Services overview
+
+| Service | How to start | Notes |
+|---|---|---|
+| **PostgreSQL** | `sudo docker compose up db -d` (from repo root) | Required for proxy. Credentials: `llmproxy`/`dbpassword9090`, DB: `litellm`, port 5432 |
+| **LiteLLM Proxy** | `DATABASE_URL="postgresql://llmproxy:dbpassword9090@localhost:5432/litellm" LITELLM_MASTER_KEY="sk-1234" poetry run litellm --config <config.yaml> --port 4000` | Runs DB migrations on first start (~3-5 min). Use `proxy_server_config.yaml` or a custom config |
+| **UI Dashboard** | `cd ui/litellm-dashboard && npm run dev` | Port 3000, requires proxy as backend |
+
+### Key caveats
+
+- **Docker is required** for PostgreSQL. Start the daemon with `sudo dockerd &>/tmp/dockerd.log &` if not running. In nested-container environments, `fuse-overlayfs` storage driver and `iptables-legacy` may be needed.
+- **`psycopg-binary`** must be installed alongside the poetry deps (`poetry run pip install psycopg-binary`) for pytest-postgresql to work.
+- **First proxy startup takes 3-5 minutes** due to Prisma migration resolution (93+ migrations). Subsequent starts are fast.
+- **Black formatting** check (`make format-check`) currently fails on ~867 files in the repo. Use `make lint-ruff` for clean lint checks. `make lint-dev` targets only changed files.
+- **Perplexity/external API calls** may be blocked by Cloudflare from cloud VM IPs. Tests relying on external APIs should be validated in CircleCI.
+- **Unit tests**: `poetry run pytest tests/test_litellm/ -x -vv -n 4` (see `Makefile` for all targets).
+- **UI tests**: `cd ui/litellm-dashboard && npx vitest run` (full suite is slow; target specific files for faster feedback).
