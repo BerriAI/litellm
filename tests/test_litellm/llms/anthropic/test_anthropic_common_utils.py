@@ -363,6 +363,87 @@ class TestProxyOAuthHeaderForwarding:
         assert "authorization" not in cleaned
         assert cleaned["content-type"] == "application/json"
 
+    def test_clean_headers_forwards_anthropic_api_key_when_enabled(self):
+        """clean_headers should preserve x-api-key when forward_llm_provider_auth_headers=True."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"authorization", b"Bearer sk-proxy-auth"),
+                (b"x-api-key", b"sk-ant-api03-test-key"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
+
+        # x-api-key should be preserved when flag is True
+        assert "x-api-key" in cleaned
+        assert cleaned["x-api-key"] == "sk-ant-api03-test-key"
+        # Authorization (proxy auth) should still be stripped
+        assert "authorization" not in cleaned
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_strips_anthropic_api_key_when_disabled(self):
+        """clean_headers should strip x-api-key when forward_llm_provider_auth_headers=False (default)."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"x-api-key", b"sk-ant-api03-test-key"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
+
+        # x-api-key should be stripped by default
+        assert "x-api-key" not in cleaned
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_forwards_google_api_key_when_enabled(self):
+        """clean_headers should preserve x-goog-api-key when forward_llm_provider_auth_headers=True."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"x-goog-api-key", b"google-api-key-123"),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        cleaned = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
+
+        assert "x-goog-api-key" in cleaned
+        assert cleaned["x-goog-api-key"] == "google-api-key-123"
+        assert cleaned["content-type"] == "application/json"
+
+    def test_clean_headers_preserves_oauth_regardless_of_forward_flag(self):
+        """clean_headers should always preserve OAuth tokens regardless of forward_llm_provider_auth_headers."""
+        from starlette.datastructures import Headers
+
+        from litellm.proxy.litellm_pre_call_utils import clean_headers
+
+        raw_headers = Headers(
+            raw=[
+                (b"authorization", f"Bearer {FAKE_OAUTH_TOKEN}".encode()),
+                (b"content-type", b"application/json"),
+            ]
+        )
+        
+        # Should preserve OAuth even with flag=False
+        cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
+        assert "authorization" in cleaned_without_flag
+        assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+        
+        # Should also preserve OAuth with flag=True
+        cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
+        assert "authorization" in cleaned_with_flag
+        assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+
     def test_add_provider_specific_headers_forwards_oauth(self):
         """add_provider_specific_headers_to_request should forward OAuth Authorization
         as a ProviderSpecificHeader scoped to Anthropic-compatible providers."""

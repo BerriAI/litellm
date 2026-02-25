@@ -274,6 +274,7 @@ ignored_keys = [
     "endTime",
     "completionStartTime",
     "endTime",
+    "request_duration_ms",
     "organization_id",
     "metadata.model_map_information",
     "metadata.usage_object",
@@ -602,6 +603,82 @@ async def test_ui_view_spend_logs_sort_validation_errors(
         )
 
         assert response.status_code == 400
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatch):
+    """Test that request_duration_ms is accepted as a valid sort_by field."""
+    base_logs = [
+        {
+            "request_id": "req_fast",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "request_duration_ms": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "endTime": "2025-01-01T00:00:00.100000+00:00",
+            "model": "gpt-4",
+        },
+        {
+            "request_id": "req_slow",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.05,
+            "total_tokens": 50,
+            "request_duration_ms": 5000,
+            "startTime": "2025-01-01T00:00:01+00:00",
+            "endTime": "2025-01-01T00:00:06+00:00",
+            "model": "gpt-4",
+        },
+    ]
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        reverse = "DESC" in sql_query
+        sorted_logs = sorted(
+            base_logs, key=lambda x: x.get("request_duration_ms", 0), reverse=reverse
+        )
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return sorted_logs[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "request_duration_ms",
+                "sort_order": "asc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        actual_ids = [log["request_id"] for log in data["data"]]
+        assert actual_ids == ["req_fast", "req_slow"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

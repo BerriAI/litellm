@@ -412,6 +412,26 @@ class MCPRequestHandler:
                     )
                     return []
 
+            #########################################################
+            # Check agent permissions if agent_id is set on the key
+            #########################################################
+            if user_api_key_auth and user_api_key_auth.agent_id:
+                allowed_mcp_servers_for_agent = (
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_agent(
+                        user_api_key_auth
+                    )
+                )
+                if len(allowed_mcp_servers_for_agent) > 0:
+                    # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
+                    allowed_mcp_servers = [
+                        s
+                        for s in allowed_mcp_servers
+                        if s in allowed_mcp_servers_for_agent
+                    ]
+                    verbose_logger.debug(
+                        f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                    )
+
             return list(set(allowed_mcp_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}")
@@ -513,13 +533,33 @@ class MCPRequestHandler:
             if team_tools:
                 if key_tools:
                     # Both have restrictions → intersection
-                    return list(set(team_tools) & set(key_tools))
+                    allowed_tools = list(set(team_tools) & set(key_tools))
                 else:
                     # Only team has restrictions → inherit from team
-                    return team_tools
+                    allowed_tools = team_tools
             else:
                 # No team restrictions → use key restrictions
-                return key_tools
+                allowed_tools = key_tools
+
+            # Intersect with agent's tool permissions if agent_id is set
+            if user_api_key_auth.agent_id:
+                # Pre-fetch agent object_permission once to avoid duplicate DB query
+                agent_obj_perm = await MCPRequestHandler._get_agent_object_permission(
+                    user_api_key_auth
+                )
+                agent_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                    server_id=server_id,
+                    user_api_key_auth=user_api_key_auth,
+                    agent_object_permission=agent_obj_perm,
+                )
+                if agent_tools is not None:
+                    if allowed_tools is not None:
+                        allowed_tools = list(
+                            set(allowed_tools) & set(agent_tools)
+                        )
+                    else:
+                        allowed_tools = agent_tools
+            return allowed_tools
 
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed tools for server: {str(e)}")
@@ -714,6 +754,131 @@ class MCPRequestHandler:
                 f"Failed to get allowed MCP servers for end_user: {str(e)}"
             )
             return []
+
+    @staticmethod
+    async def _get_agent_object_permission(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ):
+        """
+        Fetch the agent's object_permission from the DB (single query).
+
+        Returns the object_permission object or None.
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not user_api_key_auth or not user_api_key_auth.agent_id:
+            return None
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return None
+
+        try:
+            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": user_api_key_auth.agent_id},
+                include={"object_permission": True},
+            )
+            if agent_row is None or agent_row.object_permission is None:
+                return None
+
+            return agent_row.object_permission
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get agent object permission: {str(e)}"
+            )
+            return None
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_agent(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        agent_object_permission=None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an agent (from the agent's object_permission).
+
+        Returns the MCP servers from the agent's object_permission.
+        If agent has no object_permission, returns [] (no extra restriction).
+
+        Args:
+            user_api_key_auth: User auth with agent_id
+            agent_object_permission: Pre-fetched object_permission to avoid duplicate DB query.
+                If None, will be fetched from DB.
+        """
+        if not user_api_key_auth or not user_api_key_auth.agent_id:
+            return []
+
+        try:
+            obj_perm = agent_object_permission
+            if obj_perm is None:
+                obj_perm = await MCPRequestHandler._get_agent_object_permission(
+                    user_api_key_auth
+                )
+            if obj_perm is None:
+                return []
+
+            direct_mcp_servers = getattr(obj_perm, "mcp_servers", None) or []
+            if isinstance(direct_mcp_servers, str):
+                direct_mcp_servers = []
+            mcp_access_groups = getattr(obj_perm, "mcp_access_groups", None) or []
+            if isinstance(mcp_access_groups, str):
+                mcp_access_groups = []
+
+            access_group_servers = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    mcp_access_groups
+                )
+            )
+            all_servers = list(direct_mcp_servers) + access_group_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed MCP servers for agent: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_agent_tool_permissions_for_server(
+        server_id: str,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        agent_object_permission=None,
+    ) -> Optional[List[str]]:
+        """
+        Get allowed tool names for a server from the agent's object_permission.
+        Returns None if agent has no tool restrictions for this server.
+
+        Args:
+            server_id: Server ID to check permissions for
+            user_api_key_auth: User auth with agent_id
+            agent_object_permission: Pre-fetched object_permission to avoid duplicate DB query.
+                If None, will be fetched from DB.
+        """
+        if not user_api_key_auth or not user_api_key_auth.agent_id:
+            return None
+
+        try:
+            obj_perm = agent_object_permission
+            if obj_perm is None:
+                obj_perm = await MCPRequestHandler._get_agent_object_permission(
+                    user_api_key_auth
+                )
+            if obj_perm is None:
+                return None
+
+            mcp_tool_permissions = getattr(
+                obj_perm, "mcp_tool_permissions", None
+            )
+            if not mcp_tool_permissions:
+                return None
+            if isinstance(mcp_tool_permissions, dict):
+                tools = mcp_tool_permissions.get(server_id)
+            else:
+                tools = None
+            return list(tools) if tools else None
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get agent tool permissions for server: {str(e)}"
+            )
+            return None
 
     @staticmethod
     def _get_config_server_ids_for_access_groups(

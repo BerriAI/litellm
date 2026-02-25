@@ -930,6 +930,35 @@ export const keyCreateCall = async (
   }
 };
 
+export const keyCreateForAgentCall = async (
+  accessToken: string,
+  agentId: string,
+  keyAlias: string,
+  models: string[],
+) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      agent_id: agentId,
+      key_alias: keyAlias,
+      models: models.length > 0 ? models : [],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Failed to create key for agent");
+  }
+
+  return response.json();
+};
+
 export const userCreateCall = async (
   accessToken: string,
   userID: string | null,
@@ -5054,14 +5083,14 @@ export const healthCheckCall = async (accessToken: string) => {
   }
 };
 
-export const individualModelHealthCheckCall = async (accessToken: string, modelName: string) => {
+export const individualModelHealthCheckCall = async (accessToken: string, modelId: string) => {
   /**
-   * Run health check for a specific model using model name
+   * Run health check for a specific model using model ID (so each deployment is checked separately).
    */
   try {
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/health?model=${encodeURIComponent(modelName)}`
-      : `/health?model=${encodeURIComponent(modelName)}`;
+      ? `${proxyBaseUrl}/health?model_id=${encodeURIComponent(modelId)}`
+      : `/health?model_id=${encodeURIComponent(modelId)}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -5081,7 +5110,7 @@ export const individualModelHealthCheckCall = async (accessToken: string, modelN
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error(`Failed to call /health for model ${modelName}:`, error);
+    console.error(`Failed to call /health for model id ${modelId}:`, error);
     throw error;
   }
 };
@@ -5879,6 +5908,7 @@ export const enrichPolicyTemplateStream = async (
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // eslint-disable-next-line no-constant-condition -- stream read loop
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -5953,6 +5983,7 @@ export const usageAiChatStream = async (
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // eslint-disable-next-line no-constant-condition -- stream read loop
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;

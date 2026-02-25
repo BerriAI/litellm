@@ -998,7 +998,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({
 
         {!result && !error && complianceResults.length === 0 && (
           <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 24 }}>
-            Choose a test source above (quick chat or a compliance dataset) and click "Run Test"
+            Choose a test source above (quick chat or a compliance dataset) and click &quot;Run Test&quot;
           </div>
         )}
       </div>

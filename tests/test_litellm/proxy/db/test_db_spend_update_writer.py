@@ -1254,3 +1254,46 @@ async def test_daily_agent_receives_deepcopied_payload():
     # But it should have equivalent content
     assert captured_agent_payloads[0]["model"] == "gpt-4"
     assert captured_agent_payloads[0]["spend"] == 0.1
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_uses_pipeline():
+    """
+    Verify that _commit_spend_updates_to_db_with_redis uses
+    get_all_transactions_from_redis_buffer_pipeline instead of 7 individual calls.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
+    # Return all-None tuple (no data to commit)
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, None)
+    )
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=mock_prisma_client,
+        n_retry_times=1,
+        proxy_logging_obj=mock_proxy_logging,
+    )
+
+    # Pipeline method should be called once
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline.assert_called_once()
+
+    # Individual methods should NOT be called
+    mock_redis_update_buffer.get_all_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_team_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_org_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()

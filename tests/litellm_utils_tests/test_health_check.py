@@ -474,6 +474,50 @@ def test_update_litellm_params_for_health_check():
 
 
 @pytest.mark.asyncio
+async def test_perform_health_check_filters_by_model_id():
+    """
+    When model_id is passed, only that deployment is checked (not all deployments
+    that share the same model name).
+    """
+    from litellm.proxy.health_check import perform_health_check
+
+    # Two deployments with same model_name but different ids
+    model_list = [
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "deployment-id-1"},
+            "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+        },
+        {
+            "model_name": "gpt-4",
+            "model_info": {"id": "deployment-id-2"},
+            "litellm_params": {"model": "gpt-4", "api_key": "fake-key-2"},
+        },
+    ]
+
+    captured_list = []
+
+    async def mock_perform_health_check(m_list, details=True):
+        captured_list.append(m_list)
+        return [{"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}], []
+
+    with patch(
+        "litellm.proxy.health_check._perform_health_check",
+        side_effect=mock_perform_health_check,
+    ):
+        healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+            model_list=model_list, model_id="deployment-id-2", details=True
+        )
+
+    # Only one deployment (deployment-id-2) should have been passed to _perform_health_check
+    assert len(captured_list) == 1
+    assert len(captured_list[0]) == 1
+    assert (captured_list[0][0].get("model_info") or {}).get("id") == "deployment-id-2"
+    assert len(healthy_endpoints) == 1
+    assert healthy_endpoints[0]["api_key"] == "fake-key-2"
+
+
+@pytest.mark.asyncio
 async def test_perform_health_check_with_health_check_model():
     """
     Test if _perform_health_check correctly uses `health_check_model` when model=`openai/*`:
