@@ -447,6 +447,7 @@ def get_logging_payload(  # noqa: PLR0915
                 kwargs=kwargs,
                 standard_logging_payload=standard_logging_payload,
             ),
+            request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
@@ -494,6 +495,16 @@ def _get_session_id_for_spend_log(
 
     # Ensure we always have a session id, if none is provided
     return str(uuid.uuid4())
+
+
+def _get_request_duration_ms(
+    start_time: datetime, end_time: datetime
+) -> Optional[int]:
+    """Compute request duration in milliseconds from start and end times."""
+    try:
+        return int((end_time - start_time).total_seconds() * 1000)
+    except Exception:
+        return None
 
 
 def _ensure_datetime_utc(timestamp: datetime) -> datetime:
