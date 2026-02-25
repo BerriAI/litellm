@@ -573,7 +573,7 @@ def get_user_id_from_request(request: Request) -> Optional[str]:
     "/user/info",
     tags=["Internal User management"],
     dependencies=[Depends(user_api_key_auth)],
-    # response_model=UserInfoResponse,
+    response_model=UserInfoResponse,
 )
 @management_endpoint_wrapper
 async def user_info(
@@ -1911,6 +1911,10 @@ async def get_user_daily_activity(
         default=None,
         description="Filter by specific API key",
     ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
     page: int = fastapi.Query(
         default=1, description="Page number for pagination", ge=1
     ),
@@ -1955,9 +1959,21 @@ async def get_user_daily_activity(
         )
 
     try:
-        entity_id: Optional[str] = None
-        if not _user_has_admin_view(user_api_key_dict):
-            entity_id = user_api_key_dict.user_id
+        is_admin = _user_has_admin_view(user_api_key_dict)
+
+        if is_admin:
+            entity_id = user_id  # None means global view, otherwise filter by user
+        else:
+            if user_id is None:
+                user_id = user_api_key_dict.user_id
+            if user_id != user_api_key_dict.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Non-admin users can only view their own spend data."
+                    },
+                )
+            entity_id = user_id
 
         return await get_daily_activity(
             prisma_client=prisma_client,
@@ -1974,6 +1990,8 @@ async def get_user_daily_activity(
             timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/spend/daily/analytics: Exception occured - {}".format(str(e))
@@ -2008,6 +2026,10 @@ async def get_user_daily_activity_aggregated(
         default=None,
         description="Filter by specific API key",
     ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
     timezone: Optional[int] = fastapi.Query(
         default=None,
         description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
@@ -2034,9 +2056,21 @@ async def get_user_daily_activity_aggregated(
         )
 
     try:
-        entity_id: Optional[str] = None
-        if not _user_has_admin_view(user_api_key_dict):
-            entity_id = user_api_key_dict.user_id
+        is_admin = _user_has_admin_view(user_api_key_dict)
+
+        if is_admin:
+            entity_id = user_id  # None means global view, otherwise filter by user
+        else:
+            if user_id is None:
+                user_id = user_api_key_dict.user_id
+            if user_id != user_api_key_dict.user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Non-admin users can only view their own spend data."
+                    },
+                )
+            entity_id = user_id
 
         return await get_daily_activity_aggregated(
             prisma_client=prisma_client,
@@ -2051,6 +2085,8 @@ async def get_user_daily_activity_aggregated(
             timezone_offset_minutes=timezone,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "/user/daily/activity/aggregated: Exception occured - {}".format(str(e))

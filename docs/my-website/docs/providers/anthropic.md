@@ -1473,6 +1473,20 @@ LiteLLM translates OpenAI's `reasoning_effort` to Anthropic's `thinking` paramet
 | "medium"         | "budget_tokens": 2048 |
 | "high"           | "budget_tokens": 4096 |
 
+:::note
+For Claude Opus 4.6, all `reasoning_effort` values (`low`, `medium`, `high`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets, pass the native `thinking` parameter directly:
+
+```python
+from litellm import completion
+
+resp = completion(
+    model="anthropic/claude-opus-4-6",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    thinking={"type": "enabled", "budget_tokens": 1024},
+)
+```
+:::
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -1614,8 +1628,65 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### Adaptive Thinking (Claude Opus 4.6)
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
+```python
+response = litellm.completion(
+  model="anthropic/claude-opus-4-6",
+  messages=[{"role": "user", "content": "What is the optimal strategy for solving this problem?"}],
+  thinking={"type": "adaptive"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-opus-4-6",
+    "messages": [{"role": "user", "content": "What is the optimal strategy for solving this problem?"}],
+    "thinking": {"type": "adaptive"}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+#### Enabled Thinking with Budget
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = litellm.completion(
+  model="anthropic/claude-opus-4-6",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  thinking={"type": "enabled", "budget_tokens": 5000},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "anthropic/claude-opus-4-6",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "thinking": {"type": "enabled", "budget_tokens": 5000}
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## **Passing Extra Headers to Anthropic API**
 

@@ -36,14 +36,24 @@ export const mcpServerColumns = (
     id: "url",
     header: "URL",
     cell: ({ row }) => {
-      const { maskedUrl } = getMaskedAndFullUrl(row.original.url);
+      const url = row.original.url;
+      if (!url) {
+        return <span className="text-gray-400">—</span>;
+      }
+      const { maskedUrl } = getMaskedAndFullUrl(url);
       return <span className="font-mono text-sm">{maskedUrl}</span>;
     },
   },
   {
     accessorKey: "transport",
     header: "Transport",
-    cell: ({ getValue }) => <span>{((getValue() as string) || "http").toUpperCase()}</span>,
+    cell: ({ row }) => {
+      const transport = row.original.transport || "http";
+      const specPath = row.original.spec_path;
+      // If server has spec_path, display as "OPENAPI" instead of the raw transport type
+      const displayTransport = specPath && transport !== "stdio" ? "OPENAPI" : transport;
+      return <span>{displayTransport.toUpperCase()}</span>;
+    },
   },
   {
     accessorKey: "auth_type",

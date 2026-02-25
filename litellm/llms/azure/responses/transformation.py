@@ -1,5 +1,5 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -21,9 +21,24 @@ else:
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
+
+    # Parameters not supported by Azure Responses API
+    AZURE_UNSUPPORTED_PARAMS = ["context_management"]
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE
+
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Azure Responses API does not support context_management (compaction).
+        """
+        base_supported_params = super().get_supported_openai_params(model)
+        return [
+            param
+            for param in base_supported_params
+            if param not in self.AZURE_UNSUPPORTED_PARAMS
+        ]
 
     def validate_environment(
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]

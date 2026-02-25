@@ -138,6 +138,88 @@ class TestOllamaModelInfo:
         assert models == ["ollama/llama2"]
 
 
+class TestOllamaGetModelInfo:
+    """Tests for OllamaConfig.get_model_info() api_base threading and graceful fallback."""
+
+    def test_get_model_info_uses_provided_api_base(self, monkeypatch):
+        """When api_base is passed, get_model_info should use it instead of env var or default."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            resp = DummyResponse(
+                {"template": "{{ .System }} tools {{ .Prompt }}", "model_info": {"context_length": 4096}},
+                status_code=200,
+            )
+            return resp
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        result = config.get_model_info("llama3", api_base="http://my-remote-server:11434")
+
+        assert captured_urls[0] == "http://my-remote-server:11434/api/show"
+        assert result["max_tokens"] == 4096
+
+    def test_get_model_info_falls_back_to_env_var(self, monkeypatch):
+        """When no api_base is passed, should fall back to OLLAMA_API_BASE env var."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_urls = []
+
+        def mock_post(url, json, headers=None):
+            captured_urls.append(url)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        monkeypatch.setenv("OLLAMA_API_BASE", "http://env-server:11434")
+
+        config = OllamaConfig()
+        config.get_model_info("llama3")
+
+        assert captured_urls[0] == "http://env-server:11434/api/show"
+
+    def test_get_model_info_graceful_fallback_on_connection_error(self, monkeypatch):
+        """When the Ollama server is unreachable, should return defaults instead of raising."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        def mock_post(url, json, headers=None):
+            raise ConnectionError("Connection refused")
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+        monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+
+        config = OllamaConfig()
+        result = config.get_model_info("llama3", api_base="http://unreachable:11434")
+
+        assert result["key"] == "llama3"
+        assert result["litellm_provider"] == "ollama"
+        assert result["input_cost_per_token"] == 0.0
+        assert result["output_cost_per_token"] == 0.0
+        assert result["max_tokens"] is None
+
+    def test_get_model_info_strips_ollama_prefix(self, monkeypatch):
+        """Should strip 'ollama/' or 'ollama_chat/' prefix from model name."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        captured_json = []
+
+        def mock_post(url, json, headers=None):
+            captured_json.append(json)
+            return DummyResponse({"template": "", "model_info": {}}, status_code=200)
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        config.get_model_info("ollama/llama3", api_base="http://localhost:11434")
+        assert captured_json[0]["name"] == "llama3"
+
+        config.get_model_info("ollama_chat/llama3", api_base="http://localhost:11434")
+        assert captured_json[1]["name"] == "llama3"
+
+
 class TestOllamaAuthHeaders:
     """Tests for Ollama authentication header handling in completion calls."""
 

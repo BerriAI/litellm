@@ -7,8 +7,10 @@ interface DataTableProps<TData, TValue> {
   data: TData[];
   columns: ColumnDef<TData, TValue>[];
   onRowClick?: (row: TData) => void;
-  // Legacy props for backward compatibility (audit logs)
+  /** Renders inside a single colspan cell (used by audit logs) */
   renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
+  /** Renders directly in tbody as sibling table rows (used by MCP children) */
+  renderChildRows?: (props: { row: Row<TData> }) => React.ReactNode;
   getRowCanExpand?: (row: Row<TData>) => boolean;
   isLoading?: boolean;
   loadingMessage?: string;
@@ -20,24 +22,24 @@ export function DataTable<TData, TValue>({
   columns,
   onRowClick,
   renderSubComponent,
+  renderChildRows,
   getRowCanExpand,
   isLoading = false,
   loadingMessage = "🚅 Loading logs...",
   noDataMessage = "No logs found",
 }: DataTableProps<TData, TValue>) {
-  // Determine if we're in legacy expansion mode or new drawer mode
-  const isLegacyMode = !!renderSubComponent && !!getRowCanExpand;
+  const supportsExpansion = !!(renderSubComponent || renderChildRows) && !!getRowCanExpand;
 
   const table = useReactTable<TData>({
     data,
     columns,
-    ...(isLegacyMode && { getRowCanExpand }),
+    ...(supportsExpansion && { getRowCanExpand }),
     getRowId: (row: TData, index: number) => {
       const _row: any = row as any;
       return _row?.request_id ?? String(index);
     },
     getCoreRowModel: getCoreRowModel(),
-    ...(isLegacyMode && { getExpandedRowModel: getExpandedRowModel() }),
+    ...(supportsExpansion && { getExpandedRowModel: getExpandedRowModel() }),
   });
 
   return (
@@ -69,8 +71,8 @@ export function DataTable<TData, TValue>({
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
                 <TableRow
-                  className={`h-8 ${!isLegacyMode ? "cursor-pointer hover:bg-gray-50" : ""}`}
-                  onClick={() => !isLegacyMode && onRowClick?.(row.original)}
+                  className={`h-8 ${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}`}
+                  onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id} className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
@@ -79,8 +81,13 @@ export function DataTable<TData, TValue>({
                   ))}
                 </TableRow>
 
-                {/* Legacy expansion mode for audit logs */}
-                {isLegacyMode && row.getIsExpanded() && renderSubComponent && (
+                {/* Child rows rendered as real table rows (MCP children) */}
+                {supportsExpansion && row.getIsExpanded() && renderChildRows && (
+                  renderChildRows({ row })
+                )}
+
+                {/* Legacy sub-component in colspan cell (audit logs) */}
+                {supportsExpansion && row.getIsExpanded() && renderSubComponent && !renderChildRows && (
                   <TableRow>
                     <TableCell colSpan={row.getVisibleCells().length} className="p-0">
                       <div className="w-full max-w-full overflow-hidden box-border">{renderSubComponent({ row })}</div>

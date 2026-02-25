@@ -28,6 +28,7 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
+    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     DEFAULT_SSL_CIPHERS,
 )
@@ -846,6 +847,16 @@ class AsyncHTTPHandler:
         if str_to_bool(os.getenv("AIOHTTP_TRUST_ENV", "False")) is True:
             trust_env = True
 
+        #########################################################
+        # Determine SSL config to pass to transport for per-request override
+        # This ensures ssl_verify works even with shared sessions
+        #########################################################
+        ssl_for_transport: Optional[Union[bool, ssl.SSLContext]] = None
+        if ssl_context is not None:
+            ssl_for_transport = ssl_context
+        elif ssl_verify is False:
+            ssl_for_transport = False
+
         verbose_logger.debug("Creating AiohttpTransport...")
 
         # Use shared session if provided and valid
@@ -853,7 +864,11 @@ class AsyncHTTPHandler:
             verbose_logger.debug(
                 f"SHARED SESSION: Reusing existing ClientSession (ID: {id(shared_session)})"
             )
-            return LiteLLMAiohttpTransport(client=shared_session)
+            return LiteLLMAiohttpTransport(
+                client=shared_session,
+                ssl_verify=ssl_for_transport,
+                owns_session=False,
+            )
 
         # Create new session only if none provided or existing one is invalid
         verbose_logger.debug(
@@ -862,9 +877,10 @@ class AsyncHTTPHandler:
         transport_connector_kwargs = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
-            "enable_cleanup_closed": True,
             **connector_kwargs,
         }
+        if AIOHTTP_NEEDS_CLEANUP_CLOSED:
+            transport_connector_kwargs["enable_cleanup_closed"] = True
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
@@ -877,6 +893,7 @@ class AsyncHTTPHandler:
                 connector=TCPConnector(**transport_connector_kwargs),
                 trust_env=trust_env,
             ),
+            ssl_verify=ssl_for_transport,
         )
 
     @staticmethod
