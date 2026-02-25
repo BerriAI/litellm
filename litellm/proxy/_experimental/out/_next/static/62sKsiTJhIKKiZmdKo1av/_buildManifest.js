@@ -3,7 +3,7 @@ self.__BUILD_MANIFEST = {
     "afterFiles": [],
     "beforeFiles": [
       {
-        "source": "/api/v1/_next/:path+",
+        "source": "/litellm-asset-prefix/_next/:path+",
         "destination": "/_next/:path+"
       }
     ],
