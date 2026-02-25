@@ -1274,5 +1274,25 @@ describe("UsagePage", () => {
       });
       deferred.resolve(mockSpendData);
     });
+
+    it("should keep fast polling through multiple unchanged checks before slowing", async () => {
+      vi.useFakeTimers();
+      mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      // initial fetch + polls around 3s, 6s, 9s
+      expect(mockUserDailyActivityAggregatedCall.mock.calls.length).toBeGreaterThanOrEqual(4);
+      vi.useRealTimers();
+    });
   });
 });

@@ -468,5 +468,25 @@ describe("EntityUsage", () => {
       });
       deferred.resolve(mockSpendData);
     });
+
+    it("should keep fast polling through multiple unchanged checks before slowing", async () => {
+      vi.useFakeTimers();
+      mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
+
+      render(<EntityUsage {...defaultProps} />);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockTagDailyActivityCall).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      // initial fetch + polls around 3s, 6s, 9s
+      expect(mockTagDailyActivityCall.mock.calls.length).toBeGreaterThanOrEqual(4);
+      vi.useRealTimers();
+    });
   });
 });

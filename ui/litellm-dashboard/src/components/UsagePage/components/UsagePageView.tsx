@@ -461,10 +461,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     }
   }, [usageView, accessToken, dateValue.from, dateValue.to, requestFetch]);
 
-  // Poll for updates when on global usage view. 5s when changes detected, 30s when stable.
-  const POLL_FAST_MS = 5_000;
+  // Poll for updates when on global usage view.
+  // Keep a fast cadence while data may still be settling, then back off once stable.
+  const POLL_FAST_MS = 3_000;
   const POLL_SLOW_MS = 30_000;
+  const UNCHANGED_POLLS_BEFORE_SLOW = 3;
   const prevDataRef = useRef<string | null>(null);
+  const unchangedPollsRef = useRef(0);
 
   useEffect(() => {
     if (usageView !== "global" || !accessToken || !dateValue.from || !dateValue.to) return;
@@ -488,10 +491,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         const changed = hasPrevious && dataSignature !== prevDataRef.current;
         prevDataRef.current = dataSignature;
         if (changed) {
+          unchangedPollsRef.current = 0;
           await fetchUserSpendData();
           if (cancelled) return;
+          schedulePoll(POLL_FAST_MS);
+          return;
         }
-        schedulePoll(!hasPrevious || changed ? POLL_FAST_MS : POLL_SLOW_MS);
+        if (!hasPrevious) {
+          unchangedPollsRef.current = 0;
+          schedulePoll(POLL_FAST_MS);
+          return;
+        }
+        unchangedPollsRef.current += 1;
+        const nextIntervalMs =
+          unchangedPollsRef.current >= UNCHANGED_POLLS_BEFORE_SLOW ? POLL_SLOW_MS : POLL_FAST_MS;
+        schedulePoll(nextIntervalMs);
       }, intervalMs);
     };
 
@@ -499,6 +513,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
+      unchangedPollsRef.current = 0;
     };
   }, [usageView, accessToken, dateValue.from, dateValue.to, fetchUserSpendData]);
 
