@@ -163,7 +163,7 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
 
     Return `litellm_metadata` if it exists, otherwise return `metadata`
     """
-    litellm_params = kwargs.get("litellm_params", {})
+    litellm_params = kwargs.get("litellm_params") or {}
     if litellm_params:
         metadata = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})

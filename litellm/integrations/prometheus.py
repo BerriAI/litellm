@@ -1969,8 +1969,8 @@ class PrometheusLogger(CustomLogger):
                 return
 
             api_base = standard_logging_payload["api_base"]
-            _litellm_params = request_kwargs.get("litellm_params", {}) or {}
-            _metadata = get_litellm_metadata_from_kwargs(request_kwargs)
+            _litellm_params = request_kwargs.get("litellm_params") or {}
+            _metadata = get_litellm_metadata_from_kwargs(request_kwargs) or {}
             litellm_model_name = request_kwargs.get("model", None)
             llm_provider = _litellm_params.get("custom_llm_provider", None)
             _model_info = _metadata.get("model_info") or {}

@@ -87,7 +87,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         kwargs.get("completion_start_time", end_time) - start_time
                     )
 
-                final_value: Union[float, timedelta] = response_ms
+                # Always convert to float seconds for Redis JSON serialization
+                if isinstance(response_ms, timedelta):
+                    final_value: Union[float, timedelta] = response_ms.total_seconds()
+                else:
+                    final_value: Union[float, timedelta] = float(response_ms) if response_ms else 0.0
                 time_to_first_token: Optional[float] = None
                 total_tokens = 0
 
@@ -308,7 +312,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         kwargs.get("completion_start_time", end_time) - start_time
                     )
 
-                final_value: Union[float, timedelta] = response_ms
+                # Always convert to float seconds for Redis JSON serialization
+                if isinstance(response_ms, timedelta):
+                    final_value: Union[float, timedelta] = response_ms.total_seconds()
+                else:
+                    final_value: Union[float, timedelta] = float(response_ms) if response_ms else 0.0
                 total_tokens = 0
                 time_to_first_token: Optional[float] = None
 
