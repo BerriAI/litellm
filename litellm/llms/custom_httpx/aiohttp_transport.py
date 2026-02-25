@@ -23,6 +23,8 @@ AIOHTTP_EXC_MAP: Dict = {
     aiohttp.ServerTimeoutError: httpx.TimeoutException,
     aiohttp.ConnectionTimeoutError: httpx.ConnectTimeout,
     aiohttp.SocketTimeoutError: httpx.ReadTimeout,
+    # Asyncio cancellation - map to retryable ConnectError to trigger retry logic
+    asyncio.CancelledError: httpx.ConnectError,
     # Proxy related exceptions
     aiohttp.ClientProxyConnectionError: httpx.ProxyError,
     # SSL related exceptions
@@ -59,7 +61,13 @@ except ImportError:
 def map_aiohttp_exceptions() -> typing.Iterator[None]:
     try:
         yield
-    except (Exception, asyncio.CancelledError) as exc:
+    except asyncio.CancelledError as exc:
+        # asyncio.CancelledError inherits from BaseException (not Exception) in Python 3.9+.
+        # Catch it explicitly before the Exception handler and map to a retryable
+        # ConnectError so the router can retry on alternative deployments.
+        message = f"Request cancelled during DNS resolution or connection: {str(exc)}"
+        raise httpx.ConnectError(message) from exc
+    except Exception as exc:
         mapped_exc = None
 
         for from_exc, to_exc in AIOHTTP_EXC_MAP.items():
