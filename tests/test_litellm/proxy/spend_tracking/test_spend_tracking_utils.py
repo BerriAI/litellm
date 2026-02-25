@@ -160,6 +160,21 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     assert len(sanitized["nested"]["dict"]["key"]) == expected_length
 
 
+def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    override_max = max(MAX_STRING_LENGTH_PROMPT_IN_DB + 1000, 6000)
+    test_string = "a" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 500)
+
+    # Simulate config-loaded env var being set after module import.
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", str(override_max))
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload({"text": test_string})
+    assert sanitized["text"] == test_string
+
+
 def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
     # Create a circular reference
     a: dict[str, Any] = {}
@@ -1232,8 +1247,6 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
     assert (
         metadata.get("max_retries") is None
     ), "max_retries should be None when not provided"
-
-
 def test_get_request_duration_ms_normal():
     """Test that request duration is correctly computed in milliseconds."""
     start = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
@@ -1279,4 +1292,3 @@ def test_get_logging_payload_includes_request_duration_ms():
         )
 
     assert payload["request_duration_ms"] == 3000
-
