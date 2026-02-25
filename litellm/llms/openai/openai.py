@@ -325,11 +325,33 @@ class OpenAIConfig(BaseConfig):
 
 
 class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        """
+        Map 'reasoning' field to 'reasoning_content' field in delta.
+        
+        Some OpenAI-compatible providers (e.g., GLM-5, hosted_vllm, vLLM) return 
+        delta.reasoning, but LiteLLM expects delta.reasoning_content.
+        
+        Args:
+            choices: List of choice objects from the streaming chunk
+            
+        Returns:
+            List of choices with reasoning field mapped to reasoning_content
+        """
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
+        return choices
+    
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         """
         {'choices': [{'delta': {'content': '', 'role': 'assistant'}, 'finish_reason': None, 'index': 0, 'logprobs': None}], 'created': 1735763082, 'id': 'a83a2b0fbfaf4aab9c2c93cb8ba346d7', 'model': 'mistral-large', 'object': 'chat.completion.chunk'}
         """
         try:
+            choices = chunk.get("choices", [])
+            choices = self._map_reasoning_to_reasoning_content(choices)
+            chunk["choices"] = choices
             return ModelResponseStream(**chunk)
         except Exception as e:
             raise e
