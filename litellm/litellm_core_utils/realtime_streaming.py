@@ -50,6 +50,8 @@ class RealTimeStreaming:
         self.messages: List[OpenAIRealtimeEvents] = []
         self.input_message: Dict = {}
         self.input_messages: List[Dict[str, str]] = []
+        self.session_tools: List[Dict] = []
+        self.tool_calls: List[Dict] = []
 
         _logged_real_time_event_types = litellm.logged_real_time_event_types
 
@@ -86,6 +88,7 @@ class RealTimeStreaming:
             message_obj = message
         else:
             message_obj = json.loads(message)
+        self._collect_tool_calls_from_response_done(message_obj)
         try:
             if (
                 not isinstance(message, dict)
@@ -136,6 +139,9 @@ class RealTimeStreaming:
                     self.input_messages.append(
                         {"role": "system", "content": instructions}
                     )
+                tools = session.get("tools")
+                if tools and isinstance(tools, list):
+                    self.session_tools = tools
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -155,6 +161,29 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
+    def _collect_tool_calls_from_response_done(
+        self, event_obj: dict
+    ) -> None:
+        """Extract function_call items from response.done events for spend logging."""
+        try:
+            if event_obj.get("type") != "response.done":
+                return
+            response = event_obj.get("response", {})
+            for item in response.get("output", []):
+                if item.get("type") == "function_call":
+                    self.tool_calls.append(
+                        {
+                            "id": item.get("call_id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": item.get("name", ""),
+                                "arguments": item.get("arguments", "{}"),
+                            },
+                        }
+                    )
+        except (AttributeError, TypeError):
+            pass
+
     def store_input(self, message: Union[str, dict]):
         """Store input message"""
         self.input_message = message if isinstance(message, dict) else {}
@@ -169,6 +198,13 @@ class RealTimeStreaming:
                 self.logging_obj.model_call_details["messages"] = (
                     self.input_messages
                 )
+            if self.session_tools or self.tool_calls:
+                self.logging_obj.model_call_details[
+                    "realtime_tools"
+                ] = self.session_tools
+                self.logging_obj.model_call_details[
+                    "realtime_tool_calls"
+                ] = self.tool_calls
             ## ASYNC LOGGING
             # Create an event loop for the new thread
             asyncio.create_task(self.logging_obj.async_success_handler(self.messages))

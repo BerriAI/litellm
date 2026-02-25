@@ -238,6 +238,128 @@ async def test_transcription_captured_in_backend_to_client():
     assert logging_obj.model_call_details["messages"] == streaming.input_messages
 
 
+def test_collect_session_tools_from_session_update():
+    """
+    Test that tools from session.update events are collected.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    msg = json.dumps({
+        "type": "session.update",
+        "session": {
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get the current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                }
+            ],
+            "instructions": "You are a weather assistant."
+        }
+    })
+    streaming.store_input(msg)
+
+    assert len(streaming.session_tools) == 1
+    assert streaming.session_tools[0]["name"] == "get_weather"
+    assert len(streaming.input_messages) == 1
+    assert streaming.input_messages[0]["role"] == "system"
+
+
+def test_collect_tool_calls_from_response_done():
+    """
+    Test that function_call items are extracted from response.done events.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+    streaming.logged_real_time_event_types = "*"
+
+    response_done = json.dumps({
+        "type": "response.done",
+        "event_id": "evt_123",
+        "response": {
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_abc123",
+                    "name": "get_weather",
+                    "arguments": '{"location": "Paris"}',
+                }
+            ]
+        }
+    })
+    streaming.store_message(response_done)
+
+    assert len(streaming.tool_calls) == 1
+    assert streaming.tool_calls[0]["id"] == "call_abc123"
+    assert streaming.tool_calls[0]["type"] == "function"
+    assert streaming.tool_calls[0]["function"]["name"] == "get_weather"
+    assert streaming.tool_calls[0]["function"]["arguments"] == '{"location": "Paris"}'
+
+
+def test_tool_calls_not_collected_from_non_function_call_output():
+    """
+    Test that non-function_call output items in response.done are not collected.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+    streaming.logged_real_time_event_types = "*"
+
+    response_done = json.dumps({
+        "type": "response.done",
+        "event_id": "evt_456",
+        "response": {
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Hello!"}]
+                }
+            ]
+        }
+    })
+    streaming.store_message(response_done)
+
+    assert len(streaming.tool_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_log_messages_includes_tools_in_model_call_details():
+    """
+    Test that log_messages() sets session_tools and tool_calls on the logging object.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"messages": "default-message-value"}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    streaming.session_tools = [
+        {"type": "function", "name": "get_weather", "description": "Get weather"}
+    ]
+    streaming.tool_calls = [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"location": "Paris"}'}}
+    ]
+
+    await streaming.log_messages()
+
+    assert logging_obj.model_call_details["realtime_tools"] == streaming.session_tools
+    assert logging_obj.model_call_details["realtime_tool_calls"] == streaming.tool_calls
+
+
 @pytest.mark.asyncio
 async def test_realtime_guardrail_blocks_prompt_injection():
     """

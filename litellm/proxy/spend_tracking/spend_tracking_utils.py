@@ -733,7 +733,13 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
-            
+
+            if kwargs is not None:
+                realtime_tools = kwargs.get("realtime_tools")
+                if realtime_tools:
+                    _request_body = dict(_request_body)
+                    _request_body["tools"] = realtime_tools
+
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
@@ -795,7 +801,13 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
-        
+
+        if kwargs is not None:
+            realtime_tool_calls = kwargs.get("realtime_tool_calls")
+            if realtime_tool_calls and isinstance(response_obj, dict):
+                response_obj = dict(response_obj)
+                response_obj["tool_calls"] = realtime_tool_calls
+
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
