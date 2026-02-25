@@ -6,7 +6,7 @@ from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
-Phase = Optional[Literal["commentary", "final_answer"]]  # TODO:  Once openai sdk has updated, we can remove this and use the openai sdk type
+Phase = Optional[Literal["commentary", "final_answer"]]  
 
 class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):
     """Annotation for content in a message"""
