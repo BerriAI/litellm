@@ -59,7 +59,7 @@ except ImportError:
 def map_aiohttp_exceptions() -> typing.Iterator[None]:
     try:
         yield
-    except Exception as exc:
+    except (Exception, asyncio.CancelledError) as exc:
         mapped_exc = None
 
         for from_exc, to_exc in AIOHTTP_EXC_MAP.items():
