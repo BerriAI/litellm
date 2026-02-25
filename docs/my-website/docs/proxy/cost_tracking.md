@@ -326,6 +326,10 @@ See our [Swagger API](https://litellm-api.up.railway.app/#/Budget%20%26%20Spend%
 
 ## Custom Tags
 
+:::tip See Full Request Tags Documentation
+For comprehensive documentation on all tag options including `x-litellm-tags` header, request body `tags`, and config-based tags, see the dedicated [Request Tags](./request_tags.md) page.
+:::
+
 Requirements:
 
 - Virtual Keys & a database should be set up, see [virtual keys](https://docs.litellm.ai/docs/proxy/virtual_keys)
