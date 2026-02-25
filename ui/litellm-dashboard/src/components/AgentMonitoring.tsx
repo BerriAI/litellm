@@ -189,67 +189,16 @@ function AgentDetail({ agentId, onBack, accessToken, token, userRole, userID, al
         </div>
       </div>
 
-      {/* Logs — drift-annotated sample rows on top, real logs below */}
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Logs</h2>
-            <p className="text-xs text-gray-400 mt-0.5">
-              Filtered by <span className="font-mono">key_alias = Claims-agent</span>
-            </p>
-          </div>
-          <span className="text-xs text-orange-600 font-medium bg-orange-50 px-2.5 py-1 rounded-full border border-orange-200">
-            {driftCount} drifted
-          </span>
-        </div>
-        {/* Drift-annotated rows */}
-        <table className="w-full text-sm border-b border-gray-100">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50">
-              <th className="text-left px-5 py-2.5 text-xs font-medium text-gray-500">Time</th>
-              <th className="text-left px-5 py-2.5 text-xs font-medium text-gray-500">Request ID</th>
-              <th className="text-left px-5 py-2.5 text-xs font-medium text-gray-500">Model</th>
-              <th className="text-left px-5 py-2.5 text-xs font-medium text-gray-500">Tools Called</th>
-              <th className="text-left px-5 py-2.5 text-xs font-medium text-gray-500">Drift Score</th>
-              <th className="text-left px-5 py-2.5 text-xs font-medium text-gray-500">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {DRIFT_LOGS.map((row) => {
-              const isDrifting = row.drift > 50;
-              return (
-                <tr key={row.id} className={isDrifting ? "bg-orange-50" : ""}>
-                  <td className="px-5 py-3 text-gray-400 text-xs whitespace-nowrap">{row.time}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-gray-500">{row.id}</td>
-                  <td className="px-5 py-3 text-gray-600 text-xs whitespace-nowrap">{row.model}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-gray-700">{row.tools}</td>
-                  <td className="px-5 py-3">
-                    <span className={`text-sm font-semibold ${isDrifting ? "text-orange-600" : "text-green-600"}`}>
-                      {row.drift}%
-                    </span>
-                  </td>
-                  <td className="px-5 py-3">
-                    {row.status === "flagged"
-                      ? <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-orange-100 text-orange-700">flagged</span>
-                      : <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-50 text-green-700">success</span>
-                    }
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {/* Full logs — real data from proxy */}
-        <SpendLogsTable
-          accessToken={accessToken}
-          token={token}
-          userRole={userRole}
-          userID={userID}
-          allTeams={allTeams}
-          premiumUser={premiumUser}
-          initialKeyAlias="Claims-agent"
-        />
-      </div>
+      {/* Logs — real data from proxy, filtered to this agent */}
+      <SpendLogsTable
+        accessToken={accessToken}
+        token={token}
+        userRole={userRole}
+        userID={userID}
+        allTeams={allTeams}
+        premiumUser={premiumUser}
+        initialKeyAlias="Claims-agent"
+      />
     </div>
   );
 }
