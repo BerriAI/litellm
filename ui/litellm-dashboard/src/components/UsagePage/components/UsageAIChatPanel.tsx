@@ -170,7 +170,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({
     try {
       await usageAiChatStream(
         accessToken,
-        updatedMessages.map((m) => ({ role: m.role, content: m.content })),
+        updatedMessages.slice(-20).map((m) => ({ role: m.role, content: m.content })),
         selectedModel || "",
         (content: string) => {
           setStatusMessage(null);

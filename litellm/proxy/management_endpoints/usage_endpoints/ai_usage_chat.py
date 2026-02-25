@@ -31,6 +31,7 @@ ENTITY_FIELD_TEAM = "team_id"
 ENTITY_FIELD_TAG = "tag"
 
 PAGINATED_PAGE_SIZE = 200
+MAX_CHAT_MESSAGES = 20
 TOP_N_MODELS = 15
 TOP_N_PROVIDERS = 10
 TOP_N_KEYS = 10
@@ -432,10 +433,11 @@ def _resolve_fetch_kwargs(
     is_admin: bool,
 ) -> Dict[str, Any]:
     """Build keyword arguments for a tool's fetch function."""
-    kwargs: Dict[str, Any] = {
-        "start_date": fn_args["start_date"],
-        "end_date": fn_args["end_date"],
-    }
+    start_date = fn_args.get("start_date", "")
+    end_date = fn_args.get("end_date", "")
+    if not start_date or not end_date:
+        raise ValueError("Missing required start_date or end_date from tool arguments")
+    kwargs: Dict[str, Any] = {"start_date": start_date, "end_date": end_date}
     if fn_name == "get_usage_data":
         if not is_admin:
             kwargs["user_id"] = user_id
@@ -533,9 +535,12 @@ async def stream_usage_ai_chat(
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    truncated = (
+        messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
+    )
     chat_messages: List[Dict[str, Any]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
-        *messages,
+        *truncated,
     ]
 
     try:
