@@ -710,8 +710,8 @@ export default function SpendLogsTable({
                     </div>
                   )}
                   <DataTable
-                    columns={[
-                      ...createColumns({
+                    columns={(() => {
+                      const cols = createColumns({
                         sortBy,
                         sortOrder,
                         onSortChange: (newSortBy, newSortOrder) => {
@@ -719,8 +719,9 @@ export default function SpendLogsTable({
                           setSortOrder(newSortOrder);
                           setCurrentPage(1);
                         },
-                      }),
-                      ...(initialKeyAlias ? [{
+                      });
+                      if (!initialKeyAlias) return cols;
+                      const driftCol = {
                         id: "_driftScore",
                         header: () => <span className="text-xs font-medium text-gray-500">Drift Score</span>,
                         cell: ({ row }: { row: { original: { _driftScore?: number } } }) => {
@@ -732,8 +733,12 @@ export default function SpendLogsTable({
                             </span>
                           );
                         },
-                      }] : []),
-                    ]}
+                      };
+                      // Insert right after the Status column
+                      const statusIdx = cols.findIndex((c: any) => c.header === "Status" || c.accessorKey === "metadata.status");
+                      const insertAt = statusIdx >= 0 ? statusIdx + 1 : 3;
+                      return [...cols.slice(0, insertAt), driftCol, ...cols.slice(insertAt)];
+                    })()}
                     data={filteredData}
                     onRowClick={handleRowClick}
                     isLoading={logs.isLoading}
