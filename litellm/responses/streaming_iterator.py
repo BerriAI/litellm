@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -161,7 +162,10 @@ class BaseResponsesAPIStreamingIterator:
 
             return None
         except json.JSONDecodeError:
-            # If we can't parse the chunk, continue
+            verbose_logger.debug(
+                "Responses API streaming: failed to parse chunk as JSON: %s",
+                chunk[:200] if chunk else chunk,
+            )
             return None
         except Exception as e:
             # Trigger failure hooks before re-raising
