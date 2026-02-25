@@ -122,7 +122,10 @@ class ToolPolicyGuardrail(CustomGuardrail):
     async def _get_policies_cached(self, tool_names: List[str]) -> Dict[str, str]:
         """
         Batch-fetch call_policy for the given tool names.
-        Uses DualCache (in-mem + optional Redis) with TTL to avoid N+1 DB reads.
+
+        Caches per individual tool name (not per combination) so that adding
+        a new tool to a request doesn't invalidate the cached policies for all
+        the other tools already in the cache.
         """
         from litellm.proxy.db.tool_registry_writer import get_tools_by_names
         from litellm.proxy.proxy_server import prisma_client
@@ -130,23 +133,31 @@ class ToolPolicyGuardrail(CustomGuardrail):
         if not tool_names or prisma_client is None:
             return {}
 
-        cache_key = f"tool_policies:{chr(0).join(sorted(tool_names))}"
-        cached = await self._policy_cache.async_get_cache(cache_key)
-        if cached is not None and isinstance(cached, dict):
-            verbose_proxy_logger.debug(
-                "ToolPolicyGuardrail: cache hit for tools %s", tool_names
-            )
-            return cached
+        result: Dict[str, str] = {}
+        cache_misses: List[str] = []
 
-        policy_map = await get_tools_by_names(
-            prisma_client=prisma_client, tool_names=tool_names
-        )
-        await self._policy_cache.async_set_cache(
-            key=cache_key,
-            value=policy_map,
-            ttl=TOOL_POLICY_CACHE_TTL_SECONDS,
-        )
-        verbose_proxy_logger.debug(
-            "ToolPolicyGuardrail: fetched policies %s", policy_map
-        )
-        return policy_map
+        for name in tool_names:
+            cached = await self._policy_cache.async_get_cache(f"tool_policy:{name}")
+            if cached is not None and isinstance(cached, str):
+                result[name] = cached
+            else:
+                cache_misses.append(name)
+
+        if cache_misses:
+            fetched = await get_tools_by_names(
+                prisma_client=prisma_client, tool_names=cache_misses
+            )
+            for name, policy in fetched.items():
+                result[name] = policy
+                await self._policy_cache.async_set_cache(
+                    key=f"tool_policy:{name}",
+                    value=policy,
+                    ttl=TOOL_POLICY_CACHE_TTL_SECONDS,
+                )
+            verbose_proxy_logger.debug(
+                "ToolPolicyGuardrail: fetched %d policies from DB (cache hits: %d)",
+                len(cache_misses),
+                len(tool_names) - len(cache_misses),
+            )
+
+        return result
