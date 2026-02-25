@@ -198,9 +198,9 @@ function AgentDetail({ agentId, onBack, accessToken, token, userRole, userID, al
             <div className="flex items-start gap-3 mb-4">
               <WarningOutlined className="text-red-500 text-2xl flex-shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="text-base font-bold text-red-900 mb-2">High drift detected — <span className="font-mono">Claims Processing Agent</span></p>
+                <p className="text-base font-bold text-red-900 mb-2">Drift alert — <span className="font-mono">Claims Processing Agent</span></p>
                 <p className="text-sm text-red-700 mb-4">
-                  The semantic similarity between this agent's description (<span className="italic">"answer member questions about insurance claims"</span>) and the tools it is calling (<span className="font-mono">exec</span>, <span className="font-mono">write</span>, <span className="font-mono">fetch_claims</span>) is very low. The gateway embeds both on every run and computes cosine similarity — this agent is scoring consistently near zero.
+                  This agent is described as <span className="italic">"answer member questions about insurance claims"</span> but is calling <span className="font-mono">exec</span>, <span className="font-mono">write</span>, and <span className="font-mono">fetch_claims</span>. On every request, the gateway embeds the agent description and the tools called, then computes cosine similarity between them. This agent is scoring 0.08 — far outside the 0.82–0.95 range we see for healthy claims agents.
                 </p>
                 <div className="flex gap-3">
                   <div className="flex-1 bg-white border border-red-200 rounded-lg px-4 py-3 flex items-center justify-between">
