@@ -395,10 +395,8 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                     endpoint.get("custom_auth_parser") is not None
                     and endpoint.get("custom_auth_parser") == "langfuse"
                 ):
-                    """
-                    - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
-                    - check the langfuse public key if it contains the litellm api key
-                    """
+                    # langfuse returns {'Authorization': 'Basic <base64(username:password)>'}
+                    # check the langfuse public key if it contains the litellm api key
                     import base64
 
                     api_key = api_key.replace("Basic ", "").strip()
