@@ -6,7 +6,8 @@ from typing import Any, Dict, List, Optional
 import litellm
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.management_helpers.object_permission_utils import (
-    attach_object_permission_to_dict, handle_update_object_permission_common)
+    handle_update_object_permission_common,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
@@ -141,13 +142,16 @@ class AgentRegistry:
 
             # Create agent in DB
             created_agent = await prisma_client.db.litellm_agentstable.create(
-                data=create_data
+                data=create_data,
+                include={"object_permission": True},
             )
 
             created_agent_dict = created_agent.model_dump()
-            await attach_object_permission_to_dict(
-                created_agent_dict, prisma_client
-            )
+            if created_agent.object_permission is not None:
+                try:
+                    created_agent_dict["object_permission"] = created_agent.object_permission.model_dump()
+                except Exception:
+                    created_agent_dict["object_permission"] = created_agent.object_permission.dict()
             return AgentResponse(**created_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error adding agent to DB: {str(e)}")
@@ -232,11 +236,14 @@ class AgentRegistry:
                     "updated_by": updated_by,
                     "updated_at": datetime.now(timezone.utc),
                 },
+                include={"object_permission": True},
             )
             patched_agent_dict = patched_agent.model_dump()
-            await attach_object_permission_to_dict(
-                patched_agent_dict, prisma_client
-            )
+            if patched_agent.object_permission is not None:
+                try:
+                    patched_agent_dict["object_permission"] = patched_agent.object_permission.model_dump()
+                except Exception:
+                    patched_agent_dict["object_permission"] = patched_agent.object_permission.dict()
             return AgentResponse(**patched_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error patching agent in DB: {str(e)}")
@@ -305,12 +312,15 @@ class AgentRegistry:
             updated_agent = await prisma_client.db.litellm_agentstable.update(
                 where={"agent_id": agent_id},
                 data=update_data,
+                include={"object_permission": True},
             )
 
             updated_agent_dict = updated_agent.model_dump()
-            await attach_object_permission_to_dict(
-                updated_agent_dict, prisma_client
-            )
+            if updated_agent.object_permission is not None:
+                try:
+                    updated_agent_dict["object_permission"] = updated_agent.object_permission.model_dump()
+                except Exception:
+                    updated_agent_dict["object_permission"] = updated_agent.object_permission.dict()
             return AgentResponse(**updated_agent_dict)  # type: ignore
         except Exception as e:
             raise Exception(f"Error updating agent in DB: {str(e)}")
@@ -325,14 +335,18 @@ class AgentRegistry:
         try:
             agents_from_db = await prisma_client.db.litellm_agentstable.find_many(
                 order={"created_at": "desc"},
+                include={"object_permission": True},
             )
 
             agents: List[Dict[str, Any]] = []
             for agent in agents_from_db:
                 agent_dict = dict(agent)
-                await attach_object_permission_to_dict(
-                    agent_dict, prisma_client
-                )
+                # object_permission is eagerly loaded via include above
+                if agent.object_permission is not None:
+                    try:
+                        agent_dict["object_permission"] = agent.object_permission.model_dump()
+                    except Exception:
+                        agent_dict["object_permission"] = agent.object_permission.dict()
                 agents.append(agent_dict)
 
             return agents

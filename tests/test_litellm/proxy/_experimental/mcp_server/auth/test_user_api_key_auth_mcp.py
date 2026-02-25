@@ -15,8 +15,9 @@ sys.path.insert(
 
 from starlette.datastructures import Headers
 
-from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import \
-    MCPRequestHandler
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+    MCPRequestHandler,
+)
 from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -1175,8 +1176,7 @@ class TestMCPAccessGroupsE2E:
 @pytest.mark.asyncio
 def test_mcp_path_based_server_segregation(monkeypatch):
     # Import the MCP server FastAPI app and context getter
-    from litellm.proxy._experimental.mcp_server.server import (
-        app, get_auth_context)
+    from litellm.proxy._experimental.mcp_server.server import app, get_auth_context
 
     captured_mcp_servers = {}
 
@@ -1277,8 +1277,7 @@ async def test_get_team_object_permission_with_already_loaded_permission():
     Test that _get_team_object_permission returns the already loaded object_permission
     from the team object without making an additional DB call.
     """
-    from litellm.proxy._types import (LiteLLM_ObjectPermissionTable,
-                                      LiteLLM_TeamTable)
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
 
     # Create mock object permission
     mock_object_permission = LiteLLM_ObjectPermissionTable(
@@ -1341,8 +1340,7 @@ async def test_get_team_object_permission_with_core_auth_auto_loading():
     the team object returned by get_team_object() should already have object_permission loaded
     when an object_permission_id exists.
     """
-    from litellm.proxy._types import (LiteLLM_ObjectPermissionTable,
-                                      LiteLLM_TeamTable)
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable
 
     # Create mock object permission
     mock_object_permission = LiteLLM_ObjectPermissionTable(
@@ -1707,9 +1705,10 @@ class TestAgentMCPPermissions:
                         user_api_key_auth=user_api_key_auth,
                     )
                     assert result == ["tool_a"]
-                    mock_agent_tools.assert_called_once_with(
-                        "server_1", user_api_key_auth
-                    )
+                    mock_agent_tools.assert_called_once()
+                    call_kwargs = mock_agent_tools.call_args.kwargs
+                    assert call_kwargs["server_id"] == "server_1"
+                    assert call_kwargs["user_api_key_auth"] == user_api_key_auth
 
     async def test_get_allowed_tools_for_server_agent_no_restriction(self):
         """Agent has no tool permissions for server; key/team result is unchanged."""
