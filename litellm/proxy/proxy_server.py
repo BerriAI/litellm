@@ -12944,8 +12944,10 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         headers_ready = asyncio.Event()
         body_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         handler_error: list = []
+        body_terminated = False
 
         async def streaming_send(message):
+            nonlocal body_terminated
             if message["type"] == "http.response.start":
                 response_meta["status"] = message["status"]
                 response_meta["headers"] = {
@@ -12958,6 +12960,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
                 if chunk:
                     await body_queue.put(chunk)
                 if not message.get("more_body", False):
+                    body_terminated = True
                     await body_queue.put(None)  # sentinel
 
         async def run_handler():
@@ -12971,7 +12974,8 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
                 # Ensure consumers aren't stuck waiting if the handler exits
                 # without sending a complete response.
                 headers_ready.set()
-                await body_queue.put(None)
+                if not body_terminated:
+                    await body_queue.put(None)
 
         handler_task = asyncio.create_task(run_handler())
 
