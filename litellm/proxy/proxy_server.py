@@ -5474,8 +5474,7 @@ class ProxyStartupEvent:
             "enabled", False
         ):
             verbose_proxy_logger.debug(
-                "Semantic tool filter not configured or not enabled, "
-                "skipping initialization"
+                "Semantic tool filter not configured or not enabled, skipping initialization"
             )
             return
 
@@ -5483,6 +5482,7 @@ class ProxyStartupEvent:
             f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
             f"config={mcp_semantic_filter_config}"
         )
+
         hook = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
             llm_router=llm_router,
