@@ -2,7 +2,6 @@
 
 import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { Select, Switch, Tooltip } from "antd";
-import { Select, Tooltip } from "antd";
 import {
   Table,
   TableHead,
@@ -68,7 +67,7 @@ const PolicySelect: React.FC<{
           paddingLeft: 8,
           paddingRight: 4,
         },
-      }}
+      } as Record<string, React.CSSProperties>}
       popupMatchSelectWidth={false}
       options={POLICY_OPTIONS.map((o) => ({
         value: o.value,
@@ -266,7 +265,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
 
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-gray-900">Live Tail</span>
-                <Switch color="green" checked={isLiveTail} onChange={setIsLiveTail} />
+                <Switch checked={isLiveTail} onChange={setIsLiveTail} />
               </div>
 
               <button

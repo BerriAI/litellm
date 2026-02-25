@@ -6,12 +6,8 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import (
-    LiteLLM_TeamTable,
-    ProxyException,
-    SpecialHeaders,
-    UserAPIKeyAuth,
-)
+from litellm.proxy._types import (LiteLLM_TeamTable, ProxyException,
+                                  SpecialHeaders, UserAPIKeyAuth)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
@@ -412,6 +408,26 @@ class MCPRequestHandler:
                     )
                     return []
 
+            #########################################################
+            # Check agent permissions if agent_id is set on the key
+            #########################################################
+            if user_api_key_auth and user_api_key_auth.agent_id:
+                allowed_mcp_servers_for_agent = (
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_agent(
+                        user_api_key_auth
+                    )
+                )
+                if len(allowed_mcp_servers_for_agent) > 0:
+                    # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
+                    allowed_mcp_servers = [
+                        s
+                        for s in allowed_mcp_servers
+                        if s in allowed_mcp_servers_for_agent
+                    ]
+                    verbose_logger.debug(
+                        f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                    )
+
             return list(set(allowed_mcp_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}")
@@ -443,11 +459,9 @@ class MCPRequestHandler:
         get_team_object() in litellm/proxy/auth/auth_checks.py
         """
         from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
 
         verbose_logger.debug(
             f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
@@ -513,13 +527,28 @@ class MCPRequestHandler:
             if team_tools:
                 if key_tools:
                     # Both have restrictions → intersection
-                    return list(set(team_tools) & set(key_tools))
+                    allowed_tools = list(set(team_tools) & set(key_tools))
                 else:
                     # Only team has restrictions → inherit from team
-                    return team_tools
+                    allowed_tools = team_tools
             else:
                 # No team restrictions → use key restrictions
-                return key_tools
+                allowed_tools = key_tools
+
+            # Intersect with agent's tool permissions if agent_id is set
+            if user_api_key_auth.agent_id:
+                agent_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                    server_id=server_id,
+                    user_api_key_auth=user_api_key_auth,
+                )
+                if agent_tools is not None:
+                    if allowed_tools is not None:
+                        allowed_tools = list(
+                            set(allowed_tools) & set(agent_tools)
+                        )
+                    else:
+                        allowed_tools = agent_tools
+            return allowed_tools
 
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed tools for server: {str(e)}")
@@ -582,12 +611,11 @@ class MCPRequestHandler:
                 user_api_key_auth
             )
             if key_object_permission is None and user_api_key_auth and user_api_key_auth.object_permission_id:
-                from litellm.proxy.auth.auth_checks import get_object_permission
-                from litellm.proxy.proxy_server import (
-                    prisma_client,
-                    proxy_logging_obj,
-                    user_api_key_cache,
-                )
+                from litellm.proxy.auth.auth_checks import \
+                    get_object_permission
+                from litellm.proxy.proxy_server import (prisma_client,
+                                                        proxy_logging_obj,
+                                                        user_api_key_cache)
                 if prisma_client is not None:
                     key_object_permission = await get_object_permission(
                         object_permission_id=user_api_key_auth.object_permission_id,
@@ -665,11 +693,9 @@ class MCPRequestHandler:
         Returns the MCP servers from the end_user's object_permission.
         """
         from litellm.proxy.auth.auth_checks import get_end_user_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
 
         if not user_api_key_auth or not user_api_key_auth.end_user_id:
             return []
@@ -714,6 +740,99 @@ class MCPRequestHandler:
                 f"Failed to get allowed MCP servers for end_user: {str(e)}"
             )
             return []
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_agent(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an agent (from the agent's object_permission).
+
+        Returns the MCP servers from the agent's object_permission.
+        If agent has no object_permission, returns [] (no extra restriction).
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not user_api_key_auth or not user_api_key_auth.agent_id:
+            return []
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return []
+
+        try:
+            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": user_api_key_auth.agent_id},
+                include={"object_permission": True},
+            )
+            if (
+                agent_row is None
+                or agent_row.object_permission is None
+            ):
+                return []
+
+            obj_perm = agent_row.object_permission
+            direct_mcp_servers = getattr(obj_perm, "mcp_servers", None) or []
+            if isinstance(direct_mcp_servers, str):
+                direct_mcp_servers = []
+            mcp_access_groups = getattr(obj_perm, "mcp_access_groups", None) or []
+            if isinstance(mcp_access_groups, str):
+                mcp_access_groups = []
+
+            access_group_servers = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    mcp_access_groups
+                )
+            )
+            all_servers = list(direct_mcp_servers) + access_group_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed MCP servers for agent: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_agent_tool_permissions_for_server(
+        server_id: str,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> Optional[List[str]]:
+        """
+        Get allowed tool names for a server from the agent's object_permission.
+        Returns None if agent has no tool restrictions for this server.
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not user_api_key_auth or not user_api_key_auth.agent_id or not prisma_client:
+            return None
+
+        try:
+            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": user_api_key_auth.agent_id},
+                include={"object_permission": True},
+            )
+            if (
+                agent_row is None
+                or agent_row.object_permission is None
+            ):
+                return None
+
+            obj_perm = agent_row.object_permission
+            mcp_tool_permissions = getattr(
+                obj_perm, "mcp_tool_permissions", None
+            )
+            if not mcp_tool_permissions:
+                return None
+            if isinstance(mcp_tool_permissions, dict):
+                tools = mcp_tool_permissions.get(server_id)
+            else:
+                tools = None
+            return list(tools) if tools else None
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get agent tool permissions for server: {str(e)}"
+            )
+            return None
 
     @staticmethod
     def _get_config_server_ids_for_access_groups(
@@ -761,9 +880,8 @@ class MCPRequestHandler:
 
         try:
             # Import here to avoid circular import
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-                global_mcp_server_manager,
-            )
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import \
+                global_mcp_server_manager
 
             # Use the new helper for config-loaded servers
             server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
@@ -817,11 +935,9 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         from litellm.proxy.auth.auth_checks import get_object_permission
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
 
         if user_api_key_auth is None:
             return []
@@ -857,11 +973,9 @@ class MCPRequestHandler:
         Get MCP access groups for the team
         """
         from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                proxy_logging_obj,
+                                                user_api_key_cache)
 
         if user_api_key_auth is None:
             return []
