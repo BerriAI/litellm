@@ -73,6 +73,7 @@ class SupportedGuardrailIntegrations(Enum):
     CUSTOM_CODE = "custom_code"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
+    BLOCK_CODE_EXECUTION = "block_code_execution"
 
 
 class Role(Enum):
