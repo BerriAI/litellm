@@ -23,7 +23,7 @@ class TestBlockCodeExecutionGuardrail:
         )
         blocks = guardrail._find_blocks("Here is code:\n```python\nprint(1)\n```\nDone.")
         assert len(blocks) == 1
-        tag, _body, confidence, action_taken = blocks[0]
+        _start, _end, tag, _body, confidence, action_taken = blocks[0]
         assert tag == "python"
         assert confidence == 1.0
         assert action_taken == "block"
@@ -37,7 +37,7 @@ class TestBlockCodeExecutionGuardrail:
         )
         blocks = guardrail._find_blocks("```\nfoo\n```")
         assert len(blocks) == 1
-        _tag, _body, confidence, action_taken = blocks[0]
+        _start, _end, _tag, _body, confidence, action_taken = blocks[0]
         assert action_taken == "block"
         assert confidence in (0.5, 1.0)
 
@@ -50,7 +50,7 @@ class TestBlockCodeExecutionGuardrail:
         )
         blocks = guardrail._find_blocks("```text\nplain output\n```")
         assert len(blocks) == 1
-        _tag, _body, confidence, action_taken = blocks[0]
+        _start, _end, _tag, _body, confidence, action_taken = blocks[0]
         assert action_taken == "allow"
         assert confidence == 0.0
 
@@ -64,7 +64,7 @@ class TestBlockCodeExecutionGuardrail:
         # Block with no tag or plaintext tag gets confidence 0.5
         blocks = guardrail._find_blocks("```text\nx\n```")
         assert len(blocks) == 1
-        _tag, _body, confidence, action_taken = blocks[0]
+        _start, _end, _tag, _body, confidence, action_taken = blocks[0]
         assert confidence == 0.5
         assert action_taken == "log_only"
 
@@ -272,10 +272,10 @@ print(factorial(5))  # Output: 120
         normalized = _normalize_escaped_newlines(text_with_escaped)
         blocks = guardrail._find_blocks(normalized)
         assert len(blocks) == 2
-        assert blocks[0][0] == "python"
-        assert blocks[0][3] == "block"
-        assert blocks[1][0] == "python"
-        assert blocks[1][3] == "block"
+        assert blocks[0][2] == "python"
+        assert blocks[0][5] == "block"
+        assert blocks[1][2] == "python"
+        assert blocks[1][5] == "block"
 
     def test_scan_text_blocks_and_masks_when_text_has_escaped_newlines(self):
         """_scan_text detects blocks and applies block/mask when newlines are literal \\n."""

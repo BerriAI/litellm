@@ -13,7 +13,8 @@ from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
 
 from fastapi import HTTPException
 
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (CustomGuardrail,
+                                                   ModifyResponseException)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import \
     GuardrailConfigModel
@@ -46,8 +47,13 @@ def _normalize_escaped_newlines(text: str) -> str:
     """
     Replace literal escaped newlines (backslash + n or backslash + r) with real newlines.
     API/JSON payloads sometimes deliver newlines as the two-character sequence \\n.
+    Only applies when text has no real newline but contains literal \\n or \\r (double-encoded).
     """
     if not text:
+        return text
+    if "\n" in text:
+        return text
+    if "\\n" not in text and "\\r" not in text:
         return text
     # Order matters: replace \r\n first so we don't produce extra \n from \r then \n
     text = text.replace("\\r\\n", "\n")
@@ -72,6 +78,7 @@ def _is_blocked_language(
     if block_all:
         # Block all: only allow through if it's explicitly non-executable (we still block but with lower confidence)
         return True
+    # When block_all is False, caller guarantees blocked_languages is non-empty.
     if not blocked_languages:
         return True
     normalized_list = [_normalize_language(t) for t in blocked_languages]
@@ -158,12 +165,14 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
 
     def _find_blocks(
         self, text: str
-    ) -> List[Tuple[str, str, float, CodeBlockActionTaken]]:
+    ) -> List[Tuple[int, int, str, str, float, CodeBlockActionTaken]]:
         """
         Find all fenced code blocks in text. Returns list of
-        (language_tag, block_content, confidence, action_taken).
+        (start, end, language_tag, block_content, confidence, action_taken).
         """
-        results: List[Tuple[str, str, float, CodeBlockActionTaken]] = []
+        results: List[
+            Tuple[int, int, str, str, float, CodeBlockActionTaken]
+        ] = []
         for m in FENCED_BLOCK_RE.finditer(text):
             tag = (m.group(1) or "").strip()
             body = m.group(2)
@@ -180,7 +189,9 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 action_taken = "block"
             else:
                 action_taken = "log_only"
-            results.append((tag or "(none)", body, confidence, action_taken))
+            results.append(
+                (m.start(), m.end(), tag or "(none)", body, confidence, action_taken)
+            )
         return results
 
     def _scan_text(
@@ -202,29 +213,14 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         should_raise = False
         last_end = 0
         parts: List[str] = []
-        for m in FENCED_BLOCK_RE.finditer(text):
-            tag = (m.group(1) or "").strip()
-            tag_in_list = not self.block_all and _normalize_language(tag) in [
-                _normalize_language(t) for t in (self.blocked_languages or [])
-            ]
-            is_blocked = _is_blocked_language(
-                tag, self.blocked_languages, self.block_all
-            )
-            confidence = _confidence_for_block(tag, self.block_all, tag_in_list)
-            if not is_blocked:
-                action_taken: CodeBlockActionTaken = "allow"
-            elif confidence >= self.confidence_threshold:
-                action_taken = "block"
-            else:
-                action_taken = "log_only"
-
+        for start, end, tag, _body, confidence, action_taken in blocks:
             if detections is not None:
                 detections.append(
                     cast(
                         CodeBlockDetection,
                         {
                             "type": "code_block",
-                            "language": tag or "(none)",
+                            "language": tag,
                             "confidence": round(confidence, 2),
                             "action_taken": action_taken,
                         },
@@ -233,12 +229,12 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
 
             if action_taken == "block" and self.action == "block":
                 should_raise = True
-            parts.append(text[last_end : m.start()])
+            parts.append(text[last_end:start])
             if action_taken == "block":
                 parts.append(self.MASK_PLACEHOLDER)
             else:
-                parts.append(text[m.start() : m.end()])
-            last_end = m.end()
+                parts.append(text[start:end])
+            last_end = end
 
         parts.append(text[last_end:])
         new_text = "".join(parts)
@@ -358,7 +354,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 accumulated += delta_content
                 # Check after every chunk so we block before yielding the chunk that completes a blocked block
                 blocks = self._find_blocks(accumulated)
-                for _tag, _body, confidence, action_taken in blocks:
+                for _start, _end, _tag, _body, confidence, action_taken in blocks:
                     if (
                         action_taken == "block"
                         and confidence >= self.confidence_threshold
