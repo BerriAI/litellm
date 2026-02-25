@@ -2,8 +2,13 @@
 Main OCR function for LiteLLM.
 """
 import asyncio
+import base64
 import contextvars
+import mimetypes
+import os
 from functools import partial
+from io import IOBase
+from pathlib import Path
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import httpx
@@ -22,10 +27,115 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+_MIME_TYPE_MAP = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".tiff": "image/tiff",
+    ".tif": "image/tiff",
+    ".bmp": "image/bmp",
+}
+
+
+def _get_mime_type(file_path: str) -> str:
+    """
+    Determine MIME type from file path extension.
+
+    Falls back to mimetypes.guess_type, then to 'application/octet-stream'.
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+    mime = _MIME_TYPE_MAP.get(ext)
+    if mime:
+        return mime
+    guessed, _ = mimetypes.guess_type(file_path)
+    return guessed or "application/octet-stream"
+
+
+def _convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Convert a file-type document dict to a document_url-type document dict
+    with an inline base64 data URI.
+
+    Accepts document dicts like:
+        {"type": "file", "file": "/path/to/document.pdf"}        # file path string
+        {"type": "file", "file": Path("/path/to/doc.pdf")}       # pathlib.Path
+        {"type": "file", "file": <binary file-like object>}      # file-like object (BinaryIO)
+        {"type": "file", "file": b"raw bytes"}                   # raw bytes
+
+    Returns:
+        {"type": "document_url", "document_url": "data:<mime>;base64,<data>"}
+        or {"type": "image_url", "image_url": "data:<mime>;base64,<data>"}
+    """
+    file_input = document.get("file")
+    if file_input is None:
+        raise ValueError(
+            "document with type='file' must include a 'file' field containing "
+            "a file path (str), pathlib.Path, file-like object, or bytes"
+        )
+
+    file_bytes: bytes
+    mime_type: str = "application/octet-stream"
+    file_name: Optional[str] = None
+
+    if isinstance(file_input, (str, Path)):
+        # File path
+        file_path = str(file_input)
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+        mime_type = _get_mime_type(file_path)
+        file_name = os.path.basename(file_path)
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+    elif isinstance(file_input, bytes):
+        # Raw bytes
+        file_bytes = file_input
+    elif isinstance(file_input, IOBase) or hasattr(file_input, "read"):
+        # File-like object (BinaryIO)
+        if hasattr(file_input, "name"):
+            file_name = getattr(file_input, "name", None)
+            if file_name:
+                mime_type = _get_mime_type(file_name)
+        file_bytes = file_input.read()
+        if isinstance(file_bytes, str):
+            file_bytes = file_bytes.encode("utf-8")
+    else:
+        raise ValueError(
+            f"Unsupported file input type: {type(file_input)}. "
+            "Expected str (file path), pathlib.Path, bytes, or a file-like object."
+        )
+
+    if not file_bytes:
+        raise ValueError("File is empty or could not be read")
+
+    # Allow explicit mime_type override from document dict
+    if "mime_type" in document:
+        mime_type = document["mime_type"]
+
+    base64_data = base64.b64encode(file_bytes).decode("utf-8")
+    data_uri = f"data:{mime_type};base64,{base64_data}"
+
+    # Use image_url type for image MIME types, document_url for everything else
+    if mime_type.startswith("image/"):
+        verbose_logger.debug(
+            f"OCR file input: Converted file to image_url data URI "
+            f"(mime={mime_type}, size={len(file_bytes)} bytes, name={file_name})"
+        )
+        return {"type": "image_url", "image_url": data_uri}
+    else:
+        verbose_logger.debug(
+            f"OCR file input: Converted file to document_url data URI "
+            f"(mime={mime_type}, size={len(file_bytes)} bytes, name={file_name})"
+        )
+        return {"type": "document_url", "document_url": data_uri}
+
+
 @client
 async def aocr(
     model: str,
-    document: Dict[str, str],
+    document: Dict[str, Any],
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -39,8 +149,9 @@ async def aocr(
     Args:
         model: Model name (e.g., "mistral/mistral-ocr-latest")
         document: Document to process in Mistral format:
-            {"type": "document_url", "document_url": "https://..."} for PDFs/docs or
-            {"type": "image_url", "image_url": "https://..."} for images
+            {"type": "document_url", "document_url": "https://..."} for PDFs/docs,
+            {"type": "image_url", "image_url": "https://..."} for images, or
+            {"type": "file", "file": <path/bytes/file-obj>} for local files
         api_key: Optional API key
         api_base: Optional API base URL
         timeout: Optional timeout
@@ -81,6 +192,12 @@ async def aocr(
                 "type": "document_url",
                 "document_url": f"data:application/pdf;base64,{base64_pdf}"
             }
+        )
+        
+        # OCR with local file
+        response = await litellm.aocr(
+            model="mistral/mistral-ocr-latest",
+            document={"type": "file", "file": "/path/to/document.pdf"}
         )
         ```
     """
@@ -135,7 +252,7 @@ async def aocr(
 @client
 def ocr(
     model: str,
-    document: Dict[str, str],
+    document: Dict[str, Any],
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -149,8 +266,9 @@ def ocr(
     Args:
         model: Model name (e.g., "mistral/mistral-ocr-latest")
         document: Document to process in Mistral format:
-            {"type": "document_url", "document_url": "https://..."} for PDFs/docs or
-            {"type": "image_url", "image_url": "https://..."} for images
+            {"type": "document_url", "document_url": "https://..."} for PDFs/docs,
+            {"type": "image_url", "image_url": "https://..."} for images, or
+            {"type": "file", "file": <path/bytes/file-obj>} for local files
         api_key: Optional API key
         api_base: Optional API base URL
         timeout: Optional timeout
@@ -193,6 +311,12 @@ def ocr(
             }
         )
         
+        # OCR with local file
+        response = litellm.ocr(
+            model="mistral/mistral-ocr-latest",
+            document={"type": "file", "file": "/path/to/document.pdf"}
+        )
+        
         # Access pages
         for page in response.pages:
             print(f"Page {page.index}: {page.markdown}")
@@ -203,14 +327,23 @@ def ocr(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aocr", False) is True
-        
-        # Validate document parameter format (Mistral spec)
+
+        # Validate document parameter format
         if not isinstance(document, dict):
-            raise ValueError(f"document must be a dict with 'type' and URL field, got {type(document)}")
+            raise ValueError(f"document must be a dict with 'type' and URL/file field, got {type(document)}")
         
         doc_type = document.get("type")
+        
+        # Handle file type: convert to document_url/image_url with base64 data URI
+        if doc_type == "file":
+            document = _convert_file_document_to_url_document(document)
+            doc_type = document.get("type")
+        
         if doc_type not in ["document_url", "image_url"]:
-            raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url' or 'image_url'")
+            raise ValueError(
+                f"Invalid document type: {doc_type}. "
+                "Must be 'document_url', 'image_url', or 'file'"
+            )
 
         model, custom_llm_provider, dynamic_api_key, dynamic_api_base = (
             litellm.get_llm_provider(
@@ -299,4 +432,3 @@ def ocr(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
-
