@@ -117,7 +117,7 @@ class TestResponsesWebSocketHandlerE2E:
         2. Backend sends back response.created, output_text.delta, response.completed
         3. Verify all messages are forwarded correctly
         """
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -187,7 +187,7 @@ class TestResponsesWebSocketHandlerE2E:
         Verify client→backend forwarding: client sends response.create
         and the backend WS receives it.
         """
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -231,12 +231,10 @@ class TestResponsesWebSocketHandlerE2E:
     @pytest.mark.asyncio
     async def test_handler_constructs_correct_wss_url(self):
         """Verify OpenAIResponsesWebSocket builds the correct WSS URL."""
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
+        from litellm.responses.websocket_handler import (
+            OpenAIResponsesWebSocketHandler,
         )
 
-        handler = OpenAIResponsesWebSocket()
-
-        assert handler._construct_url("https://api.openai.com/v1") == "wss://api.openai.com/v1/responses"
-        assert handler._construct_url("http://localhost:4000/v1") == "ws://localhost:4000/v1/responses"
-        assert handler._construct_url("https://custom.endpoint.com/v1/responses") == "wss://custom.endpoint.com/v1/responses"
+        assert OpenAIResponsesWebSocketHandler._http_url_to_ws("https://api.openai.com/v1/responses") == "wss://api.openai.com/v1/responses"
+        assert OpenAIResponsesWebSocketHandler._http_url_to_ws("http://localhost:4000/v1/responses") == "ws://localhost:4000/v1/responses"
+        assert OpenAIResponsesWebSocketHandler._http_url_to_ws("https://custom.endpoint.com/v1/responses") == "wss://custom.endpoint.com/v1/responses"

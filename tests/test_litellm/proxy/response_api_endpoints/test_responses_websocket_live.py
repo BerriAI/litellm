@@ -42,10 +42,8 @@ async def test_responses_websocket_live_through_proxy():
     async with websockets.connect(url, additional_headers=headers) as ws:
         request_event = {
             "type": "response.create",
-            "response": {
-                "model": MODEL,
-                "input": "Say exactly: Hello WebSocket",
-            },
+            "model": MODEL,
+            "input": "Say exactly: Hello WebSocket",
         }
         await ws.send(json.dumps(request_event))
 
@@ -101,10 +99,8 @@ async def test_responses_websocket_continuation():
         # First turn
         await ws.send(json.dumps({
             "type": "response.create",
-            "response": {
-                "model": MODEL,
-                "input": "Remember the number 42.",
-            },
+            "model": MODEL,
+            "input": "Remember the number 42.",
         }))
 
         first_response_id = None
@@ -122,13 +118,11 @@ async def test_responses_websocket_continuation():
         # Second turn — continuation
         await ws.send(json.dumps({
             "type": "response.create",
-            "response": {
-                "model": MODEL,
-                "input": [
-                    {"type": "message", "role": "user", "content": "What number did I mention?"},
-                ],
-                "previous_response_id": first_response_id,
-            },
+            "model": MODEL,
+            "input": [
+                {"type": "message", "role": "user", "content": "What number did I mention?"},
+            ],
+            "previous_response_id": first_response_id,
         }))
 
         second_events = []

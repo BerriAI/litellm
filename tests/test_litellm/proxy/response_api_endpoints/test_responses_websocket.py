@@ -16,85 +16,48 @@ import pytest
 
 
 class TestOpenAIResponsesWebSocketHandler:
-    """Unit tests for OpenAIResponsesWebSocket handler."""
+    """Unit tests for OpenAIResponsesWebSocketHandler."""
 
-    def test_construct_url_from_https_base(self):
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
+    def test_http_url_to_ws_https(self):
+        from litellm.responses.websocket_handler import (
+            OpenAIResponsesWebSocketHandler,
         )
 
-        handler = OpenAIResponsesWebSocket()
-        url = handler._construct_url("https://api.openai.com/v1")
-        assert url.startswith("wss://")
-        assert url.endswith("/v1/responses")
+        assert OpenAIResponsesWebSocketHandler._http_url_to_ws(
+            "https://api.openai.com/v1/responses"
+        ) == "wss://api.openai.com/v1/responses"
 
-    def test_construct_url_from_http_base(self):
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
+    def test_http_url_to_ws_http(self):
+        from litellm.responses.websocket_handler import (
+            OpenAIResponsesWebSocketHandler,
         )
 
-        handler = OpenAIResponsesWebSocket()
-        url = handler._construct_url("http://localhost:8080/v1")
-        assert url.startswith("ws://")
-        assert "/v1/responses" in url
+        result = OpenAIResponsesWebSocketHandler._http_url_to_ws(
+            "http://localhost:4000/v1/responses"
+        )
+        assert result == "ws://localhost:4000/v1/responses"
 
-    def test_construct_url_already_has_responses_path(self):
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
+    def test_ssl_config_ws(self):
+        from litellm.responses.websocket_handler import (
+            OpenAIResponsesWebSocketHandler,
         )
 
-        handler = OpenAIResponsesWebSocket()
-        url = handler._construct_url("https://api.openai.com/v1/responses")
-        assert url == "wss://api.openai.com/v1/responses"
+        assert OpenAIResponsesWebSocketHandler._get_ssl_config("ws://localhost:8080") is None
 
-    def test_get_headers(self):
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
+    def test_ssl_config_wss(self):
+        from litellm.responses.websocket_handler import (
+            OpenAIResponsesWebSocketHandler,
         )
 
-        handler = OpenAIResponsesWebSocket()
-        headers = handler._get_headers("sk-test-key")
-        assert headers == {"Authorization": "Bearer sk-test-key"}
-
-    def test_get_default_api_base(self):
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
-        )
-
-        handler = OpenAIResponsesWebSocket()
-        assert handler._get_default_api_base() == "https://api.openai.com/v1"
-
-    def test_get_ssl_config_ws(self):
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
-        )
-
-        handler = OpenAIResponsesWebSocket()
-        assert handler._get_ssl_config("ws://localhost:8080") is None
-
-    @pytest.mark.asyncio
-    async def test_missing_api_key_raises(self):
-        from litellm.llms.openai.responses.websocket_handler import (
-            OpenAIResponsesWebSocket,
-        )
-
-        handler = OpenAIResponsesWebSocket()
-        mock_ws = MagicMock()
-        mock_logging = MagicMock()
-
-        with pytest.raises(ValueError, match="api_key is required"):
-            await handler.async_responses_websocket(
-                websocket=mock_ws,
-                logging_obj=mock_logging,
-                api_key=None,
-            )
+        result = OpenAIResponsesWebSocketHandler._get_ssl_config("wss://api.openai.com/v1/responses")
+        assert result is not None
 
 
 class TestResponsesWebSocketStreaming:
     """Unit tests for ResponsesWebSocketStreaming."""
 
     def test_store_backend_message_logged_event(self):
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -114,7 +77,7 @@ class TestResponsesWebSocketStreaming:
         assert streaming.messages[0]["type"] == "response.created"
 
     def test_store_backend_message_unlogged_event(self):
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -133,7 +96,7 @@ class TestResponsesWebSocketStreaming:
         assert len(streaming.messages) == 0
 
     def test_store_client_message(self):
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -160,7 +123,7 @@ class TestResponsesWebSocketStreaming:
     @pytest.mark.asyncio
     async def test_bidirectional_forward_client_disconnect(self):
         """When the client disconnects, the forward task should be cancelled."""
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -184,7 +147,7 @@ class TestResponsesWebSocketStreaming:
 
     @pytest.mark.asyncio
     async def test_client_to_backend_forwards_message(self):
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -211,7 +174,7 @@ class TestResponsesWebSocketStreaming:
     async def test_backend_to_client_forwards_message(self):
         from websockets.exceptions import ConnectionClosed
 
-        from litellm.litellm_core_utils.responses_websocket_streaming import (
+        from litellm.responses.websocket_streaming import (
             ResponsesWebSocketStreaming,
         )
 
@@ -255,7 +218,7 @@ class TestResponsesWebSocketEntryPoint:
         raises ValueError. We patch the inner function directly to avoid
         the @wrapper_client decorator complexity.
         """
-        from litellm.realtime_api.responses_websocket import (
+        from litellm.responses.websocket import (
             _aresponses_websocket,
         )
 
@@ -278,11 +241,11 @@ class TestResponsesWebSocketEntryPoint:
         Directly test the inner logic that the ValueError message is correct
         for unsupported providers.
         """
-        from litellm.realtime_api.responses_websocket import (
-            openai_responses_ws,
+        from litellm.responses.websocket import (
+            openai_responses_ws_handler,
         )
 
-        assert openai_responses_ws is not None
+        assert openai_responses_ws_handler is not None
 
 
 class TestProxyWebSocketEndpointRegistration:

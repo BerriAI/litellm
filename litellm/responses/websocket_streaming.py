@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 
-from .litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
