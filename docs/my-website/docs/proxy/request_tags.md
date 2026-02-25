@@ -50,7 +50,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ### Option 2: Use `x-litellm-tags` Header
 
-Pass tags dynamically via the `x-litellm-tags` header:
+Pass tags dynamically via the `x-litellm-tags` header as a comma-separated string:
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -63,9 +63,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   }'
 ```
 
-The header accepts:
-- **Comma-separated string**: `"tag1,tag2,tag3"` (spaces are trimmed)
-- **Array of strings**: `["tag1", "tag2", "tag3"]`
+Format: Comma-separated string (spaces are automatically trimmed): `"tag1,tag2,tag3"`
 
 ### Option 3: Use Request Body `tags`
 
