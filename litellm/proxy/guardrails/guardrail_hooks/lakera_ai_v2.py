@@ -385,7 +385,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         if lakera_guardrail_response.get("flagged") is True:
             # If only PII violations exist, mask the PII in the response and allow
             if self._is_only_pii_violation(lakera_guardrail_response):
-                masked_entity_count = {}
+                masked_entity_count: Dict[str, int] = {}
                 masked_messages = self._mask_pii_in_messages(
                     messages=post_call_messages,
                     lakera_response=lakera_guardrail_response,
