@@ -12,6 +12,7 @@ interface DataTableProps<TData, TValue> {
   /** Renders directly in tbody as sibling table rows (used by MCP children) */
   renderChildRows?: (props: { row: Row<TData> }) => React.ReactNode;
   getRowCanExpand?: (row: Row<TData>) => boolean;
+  getRowClassName?: (row: TData) => string;
   isLoading?: boolean;
   loadingMessage?: string;
   noDataMessage?: string;
@@ -24,6 +25,7 @@ export function DataTable<TData, TValue>({
   renderSubComponent,
   renderChildRows,
   getRowCanExpand,
+  getRowClassName,
   isLoading = false,
   loadingMessage = "🚅 Loading logs...",
   noDataMessage = "No logs found",
@@ -71,7 +73,7 @@ export function DataTable<TData, TValue>({
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
                 <TableRow
-                  className={`h-8 ${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}`}
+                  className={`h-8 ${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""} ${getRowClassName ? getRowClassName(row.original) : ""}`}
                   onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (

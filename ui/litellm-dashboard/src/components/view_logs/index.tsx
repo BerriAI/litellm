@@ -338,15 +338,23 @@ export default function SpendLogsTable({
     }
   }
 
+  // Demo drift scores: first 10 rows (most recent) get high drift, rest get low
+  const DEMO_HIGH_DRIFT = [91, 88, 85, 89, 83, 87, 82, 90, 86, 84];
+  const DEMO_LOW_DRIFT  = [4, 6, 3, 5, 7, 4, 3, 6, 5, 4];
+
   const filteredData =
     searchedLogs
-      .map((log) => {
+      .map((log, idx) => {
         const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
+        const driftScore = initialKeyAlias
+          ? (idx < 10 ? DEMO_HIGH_DRIFT[idx % DEMO_HIGH_DRIFT.length] : DEMO_LOW_DRIFT[idx % DEMO_LOW_DRIFT.length])
+          : undefined;
         return {
           ...log,
           duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
           session_llm_count: sessionComposition?.llm ?? undefined,
           session_mcp_count: sessionComposition?.mcp ?? undefined,
+          _driftScore: driftScore,
           onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
           onSessionClick: (sessionId: string) => {
             if (sessionId) {
@@ -702,18 +710,36 @@ export default function SpendLogsTable({
                     </div>
                   )}
                   <DataTable
-                    columns={createColumns({
-                      sortBy,
-                      sortOrder,
-                      onSortChange: (newSortBy, newSortOrder) => {
-                        setSortBy(newSortBy);
-                        setSortOrder(newSortOrder);
-                        setCurrentPage(1);
-                      },
-                    })}
+                    columns={[
+                      ...createColumns({
+                        sortBy,
+                        sortOrder,
+                        onSortChange: (newSortBy, newSortOrder) => {
+                          setSortBy(newSortBy);
+                          setSortOrder(newSortOrder);
+                          setCurrentPage(1);
+                        },
+                      }),
+                      ...(initialKeyAlias ? [{
+                        id: "_driftScore",
+                        header: () => <span className="text-xs font-medium text-gray-500">Drift Score</span>,
+                        cell: ({ row }: { row: { original: { _driftScore?: number } } }) => {
+                          const score = row.original._driftScore;
+                          if (score === undefined) return null;
+                          return (
+                            <span className={`text-sm font-semibold ${score > 50 ? "text-orange-600" : "text-green-600"}`}>
+                              {score}%
+                            </span>
+                          );
+                        },
+                      }] : []),
+                    ]}
                     data={filteredData}
                     onRowClick={handleRowClick}
                     isLoading={logs.isLoading}
+                    getRowClassName={(row: { _driftScore?: number }) =>
+                      row._driftScore !== undefined && row._driftScore > 50 ? "!bg-orange-50" : ""
+                    }
                   />
                 </div>
               </>
