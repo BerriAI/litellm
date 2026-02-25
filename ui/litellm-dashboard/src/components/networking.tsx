@@ -9854,3 +9854,57 @@ export const checkGdprCompliance = async (
   }
   return response.json();
 };
+
+export interface ToolRow {
+  tool_id: string;
+  tool_name: string;
+  origin?: string;
+  call_policy: string;
+  call_count?: number;
+  assignments?: Record<string, any>;
+  key_hash?: string;
+  team_id?: string;
+  key_alias?: string;
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string;
+  updated_by?: string;
+}
+
+export const fetchToolsList = async (accessToken: string): Promise<ToolRow[]> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/list` : `/v1/tool/list`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  const data = await response.json();
+  return data.tools ?? [];
+};
+
+export const updateToolPolicy = async (
+  accessToken: string,
+  toolName: string,
+  callPolicy: string
+): Promise<ToolRow> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/policy` : `/v1/tool/policy`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ tool_name: toolName, call_policy: callPolicy }),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};

@@ -134,6 +134,12 @@ const menuGroups: MenuGroup[] = [
             label: "Vector Stores",
             icon: <DatabaseOutlined />,
           },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <SafetyOutlined />,
+          },
         ],
       },
     ],
