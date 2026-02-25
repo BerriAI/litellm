@@ -100,26 +100,29 @@ function LiveDot() {
 // ─── Mock log rows with drift scores ───────────────────────────────────────────
 
 const DRIFT_LOGS = [
-  { id: "req_01", time: "2m ago",  model: "gpt-4o",              tools: "exec, write",          drift: 91, status: "flagged" },
-  { id: "req_02", time: "4m ago",  model: "gpt-4o",              tools: "fetch_claims",          drift: 88, status: "flagged" },
-  { id: "req_03", time: "7m ago",  model: "gpt-4o",              tools: "exec",                  drift: 85, status: "flagged" },
-  { id: "req_04", time: "11m ago", model: "gpt-4o",              tools: "search_database, read", drift: 4,  status: "success" },
-  { id: "req_05", time: "15m ago", model: "claude-3-5-sonnet",   tools: "fetch_claims, exec",    drift: 89, status: "flagged" },
-  { id: "req_06", time: "19m ago", model: "gpt-4o",              tools: "exec, write",           drift: 83, status: "flagged" },
-  { id: "req_07", time: "24m ago", model: "claude-3-5-sonnet",   tools: "search_database",       drift: 6,  status: "success" },
-  { id: "req_08", time: "28m ago", model: "gpt-4o",              tools: "fetch_claims",          drift: 87, status: "flagged" },
-  { id: "req_09", time: "33m ago", model: "gpt-4o",              tools: "exec",                  drift: 82, status: "flagged" },
-  { id: "req_10", time: "41m ago", model: "claude-3-5-sonnet",   tools: "exec, fetch_claims",    drift: 90, status: "flagged" },
-  { id: "req_11", time: "48m ago", model: "gpt-4o",              tools: "read, search_database", drift: 3,  status: "success" },
-  { id: "req_12", time: "55m ago", model: "gpt-4o",              tools: "write, exec",           drift: 86, status: "flagged" },
+  { id: "req_01", time: "2m ago",  model: "gpt-4o",              tools: "return_system_files, exec",   drift: 91, status: "flagged" },
+  { id: "req_02", time: "4m ago",  model: "gpt-4o",              tools: "return_system_files",          drift: 88, status: "flagged" },
+  { id: "req_03", time: "7m ago",  model: "gpt-4o",              tools: "exec",                         drift: 85, status: "flagged" },
+  { id: "req_04", time: "11m ago", model: "gpt-4o",              tools: "search_database, read",        drift: 4,  status: "success" },
+  { id: "req_05", time: "15m ago", model: "claude-3-5-sonnet",   tools: "return_system_files, exec",    drift: 89, status: "flagged" },
+  { id: "req_06", time: "19m ago", model: "gpt-4o",              tools: "exec, write",                  drift: 83, status: "flagged" },
+  { id: "req_07", time: "24m ago", model: "claude-3-5-sonnet",   tools: "search_database",              drift: 6,  status: "success" },
+  { id: "req_08", time: "28m ago", model: "gpt-4o",              tools: "return_system_files",          drift: 87, status: "flagged" },
+  { id: "req_09", time: "33m ago", model: "gpt-4o",              tools: "exec",                         drift: 82, status: "flagged" },
+  { id: "req_10", time: "41m ago", model: "claude-3-5-sonnet",   tools: "exec, return_system_files",    drift: 90, status: "flagged" },
+  { id: "req_11", time: "48m ago", model: "gpt-4o",              tools: "read, search_database",        drift: 3,  status: "success" },
+  { id: "req_12", time: "55m ago", model: "gpt-4o",              tools: "write, exec",                  drift: 86, status: "flagged" },
+  { id: "req_13", time: "1h ago",  model: "gpt-4o",              tools: "return_system_files",          drift: 84, status: "flagged" },
+  { id: "req_14", time: "1h ago",  model: "claude-3-5-sonnet",   tools: "search_database, read",        drift: 5,  status: "success" },
+  { id: "req_15", time: "1h ago",  model: "gpt-4o",              tools: "exec, return_system_files",    drift: 88, status: "flagged" },
 ];
 
 const DRIFT_BY_TOOL = [
-  { tool: "fetch_claims", calls: 41, drift: 92 },
-  { tool: "exec",         calls: 123, drift: 85 },
-  { tool: "write",        calls: 18, drift: 78 },
-  { tool: "search_database", calls: 142, drift: 4 },
-  { tool: "read",         calls: 5,  drift: 3  },
+  { tool: "return_system_files", calls: 41,  drift: 92 },
+  { tool: "exec",                calls: 123, drift: 85 },
+  { tool: "write",               calls: 18,  drift: 78 },
+  { tool: "search_database",     calls: 142, drift: 4  },
+  { tool: "read",                calls: 5,   drift: 3  },
 ];
 
 // ─── Detail view ───────────────────────────────────────────────────────────────
@@ -152,7 +155,7 @@ function AgentDetail({ agentId, onBack, accessToken, token, userRole, userID, al
         <h1 className="text-xl font-semibold text-gray-900">{agent.name}</h1>
         <StatusPill status={agent.status} />
         <span className="ml-auto text-sm text-red-600 font-medium">
-          {driftCount} of {totalLogs} requests drifted ({Math.round(driftCount / totalLogs * 100)}%)
+          {driftCount} of {totalLogs} requests drifted ({agent.drift}%)
         </span>
       </div>
 
