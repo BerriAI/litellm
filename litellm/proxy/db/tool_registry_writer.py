@@ -17,6 +17,7 @@ from litellm.proxy._types import ToolDiscoveryQueueItem
 from litellm.types.tool_management import LiteLLM_ToolTableRow, ToolCallPolicy
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import ToolCallLogItem
     from litellm.proxy.utils import PrismaClient
 
 
@@ -172,3 +173,75 @@ async def get_tools_by_names(
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer get_tools_by_names error: %s", e)
         return {}
+
+
+async def batch_insert_tool_call_logs(
+    prisma_client: "PrismaClient",
+    items: "List[ToolCallLogItem]",
+) -> None:
+    """Insert per-invocation call log rows into LiteLLM_ToolCallLog."""
+    if not items:
+        return
+    try:
+        for item in items:
+            tool_name = item.get("tool_name", "")
+            if not tool_name:
+                continue
+            await prisma_client.db.execute_raw(
+                'INSERT INTO "LiteLLM_ToolCallLog" (id, tool_name, request_id, key_hash, team_id, created_at) '
+                "VALUES ($1, $2, $3, $4, $5, NOW())",
+                str(uuid.uuid4()),
+                tool_name,
+                item.get("request_id"),
+                item.get("key_hash"),
+                item.get("team_id"),
+            )
+        verbose_proxy_logger.debug(
+            "tool_registry_writer: inserted %d call log(s)", len(items)
+        )
+    except Exception as e:
+        verbose_proxy_logger.error("tool_registry_writer batch_insert_tool_call_logs error: %s", e)
+
+
+async def get_tool_call_logs(
+    prisma_client: "PrismaClient",
+    tool_name: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict]:
+    """
+    Return recent call log rows for a tool, joined with LiteLLM_SpendLogs
+    to include request/response args (when prompt logging is enabled).
+    """
+    try:
+        rows = await prisma_client.db.query_raw(
+            'SELECT tl.id, tl.tool_name, tl.request_id, tl.key_hash, tl.team_id, tl.created_at, '
+            '       sl.proxy_server_request AS request, sl.response '
+            'FROM "LiteLLM_ToolCallLog" tl '
+            'LEFT JOIN "LiteLLM_SpendLogs" sl ON tl.request_id = sl.request_id '
+            'WHERE tl.tool_name = $1 '
+            'ORDER BY tl.created_at DESC LIMIT $2 OFFSET $3',
+            tool_name,
+            limit,
+            offset,
+        )
+        return rows
+    except Exception as e:
+        verbose_proxy_logger.error("tool_registry_writer get_tool_call_logs error: %s", e)
+        return []
+
+
+async def count_tool_call_logs(
+    prisma_client: "PrismaClient",
+    tool_name: str,
+) -> int:
+    """Return total number of call log rows for a tool."""
+    try:
+        rows = await prisma_client.db.query_raw(
+            'SELECT COUNT(*)::int AS n FROM "LiteLLM_ToolCallLog" WHERE tool_name = $1',
+            tool_name,
+        )
+        return int((rows[0].get("n") or 0)) if rows else 0
+    except Exception as e:
+        verbose_proxy_logger.error("tool_registry_writer count_tool_call_logs error: %s", e)
+        return 0

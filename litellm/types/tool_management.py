@@ -40,3 +40,29 @@ class ToolPolicyUpdateResponse(BaseModel):
     tool_name: str
     call_policy: ToolCallPolicy
     updated: bool
+
+
+class ToolCallLogRow(BaseModel):
+    id: str
+    tool_name: str
+    request_id: Optional[str] = None
+    key_hash: Optional[str] = None
+    team_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+    # Joined from LiteLLM_SpendLogs (present only when prompt logging is enabled)
+    request: Optional[str] = None
+    response: Optional[str] = None
+
+
+class ToolCallLogsResponse(BaseModel):
+    calls: List[ToolCallLogRow]
+    total: int
+    tool_name: str
+
+
+class ToolSettingsResponse(BaseModel):
+    store_tool_call_logs: bool
+
+
+class ToolSettingsUpdateRequest(BaseModel):
+    store_tool_call_logs: bool

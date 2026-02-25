@@ -4133,6 +4133,13 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     key_alias: Optional[str]  # human-readable key alias
 
 
+class ToolCallLogItem(TypedDict, total=False):
+    tool_name: str
+    request_id: Optional[str]  # litellm_call_id; join to LiteLLM_SpendLogs for args
+    key_hash: Optional[str]
+    team_id: Optional[str]
+
+
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     unified_file_id: str
     file_object: Optional[OpenAIFileObject] = None

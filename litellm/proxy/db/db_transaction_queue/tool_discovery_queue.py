@@ -10,23 +10,26 @@ increments in subsequent cycles rather than stopping after the first flush.
 from typing import List, Set
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ToolDiscoveryQueueItem
+from litellm.proxy._types import ToolCallLogItem, ToolDiscoveryQueueItem
 
 
 class ToolDiscoveryQueue:
     """
-    In-memory buffer for tool registry upserts.
+    In-memory buffer for tool registry upserts and call logs.
 
-    Deduplicates by tool_name within each flush cycle: a tool is only queued
-    once per ~30s batch, so call_count increments once per flush cycle the
-    tool appears in (not once per invocation, but not once per pod lifetime
-    either). The seen-set is cleared on flush so subsequent batches can
-    re-count the same tool.
+    Registry items deduplicate by tool_name within each flush cycle: a tool is
+    only queued once per ~30s batch, so call_count increments once per flush
+    cycle the tool appears in. The seen-set is cleared on flush so subsequent
+    batches can re-count the same tool.
+
+    Call log items are NOT deduplicated — one entry is written per invocation.
+    They reference LiteLLM_SpendLogs via request_id so callers can look up args.
     """
 
     def __init__(self) -> None:
         self._seen_tool_names: Set[str] = set()
         self._pending: List[ToolDiscoveryQueueItem] = []
+        self._call_log_pending: List[ToolCallLogItem] = []
 
     def add_update(self, item: ToolDiscoveryQueueItem) -> None:
         """Enqueue a tool discovery item if tool_name has not been seen before."""
@@ -46,9 +49,20 @@ class ToolDiscoveryQueue:
             item.get("origin"),
         )
 
+    def add_call_log(self, item: ToolCallLogItem) -> None:
+        """Enqueue one call log entry (not deduplicated)."""
+        if not item.get("tool_name"):
+            return
+        self._call_log_pending.append(item)
+
     def flush(self) -> List[ToolDiscoveryQueueItem]:
-        """Return and clear all pending items. Resets seen-set so the next
-        flush cycle can re-count the same tools."""
+        """Return and clear all pending registry items. Resets seen-set so the
+        next flush cycle can re-count the same tools."""
         items, self._pending = self._pending, []
         self._seen_tool_names.clear()
+        return items
+
+    def flush_call_logs(self) -> List[ToolCallLogItem]:
+        """Return and clear all pending call log items."""
+        items, self._call_log_pending = self._call_log_pending, []
         return items

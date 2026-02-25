@@ -45,6 +45,7 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
     SpendUpdateQueueItem,
+    ToolCallLogItem,
     ToolDiscoveryQueueItem,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
@@ -337,6 +338,7 @@ class DBSpendUpdateWriter:
                     _enqueue(name)
 
             # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
+            request_id = kwargs.get("litellm_call_id")
             if completion_response is not None and hasattr(completion_response, "choices"):
                 for choice in completion_response.choices or []:
                     message = getattr(choice, "message", None)
@@ -352,6 +354,15 @@ class DBSpendUpdateWriter:
                         tool_name = getattr(fn, "name", None)
                         if tool_name:
                             _enqueue(tool_name)
+                            if getattr(litellm, "store_tool_call_logs", True):
+                                self.tool_discovery_queue.add_call_log(
+                                    ToolCallLogItem(
+                                        tool_name=tool_name,
+                                        request_id=request_id,
+                                        key_hash=hashed_token,
+                                        team_id=team_id,
+                                    )
+                                )
         except Exception as e:
             verbose_proxy_logger.debug(
                 "_enqueue_tool_registry_upsert error (non-blocking): %s", e
@@ -879,13 +890,21 @@ class DBSpendUpdateWriter:
         self,
         prisma_client: PrismaClient,
     ) -> None:
-        """Flush ToolDiscoveryQueue and batch-upsert new tools into LiteLLM_ToolTable."""
-        from litellm.proxy.db.tool_registry_writer import batch_upsert_tools
+        """Flush ToolDiscoveryQueue: upsert new tools and insert call log rows."""
+        from litellm.proxy.db.tool_registry_writer import (
+            batch_insert_tool_call_logs,
+            batch_upsert_tools,
+        )
 
         try:
             items = self.tool_discovery_queue.flush()
             if items:
                 await batch_upsert_tools(prisma_client=prisma_client, items=items)
+            call_logs = self.tool_discovery_queue.flush_call_logs()
+            if call_logs:
+                await batch_insert_tool_call_logs(
+                    prisma_client=prisma_client, items=call_logs
+                )
         except Exception as e:
             verbose_proxy_logger.debug(
                 "_flush_tool_discovery_queue error (non-blocking): %s", e

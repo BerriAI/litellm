@@ -4,23 +4,34 @@ TOOL POLICY MANAGEMENT
 All /tool management endpoints
 
 GET  /v1/tool/list              - List all discovered tools and their policies
+GET  /v1/tool/calls             - Get call log rows for a tool (query param: tool_name)
+GET  /v1/tool/settings          - Get tool call log settings
+POST /v1/tool/settings          - Update tool call log settings
 GET  /v1/tool/{tool_name}       - Get a single tool's details
 POST /v1/tool/policy            - Update the call_policy for a tool
+
+NOTE: /v1/tool/calls, /v1/tool/settings, /v1/tool/list and /v1/tool/policy must
+all be registered BEFORE /v1/tool/{tool_name:path} so FastAPI routes them first.
 """
 
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
+    ToolCallLogRow,
+    ToolCallLogsResponse,
     ToolCallPolicy,
     ToolListResponse,
     ToolPolicyUpdateRequest,
     ToolPolicyUpdateResponse,
+    ToolSettingsResponse,
+    ToolSettingsUpdateRequest,
 )
 
 router = APIRouter()
@@ -56,6 +67,87 @@ async def list_tools(
     except Exception as e:
         verbose_proxy_logger.exception("Error listing tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/v1/tool/calls",
+    tags=["tool management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ToolCallLogsResponse,
+)
+async def get_tool_calls(
+    tool_name: str,
+    limit: int = 50,
+    offset: int = 0,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Return recent call log rows for a tool, joined with LiteLLM_SpendLogs
+    to include request/response args (when prompt logging is enabled).
+
+    Parameters:
+    - tool_name: The tool to look up
+    - limit: Max rows to return (default 50)
+    - offset: Pagination offset (default 0)
+    """
+    from litellm.proxy.db.tool_registry_writer import (
+        count_tool_call_logs,
+        get_tool_call_logs,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+
+    try:
+        rows = await get_tool_call_logs(
+            prisma_client=prisma_client,
+            tool_name=tool_name,
+            limit=limit,
+            offset=offset,
+        )
+        total = await count_tool_call_logs(
+            prisma_client=prisma_client, tool_name=tool_name
+        )
+        calls = [ToolCallLogRow(**row) for row in rows]
+        return ToolCallLogsResponse(calls=calls, total=total, tool_name=tool_name)
+    except Exception as e:
+        verbose_proxy_logger.exception("Error getting tool calls: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/v1/tool/settings",
+    tags=["tool management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ToolSettingsResponse,
+)
+async def get_tool_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Return the current tool call log settings."""
+    return ToolSettingsResponse(
+        store_tool_call_logs=getattr(litellm, "store_tool_call_logs", True)
+    )
+
+
+@router.post(
+    "/v1/tool/settings",
+    tags=["tool management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ToolSettingsResponse,
+)
+async def update_tool_settings(
+    data: ToolSettingsUpdateRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Toggle whether tool invocation call logs are stored."""
+    setattr(litellm, "store_tool_call_logs", data.store_tool_call_logs)
+    return ToolSettingsResponse(
+        store_tool_call_logs=getattr(litellm, "store_tool_call_logs", True)
+    )
 
 
 @router.get(

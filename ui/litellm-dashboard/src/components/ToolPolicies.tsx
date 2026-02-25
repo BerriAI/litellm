@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
-import { Select, Switch, Tooltip } from "antd";
-import { Select, Tooltip } from "antd";
+import { Switch } from "@tremor/react";
+import { Drawer, Select, Tooltip } from "antd";
 import {
   Table,
   TableHead,
@@ -15,7 +15,17 @@ import { TimeCell } from "./view_logs/time_cell";
 import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import FilterComponent, { FilterOption } from "./molecules/filter";
-import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
+import {
+  fetchToolsList,
+  fetchToolCallLogs,
+  fetchToolSettings,
+  updateToolPolicy,
+  updateToolSettings,
+  ToolRow,
+  ToolCallLog,
+} from "./networking";
+import { FormattedToolView } from "./view_logs/ToolsSection/FormattedToolView";
+import type { ParsedTool } from "./view_logs/ToolsSection/types";
 
 const POLICY_OPTIONS = [
   { value: "trusted",   label: "trusted",   color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
@@ -101,6 +111,35 @@ const PolicySelect: React.FC<{
   );
 };
 
+/** Build a ParsedTool from a raw SpendLogs response JSON string for the given tool name. */
+function buildParsedTool(responseJson: string | null | undefined, toolName: string): ParsedTool | null {
+  if (!responseJson) return null;
+  try {
+    const obj = JSON.parse(responseJson);
+    const choices = obj?.choices ?? [];
+    for (const choice of choices) {
+      const toolCalls = choice?.message?.tool_calls ?? [];
+      for (const tc of toolCalls) {
+        if (tc?.function?.name === toolName) {
+          let args: Record<string, any> = {};
+          try { args = JSON.parse(tc.function.arguments || "{}"); } catch { /* ignore */ }
+          return {
+            index: 1,
+            name: toolName,
+            description: "",
+            parameters: {},
+            called: true,
+            callData: { id: tc.id ?? "", name: toolName, arguments: args },
+          };
+        }
+      }
+    }
+  } catch {
+    // not JSON
+  }
+  return null;
+}
+
 export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
   const [tools, setTools] = useState<ToolRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,6 +154,19 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
   const [isLiveTail, setIsLiveTail] = useState(true);
   const [activeFilters, setActiveFilters] = useState<FilterValues>({});
   const pageSize = 50;
+
+  // Settings state
+  const [showSettings, setShowSettings] = useState(false);
+  const [storeToolCallLogs, setStoreToolCallLogs] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // Call log drawer state
+  const [selectedTool, setSelectedTool] = useState<ToolRow | null>(null);
+  const [callLogs, setCallLogs] = useState<ToolCallLog[]>([]);
+  const [callLogsTotal, setCallLogsTotal] = useState(0);
+  const [callLogsLoading, setCallLogsLoading] = useState(false);
+  const [callLogsPage, setCallLogsPage] = useState(1);
+  const callLogsPageSize = 20;
 
   const isFetchingDeferred = useDeferredValue(isFetching);
   const isButtonLoading = isFetching || isFetchingDeferred;
@@ -132,6 +184,14 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
       setIsFetching(false);
       setLoading(false);
     }
+  }, [accessToken]);
+
+  // Load settings once on mount
+  useEffect(() => {
+    if (!accessToken) return;
+    fetchToolSettings(accessToken)
+      .then((s) => setStoreToolCallLogs(s.store_tool_call_logs))
+      .catch(() => {/* ignore, default true */});
   }, [accessToken]);
 
   useEffect(() => { load(); }, [load]);
@@ -155,6 +215,45 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     } finally {
       setSaving(null);
     }
+  };
+
+  const handleSettingsToggle = async (val: boolean) => {
+    if (!accessToken) return;
+    setSavingSettings(true);
+    try {
+      const result = await updateToolSettings(accessToken, val);
+      setStoreToolCallLogs(result.store_tool_call_logs);
+    } catch {
+      // revert on error
+      setStoreToolCallLogs(!val);
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const loadCallLogs = useCallback(
+    async (tool: ToolRow, page: number) => {
+      if (!accessToken) return;
+      setCallLogsLoading(true);
+      try {
+        const offset = (page - 1) * callLogsPageSize;
+        const result = await fetchToolCallLogs(accessToken, tool.tool_name, callLogsPageSize, offset);
+        setCallLogs(result.calls);
+        setCallLogsTotal(result.total);
+      } catch {
+        setCallLogs([]);
+        setCallLogsTotal(0);
+      } finally {
+        setCallLogsLoading(false);
+      }
+    },
+    [accessToken]
+  );
+
+  const handleRowClick = (tool: ToolRow) => {
+    setSelectedTool(tool);
+    setCallLogsPage(1);
+    loadCallLogs(tool, 1);
   };
 
   const handleSortChange = (field: SortField, newState: SortState) => {
@@ -241,6 +340,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const callLogsTotalPages = Math.max(1, Math.ceil(callLogsTotal / callLogsPageSize));
 
   return (
     <div className="p-6 w-full">
@@ -278,6 +378,18 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
                 {isButtonLoading ? "Fetching" : "Fetch"}
+              </button>
+
+              {/* Settings gear */}
+              <button
+                onClick={() => setShowSettings(true)}
+                className="flex items-center gap-1.5 px-3 py-2 text-sm border rounded-md hover:bg-gray-50"
+                title="Tool log settings"
+              >
+                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
               </button>
             </div>
 
@@ -345,13 +457,17 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
               </TableRow>
             ) : (
               paginated.map((tool) => (
-                <TableRow key={tool.tool_id} className="h-8 hover:bg-gray-50">
+                <TableRow
+                  key={tool.tool_id}
+                  className="h-8 hover:bg-gray-50 cursor-pointer"
+                  onClick={() => handleRowClick(tool)}
+                >
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <TimeCell utcTime={tool.created_at ?? ""} />
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden">
                     <Tooltip title={tool.tool_name}>
-                      <span className="font-mono text-xs max-w-[20ch] truncate block font-medium">
+                      <span className="font-mono text-xs max-w-[20ch] truncate block font-medium text-blue-600 hover:underline">
                         {tool.tool_name}
                       </span>
                     </Tooltip>
@@ -408,6 +524,131 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
           </div>
         )}
       </div>
+
+      {/* Settings drawer */}
+      <Drawer
+        title="Tool Log Settings"
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        width={360}
+      >
+        <div className="space-y-6">
+          <div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Store Tool Call Logs</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Record each tool invocation. When enabled, click any tool row to see its call history.
+                </p>
+              </div>
+              <Switch
+                color="green"
+                checked={storeToolCallLogs}
+                disabled={savingSettings}
+                onChange={handleSettingsToggle}
+              />
+            </div>
+          </div>
+          {!storeToolCallLogs && (
+            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+              Call log recording is off. New invocations won&apos;t be tracked until re-enabled.
+            </div>
+          )}
+          <div className="text-xs text-gray-400">
+            To see request/response args, also enable <strong>Store Prompts in Spend Logs</strong> on the Logs settings page.
+          </div>
+        </div>
+      </Drawer>
+
+      {/* Call log drawer */}
+      <Drawer
+        title={
+          <div>
+            <span className="font-mono text-sm">{selectedTool?.tool_name}</span>
+            <span className="ml-2 text-xs text-gray-500 font-normal">call history</span>
+          </div>
+        }
+        open={!!selectedTool}
+        onClose={() => { setSelectedTool(null); setCallLogs([]); }}
+        width={680}
+      >
+        {callLogsLoading ? (
+          <div className="text-center text-gray-500 py-8">Loading…</div>
+        ) : callLogs.length === 0 ? (
+          <div className="text-center text-gray-500 py-8">
+            <p>No call logs found.</p>
+            {!storeToolCallLogs && (
+              <p className="text-xs mt-2 text-yellow-700">
+                Store Tool Call Logs is currently off — enable it in Settings to capture future calls.
+              </p>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="mb-3 text-xs text-gray-500">{callLogsTotal} total call{callLogsTotal !== 1 ? "s" : ""}</div>
+            <div className="space-y-3">
+              {callLogs.map((log) => {
+                const parsedTool = buildParsedTool(log.response, selectedTool?.tool_name ?? "");
+                return (
+                  <div key={log.id} className="border rounded-lg p-3 bg-gray-50 text-xs">
+                    <div className="flex items-center justify-between mb-2">
+                      <TimeCell utcTime={log.created_at ?? ""} />
+                      <div className="flex gap-3 text-gray-400">
+                        {log.request_id && (
+                          <Tooltip title={log.request_id}>
+                            <span className="font-mono truncate max-w-[18ch]">req: {log.request_id.slice(0, 8)}…</span>
+                          </Tooltip>
+                        )}
+                        {log.key_hash && (
+                          <Tooltip title={log.key_hash}>
+                            <span className="font-mono truncate max-w-[12ch] text-blue-500">{log.key_hash.slice(0, 8)}…</span>
+                          </Tooltip>
+                        )}
+                      </div>
+                    </div>
+                    {parsedTool ? (
+                      <FormattedToolView tool={parsedTool} />
+                    ) : (
+                      <p className="text-gray-400 italic">
+                        {log.response
+                          ? "No args captured for this call"
+                          : "Enable Store Prompts in Spend Logs to see args"}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Pagination */}
+            {callLogsTotalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+                <span>Page {callLogsPage} of {callLogsTotalPages}</span>
+                <div className="flex gap-1">
+                  <button
+                    disabled={callLogsPage === 1}
+                    onClick={() => {
+                      const p = callLogsPage - 1;
+                      setCallLogsPage(p);
+                      if (selectedTool) loadCallLogs(selectedTool, p);
+                    }}
+                    className="px-2 py-1 border rounded hover:bg-gray-100 disabled:opacity-40"
+                  >Previous</button>
+                  <button
+                    disabled={callLogsPage === callLogsTotalPages}
+                    onClick={() => {
+                      const p = callLogsPage + 1;
+                      setCallLogsPage(p);
+                      if (selectedTool) loadCallLogs(selectedTool, p);
+                    }}
+                    className="px-2 py-1 border rounded hover:bg-gray-100 disabled:opacity-40"
+                  >Next</button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Drawer>
     </div>
   );
 };
