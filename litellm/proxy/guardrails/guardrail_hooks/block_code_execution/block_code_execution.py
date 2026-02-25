@@ -317,6 +317,9 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         except HTTPException:
             status = "guardrail_intervened"
             raise
+        except ModifyResponseException:
+            status = "guardrail_intervened"
+            raise
         except Exception as e:
             status = "guardrail_failed_to_respond"
             exception_str = str(e)
