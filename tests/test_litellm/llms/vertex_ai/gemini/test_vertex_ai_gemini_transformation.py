@@ -1324,3 +1324,126 @@ def test_assistant_message_with_images_in_conversation_history():
     inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
     assert len(inline_data_parts) == 1
     assert inline_data_parts[0]["inline_data"]["mime_type"] == "image/png"
+
+
+def test_function_response_has_user_role():
+    """
+    Test that function response ContentType blocks include role="user".
+
+    Gemini API only accepts two roles: "user" and "model". Function responses
+    must be sent with role="user". Previously, LiteLLM omitted the role field
+    entirely, causing 400 errors from the Gemini API.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/22003
+    Fixes: https://github.com/BerriAI/litellm/issues/20690
+    """
+    messages = [
+        {"role": "user", "content": "What is the weather in Berlin?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Berlin"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": '{"temperature": "15°C", "condition": "Cloudy"}',
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    # Expect: user -> model (functionCall) -> user (functionResponse)
+    assert len(contents) == 3
+
+    assert contents[0]["role"] == "user"
+    assert contents[1]["role"] == "model"
+    assert "function_call" in contents[1]["parts"][0]
+
+    # The critical assertion: function response must have role="user"
+    assert contents[2]["role"] == "user"
+    assert "function_response" in contents[2]["parts"][0]
+
+
+def test_multi_turn_function_calling_roles():
+    """
+    Test a full multi-turn function calling conversation produces correct roles.
+
+    Simulates: user asks → model calls tool → tool responds → model answers → user asks again.
+    Every content block must have an explicit role of "user" or "model".
+
+    Fixes: https://github.com/BerriAI/litellm/issues/22003
+    """
+    messages = [
+        {"role": "user", "content": "What is the weather in Berlin?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_001",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Berlin"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_001",
+            "content": '{"temperature": "15°C"}',
+        },
+        {
+            "role": "assistant",
+            "content": "The weather in Berlin is 15°C.",
+        },
+        {"role": "user", "content": "And in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_002",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Paris"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_002",
+            "content": '{"temperature": "18°C"}',
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    # Every content block must have a valid role
+    for i, content in enumerate(contents):
+        assert "role" in content, f"Content block {i} missing 'role' field"
+        assert content["role"] in (
+            "user",
+            "model",
+        ), f"Content block {i} has invalid role: {content.get('role')}"
+
+    # Verify the function response blocks specifically have role="user"
+    for i, content in enumerate(contents):
+        for part in content["parts"]:
+            if "function_response" in part:
+                assert (
+                    content["role"] == "user"
+                ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
