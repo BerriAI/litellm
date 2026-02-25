@@ -14,16 +14,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import (CommonProxyErrors, LitellmUserRoles,
-                                  UserAPIKeyAuth)
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_daily_activity import \
-    get_daily_activity
-from litellm.types.agents import (AgentConfig, AgentMakePublicResponse,
-                                  AgentResponse, MakeAgentsPublicRequest,
-                                  PatchAgentRequest)
-from litellm.types.proxy.management_endpoints.common_daily_activity import \
-    SpendAnalyticsPaginatedResponse
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.types.agents import (
+    AgentConfig,
+    AgentMakePublicResponse,
+    AgentResponse,
+    MakeAgentsPublicRequest,
+    PatchAgentRequest,
+)
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
 
 router = APIRouter()
 
@@ -49,10 +52,10 @@ async def get_agents(
     Returns: List[AgentResponse]
 
     """
-    from litellm.proxy.agent_endpoints.agent_registry import \
-        global_agent_registry
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import \
-        AgentRequestHandler
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
 
     try:
         returned_agents: List[AgentResponse] = []
@@ -105,8 +108,9 @@ async def get_agents(
 
 #### CRUD ENDPOINTS FOR AGENTS ####
 
-from litellm.proxy.agent_endpoints.agent_registry import \
-    global_agent_registry as AGENT_REGISTRY
+from litellm.proxy.agent_endpoints.agent_registry import (
+    global_agent_registry as AGENT_REGISTRY,
+)
 
 
 @router.post(
@@ -226,19 +230,19 @@ async def get_agent_by_id(agent_id: str):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        from litellm.proxy.management_helpers.object_permission_utils import \
-            attach_object_permission_to_dict
-
         agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
         if agent is None:
             agent_row = await prisma_client.db.litellm_agentstable.find_unique(
-                where={"agent_id": agent_id}
+                where={"agent_id": agent_id},
+                include={"object_permission": True},
             )
             if agent_row is not None:
                 agent_dict = agent_row.model_dump()
-                await attach_object_permission_to_dict(
-                    agent_dict, prisma_client
-                )
+                if agent_row.object_permission is not None:
+                    try:
+                        agent_dict["object_permission"] = agent_row.object_permission.model_dump()
+                    except Exception:
+                        agent_dict["object_permission"] = agent_row.object_permission.dict()
                 agent = AgentResponse(**agent_dict)  # type: ignore
 
         if agent is None:
@@ -532,8 +536,9 @@ async def make_agent_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry as AGENT_REGISTRY
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
         from litellm.proxy.proxy_server import proxy_config
 
         # Check if user has admin permissions
@@ -648,8 +653,9 @@ async def make_agents_public(
     try:
         # Update the public model groups
         import litellm
-        from litellm.proxy.agent_endpoints.agent_registry import \
-            global_agent_registry as AGENT_REGISTRY
+        from litellm.proxy.agent_endpoints.agent_registry import (
+            global_agent_registry as AGENT_REGISTRY,
+        )
         from litellm.proxy.proxy_server import proxy_config
 
         # Load existing config
