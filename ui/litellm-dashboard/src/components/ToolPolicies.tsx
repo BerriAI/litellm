@@ -24,7 +24,7 @@ import {
   ToolRow,
   ToolCallLog,
 } from "./networking";
-import { FormattedToolView } from "./view_logs/ToolsSection/FormattedToolView";
+import { ToolItem } from "./view_logs/ToolsSection/ToolItem";
 import type { ParsedTool } from "./view_logs/ToolsSection/types";
 
 const POLICY_OPTIONS = [
@@ -591,7 +591,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                       </div>
                     </div>
                     {parsedTool ? (
-                      <FormattedToolView tool={parsedTool} />
+                      <ToolItem tool={parsedTool} />
                     ) : (
                       <p className="text-gray-400 italic">No arguments captured for this call</p>
                     )}
