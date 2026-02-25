@@ -221,7 +221,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
         optional_params.pop("max_retries", None)

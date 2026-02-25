@@ -250,7 +250,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         stream: bool = optional_params.pop("stream", None) or False
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
 
         ## TOOL CALLING
         # Transform tools from OpenAI format to Snowflake's tool_spec format

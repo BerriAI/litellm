@@ -254,7 +254,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         )
 
         stream: bool = optional_params.pop("stream", None) or False
-        extra_body = optional_params.pop("extra_body", {})
+        extra_body = optional_params.pop("extra_body", {}) or {}
         json_mode = optional_params.pop("json_mode", None)
         optional_params.pop("max_retries", None)
         if not fake_stream:

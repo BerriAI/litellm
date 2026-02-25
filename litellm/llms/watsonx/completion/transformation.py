@@ -232,7 +232,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         self, model: str, prompt: str, optional_params: Dict
     ) -> Dict:
         """Shared logic to build request payload"""
-        extra_body_params = optional_params.pop("extra_body", {})
+        extra_body_params = optional_params.pop("extra_body", {}) or {}
         optional_params.update(extra_body_params)
         watsonx_api_params = _get_api_params(params=optional_params, model=model)
         watsonx_auth_payload = self._prepare_payload(
