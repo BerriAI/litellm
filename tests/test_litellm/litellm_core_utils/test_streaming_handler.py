@@ -1291,3 +1291,39 @@ def test_empty_chunk_still_stops_after_finish_reason_set(
 
     with pytest.raises(StopIteration):
         initialized_custom_stream_wrapper.chunk_creator(chunk=empty_chunk)
+
+
+def test_tool_use_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test (Greptile suggestion): verifies that a chunk carrying only
+    tool_use data (empty text) is NOT dropped when received_finish_reason is
+    already set.
+
+    The fix checks BOTH text and tool_use for content, so this exercises the
+    tool_use branch of the guard added for issue #22098.
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    tool_chunk = {
+        "text": "",
+        "tool_use": {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+        },
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    # Must NOT raise StopIteration — the tool_use content should be returned.
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None even though the chunk had tool_use content — "
+        "tool_use data would be silently dropped."
+    )
