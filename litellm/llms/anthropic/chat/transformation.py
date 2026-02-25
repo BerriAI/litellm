@@ -186,6 +186,49 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         )
 
+    @staticmethod
+    def _is_effort_supported_model(model: str) -> bool:
+        """Check if the model supports the output_config.effort parameter.
+
+        Supported by Claude Opus 4.6, Sonnet 4.6, and Opus 4.5.
+        """
+        model_lower = model.lower()
+        if AnthropicConfig._is_claude_4_6_model(model):
+            return True
+        return any(
+            v in model_lower for v in ("opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5")
+        )
+
+    @staticmethod
+    def _map_reasoning_effort_to_anthropic_effort(
+        reasoning_effort: str, model: str
+    ) -> Optional[str]:
+        """Map reasoning_effort string to Anthropic output_config effort level.
+
+        Returns None for 'none' (no effort control desired).
+        Maps 'xhigh' to 'max' for Opus 4.6 only; maps to 'high' for
+        Sonnet 4.6 and other models since the Anthropic API rejects
+        'max' on non-Opus 4.6 models.
+        """
+        if reasoning_effort == "none":
+            return None
+
+        effort_map = {
+            "low": "low",
+            "minimal": "low",
+            "medium": "medium",
+            "high": "high",
+        }
+
+        if reasoning_effort == "xhigh":
+            is_opus_4_6 = any(
+                v in model.lower()
+                for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
+            )
+            return "max" if is_opus_4_6 else "high"
+
+        return effort_map.get(reasoning_effort)
+
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",
@@ -215,6 +258,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             params.append("thinking")
             params.append("reasoning_effort")
+
+        if AnthropicConfig._is_effort_supported_model(model):
+            params.append("output_config")
 
         return params
 
@@ -1003,9 +1049,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                thinking_param = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
+                if thinking_param is not None:
+                    optional_params["thinking"] = thinking_param
+                # For Claude 4.6, also set output_config.effort unless explicitly provided
+                if (
+                    AnthropicConfig._is_claude_4_6_model(model)
+                    and "output_config" not in non_default_params
+                ):
+                    effort_level = (
+                        AnthropicConfig._map_reasoning_effort_to_anthropic_effort(
+                            value, model
+                        )
+                    )
+                    if effort_level:
+                        optional_params["output_config"] = {"effort": effort_level}
+            elif param == "output_config" and isinstance(value, dict):
+                optional_params["output_config"] = value
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)

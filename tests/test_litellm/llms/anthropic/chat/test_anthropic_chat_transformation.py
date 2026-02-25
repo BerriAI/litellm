@@ -2006,18 +2006,25 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
 # ============ Reasoning Effort Tests ============
 
 
-def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
+def test_reasoning_effort_maps_to_adaptive_thinking_and_output_config_for_claude_4_6_models():
     """
-    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models.
+    Test that reasoning_effort maps to adaptive thinking AND output_config.effort for Claude 4.6 models.
 
-    For Claude Opus 4.6 and Claude Sonnet 4.6, reasoning_effort should map to {"type": "adaptive"}
-    regardless of the effort level specified.
+    For Claude Opus 4.6 and Claude Sonnet 4.6, reasoning_effort should map to both:
+    - thinking: {"type": "adaptive"}
+    - output_config: {"effort": <mapped_level>}
     """
     config = AnthropicConfig()
 
-    # Test with different reasoning_effort values - all should map to adaptive
+    expected_effort_map = {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "minimal": "low",
+    }
+
     for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
-        for effort in ["low", "medium", "high", "minimal"]:
+        for effort, expected_anthropic_effort in expected_effort_map.items():
             non_default_params = {"reasoning_effort": effort}
             optional_params = {}
 
@@ -2031,41 +2038,48 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             # Should map to adaptive thinking type
             assert "thinking" in result
             assert result["thinking"]["type"] == "adaptive"
-            # Should not have budget_tokens for adaptive type
             assert "budget_tokens" not in result["thinking"]
-            # reasoning_effort should not be in the result (it's transformed to thinking)
+            # Should also set output_config.effort
+            assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
+            assert result["output_config"]["effort"] == expected_anthropic_effort, (
+                f"Expected effort={expected_anthropic_effort} for {model} with reasoning_effort={effort}, "
+                f"got {result['output_config']['effort']}"
+            )
             assert "reasoning_effort" not in result
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
-    """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+    """Sonnet 4.6 aliases should expose thinking, reasoning_effort, and output_config."""
     config = AnthropicConfig()
 
     params = config.get_supported_openai_params(model="claude-sonnet-4-6-20260219")
 
     assert "thinking" in params
     assert "reasoning_effort" in params
+    assert "output_config" in params
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
-    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+    """Dotted Sonnet 4.6 aliases should expose thinking, reasoning_effort, and output_config."""
     config = AnthropicConfig()
 
     params = config.get_supported_openai_params(model="claude-sonnet-4.6")
 
     assert "thinking" in params
     assert "reasoning_effort" in params
+    assert "output_config" in params
 
 
 def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
     """
-    Sonnet 4.6 should convert reasoning_effort to adaptive thinking in final request payload.
+    Sonnet 4.6 should convert reasoning_effort to adaptive thinking AND output_config.effort
+    in the final request payload sent to Anthropic.
     """
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Think through this carefully."}]
 
     mapped_optional_params = config.map_openai_params(
-        non_default_params={"reasoning_effort": "high"},
+        non_default_params={"reasoning_effort": "medium"},
         optional_params={},
         model="claude-sonnet-4-6-20260219",
         drop_params=False,
@@ -2081,6 +2095,8 @@ def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
     assert "thinking" in result
     assert result["thinking"]["type"] == "adaptive"
     assert "budget_tokens" not in result["thinking"]
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "medium"
 
 
 def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
@@ -2117,6 +2133,120 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         assert result["thinking"]["budget_tokens"] == expected_budget
         # reasoning_effort should not be in the result (it's transformed to thinking)
         assert "reasoning_effort" not in result
+        # Non-4.6 models should NOT get output_config from reasoning_effort
+        assert "output_config" not in result
+
+
+def test_output_config_in_supported_params_for_opus_4_5():
+    """Opus 4.5 should support output_config."""
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-opus-4-5-20251101")
+    assert "output_config" in params
+
+
+def test_output_config_not_in_supported_params_for_sonnet_4_5():
+    """Sonnet 4.5 (non-effort model) should NOT support output_config."""
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-5-20250929")
+    assert "output_config" not in params
+
+
+def test_output_config_passthrough():
+    """output_config passed directly should be preserved in optional_params."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"output_config": {"effort": "low"}},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    assert result["output_config"] == {"effort": "low"}
+
+
+def test_output_config_overrides_reasoning_effort():
+    """Explicit output_config should take precedence over reasoning_effort mapping."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": "high",
+            "output_config": {"effort": "low"},
+        },
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "adaptive"
+    assert result["output_config"]["effort"] == "low"
+
+
+def test_reasoning_effort_xhigh_maps_to_max_for_opus_4_6():
+    """xhigh reasoning_effort should map to max effort for Opus 4.6."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="claude-opus-4-6-20250514",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "adaptive"
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_reasoning_effort_xhigh_maps_to_high_for_sonnet_4_6():
+    """xhigh reasoning_effort should map to high (not max) for Sonnet 4.6."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "adaptive"
+    assert result["output_config"]["effort"] == "high"
+
+
+def test_reasoning_effort_none_does_not_set_output_config():
+    """reasoning_effort='none' should not set output_config."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+
+    assert "output_config" not in result
+
+
+def test_output_config_in_transform_request_payload():
+    """output_config should appear in the final Anthropic API request payload."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    mapped = config.map_openai_params(
+        non_default_params={"output_config": {"effort": "medium"}},
+        optional_params={},
+        model="claude-sonnet-4-6-20260219",
+        drop_params=False,
+    )
+    result = config.transform_request(
+        model="claude-sonnet-4-6-20260219",
+        messages=messages,
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "medium"
 
 
 def test_code_execution_tool_results_extraction():
