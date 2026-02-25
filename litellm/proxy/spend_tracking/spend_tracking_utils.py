@@ -11,6 +11,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
@@ -36,14 +39,13 @@ def _get_max_string_length_prompt_in_db() -> int:
     Resolve prompt truncation threshold at runtime so values loaded later via
     proxy config environment_variables are honored.
     """
-    default_max = 2048
     max_length_str = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
     if max_length_str is None:
-        return default_max
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
     try:
         return int(max_length_str)
     except (TypeError, ValueError):
-        return default_max
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
