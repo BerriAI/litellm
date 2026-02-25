@@ -1247,6 +1247,8 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
     assert (
         metadata.get("max_retries") is None
     ), "max_retries should be None when not provided"
+
+
 def test_get_request_duration_ms_normal():
     """Test that request duration is correctly computed in milliseconds."""
     start = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
