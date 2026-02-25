@@ -9916,9 +9916,7 @@ export interface ToolCallLog {
   key_hash?: string;
   team_id?: string;
   created_at?: string;
-  // Joined from SpendLogs when prompt logging is enabled
-  request?: string;
-  response?: string;
+  tool_arguments?: Record<string, unknown> | null;
 }
 
 export const fetchToolCallLogs = async (

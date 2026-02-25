@@ -4135,9 +4135,10 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
 
 class ToolCallLogItem(TypedDict, total=False):
     tool_name: str
-    request_id: Optional[str]  # litellm_call_id; join to LiteLLM_SpendLogs for args
+    request_id: Optional[str]  # litellm_call_id
     key_hash: Optional[str]
     team_id: Optional[str]
+    tool_arguments: Optional[dict]  # captured function arguments from the tool call
 
 
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):

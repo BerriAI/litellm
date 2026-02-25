@@ -355,12 +355,22 @@ class DBSpendUpdateWriter:
                         if tool_name:
                             _enqueue(tool_name)
                             if getattr(litellm, "store_tool_call_logs", True):
+                                raw_args = getattr(fn, "arguments", None)
+                                tool_arguments: Optional[dict] = None
+                                if isinstance(raw_args, str):
+                                    try:
+                                        tool_arguments = json.loads(raw_args)
+                                    except Exception:
+                                        tool_arguments = {"raw": raw_args}
+                                elif isinstance(raw_args, dict):
+                                    tool_arguments = raw_args
                                 self.tool_discovery_queue.add_call_log(
                                     ToolCallLogItem(
                                         tool_name=tool_name,
                                         request_id=request_id,
                                         key_hash=hashed_token,
                                         team_id=team_id,
+                                        tool_arguments=tool_arguments,
                                     )
                                 )
         except Exception as e:

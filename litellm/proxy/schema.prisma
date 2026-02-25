@@ -1075,12 +1075,13 @@ model LiteLLM_ToolTable {
 // Per-invocation call log — one row per tool_call seen in an LLM response.
 // References LiteLLM_SpendLogs via request_id to avoid duplicating args data.
 model LiteLLM_ToolCallLog {
-  id         String   @id @default(uuid())
-  tool_name  String
-  request_id String?            // litellm_call_id; join to LiteLLM_SpendLogs for args
-  key_hash   String?
-  team_id    String?
-  created_at DateTime @default(now())
+  id             String   @id @default(uuid())
+  tool_name      String
+  request_id     String?            // litellm_call_id; join to LiteLLM_SpendLogs for args
+  key_hash       String?
+  team_id        String?
+  tool_arguments Json?              // captured function arguments from the tool call
+  created_at     DateTime @default(now())
 
   @@index([tool_name])
   @@index([created_at])

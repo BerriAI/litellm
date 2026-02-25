@@ -3,7 +3,7 @@ Pydantic models for Tool Policy management endpoints.
 """
 
 from datetime import datetime
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel
 
@@ -49,9 +49,7 @@ class ToolCallLogRow(BaseModel):
     key_hash: Optional[str] = None
     team_id: Optional[str] = None
     created_at: Optional[datetime] = None
-    # Joined from LiteLLM_SpendLogs (present only when prompt logging is enabled)
-    request: Optional[str] = None
-    response: Optional[str] = None
+    tool_arguments: Optional[Dict[str, Any]] = None
 
 
 class ToolCallLogsResponse(BaseModel):

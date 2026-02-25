@@ -9,6 +9,7 @@ because the generated Prisma Python client may not have LiteLLM_ToolTable
 when running against an older generated schema.
 """
 
+import json
 import uuid
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -187,14 +188,19 @@ async def batch_insert_tool_call_logs(
             tool_name = item.get("tool_name", "")
             if not tool_name:
                 continue
+            tool_arguments = item.get("tool_arguments")
+            args_json: Optional[str] = (
+                json.dumps(tool_arguments) if tool_arguments is not None else None
+            )
             await prisma_client.db.execute_raw(
-                'INSERT INTO "LiteLLM_ToolCallLog" (id, tool_name, request_id, key_hash, team_id, created_at) '
-                "VALUES ($1, $2, $3, $4, $5, NOW())",
+                'INSERT INTO "LiteLLM_ToolCallLog" (id, tool_name, request_id, key_hash, team_id, tool_arguments, created_at) '
+                "VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())",
                 str(uuid.uuid4()),
                 tool_name,
                 item.get("request_id"),
                 item.get("key_hash"),
                 item.get("team_id"),
+                args_json,
             )
         verbose_proxy_logger.debug(
             "tool_registry_writer: inserted %d call log(s)", len(items)
@@ -209,18 +215,13 @@ async def get_tool_call_logs(
     limit: int = 50,
     offset: int = 0,
 ) -> List[Dict]:
-    """
-    Return recent call log rows for a tool, joined with LiteLLM_SpendLogs
-    to include request/response args (when prompt logging is enabled).
-    """
+    """Return recent call log rows for a tool."""
     try:
         rows = await prisma_client.db.query_raw(
-            'SELECT tl.id, tl.tool_name, tl.request_id, tl.key_hash, tl.team_id, tl.created_at, '
-            '       sl.proxy_server_request AS request, sl.response '
-            'FROM "LiteLLM_ToolCallLog" tl '
-            'LEFT JOIN "LiteLLM_SpendLogs" sl ON tl.request_id = sl.request_id '
-            'WHERE tl.tool_name = $1 '
-            'ORDER BY tl.created_at DESC LIMIT $2 OFFSET $3',
+            'SELECT id, tool_name, request_id, key_hash, team_id, tool_arguments, created_at '
+            'FROM "LiteLLM_ToolCallLog" '
+            'WHERE tool_name = $1 '
+            'ORDER BY created_at DESC LIMIT $2 OFFSET $3',
             tool_name,
             limit,
             offset,

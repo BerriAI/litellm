@@ -111,33 +111,17 @@ const PolicySelect: React.FC<{
   );
 };
 
-/** Build a ParsedTool from a raw SpendLogs response JSON string for the given tool name. */
-function buildParsedTool(responseJson: string | null | undefined, toolName: string): ParsedTool | null {
-  if (!responseJson) return null;
-  try {
-    const obj = JSON.parse(responseJson);
-    const choices = obj?.choices ?? [];
-    for (const choice of choices) {
-      const toolCalls = choice?.message?.tool_calls ?? [];
-      for (const tc of toolCalls) {
-        if (tc?.function?.name === toolName) {
-          let args: Record<string, any> = {};
-          try { args = JSON.parse(tc.function.arguments || "{}"); } catch { /* ignore */ }
-          return {
-            index: 1,
-            name: toolName,
-            description: "",
-            parameters: {},
-            called: true,
-            callData: { id: tc.id ?? "", name: toolName, arguments: args },
-          };
-        }
-      }
-    }
-  } catch {
-    // not JSON
-  }
-  return null;
+/** Build a ParsedTool from captured tool_arguments for display. */
+function buildParsedTool(toolArguments: Record<string, unknown> | null | undefined, toolName: string): ParsedTool | null {
+  if (!toolArguments) return null;
+  return {
+    index: 1,
+    name: toolName,
+    description: "",
+    parameters: {},
+    called: true,
+    callData: { id: "", name: toolName, arguments: toolArguments as Record<string, any> },
+  };
 }
 
 export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
@@ -588,7 +572,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
             <div className="mb-3 text-xs text-gray-500">{callLogsTotal} total call{callLogsTotal !== 1 ? "s" : ""}</div>
             <div className="space-y-3">
               {callLogs.map((log) => {
-                const parsedTool = buildParsedTool(log.response, selectedTool?.tool_name ?? "");
+                const parsedTool = buildParsedTool(log.tool_arguments, selectedTool?.tool_name ?? "");
                 return (
                   <div key={log.id} className="border rounded-lg p-3 bg-gray-50 text-xs">
                     <div className="flex items-center justify-between mb-2">
@@ -609,11 +593,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                     {parsedTool ? (
                       <FormattedToolView tool={parsedTool} />
                     ) : (
-                      <p className="text-gray-400 italic">
-                        {log.response
-                          ? "No args captured for this call"
-                          : "Enable Store Prompts in Spend Logs to see args"}
-                      </p>
+                      <p className="text-gray-400 italic">No arguments captured for this call</p>
                     )}
                   </div>
                 );
