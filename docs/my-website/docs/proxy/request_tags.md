@@ -56,7 +56,7 @@ Pass tags dynamically via the `x-litellm-tags` header:
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   -H 'Authorization: Bearer sk-1234' \
   -H 'Content-Type: application/json' \
-  -H 'x-litellm-tags: team-stripe,production,us-east-1' \
+  -H 'x-litellm-tags: team-api,production,us-east-1' \
   -d '{
     "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello"}]
@@ -81,7 +81,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   -d '{
     "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello"}],
-    "tags": ["team-stripe", "production", "us-east-1"]
+    "tags": ["team-api", "production", "us-east-1"]
   }'
 ```
 
@@ -97,7 +97,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
     "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello"}],
     "metadata": {
-      "tags": ["team-stripe", "production", "us-east-1"]
+      "tags": ["team-api", "production", "us-east-1"]
     }
   }'
 ```
@@ -124,7 +124,7 @@ curl -L -X POST 'http://0.0.0.0:4000/key/generate' \
   -H 'Content-Type: application/json' \
   -d '{
     "metadata": {
-      "tags": ["customer-stripe", "tier-premium"]
+      "tags": ["customer-acme", "tier-premium"]
     }
   }'
 ```
