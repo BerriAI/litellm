@@ -401,6 +401,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
+        filterMode={entityType === "user" ? "single" : "multiple"}
         teams={teams || []}
       />
       <TabGroup>
