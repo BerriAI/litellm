@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button } from "@tremor/react";
-import { message } from "antd";
+import { Button, message } from "antd";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
@@ -43,7 +42,9 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
       </div>
 
       <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-        <Button className="mt-3">{copied ? "Copied!" : "Copy Virtual Key"}</Button>
+        <Button type="primary" style={{ marginTop: 12 }}>
+          {copied ? "Copied!" : "Copy Virtual Key"}
+        </Button>
       </CopyToClipboard>
     </div>
   );
