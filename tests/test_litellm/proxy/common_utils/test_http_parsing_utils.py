@@ -761,3 +761,70 @@ async def test_request_body_with_html_script_tags():
             f"Message content with HTML was modified during parsing: "
             f"expected={msg['content']!r}, got={result['messages'][2]['content']!r}"
         )
+
+
+def test_safe_get_request_headers_caches_on_request_state():
+    """
+    Test that _safe_get_request_headers caches the result on request.state
+    and returns the same object on subsequent calls.
+    """
+    mock_request = MagicMock()
+    mock_request.headers = {"content-type": "application/json", "authorization": "Bearer sk-123"}
+    mock_request.state = MagicMock(spec=[])  # empty spec so getattr returns default
+
+    # First call — should create and cache
+    result1 = _safe_get_request_headers(mock_request)
+    assert result1 == {"content-type": "application/json", "authorization": "Bearer sk-123"}
+    assert mock_request.state._cached_headers is result1
+
+    # Second call — should return the cached object (same identity)
+    result2 = _safe_get_request_headers(mock_request)
+    assert result2 is result1
+
+
+def test_safe_get_request_headers_none_request():
+    """
+    Test that _safe_get_request_headers returns empty dict for None request.
+    """
+    result = _safe_get_request_headers(None)
+    assert result == {}
+
+
+def test_safe_get_request_headers_copy_protects_cache():
+    """
+    Test that callers using .copy() before mutation do not corrupt the cache.
+    """
+    mock_request = MagicMock()
+    mock_request.headers = {"authorization": "Bearer sk-123", "host": "localhost"}
+    mock_request.state = MagicMock(spec=[])
+
+    original = _safe_get_request_headers(mock_request)
+
+    # Simulate what mutation call sites do: copy then pop
+    mutable = _safe_get_request_headers(mock_request).copy()
+    mutable.pop("authorization", None)
+
+    # Cache must be unaffected
+    assert "authorization" in _safe_get_request_headers(mock_request)
+    assert _safe_get_request_headers(mock_request) is original
+
+
+def test_safe_get_request_headers_state_unavailable():
+    """
+    Test that _safe_get_request_headers still returns headers when
+    request.state rejects attribute writes (the except path on the cache-write).
+    """
+    class ReadOnlyState:
+        """State object that allows reads but raises on writes."""
+        def __setattr__(self, name, value):
+            raise AttributeError("read-only state")
+
+        def __getattr__(self, name):
+            return None  # _cached_headers not found → triggers fresh read
+
+    mock_request = MagicMock()
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.state = ReadOnlyState()
+
+    result = _safe_get_request_headers(mock_request)
+    assert result == {"content-type": "application/json"}
