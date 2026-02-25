@@ -193,7 +193,7 @@ All metrics include the following tags: `env`, `service`, `version`, `HOSTNAME`,
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+  - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
 litellm_settings:
