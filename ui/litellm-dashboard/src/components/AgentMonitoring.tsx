@@ -203,13 +203,13 @@ function AgentDetail({ agentId, onBack, accessToken, token, userRole, userID, al
                   This agent is described as <span className="italic">"answer member questions about insurance claims"</span> but is calling <span className="font-mono">exec</span>, <span className="font-mono">write</span>, and <span className="font-mono">fetch_claims</span>. On every request, the gateway embeds the agent description and the tools called, then computes cosine similarity between them. This agent is scoring 0.08 — far outside the 0.82–0.95 range we see for healthy claims agents.
                 </p>
                 <div className="flex gap-3">
-                  <div className="flex-1 bg-white border border-red-200 rounded-lg px-4 py-3 flex items-center justify-between">
-                    <span className="text-xs text-gray-500">Similarity — description vs tools called</span>
-                    <span className="text-xl font-bold text-red-700">0.08</span>
+                  <div className="flex-1 bg-white border border-red-200 rounded-lg px-4 py-3">
+                    <span className="text-xs text-gray-500 block mb-1">Similarity — description vs tools</span>
+                    <span className="text-2xl font-bold text-red-700">0.08</span>
                   </div>
-                  <div className="flex-1 bg-white border border-gray-200 rounded-lg px-4 py-3 flex items-center justify-between">
-                    <span className="text-xs text-gray-500">Expected range for this agent type</span>
-                    <span className="text-xl font-bold text-green-700">0.82 – 0.95</span>
+                  <div className="flex-1 bg-white border border-gray-200 rounded-lg px-4 py-3">
+                    <span className="text-xs text-gray-500 block mb-1">Expected range for this agent type</span>
+                    <span className="text-2xl font-bold text-green-700">0.82 – 0.95</span>
                   </div>
                 </div>
               </div>
