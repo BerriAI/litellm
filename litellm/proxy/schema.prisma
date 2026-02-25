@@ -480,6 +480,7 @@ model LiteLLM_SpendLogs {
   completion_tokens   Int     @default(0)
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
+  request_duration_ms Int?
   completionStartTime DateTime? // Assuming completionStartTime is a DateTime field
   model               String   @default("")
   model_id            String?   @default("") // the model id stored in proxy model db
