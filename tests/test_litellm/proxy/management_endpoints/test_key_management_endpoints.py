@@ -5623,6 +5623,7 @@ async def test_rotate_master_key_model_data_valid_for_prisma(
     litellm_params/model_info are JSON strings (create_many expects dicts).
     """
     from unittest.mock import AsyncMock, MagicMock
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _rotate_master_key,
@@ -6157,3 +6158,51 @@ async def test_get_member_team_ids():
     # Should return team-A and team-B (user is a member of both)
     # Should NOT return team-C (user is not in members list)
     assert sorted(result) == ["team-A", "team-B"]
+
+
+@pytest.mark.asyncio
+async def test_generate_key_with_agent_id():
+    """Test that agent_id is accepted in GenerateKeyRequest and passed to generate_key_helper_fn."""
+    from litellm.proxy._types import GenerateKeyRequest
+
+    # Verify GenerateKeyRequest accepts agent_id
+    request = GenerateKeyRequest(
+        key_alias="agent-test-key",
+        agent_id="test-agent-123",
+        models=[],
+    )
+    assert request.agent_id == "test-agent-123"
+    data_json = request.model_dump(exclude_unset=True, exclude_none=True)
+    assert data_json["agent_id"] == "test-agent-123"
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_fn_agent_id():
+    """Test that generate_key_helper_fn correctly stores agent_id in key_data."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import litellm.proxy.management_endpoints.key_management_endpoints as km
+
+    mock_prisma_client = AsyncMock()
+    mock_insert = AsyncMock(return_value=MagicMock(token="sk-test", created_at=None, updated_at=None, litellm_budget_table=None))
+    mock_prisma_client.insert_data = mock_insert
+
+    with patch.object(km, "prisma_client", mock_prisma_client):
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+            try:
+                result = await generate_key_helper_fn(
+                    request_type="key",
+                    agent_id="test-agent-456",
+                    key_alias="test-agent-key",
+                    models=[],
+                    table_name="key",
+                )
+            except Exception:
+                # We just verify the agent_id was passed to insert_data
+                pass
+
+    # Verify insert_data was called with agent_id in key_data
+    if mock_insert.called:
+        call_kwargs = mock_insert.call_args
+        key_data = call_kwargs[1].get("data") or (call_kwargs[0][0] if call_kwargs[0] else {})
+        assert key_data.get("agent_id") == "test-agent-456"

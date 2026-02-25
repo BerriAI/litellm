@@ -314,6 +314,7 @@ model LiteLLM_VerificationToken {
     router_settings Json? @default("{}")
     user_id    String?
     team_id    String?
+    agent_id   String?
     project_id String?
     permissions Json @default("{}")
     max_parallel_requests Int?
