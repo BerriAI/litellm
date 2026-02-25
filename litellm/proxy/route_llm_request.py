@@ -163,6 +163,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
+        "_aresponses_websocket",  # private function for responses API websocket
         "aimage_edit",
         "agenerate_content",
         "agenerate_content_stream",

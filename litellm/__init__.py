@@ -1238,6 +1238,7 @@ from .ocr.main import *
 from .rag.main import *
 from .search.main import *
 from .realtime_api.main import _arealtime
+from .realtime_api.responses_websocket import _aresponses_websocket
 from .fine_tuning.main import *
 from .files.main import *
 from .vector_store_files.main import (

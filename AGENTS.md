@@ -189,4 +189,26 @@ When opening issues or pull requests, follow these templates:
 - Check similar provider implementations
 - Ensure comprehensive test coverage
 - Update documentation appropriately
-- Consider backward compatibility impact 
+- Consider backward compatibility impact
+
+## Cursor Cloud specific instructions
+
+### Dependencies
+- Run `poetry install --with dev,proxy-dev --extras proxy` to install all dev deps.
+- After that run `poetry run pip install psycopg-binary pytest-retry pytest-xdist openapi-core` for test extras.
+- Run `poetry run prisma generate` to generate the Prisma client (required before starting the proxy or running tests that import `litellm.proxy.proxy_server`).
+- See `CLAUDE.md` and the `Makefile` for canonical install/lint/test commands.
+
+### Running tests
+- `poetry run pytest tests/test_litellm/ -x -v` — unit tests (no DB/API keys needed).
+- `make lint-ruff` — fast linting. `make lint` runs full linting including mypy and circular-import checks.
+- Black formatting check will show many existing reformats; this is expected in the current codebase.
+
+### Running the proxy
+- The proxy requires PostgreSQL and Prisma. Without a live DB, `uvicorn` startup will fail during the Prisma migration step.
+- For most development tasks, unit tests and the `TestClient` from `starlette.testclient` are sufficient to validate proxy endpoints (including WebSocket endpoints) without starting a full server.
+
+### WebSocket endpoints
+- The proxy registers WebSocket routes at `/v1/realtime` (Realtime API) and `/v1/responses` (Responses API WebSocket mode).
+- WebSocket auth uses `user_api_key_auth_websocket` from `litellm/proxy/auth/user_api_key_auth.py`.
+- Use `from websockets.exceptions import ...` (not `websockets.exceptions.X`) for websockets v15+ compatibility.

@@ -7428,6 +7428,98 @@ async def realtime_websocket_endpoint(
 
 ######################################################################
 
+#            /v1/responses WebSocket Endpoint (WebSocket Mode)
+
+######################################################################
+
+
+RESPONSES_WS_REQUEST_SCOPE_TEMPLATE: Dict[str, Any] = {
+    "type": "http",
+    "method": "POST",
+    "path": "/v1/responses",
+}
+
+
+@app.websocket("/v1/responses")
+@app.websocket("/responses")
+@app.websocket("/openai/v1/responses")
+async def responses_websocket_endpoint(
+    websocket: WebSocket,
+    model: str = fastapi.Query(
+        ..., description="The model to use for the response."
+    ),
+    user_api_key_dict=Depends(user_api_key_auth_websocket),
+):
+    """
+    OpenAI Responses API — WebSocket mode.
+
+    Implements https://developers.openai.com/api/docs/guides/websocket-mode/
+
+    Clients connect with ``wss://…/v1/responses?model=<model>`` and send
+    ``response.create`` JSON events.  The server streams back the same
+    event types used by the SSE transport.
+    """
+    await websocket.accept()
+
+    data = {
+        "model": model,
+        "websocket": websocket,
+    }
+
+    headers_list = list(websocket.scope.get("headers") or [])
+    scope = RESPONSES_WS_REQUEST_SCOPE_TEMPLATE.copy()
+    scope["headers"] = headers_list
+
+    request = Request(scope=scope)
+    request._url = websocket.url
+
+    async def return_body():
+        return _realtime_request_body(model)
+
+    request.body = return_body  # type: ignore
+
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            model=model,
+            route_type="_aresponses_websocket",
+        )
+        data["user_api_key_dict"] = user_api_key_dict
+        llm_call = await route_request(
+            data=data,
+            route_type="_aresponses_websocket",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+
+        await llm_call
+    except Exception as e:
+        from websockets.exceptions import InvalidStatusCode
+
+        if isinstance(e, InvalidStatusCode):
+            verbose_proxy_logger.exception("Invalid status code")
+            await websocket.close(code=e.status_code, reason="Invalid status code")
+        else:
+            verbose_proxy_logger.exception("Internal server error")
+            await websocket.close(code=1011, reason="Internal server error")
+
+
+######################################################################
+
 #                          /v1/assistant Endpoints
 
 
