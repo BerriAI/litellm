@@ -47,7 +47,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [formValues, setFormValues] = useState<Record<string, any>>({});
-  const [pendingRestoredValues, setPendingRestoredValues] = useState<{ values: Record<string, any>; transport?: string } | null>(null);
+  const [pendingRestoredValues, setPendingRestoredValues] = useState<{
+    values: Record<string, any>;
+    transport?: string;
+  } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [tools, setTools] = useState<any[]>([]);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
@@ -129,7 +132,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     },
     onTokenReceived: (token) => {
       setOauthAccessToken(token?.access_token ?? null);
-      
+
       if (token?.access_token) {
         const credentials = {
           access_token: token.access_token,
@@ -137,11 +140,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ...(token.expires_in && { expires_in: token.expires_in }),
           ...(token.scope && { scope: token.scope }),
         };
-        
+
         form.setFieldsValue({ credentials });
-        
+
         NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration."
+          "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
         );
       }
     },
@@ -356,7 +359,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       };
 
       payload.static_headers = staticHeaders;
-      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
+      const includeCredentials =
+        restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
@@ -534,10 +538,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </span>
               }
               name="alias"
-              rules={[
-                { required: false },
-                { validator: (_, value) => validateMCPServerName(value) },
-              ]}
+              rules={[{ required: false }, { validator: (_, value) => validateMCPServerName(value) }]}
             >
               <TextInput
                 placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
@@ -647,7 +648,14 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   </span>
                 }
                 name={["credentials", "auth_value"]}
-                rules={[{ required: true, message: "Please enter the authentication value" }]}
+                rules={[
+                  {
+                    validator: (_, value) =>
+                      value && typeof value === "string" && value.trim() === ""
+                        ? Promise.reject(new Error("Authentication value cannot be empty whitespace"))
+                        : Promise.resolve(),
+                  },
+                ]}
               >
                 <TextInput
                   type="password"
