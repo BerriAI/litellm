@@ -117,9 +117,15 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
         addMessage("status", "Connected to realtime API");
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = async (event) => {
         try {
-          const data = JSON.parse(event.data);
+          let raw = event.data;
+          if (raw instanceof Blob) {
+            raw = await raw.text();
+          } else if (raw instanceof ArrayBuffer) {
+            raw = new TextDecoder().decode(raw);
+          }
+          const data = JSON.parse(raw);
           const type = data.type;
 
           if (type === "session.created") {
@@ -132,28 +138,39 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
                   input_audio_format: "pcm16",
                   output_audio_format: "pcm16",
                   input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
-                  turn_detection: { type: "server_vad" },
+                  turn_detection: null,
                 },
               })
             );
+          } else if (type === "session.updated") {
+            // session configured
           } else if (type === "response.audio.delta") {
             if (data.delta) playAudioChunk(data.delta);
-          } else if (type === "response.audio_transcript.delta") {
+          } else if (type === "response.audio_transcript.delta" || type === "response.text.delta") {
             if (data.delta) appendAssistantText(data.delta);
           } else if (
             type === "conversation.item.input_audio_transcription.completed"
           ) {
             if (data.transcript) addMessage("user", data.transcript);
           } else if (type === "response.done") {
-            // Final response - extract text if no transcript was streamed
-            const output = data.response?.output || [];
-            for (const item of output) {
-              for (const c of item.content || []) {
-                if (c.type === "text" && c.text) {
-                  appendAssistantText(c.text);
+            // Ensure we have the full text if deltas were missed
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.role === "assistant" && last.content) return prev;
+              // No assistant message yet — extract from response.done
+              const output = data.response?.output || [];
+              const texts: string[] = [];
+              for (const item of output) {
+                for (const c of item.content || []) {
+                  const t = c.text || c.transcript;
+                  if (t) texts.push(t);
                 }
               }
-            }
+              if (texts.length > 0) {
+                return [...prev, { role: "assistant" as const, content: texts.join(""), timestamp: new Date() }];
+              }
+              return prev;
+            });
           } else if (type === "error") {
             addMessage("status", `Error: ${data.error?.message || JSON.stringify(data.error)}`);
           }
@@ -189,11 +206,27 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     audioContextRef.current?.close();
     audioContextRef.current = null;
     nextPlayTimeRef.current = 0;
+    configureSessionRef.current = false;
     setIsConnected(false);
   }, []);
 
   const startRecording = useCallback(async () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    // Switch to server VAD mode for voice input
+    wsRef.current.send(
+      JSON.stringify({
+        type: "session.update",
+        session: {
+          modalities: ["text", "audio"],
+          voice: selectedVoice,
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+          turn_detection: { type: "server_vad" },
+        },
+      })
+    );
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -260,6 +293,27 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
     setIsRecording(false);
   }, []);
 
+  const configureSessionRef = useRef(false);
+
+  const ensureTextSession = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (configureSessionRef.current) return;
+    configureSessionRef.current = true;
+    wsRef.current.send(
+      JSON.stringify({
+        type: "session.update",
+        session: {
+          modalities: ["text", "audio"],
+          voice: selectedVoice,
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+          input_audio_transcription: { model: "gpt-4o-mini-transcribe" },
+          turn_detection: null,
+        },
+      })
+    );
+  }, [selectedVoice]);
+
   const sendTextMessage = useCallback(() => {
     if (!inputText.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     const text = inputText.trim();
@@ -277,7 +331,7 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
       })
     );
     wsRef.current.send(JSON.stringify({ type: "response.create" }));
-  }, [inputText, addMessage]);
+  }, [inputText, addMessage, ensureTextSession]);
 
   useEffect(() => {
     return () => {
