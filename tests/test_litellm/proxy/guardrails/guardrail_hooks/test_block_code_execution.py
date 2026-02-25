@@ -367,3 +367,63 @@ print(factorial(5))  # Output: 120
         assert "code block" in (exc_info.value.detail or {}).get("error", "")
         # The chunk that completes the block (third chunk) must not have been yielded
         assert len(yielded_chunks) == 2
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_blocks_when_accumulated_has_literal_backslash_n(
+        self,
+    ):
+        """Streaming hook normalizes escaped newlines before detection; blocks when literal \\n forms a complete code block."""
+        from litellm.types.utils import (Delta, ModelResponseStream,
+                                         StreamingChoices)
+
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.5,
+        )
+
+        # Chunks that when concatenated form "```python\\nprint(1)\\n```" (literal backslash-n)
+        async def mock_stream():
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content="```python\\n"))],
+            )
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content="print(1)\\n"))],
+            )
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content="```"))],
+            )
+
+        request_data = {"model": "gpt-4", "metadata": {}}
+        yielded_chunks = []
+
+        with pytest.raises(HTTPException) as exc_info:
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                yielded_chunks.append(chunk)
+
+        assert exc_info.value.status_code == 400
+        assert "code block" in (exc_info.value.detail or {}).get("error", "")
+        # Block is detected after normalization; chunk that completes the block not yielded
+        assert len(yielded_chunks) == 2
+
+    def test_normalize_escaped_newlines_mixed_content_detects_block(self):
+        """Mixed content (real newlines and literal \\n) is normalized so code block is detected."""
+        # Text with real newline then a fence using literal \n after language tag
+        mixed = "line1\n```py\\nprint(1)\\n```"
+        normalized = _normalize_escaped_newlines(mixed)
+        assert "```py\n" in normalized
+        assert "print(1)\n" in normalized
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python", "py"],
+            confidence_threshold=0.5,
+        )
+        blocks = guardrail._find_blocks(normalized)
+        assert len(blocks) == 1
+        assert blocks[0][2] == "py"
+        assert blocks[0][5] == "block"

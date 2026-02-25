@@ -47,11 +47,9 @@ def _normalize_escaped_newlines(text: str) -> str:
     """
     Replace literal escaped newlines (backslash + n or backslash + r) with real newlines.
     API/JSON payloads sometimes deliver newlines as the two-character sequence \\n.
-    Only applies when text has no real newline but contains literal \\n or \\r (double-encoded).
+    Applied whenever \\n or \\r appear, including in mixed content with real newlines.
     """
     if not text:
-        return text
-    if "\n" in text:
         return text
     if "\\n" not in text and "\\r" not in text:
         return text
@@ -353,7 +351,8 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                             delta_content += content
                 accumulated += delta_content
                 # Check after every chunk so we block before yielding the chunk that completes a blocked block
-                blocks = self._find_blocks(accumulated)
+                normalized = _normalize_escaped_newlines(accumulated)
+                blocks = self._find_blocks(normalized)
                 for _start, _end, _tag, _body, confidence, action_taken in blocks:
                     if (
                         action_taken == "block"
