@@ -243,7 +243,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             service_in_success_callbacks = True
         else:
             for cb in litellm.success_callback:
-                if hasattr(cb, "callback_name") and cb.callback_name == service:
+                if getattr(cb, "callback_name", None) == service:
                     service_in_success_callbacks = True
                     break
                 cb_id = get_callback_identifier(cb)
@@ -747,6 +747,7 @@ async def _perform_health_check_and_save(
         model=target_model,
         details=details,
         max_concurrency=max_concurrency,
+        model_id=model_id,
     )
 
     # Optionally save health check result to database (non-blocking)

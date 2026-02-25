@@ -334,6 +334,81 @@ def test_chat_completion_forward_headers(
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
+@pytest.mark.parametrize("forward_llm_auth_headers", [True, False])
+@mock_patch_acompletion()
+def test_chat_completion_forward_llm_provider_auth_headers(
+    mock_acompletion, client_no_auth, forward_llm_auth_headers
+):
+    """
+    Test that LLM provider auth headers (x-api-key, x-goog-api-key) are forwarded
+    when forward_llm_provider_auth_headers=True.
+    
+    This allows clients to send their own LLM provider API keys through the proxy.
+    """
+    try:
+        # Configure general settings
+        gs = getattr(litellm.proxy.proxy_server, "general_settings")
+        gs["forward_client_headers_to_llm_api"] = True
+        gs["forward_llm_provider_auth_headers"] = forward_llm_auth_headers
+        setattr(litellm.proxy.proxy_server, "general_settings", gs)
+        
+        # Test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "user", "content": "hello"},
+            ],
+            "max_tokens": 10,
+        }
+        
+        # Headers including LLM provider auth
+        request_headers = {
+            "Authorization": "Bearer sk-proxy-auth-123",  # Proxy auth (should be stripped)
+            "x-api-key": "sk-ant-api03-test-anthropic-key",  # Anthropic API key
+            "x-goog-api-key": "google-api-key-123",  # Google API key
+            "X-Custom-Header": "custom-value",  # Custom header (should be forwarded)
+        }
+        
+        # Make request
+        response = client_no_auth.post(
+            "/v1/chat/completions", json=test_data, headers=request_headers
+        )
+        
+        assert response.status_code == 200
+        
+        # Check forwarded headers
+        forwarded_headers = mock_acompletion.call_args.kwargs.get("headers", {})
+        
+        if forward_llm_auth_headers:
+            # LLM provider auth headers should be forwarded
+            assert "x-api-key" in forwarded_headers
+            assert forwarded_headers["x-api-key"] == "sk-ant-api03-test-anthropic-key"
+            assert "x-goog-api-key" in forwarded_headers
+            assert forwarded_headers["x-goog-api-key"] == "google-api-key-123"
+        else:
+            # LLM provider auth headers should be stripped
+            assert "x-api-key" not in forwarded_headers
+            assert "x-goog-api-key" not in forwarded_headers
+        
+        # Custom headers should always be forwarded (when forward_client_headers_to_llm_api=True)
+        assert "x-custom-header" in forwarded_headers
+        assert forwarded_headers["x-custom-header"] == "custom-value"
+        
+        # Proxy Authorization should never be forwarded
+        assert "authorization" not in forwarded_headers
+        
+        print(f"✓ Test passed with forward_llm_provider_auth_headers={forward_llm_auth_headers}")
+        print(f"  Forwarded headers: {list(forwarded_headers.keys())}")
+        
+    except Exception as e:
+        pytest.fail(f"Test failed with forward_llm_auth_headers={forward_llm_auth_headers}: {str(e)}")
+    finally:
+        # Clean up
+        gs = getattr(litellm.proxy.proxy_server, "general_settings")
+        gs.pop("forward_llm_provider_auth_headers", None)
+        setattr(litellm.proxy.proxy_server, "general_settings", gs)
+
+
 @mock_patch_acompletion()
 @pytest.mark.asyncio
 async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
