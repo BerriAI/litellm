@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import os
 import time
 from datetime import datetime
@@ -6,6 +7,7 @@ from typing import List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -39,8 +41,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         # Initialize lock
         self.flush_lock = asyncio.Lock()
 
-        # Check if flush_lock is already in kwargs to avoid double passing
-        kwargs["flush_lock"] = self.flush_lock
+        # Only set flush_lock if not already provided by caller
+        if "flush_lock" not in kwargs:
+            kwargs["flush_lock"] = self.flush_lock
 
         # Send metrics more quickly to datadog (every 5 seconds)
         if "flush_interval" not in kwargs:
@@ -229,10 +232,6 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
         if self.dd_app_key:
             headers["DD-APPLICATION-KEY"] = self.dd_app_key
-
-        import gzip
-
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         json_data = safe_dumps(payload)
         compressed_data = gzip.compress(json_data.encode("utf-8"))
