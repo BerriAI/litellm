@@ -898,6 +898,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               dateValue={dateValue}
             />
           )}
+          {/* User Usage Panel */}
+          {usageView === "user" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="user"
+              userID={userID}
+              userRole={userRole}
+              entityList={userOptions.length > 0 ? userOptions : null}
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
+          )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
             <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
