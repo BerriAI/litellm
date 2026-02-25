@@ -1,4 +1,5 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { useFetchWithLoadingManager } from "@/hooks/useFetchWithLoadingManager";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   BarChart,
@@ -22,9 +23,10 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
 import { UsageExportHeader } from "../../../EntityUsageExport";
+import { LoadingOverlay } from "../../../shared/loading_overlay";
 import type { EntityType } from "../../../EntityUsageExport/types";
 import {
   agentDailyActivityCall,
@@ -105,12 +107,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
 
-  const fetchSpendData = async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
+  const fetchSpendData = useCallback(async (): Promise<EntitySpendData | undefined> => {
+    if (!accessToken || !dateValue.from || !dateValue.to) return undefined;
     // Create new Date objects to avoid mutating the original dates
     const startTime = new Date(dateValue.from);
     const endTime = new Date(dateValue.to);
 
+    try {
     if (entityType === "tag") {
       const data = await tagDailyActivityCall(
         accessToken,
@@ -120,6 +123,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
+      return data;
     } else if (entityType === "team") {
       const data = await teamDailyActivityCall(
         accessToken,
@@ -129,6 +133,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
+      return data;
     } else if (entityType === "organization") {
       const data = await organizationDailyActivityCall(
         accessToken,
@@ -138,6 +143,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
+      return data;
     } else if (entityType === "customer") {
       const data = await customerDailyActivityCall(
         accessToken,
@@ -147,6 +153,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
+      return data;
     } else if (entityType === "agent") {
       const data = await agentDailyActivityCall(
         accessToken,
@@ -156,14 +163,58 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         selectedTags.length > 0 ? selectedTags : null,
       );
       setSpendData(data);
+      return data;
     } else {
       throw new Error("Invalid entity type");
     }
-  };
+    } catch (error) {
+      console.error("Error fetching entity spend data:", error);
+      return undefined;
+    }
+  }, [accessToken, dateValue.from, dateValue.to, entityType, entityId, selectedTags]);
+
+  const { loading, requestFetch } = useFetchWithLoadingManager(fetchSpendData);
 
   useEffect(() => {
-    fetchSpendData();
-  }, [accessToken, dateValue, entityId, selectedTags]);
+    requestFetch();
+  }, [requestFetch]);
+
+  // Poll for updates. 5s when changes detected, 30s when stable.
+  const POLL_FAST_MS = 5_000;
+  const POLL_SLOW_MS = 30_000;
+  const prevDataRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!accessToken || !dateValue.from || !dateValue.to) return;
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const schedulePoll = (intervalMs: number) => {
+      if (cancelled) return;
+      timeoutId = setTimeout(async () => {
+        if (document.visibilityState !== "visible") {
+          schedulePoll(intervalMs);
+          return;
+        }
+        const newData = await fetchSpendData();
+        if (cancelled) return;
+        const dataSignature = newData
+          ? `${newData.metadata?.total_spend ?? 0}-${newData.metadata?.total_api_requests ?? 0}-${newData.results?.length ?? 0}`
+          : null;
+        const hasPrevious = prevDataRef.current !== null;
+        const changed = hasPrevious && dataSignature !== prevDataRef.current;
+        prevDataRef.current = dataSignature;
+        schedulePoll(!hasPrevious || changed ? POLL_FAST_MS : POLL_SLOW_MS);
+      }, intervalMs);
+    };
+
+    schedulePoll(POLL_FAST_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [accessToken, dateValue.from, dateValue.to, fetchSpendData]);
 
   const getTopModels = () => {
     const modelSpend: { [key: string]: any } = {};
@@ -381,10 +432,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   return (
     <div style={{ width: "100%" }} className="relative">
+      <LoadingOverlay loading={loading} message="Updating data..." minDisplayMs={1000}>
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
+        onRefresh={requestFetch}
+        isRefreshing={loading}
         showFilters={entityList !== null && entityList.length > 0}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
@@ -693,6 +747,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      </LoadingOverlay>
     </div>
   );
 };

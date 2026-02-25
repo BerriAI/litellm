@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useRef, useState, useEffect } from "react";
 import {
+  Button,
   Card,
   Title,
   Text,
@@ -17,7 +18,9 @@ import { Select, Tooltip } from "antd";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
+import { useFetchWithLoadingManager } from "@/hooks/useFetchWithLoadingManager";
 import { ChartLoader } from "./shared/chart_loader";
+import { LoadingOverlay } from "./shared/loading_overlay";
 
 // New interfaces for the updated API response
 interface TagActiveUsersResponse {
@@ -78,11 +81,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
 
-  // Separate loading states for each endpoint
-  const [dauLoading, setDauLoading] = useState(false);
-  const [wauLoading, setWauLoading] = useState(false);
-  const [mauLoading, setMauLoading] = useState(false);
-  const [summaryLoading, setSummaryLoading] = useState(false);
 
   // Use today's date as the end date for all API calls
   const today = new Date();
@@ -101,10 +99,9 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     }
   };
 
-  const fetchDauData = async () => {
-    if (!accessToken) return;
+  const fetchDauData = async (): Promise<ActiveUsersAnalyticsResponse | undefined> => {
+    if (!accessToken) return undefined;
 
-    setDauLoading(true);
     try {
       const data = await tagDauCall(
         accessToken,
@@ -113,17 +110,16 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
         selectedTags.length > 0 ? selectedTags : undefined,
       );
       setDauData(data);
+      return data;
     } catch (error) {
       console.error("Failed to fetch DAU data:", error);
-    } finally {
-      setDauLoading(false);
+      return undefined;
     }
   };
 
-  const fetchWauData = async () => {
-    if (!accessToken) return;
+  const fetchWauData = async (): Promise<ActiveUsersAnalyticsResponse | undefined> => {
+    if (!accessToken) return undefined;
 
-    setWauLoading(true);
     try {
       const data = await tagWauCall(
         accessToken,
@@ -132,17 +128,16 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
         selectedTags.length > 0 ? selectedTags : undefined,
       );
       setWauData(data);
+      return data;
     } catch (error) {
       console.error("Failed to fetch WAU data:", error);
-    } finally {
-      setWauLoading(false);
+      return undefined;
     }
   };
 
-  const fetchMauData = async () => {
-    if (!accessToken) return;
+  const fetchMauData = async (): Promise<ActiveUsersAnalyticsResponse | undefined> => {
+    if (!accessToken) return undefined;
 
-    setMauLoading(true);
     try {
       const data = await tagMauCall(
         accessToken,
@@ -151,17 +146,16 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
         selectedTags.length > 0 ? selectedTags : undefined,
       );
       setMauData(data);
+      return data;
     } catch (error) {
       console.error("Failed to fetch MAU data:", error);
-    } finally {
-      setMauLoading(false);
+      return undefined;
     }
   };
 
-  const fetchSummaryData = async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
+  const fetchSummaryData = async (): Promise<TagSummaryResponse | undefined> => {
+    if (!accessToken || !dateValue.from || !dateValue.to) return undefined;
 
-    setSummaryLoading(true);
     try {
       const summary = await userAgentSummaryCall(
         accessToken,
@@ -170,10 +164,10 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
         selectedTags.length > 0 ? selectedTags : undefined,
       );
       setSummaryData(summary);
+      return summary;
     } catch (error) {
       console.error("Failed to fetch user agent summary data:", error);
-    } finally {
-      setSummaryLoading(false);
+      return undefined;
     }
   };
 
@@ -182,29 +176,66 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     fetchAvailableTags();
   }, [accessToken]);
 
-  // Effect for DAU/WAU/MAU data (independent of date picker)
+  const refetchAllData = useCallback(async () => {
+    const [dau, wau, mau, summary] = await Promise.all([
+      fetchDauData(),
+      fetchWauData(),
+      fetchMauData(),
+      dateValue.from && dateValue.to ? fetchSummaryData() : Promise.resolve(undefined),
+    ]);
+    const summarySig = summary
+      ? `${summary.results?.length ?? 0}-${(summary.results ?? []).reduce((s, r) => s + (r.total_spend ?? 0), 0)}`
+      : "";
+    return `${summarySig}-${dau?.results?.length ?? 0}-${wau?.results?.length ?? 0}-${mau?.results?.length ?? 0}`;
+  }, [accessToken, userAgentFilter, selectedTags, dateValue.from, dateValue.to]);
+
+  const { loading: isDataLoading, requestFetch } = useFetchWithLoadingManager(refetchAllData);
+
+  // Effect for data fetching when deps change
   useEffect(() => {
     if (!accessToken) return;
-
-    const timeoutId = setTimeout(() => {
-      fetchDauData();
-      fetchWauData();
-      fetchMauData();
-    }, 50);
-
-    return () => clearTimeout(timeoutId);
-  }, [accessToken, userAgentFilter, selectedTags]);
-
-  // Effect for summary data (depends on date picker)
-  useEffect(() => {
     if (!dateValue.from || !dateValue.to) return;
 
     const timeoutId = setTimeout(() => {
-      fetchSummaryData();
+      requestFetch();
     }, 50);
 
     return () => clearTimeout(timeoutId);
-  }, [accessToken, dateValue, selectedTags]);
+  }, [accessToken, dateValue.from, dateValue.to, userAgentFilter, selectedTags, requestFetch]);
+
+  // Poll for updates. 5s when changes detected, 30s when stable.
+  const POLL_FAST_MS = 5_000;
+  const POLL_SLOW_MS = 30_000;
+  const prevDataRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!accessToken) return;
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const schedulePoll = (intervalMs: number) => {
+      if (cancelled) return;
+      timeoutId = setTimeout(async () => {
+        if (document.visibilityState !== "visible") {
+          schedulePoll(intervalMs);
+          return;
+        }
+        const dataSignature = await requestFetch();
+        if (cancelled) return;
+        const hasPrevious = prevDataRef.current !== null;
+        const changed = hasPrevious && dataSignature !== prevDataRef.current;
+        prevDataRef.current = dataSignature;
+        schedulePoll(!hasPrevious || changed ? POLL_FAST_MS : POLL_SLOW_MS);
+      }, intervalMs);
+    };
+
+    schedulePoll(POLL_FAST_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [accessToken, requestFetch]);
 
   // Helper function to extract user agent from tag
   const extractUserAgent = (tag: string): string => {
@@ -369,6 +400,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   };
 
   return (
+    <LoadingOverlay loading={isDataLoading} message="Updating data..." minDisplayMs={1000}>
     <div className="space-y-6 mt-6">
       {/* Summary Section Card */}
       <Card>
@@ -379,6 +411,23 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
               <Subtitle>Performance metrics for different user agents</Subtitle>
             </div>
 
+            <div className="flex items-end gap-2">
+            <Button
+              onClick={requestFetch}
+              disabled={isDataLoading}
+              icon={() => (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+              )}
+            >
+              Refresh
+            </Button>
             {/* User Agent Filter */}
             <div className="w-96">
               <Text className="text-sm font-medium block mb-2">Filter by User Agents</Text>
@@ -406,12 +455,13 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                 })}
               </Select>
             </div>
+            </div>
           </div>
 
           {/* Date Range Picker is controlled by parent component */}
 
           {/* Top 4 User Agents Cards */}
-          {summaryLoading ? (
+          {isDataLoading ? (
             <ChartLoader isDateChanging={false} />
           ) : (
             <Grid numItems={4} className="gap-4">
@@ -493,7 +543,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                     <div className="mb-4">
                       <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
                     </div>
-                    {dauLoading ? (
+                    {isDataLoading ? (
                       <ChartLoader isDateChanging={false} />
                     ) : (
                       <BarChart
@@ -512,7 +562,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                     <div className="mb-4">
                       <Title className="text-lg">Weekly Active Users - Last 7 Weeks</Title>
                     </div>
-                    {wauLoading ? (
+                    {isDataLoading ? (
                       <ChartLoader isDateChanging={false} />
                     ) : (
                       <BarChart
@@ -531,7 +581,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                     <div className="mb-4">
                       <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
                     </div>
-                    {mauLoading ? (
+                    {isDataLoading ? (
                       <ChartLoader isDateChanging={false} />
                     ) : (
                       <BarChart
@@ -561,6 +611,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
         </TabGroup>
       </Card>
     </div>
+    </LoadingOverlay>
   );
 };
 

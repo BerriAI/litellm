@@ -23,11 +23,12 @@ import {
 } from "@tremor/react";
 import { Alert, Segmented, Select, Tooltip, Typography } from "antd";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
-import React, { useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useFetchWithLoadingManager } from "@/hooks/useFetchWithLoadingManager";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -39,7 +40,7 @@ import EntityUsageExportModal from "../../EntityUsageExport";
 import { Team } from "../../key_team_helpers/key_list";
 import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
 import AdvancedDatePicker from "../../shared/advanced_date_picker";
-import { ChartLoader } from "../../shared/chart_loader";
+import { LoadingOverlay } from "../../shared/loading_overlay";
 import { Tag } from "../../tag_management/types";
 import UserAgentActivity from "../../user_agent_activity";
 import ViewUserSpend from "../../view_user_spend";
@@ -64,9 +65,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     metadata: any;
   }>({ results: [], metadata: {} });
 
-  // Separate loading states for better UX
-  const [loading, setLoading] = useState(false);
-  const [isDateChanging, setIsDateChanging] = useState(false);
 
   // Create initial dates outside of state to prevent recreation
   const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
@@ -363,13 +361,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       .slice(0, limit);
   };
 
-  const fetchUserSpendData = useCallback(async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
+  const fetchUserSpendData = useCallback(async (): Promise<typeof userSpendData | undefined> => {
+    if (!accessToken || !dateValue.from || !dateValue.to) return undefined;
 
     // For non-admins, always pass their own user_id
     const effectiveUserId = isAdmin ? selectedUserId : (userID || null);
-
-    setLoading(true);
 
     // Create new Date objects to avoid mutating the original dates
     const startTime = new Date(dateValue.from);
@@ -380,7 +376,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       try {
         const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId);
         setUserSpendData(aggregated);
-        return;
+        return aggregated;
       } catch (e) {
         // Fallback to paginated calls if aggregated endpoint is unavailable
       }
@@ -389,7 +385,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
       if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData);
-        return;
+        return firstPageData;
       }
 
       const allResults = [...firstPageData.results];
@@ -407,25 +403,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         }
       }
 
-      setUserSpendData({
-        results: allResults,
-        metadata: aggregatedMetadata,
-      });
+      const data = { results: allResults, metadata: aggregatedMetadata };
+      setUserSpendData(data);
+      return data;
     } catch (error) {
       console.error("Error fetching user spend data:", error);
-    } finally {
-      setLoading(false);
-      setIsDateChanging(false);
+      return undefined;
     }
   }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID]);
 
+  const { loading, requestFetch } = useFetchWithLoadingManager(fetchUserSpendData);
+
   // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
-    // Instant visual feedback
-    setIsDateChanging(true);
-    setLoading(true);
-
-    // Update date immediately for UI responsiveness
     setDateValue(newValue);
   }, []);
 
@@ -434,11 +424,55 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     if (!dateValue.from || !dateValue.to) return;
 
     const timeoutId = setTimeout(() => {
-      fetchUserSpendData();
+      requestFetch();
     }, 50); // Very short debounce
 
     return () => clearTimeout(timeoutId);
-  }, [fetchUserSpendData]);
+  }, [requestFetch, dateValue.from, dateValue.to]);
+
+  // Trigger fetch with loader when switching back to global usage (EntityUsage does this on mount for other views)
+  useEffect(() => {
+    if (usageView === "global" && accessToken && dateValue.from && dateValue.to) {
+      requestFetch();
+    }
+  }, [usageView, accessToken, dateValue.from, dateValue.to, requestFetch]);
+
+  // Poll for updates when on global usage view. 5s when changes detected, 30s when stable.
+  const POLL_FAST_MS = 5_000;
+  const POLL_SLOW_MS = 30_000;
+  const prevDataRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (usageView !== "global" || !accessToken || !dateValue.from || !dateValue.to) return;
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const schedulePoll = (intervalMs: number) => {
+      if (cancelled) return;
+      timeoutId = setTimeout(async () => {
+        if (document.visibilityState !== "visible") {
+          schedulePoll(intervalMs);
+          return;
+        }
+        const newData = await fetchUserSpendData();
+        if (cancelled) return;
+        const dataSignature = newData
+          ? `${newData.metadata?.total_spend ?? 0}-${newData.metadata?.total_api_requests ?? 0}-${newData.results?.length ?? 0}`
+          : null;
+        const hasPrevious = prevDataRef.current !== null;
+        const changed = hasPrevious && dataSignature !== prevDataRef.current;
+        prevDataRef.current = dataSignature;
+        schedulePoll(!hasPrevious || changed ? POLL_FAST_MS : POLL_SLOW_MS);
+      }, intervalMs);
+    };
+
+    schedulePoll(POLL_FAST_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [usageView, accessToken, dateValue.from, dateValue.to, fetchUserSpendData]);
 
   const modelMetrics = processActivityData(userSpendData, "models", teams);
   const keyMetrics = processActivityData(userSpendData, "api_keys", teams);
@@ -509,6 +543,22 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 </TabList>
                 <div className="flex items-center gap-2">
                   <Button
+                    onClick={() => requestFetch()}
+                    disabled={loading}
+                    icon={() => (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                        />
+                      </svg>
+                    )}
+                  >
+                    Refresh
+                  </Button>
+                  <Button
                     onClick={() => setIsAiChatOpen(true)}
                     icon={() => (
                       <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
@@ -535,6 +585,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   </Button>
                 </div>
               </div>
+              <LoadingOverlay loading={loading} message="Updating data..." minDisplayMs={1000}>
               <TabPanels>
                 {/* Cost Panel */}
                 <TabPanel>
@@ -655,10 +706,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     <Col numColSpan={2}>
                       <Card>
                         <Title>Daily Spend</Title>
-                        {loading ? (
-                          <ChartLoader isDateChanging={isDateChanging} />
-                        ) : (
-                          <BarChart
+                        <BarChart
                             data={[...userSpendData.results].sort(
                               (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
                             )}
@@ -685,7 +733,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               );
                             }}
                           />
-                        )}
                       </Card>
                     </Col>
                     {/* Top API Keys */}
@@ -737,10 +784,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </button>
                           </div>
                         </div>
-                        {loading ? (
-                          <ChartLoader isDateChanging={isDateChanging} />
-                        ) : (
-                          <div className="relative max-h-[600px] overflow-y-auto">
+                        <div className="relative max-h-[600px] overflow-y-auto">
                             {(() => {
                               const modelData =
                                 modelViewType === "groups"
@@ -780,17 +824,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               );
                             })()}
                           </div>
-                        )}
                       </Card>
                     </Col>
 
                     {/* Spend by Provider */}
                     <Col numColSpan={2}>
-                      <SpendByProvider
-                        loading={loading}
-                        isDateChanging={isDateChanging}
-                        providerSpend={getProviderSpend()}
-                      />
+                      <SpendByProvider providerSpend={getProviderSpend()} />
                     </Col>
 
                     {/* Usage Metrics */}
@@ -811,6 +850,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <EndpointUsage userSpendData={userSpendData} />
                 </TabPanel>
               </TabPanels>
+              </LoadingOverlay>
             </TabGroup>
             </>
           )}

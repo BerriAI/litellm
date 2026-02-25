@@ -10,6 +10,8 @@ interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
   entityType: EntityType;
   spendData: EntitySpendData;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
   // Optional filter props
   showFilters?: boolean;
   filterLabel?: string;
@@ -26,6 +28,8 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   dateValue,
   entityType,
   spendData,
+  onRefresh,
+  isRefreshing = false,
   showFilters = false,
   filterLabel,
   filterPlaceholder,
@@ -70,7 +74,25 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
             </div>
           )}
 
-          <div className="justify-self-end">
+          <div className="justify-self-end flex gap-2">
+            {onRefresh && (
+              <Button
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                icon={() => (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                )}
+              >
+                Refresh
+              </Button>
+            )}
             <Button
               onClick={() => setIsExportModalOpen(true)}
               icon={() => (
