@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, message, Select, Input, Steps, Radio, Tag, Divider } from "antd";
 import { Button } from "@tremor/react";
-import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined } from "@ant-design/icons";
+import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import {
   createAgentCall,
@@ -9,11 +9,16 @@ import {
   keyCreateForAgentCall,
   keyListCall,
   keyUpdateCall,
+  modelAvailableCall,
   AgentCreateInfo,
 } from "../networking";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { getDefaultFormValues, buildAgentDataFromForm } from "./agent_config";
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 
 const { Step } = Steps;
 
@@ -32,6 +37,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   accessToken,
   onSuccess,
 }) => {
+  const { userId, userRole } = useAuthorized();
   const [form] = Form.useForm();
   const [currentStep, setCurrentStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -46,6 +52,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const [existingKeys, setExistingKeys] = useState<any[]>([]);
   const [selectedExistingKey, setSelectedExistingKey] = useState<string | null>(null);
   const [loadingKeys, setLoadingKeys] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   // Step 2: results
   const [createdAgentName, setCreatedAgentName] = useState<string>("");
@@ -68,9 +76,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     fetchMetadata();
   }, []);
 
-  // Fetch existing keys when assign key step becomes active
+  // Fetch existing keys when assign key step becomes active (step 2)
   useEffect(() => {
-    if (currentStep === 1 && accessToken && existingKeys.length === 0) {
+    if (currentStep === 2 && accessToken && existingKeys.length === 0) {
       const fetchKeys = async () => {
         setLoadingKeys(true);
         try {
@@ -85,6 +93,31 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       fetchKeys();
     }
   }, [currentStep, accessToken]);
+
+  // Fetch available models when Assign Key step is active (same list as key generation)
+  useEffect(() => {
+    if (currentStep !== 2 || !accessToken || !userId || !userRole) return;
+    let cancelled = false;
+    setLoadingModels(true);
+    modelAvailableCall(accessToken, userId, userRole)
+      .then((response) => {
+        if (cancelled) return;
+        const modelsArray = response?.data ?? (Array.isArray(response) ? response : []);
+        const ids = modelsArray
+          .map((m: { id?: string; model_name?: string }) => m.id ?? m.model_name)
+          .filter(Boolean) as string[];
+        setAvailableModels(ids);
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Error fetching models:", error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentStep, accessToken, userId, userRole]);
 
   const selectedAgentTypeInfo = agentTypeMetadata.find(
     (info) => info.agent_type === agentType
@@ -156,8 +189,6 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
 
     setIsSubmitting(true);
     try {
-      // getFieldsValue(true) returns ALL preserved values including fields from
-      // unmounted steps; merge with any currently-mounted validated fields.
       await form.validateFields();
       const values = { ...form.getFieldsValue(true) };
       const agentData = buildAgentData(values);
@@ -165,6 +196,26 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         message.error("Failed to build agent data");
         setIsSubmitting(false);
         return;
+      }
+
+      // Build object_permission from MCP Tools step (allowed_mcp_servers_and_groups, mcp_tool_permissions)
+      const mcpServersAndGroups = values.allowed_mcp_servers_and_groups;
+      const mcpToolPermissions = values.mcp_tool_permissions || {};
+      if (
+        mcpServersAndGroups &&
+        (mcpServersAndGroups.servers?.length > 0 || mcpServersAndGroups.accessGroups?.length > 0) ||
+        Object.keys(mcpToolPermissions).length > 0
+      ) {
+        agentData.object_permission = {};
+        if (mcpServersAndGroups?.servers?.length > 0) {
+          agentData.object_permission.mcp_servers = mcpServersAndGroups.servers;
+        }
+        if (mcpServersAndGroups?.accessGroups?.length > 0) {
+          agentData.object_permission.mcp_access_groups = mcpServersAndGroups.accessGroups;
+        }
+        if (Object.keys(mcpToolPermissions).length > 0) {
+          agentData.object_permission.mcp_tool_permissions = mcpToolPermissions;
+        }
       }
 
       const agentResponse = await createAgentCall(accessToken, agentData);
@@ -194,11 +245,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         setAssignedKeyAlias(keyInfo?.key_alias || selectedExistingKey.slice(0, 12) + "…");
       }
 
-      setCurrentStep(2);
+      setCurrentStep(3);
       onSuccess();
     } catch (error) {
       console.error("Error creating agent:", error);
-      message.error("Failed to create agent");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      message.error(errorMessage ? `Failed to create agent: ${errorMessage}` : "Failed to create agent");
     } finally {
       setIsSubmitting(false);
     }
@@ -217,6 +269,54 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     setAssignedKeyAlias(null);
     onClose();
   };
+
+  const renderMCPToolsStep = () => (
+    <div className="space-y-4">
+      <p className="text-sm text-gray-600">
+        Optionally restrict which MCP servers and tools this agent can use. Leave empty to allow all (subject to key/team permissions).
+      </p>
+      <Form.Item
+        label={
+          <span>
+            Allowed MCP Servers{" "}
+            <InfoCircleOutlined title="Select which MCP servers or access groups this agent can access" style={{ marginLeft: "4px" }} />
+          </span>
+        }
+        name="allowed_mcp_servers_and_groups"
+        initialValue={{ servers: [], accessGroups: [] }}
+      >
+        <MCPServerSelector
+          onChange={(val: { servers?: string[]; accessGroups?: string[] }) =>
+            form.setFieldValue("allowed_mcp_servers_and_groups", val)
+          }
+          value={form.getFieldValue("allowed_mcp_servers_and_groups") || { servers: [], accessGroups: [] }}
+          accessToken={accessToken ?? ""}
+          placeholder="Select MCP servers or access groups (optional)"
+        />
+      </Form.Item>
+      <Form.Item name="mcp_tool_permissions" initialValue={{}} hidden>
+        <Input type="hidden" />
+      </Form.Item>
+      <Form.Item
+        noStyle
+        shouldUpdate={(prev, curr) =>
+          prev.allowed_mcp_servers_and_groups !== curr.allowed_mcp_servers_and_groups ||
+          prev.mcp_tool_permissions !== curr.mcp_tool_permissions
+        }
+      >
+        {() => (
+          <div className="mt-4">
+            <MCPToolPermissions
+              accessToken={accessToken ?? ""}
+              selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers ?? []}
+              toolPermissions={form.getFieldValue("mcp_tool_permissions") ?? {}}
+              onChange={(toolPerms: Record<string, string[]>) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+            />
+          </div>
+        )}
+      </Form.Item>
+    </div>
+  );
 
   const handleAgentTypeChange = (value: string) => {
     setAgentType(value);
@@ -412,10 +512,16 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                         <Select
                           mode="tags"
                           style={{ width: "100%" }}
-                          placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+                          placeholder={loadingModels ? "Loading models..." : "e.g. gpt-4o, claude-3-5-sonnet"}
                           value={newKeyModels}
                           onChange={setNewKeyModels}
                           tokenSeparators={[","]}
+                          loading={loadingModels}
+                          showSearch
+                          options={availableModels.map((m) => ({
+                            label: getModelDisplayName(m),
+                            value: m,
+                          }))}
                         />
                       </div>
                     </div>
@@ -537,6 +643,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         {/* Step indicator */}
         <Steps current={currentStep} size="small" className="mb-8">
           <Step title="Configure" />
+          <Step title="MCP Tools" />
           <Step title="Assign Key" />
           <Step title="Ready" />
         </Steps>
@@ -544,18 +651,23 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         <Form
           form={form}
           layout="vertical"
-          initialValues={agentType === "a2a" ? getDefaultFormValues() : {}}
+          initialValues={
+            agentType === "a2a"
+              ? { ...getDefaultFormValues(), allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {} }
+              : { allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {} }
+          }
           className="space-y-4"
         >
           {currentStep === 0 && renderConfigureStep()}
-          {currentStep === 1 && renderAssignKeyStep()}
-          {currentStep === 2 && renderReadyStep()}
+          {currentStep === 1 && renderMCPToolsStep()}
+          {currentStep === 2 && renderAssignKeyStep()}
+          {currentStep === 3 && renderReadyStep()}
         </Form>
 
         {/* Footer navigation */}
         <div className="flex items-center justify-between pt-6 border-t border-gray-100 mt-6">
           <div>
-            {currentStep > 0 && currentStep < 2 && (
+            {currentStep > 0 && currentStep < 3 && (
               <button
                 type="button"
                 onClick={handleBack}
@@ -566,7 +678,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
             )}
           </div>
           <div className="flex gap-3">
-            {currentStep < 2 && (
+            {currentStep < 3 && (
               <Button variant="secondary" onClick={handleClose}>
                 Cancel
               </Button>
@@ -577,11 +689,16 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
               </Button>
             )}
             {currentStep === 1 && (
+              <Button variant="primary" onClick={handleNext}>
+                Next →
+              </Button>
+            )}
+            {currentStep === 2 && (
               <Button variant="primary" loading={isSubmitting} onClick={handleCreateAgent}>
                 {isSubmitting ? "Creating..." : "Create Agent →"}
               </Button>
             )}
-            {currentStep === 2 && (
+            {currentStep === 3 && (
               <Button variant="primary" onClick={handleClose}>
                 Done
               </Button>

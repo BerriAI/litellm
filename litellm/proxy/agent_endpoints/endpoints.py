@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.agents import (
     AgentConfig,
     AgentMakePublicResponse,
@@ -23,8 +24,6 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
-
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -233,11 +232,18 @@ async def get_agent_by_id(agent_id: str):
     try:
         agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
         if agent is None:
-            agent = await prisma_client.db.litellm_agentstable.find_unique(
-                where={"agent_id": agent_id}
+            agent_row = await prisma_client.db.litellm_agentstable.find_unique(
+                where={"agent_id": agent_id},
+                include={"object_permission": True},
             )
-            if agent is not None:
-                agent = AgentResponse(**agent.model_dump())  # type: ignore
+            if agent_row is not None:
+                agent_dict = agent_row.model_dump()
+                if agent_row.object_permission is not None:
+                    try:
+                        agent_dict["object_permission"] = agent_row.object_permission.model_dump()
+                    except Exception:
+                        agent_dict["object_permission"] = agent_row.object_permission.dict()
+                agent = AgentResponse(**agent_dict)  # type: ignore
 
         if agent is None:
             raise HTTPException(
