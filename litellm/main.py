@@ -1262,7 +1262,9 @@ def completion(  # type: ignore # noqa: PLR0915
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
-            prompt_id=prompt_id, non_default_params=non_default_params
+            prompt_id=prompt_id,
+            non_default_params=non_default_params,
+            tools=tools,
         )
     ):
         (
@@ -1277,7 +1279,17 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
+            tools=tools,
         )
+        #########################################################
+        # if the chat completion logging hook removed all tools,
+        # set tools to None
+        # eg. in certain cases when users send vector stores as tools
+        # we don't want the tools to go to the upstream llm
+        # relevant issue: https://github.com/BerriAI/litellm/issues/11404
+        #########################################################
+        if tools is not None and len(tools) == 0:
+            tools = None
 
     ### LITELLM SYSTEM PROMPT ###
     if litellm_system_prompt:
