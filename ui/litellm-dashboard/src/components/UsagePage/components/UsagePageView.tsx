@@ -146,6 +146,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [apiCallsInFlight, setApiCallsInFlight] = useState(0);
   const getAllTags = async () => {
     if (!accessToken) {
       return;
@@ -361,8 +362,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       .slice(0, limit);
   };
 
-  const fetchUserSpendData = useCallback(async (): Promise<typeof userSpendData | undefined> => {
+  const fetchUserSpendData = useCallback(async (
+    options: { trackInFlight?: boolean; applyData?: boolean } = {}
+  ): Promise<typeof userSpendData | undefined> => {
+    const { trackInFlight = true, applyData = true } = options;
     if (!accessToken || !dateValue.from || !dateValue.to) return undefined;
+
+    if (trackInFlight) {
+      setApiCallsInFlight((count) => count + 1);
+    }
 
     // For non-admins, always pass their own user_id
     const effectiveUserId = isAdmin ? selectedUserId : (userID || null);
@@ -375,7 +383,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       // Prefer aggregated endpoint to avoid many page requests
       try {
         const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime, effectiveUserId);
-        setUserSpendData(aggregated);
+        if (applyData) {
+          setUserSpendData(aggregated);
+        }
         return aggregated;
       } catch (e) {
         // Fallback to paginated calls if aggregated endpoint is unavailable
@@ -384,7 +394,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime, 1, effectiveUserId);
 
       if (firstPageData.metadata.total_pages <= 1) {
-        setUserSpendData(firstPageData);
+        if (applyData) {
+          setUserSpendData(firstPageData);
+        }
         return firstPageData;
       }
 
@@ -404,15 +416,22 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       }
 
       const data = { results: allResults, metadata: aggregatedMetadata };
-      setUserSpendData(data);
+      if (applyData) {
+        setUserSpendData(data);
+      }
       return data;
     } catch (error) {
       console.error("Error fetching user spend data:", error);
       return undefined;
+    } finally {
+      if (trackInFlight) {
+        setApiCallsInFlight((count) => Math.max(0, count - 1));
+      }
     }
   }, [accessToken, dateValue.from, dateValue.to, selectedUserId, isAdmin, userID]);
 
   const { loading, requestFetch } = useFetchWithLoadingManager(fetchUserSpendData);
+  const effectiveLoading = loading || apiCallsInFlight > 0;
 
   // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
@@ -430,9 +449,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return () => clearTimeout(timeoutId);
   }, [requestFetch, dateValue.from, dateValue.to]);
 
-  // Trigger fetch with loader when switching back to global usage (EntityUsage does this on mount for other views)
+  // Trigger fetch with loader only when switching back to global usage.
+  // Initial load is already handled by the date range fetch effect.
+  const prevUsageViewRef = useRef<UsageOption | null>(null);
   useEffect(() => {
-    if (usageView === "global" && accessToken && dateValue.from && dateValue.to) {
+    const previousUsageView = prevUsageViewRef.current;
+    prevUsageViewRef.current = usageView;
+    const switchedToGlobal = previousUsageView !== null && previousUsageView !== "global" && usageView === "global";
+    if (switchedToGlobal && accessToken && dateValue.from && dateValue.to) {
       requestFetch();
     }
   }, [usageView, accessToken, dateValue.from, dateValue.to, requestFetch]);
@@ -455,7 +479,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           schedulePoll(intervalMs);
           return;
         }
-        const newData = await fetchUserSpendData();
+        const newData = await fetchUserSpendData({ trackInFlight: false, applyData: false });
         if (cancelled) return;
         const dataSignature = newData
           ? `${newData.metadata?.total_spend ?? 0}-${newData.metadata?.total_api_requests ?? 0}-${newData.results?.length ?? 0}`
@@ -463,6 +487,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         const hasPrevious = prevDataRef.current !== null;
         const changed = hasPrevious && dataSignature !== prevDataRef.current;
         prevDataRef.current = dataSignature;
+        if (changed) {
+          await fetchUserSpendData();
+          if (cancelled) return;
+        }
         schedulePoll(!hasPrevious || changed ? POLL_FAST_MS : POLL_SLOW_MS);
       }, intervalMs);
     };
@@ -544,7 +572,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 <div className="flex items-center gap-2">
                   <Button
                     onClick={() => requestFetch()}
-                    disabled={loading}
+                    disabled={effectiveLoading}
                     icon={() => (
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path
@@ -585,7 +613,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   </Button>
                 </div>
               </div>
-              <LoadingOverlay loading={loading} message="Updating data..." minDisplayMs={1000}>
+              <LoadingOverlay loading={effectiveLoading} message="Updating data..." minDisplayMs={1000}>
               <TabPanels>
                 {/* Cost Panel */}
                 <TabPanel>

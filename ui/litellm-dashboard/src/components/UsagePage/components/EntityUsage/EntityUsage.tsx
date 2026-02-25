@@ -106,9 +106,16 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [apiCallsInFlight, setApiCallsInFlight] = useState(0);
 
-  const fetchSpendData = useCallback(async (): Promise<EntitySpendData | undefined> => {
+  const fetchSpendData = useCallback(async (
+    options: { trackInFlight?: boolean; applyData?: boolean } = {}
+  ): Promise<EntitySpendData | undefined> => {
+    const { trackInFlight = true, applyData = true } = options;
     if (!accessToken || !dateValue.from || !dateValue.to) return undefined;
+    if (trackInFlight) {
+      setApiCallsInFlight((count) => count + 1);
+    }
     // Create new Date objects to avoid mutating the original dates
     const startTime = new Date(dateValue.from);
     const endTime = new Date(dateValue.to);
@@ -122,7 +129,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
       return data;
     } else if (entityType === "team") {
       const data = await teamDailyActivityCall(
@@ -132,7 +141,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
       return data;
     } else if (entityType === "organization") {
       const data = await organizationDailyActivityCall(
@@ -142,7 +153,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
       return data;
     } else if (entityType === "customer") {
       const data = await customerDailyActivityCall(
@@ -152,7 +165,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
       return data;
     } else if (entityType === "agent") {
       const data = await agentDailyActivityCall(
@@ -162,7 +177,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
       return data;
     } else {
       throw new Error("Invalid entity type");
@@ -170,10 +187,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     } catch (error) {
       console.error("Error fetching entity spend data:", error);
       return undefined;
+    } finally {
+      if (trackInFlight) {
+        setApiCallsInFlight((count) => Math.max(0, count - 1));
+      }
     }
   }, [accessToken, dateValue.from, dateValue.to, entityType, entityId, selectedTags]);
 
   const { loading, requestFetch } = useFetchWithLoadingManager(fetchSpendData);
+  const effectiveLoading = loading || apiCallsInFlight > 0;
 
   useEffect(() => {
     requestFetch();
@@ -197,7 +219,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           schedulePoll(intervalMs);
           return;
         }
-        const newData = await fetchSpendData();
+        const newData = await fetchSpendData({ trackInFlight: false, applyData: false });
         if (cancelled) return;
         const dataSignature = newData
           ? `${newData.metadata?.total_spend ?? 0}-${newData.metadata?.total_api_requests ?? 0}-${newData.results?.length ?? 0}`
@@ -205,6 +227,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         const hasPrevious = prevDataRef.current !== null;
         const changed = hasPrevious && dataSignature !== prevDataRef.current;
         prevDataRef.current = dataSignature;
+        if (changed) {
+          await fetchSpendData();
+          if (cancelled) return;
+        }
         schedulePoll(!hasPrevious || changed ? POLL_FAST_MS : POLL_SLOW_MS);
       }, intervalMs);
     };
@@ -432,13 +458,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   return (
     <div style={{ width: "100%" }} className="relative">
-      <LoadingOverlay loading={loading} message="Updating data..." minDisplayMs={1000}>
+      <LoadingOverlay loading={effectiveLoading} message="Updating data..." minDisplayMs={1000}>
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
         onRefresh={requestFetch}
-        isRefreshing={loading}
+        isRefreshing={effectiveLoading}
         showFilters={entityList !== null && entityList.length > 0}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
