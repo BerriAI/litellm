@@ -189,4 +189,25 @@ When opening issues or pull requests, follow these templates:
 - Check similar provider implementations
 - Ensure comprehensive test coverage
 - Update documentation appropriately
-- Consider backward compatibility impact 
+- Consider backward compatibility impact
+
+## Cursor Cloud specific instructions
+
+### Environment setup
+- Python 3.12 with `poetry install --with dev,proxy-dev --extras proxy`
+- Install `psycopg-binary` and `psutil` separately: `poetry run pip install psycopg-binary psutil`
+- Lint: `cd litellm && poetry run ruff check .`
+- Unit tests: `poetry run pytest tests/test_litellm/ -x -n 4` (see `Makefile` for specific test groups)
+- Memory/load tests: `poetry run pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v` (run individually, not all at once)
+
+### Running the proxy server locally
+- `poetry run litellm --model openai/gpt-4o` (requires `OPENAI_API_KEY`)
+- Proxy listens on port 4000 by default
+- No PostgreSQL or Redis required for basic SDK/proxy testing with mock endpoints
+
+### Memory leak testing
+- Existing tests in `tests/load_tests/` use a local mock OpenAI server (no API keys needed)
+- `test_linear_memory_growth.py` tests are designed to run **individually** (memory baselines drift when combined)
+- `_periodic_memory_cleanup()` in `litellm/proxy/common_utils/memory_utils.py` calls `gc.collect()` + `malloc_trim()` on Linux to return freed memory to the OS
+- `LITELLM_MEMORY_CLEANUP_INTERVAL` env var controls cleanup frequency (default 60s)
+- `PYTHON_GC_THRESHOLD` env var configures GC thresholds (format: `gen0,gen1,gen2`)

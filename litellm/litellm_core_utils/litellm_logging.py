@@ -2368,6 +2368,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 ),
             )
+        finally:
+            # Release large data structures now that all callbacks have consumed them
+            self._cleanup_after_logging()
 
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -2712,6 +2715,45 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
                 pass
+
+        # Release large data structures now that all callbacks have consumed them
+        self._cleanup_after_logging()
+
+    def _cleanup_after_logging(self):
+        """
+        Release large data structures after all logging callbacks have completed.
+
+        This prevents memory from accumulating when many requests are processed,
+        especially under high concurrency. The Logging object may still be
+        referenced by async tasks, but its large payload fields are no longer
+        needed after callbacks have consumed them.
+
+        Fields intentionally kept:
+        - ``response_cost``, ``standard_logging_object`` – may be read after
+          callbacks (e.g. for response headers).
+        - ``async_complete_streaming_response``, ``complete_streaming_response``
+          – used as guard flags to prevent double-processing on repeated calls.
+        """
+        # Clear streaming chunks (can be very large for long responses)
+        if hasattr(self, "streaming_chunks"):
+            self.streaming_chunks.clear()
+        if hasattr(self, "sync_streaming_chunks"):
+            self.sync_streaming_chunks.clear()
+
+        # Clear large payload-only fields from model_call_details.
+        # These hold the raw request input and response text which can be
+        # substantial (kilobytes to megabytes per request).
+        _large_keys = (
+            "input",
+            "original_response",
+            "complete_response",
+            "raw_request_typed_dict",
+        )
+        for key in _large_keys:
+            self.model_call_details.pop(key, None)
+
+        # Clear messages reference (the full request prompt)
+        self.messages = None
 
     def _handle_callback_failure(self, callback: Any):
         """

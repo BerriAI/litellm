@@ -5667,6 +5667,23 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### PERIODIC MEMORY CLEANUP ###
+        # Return freed memory to the OS. Python's allocator holds freed arenas
+        # indefinitely; malloc_trim() on Linux releases them, preventing RSS
+        # from staying elevated after traffic spikes.
+        from litellm.proxy.common_utils.memory_utils import (
+            _periodic_memory_cleanup,
+        )
+
+        scheduler.add_job(
+            _periodic_memory_cleanup,
+            "interval",
+            seconds=int(os.getenv("LITELLM_MEMORY_CLEANUP_INTERVAL", 60)),
+            id="memory_cleanup_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import _monitor_spend_logs_queue
