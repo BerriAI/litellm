@@ -64,6 +64,8 @@ model LiteLLM_AgentsTable {
   litellm_params Json?
   agent_card_params Json
   agent_access_groups String[]       @default([])
+  object_permission_id String?
+  object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -264,6 +266,7 @@ model LiteLLM_ObjectPermissionTable {
   organizations         LiteLLM_OrganizationTable[]
   users                 LiteLLM_UserTable[]
   end_users             LiteLLM_EndUserTable[]
+  agents_table          LiteLLM_AgentsTable[]
 }
 
 // Holds the MCP server configuration 

@@ -4,7 +4,6 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
-import CompliancePanel from "../GuardrailViewer/CompliancePanel";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";

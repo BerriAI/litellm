@@ -1,12 +1,12 @@
 import React, { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
-import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, AUTH_TYPE } from "./types";
+import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 
 import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined, SearchOutlined, LockOutlined, KeyOutlined } from "@ant-design/icons";
-import { Input, Alert, Button as AntdButton } from "antd";
+import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
+import { Input, Button as AntdButton } from "antd";
 
 const MCPToolsViewer = ({
   serverId,
@@ -134,7 +134,7 @@ const MCPToolsViewer = ({
                   
                   {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
                     <Text className="text-xs text-blue-700">
-                      This server requires additional headers. Click "Configure" to provide values.
+                      This server requires additional headers. Click &quot;Configure&quot; to provide values.
                     </Text>
                   )}
                   
@@ -255,7 +255,7 @@ const MCPToolsViewer = ({
                       <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                         <SearchOutlined className="text-2xl text-gray-400 mb-2" />
                         <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
-                        <p className="text-xs text-gray-500">No tools match "{toolSearchTerm}"</p>
+                        <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
                       </div>
                     ) : (
                       <div

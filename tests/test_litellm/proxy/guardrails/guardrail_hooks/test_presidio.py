@@ -24,12 +24,29 @@ from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
-def _make_mock_session_iterator(json_response):
+def _make_mock_session_iterator(
+    json_response, status=200, content_type="application/json", text_response=""
+):
     """Create a mock _get_session_iterator that yields a session returning json_response."""
 
     @asynccontextmanager
     async def mock_iterator():
         class MockResponse:
+            def __init__(self):
+                self.status = status
+                self.content_type = content_type
+                self.headers = {"Content-Type": content_type}
+
+            async def text(self):
+                if text_response:
+                    return text_response
+                import json
+
+                try:
+                    return json.dumps(json_response)
+                except Exception:
+                    return str(json_response)
+
             async def json(self):
                 return json_response
 
@@ -41,6 +58,7 @@ def _make_mock_session_iterator(json_response):
 
         class MockSession:
             def post(self, *args, **kwargs):
+                self.last_kwargs = kwargs
                 return MockResponse()
 
             async def __aenter__(self):
@@ -1444,3 +1462,149 @@ def test_deny_list_and_score_threshold_combined():
     # EMAIL_ADDRESS passes both filters
     assert len(filtered) == 1
     assert filtered[0]["entity_type"] == "EMAIL_ADDRESS"
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_non_json_content_type_fail_closed():
+    """
+    Test that analyze_text raises GuardrailRaisedException when Presidio health
+    endpoint returns text/html and fail-closed is enabled.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={"PERSON": PiiAction.BLOCK},
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=200,
+        content_type="text/html; charset=utf-8",
+        text_response="Presidio Analyzer service is up.",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await guardrail.analyze_text(
+                text="Hello world",
+                presidio_config=None,
+                request_data={},
+            )
+        assert "expected application/json Content-Type" in str(exc_info.value)
+        assert "text/html" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_non_json_content_type_fail_open():
+    """
+    Test that analyze_text returns empty list when Presidio returns text/html
+    and fail-closed is NOT enabled.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=200,
+        content_type="text/html; charset=utf-8",
+        text_response="Presidio Analyzer service is up.",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        results = await guardrail.analyze_text(
+            text="Hello world",
+            presidio_config=None,
+            request_data={},
+        )
+        assert results == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_text_http_error_status():
+    """
+    Test that analyze_text handles 5xx HTTP errors properly.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={"PERSON": PiiAction.BLOCK},
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=500,
+        content_type="text/plain",
+        text_response="Internal Server Error",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await guardrail.analyze_text(
+                text="Hello world",
+                presidio_config=None,
+                request_data={},
+            )
+        assert "HTTP 500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_non_json_content_type():
+    """
+    Test that anonymize_text raises Exception for non-JSON responses.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=200,
+        content_type="text/html",
+        text_response="Presidio Anonymizer service is up.",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(
+            Exception, match="Presidio anonymizer returned non-JSON Content-Type"
+        ):
+            await guardrail.anonymize_text(
+                text="Hello world",
+                analyze_results=[{"start": 0, "end": 5, "entity_type": "PERSON"}],
+                output_parse_pii=False,
+                masked_entity_count={},
+            )
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_http_error_status():
+    """
+    Test that anonymize_text raises Exception on HTTP error.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=None,
+        status=502,
+        content_type="text/plain",
+        text_response="Bad Gateway",
+    )
+
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        with pytest.raises(Exception, match="Presidio anonymizer returned HTTP 502"):
+            await guardrail.anonymize_text(
+                text="Hello world",
+                analyze_results=[{"start": 0, "end": 5, "entity_type": "PERSON"}],
+                output_parse_pii=False,
+                masked_entity_count={},
+            )
