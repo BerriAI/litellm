@@ -2,8 +2,16 @@ import json
 import os
 from typing import List
 
+import litellm
 from fastapi import APIRouter, Depends, HTTPException
 
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_blog_posts import (
+    BlogPost,
+    BlogPostsResponse,
+    GetBlogPosts,
+    get_blog_posts,
+)
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.agents import AgentCard
@@ -191,6 +199,30 @@ async def get_litellm_model_cost_map():
             status_code=500,
             detail=f"Internal Server Error ({str(e)})",
         )
+
+
+@router.get(
+    "/public/litellm_blog_posts",
+    tags=["public"],
+    response_model=BlogPostsResponse,
+)
+async def get_litellm_blog_posts():
+    """
+    Public endpoint to get the latest LiteLLM blog posts.
+
+    Fetches from GitHub with a 1-hour in-process cache.
+    Falls back to the bundled local backup on any failure.
+    """
+    try:
+        posts_data = get_blog_posts(url=litellm.blog_posts_url)
+    except Exception as e:
+        verbose_logger.warning(
+            "LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e)
+        )
+        posts_data = GetBlogPosts.load_local_blog_posts()
+
+    posts = [BlogPost(**p) for p in posts_data[:5]]
+    return BlogPostsResponse(posts=posts)
 
 
 @router.get(

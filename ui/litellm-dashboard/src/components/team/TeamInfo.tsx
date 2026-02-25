@@ -23,6 +23,7 @@ import { Button, Form, Input, message, Select, Switch, Tabs, Tooltip } from "ant
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
@@ -90,6 +91,7 @@ export interface TeamData {
       model_aliases: Record<string, string>;
     } | null;
     created_at: string;
+    access_group_ids?: string[];
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -535,6 +537,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.object_permission.vector_stores = values.vector_stores;
       }
 
+      // Pass access_group_ids to the update request
+      if (values.access_group_ids !== undefined) {
+        updateData.access_group_ids = values.access_group_ids;
+      }
+
       const response = await teamUpdateCall(accessToken, updateData);
 
       NotificationsManager.success("Team settings updated successfully");
@@ -800,6 +807,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         agents: info.object_permission?.agents || [],
                         accessGroups: info.object_permission?.agent_access_groups || [],
                       },
+                      access_group_ids: info.access_group_ids || [],
                     }}
                     layout="vertical"
                   >
@@ -968,6 +976,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         placeholder="Select or enter policies"
                         options={policiesList.map((name) => ({ value: name, label: name }))}
                       />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span>
+                          Access Groups{" "}
+                          <Tooltip title="Assign access groups to this team. Access groups control which models, MCP servers, and agents this team can use">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="access_group_ids"
+                    >
+                      <AccessGroupSelector placeholder="Select access groups (optional)" />
                     </Form.Item>
 
                     <Form.Item label="Vector Stores" name="vector_stores" aria-label="Vector Stores">

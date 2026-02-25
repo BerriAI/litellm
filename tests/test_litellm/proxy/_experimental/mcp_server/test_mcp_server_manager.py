@@ -39,7 +39,16 @@ def _reload_mcp_manager_module():
         "litellm.proxy._experimental.mcp_server.mcp_server_manager"
     ]
     importlib.reload(utils_module)
-    return importlib.reload(manager_module)
+    reloaded = importlib.reload(manager_module)
+    # After reload, server.py still holds a stale reference to the old
+    # global_mcp_server_manager. Update it so tests that exercise server.py
+    # functions (e.g. _get_tools_from_mcp_servers) use the fresh instance.
+    server_module = sys.modules.get(
+        "litellm.proxy._experimental.mcp_server.server"
+    )
+    if server_module is not None and hasattr(server_module, "global_mcp_server_manager"):
+        server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
+    return reloaded
 
 
 class TestMCPServerManager:
@@ -112,7 +121,44 @@ class TestMCPServerManager:
         assert client.stdio_config is not None
         assert client.stdio_config["command"] == "node"
         assert client.stdio_config["args"] == ["server.js"]
-        assert client.stdio_config["env"] == {"NODE_ENV": "test"}
+        # NPM_CONFIG_CACHE is injected automatically for container compatibility
+        from litellm.constants import MCP_NPM_CACHE_DIR
+
+        assert client.stdio_config["env"]["NODE_ENV"] == "test"
+        assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
+
+    async def test_create_mcp_client_stdio_injects_npm_config_cache(self):
+        """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
+        and preserves user-provided NPM_CONFIG_CACHE when present."""
+        from litellm.constants import MCP_NPM_CACHE_DIR
+
+        manager = MCPServerManager()
+
+        # Case 1: NPM_CONFIG_CACHE not set -> should be injected
+        server_no_cache = MCPServer(
+            server_id="stdio-npm-1",
+            name="test_npm_server",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-everything"],
+            env={},
+        )
+        client = await manager._create_mcp_client(server_no_cache)
+        assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
+
+        # Case 2: NPM_CONFIG_CACHE already set -> should NOT be overwritten
+        server_with_cache = MCPServer(
+            server_id="stdio-npm-2",
+            name="test_npm_server_custom",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-everything"],
+            env={"NPM_CONFIG_CACHE": "/custom/cache"},
+        )
+        client2 = await manager._create_mcp_client(server_with_cache)
+        assert client2.stdio_config["env"]["NPM_CONFIG_CACHE"] == "/custom/cache"
 
     def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
         """Ensure only ${X-*} placeholders are substituted from headers."""
@@ -989,6 +1035,240 @@ class TestMCPServerManager:
         assert result.server_id == "test-server"
         assert result.status == "healthy"
         assert result.health_check_error is None
+
+    @pytest.mark.asyncio
+    async def test_health_check_skips_passthrough_auth_with_authorization_header(self):
+        """Test that health check is skipped for servers with passthrough Authorization header"""
+        manager = MCPServerManager()
+
+        # Mock server with auth_type=none and Authorization in extra_headers (passthrough auth)
+        server = MCPServer(
+            server_id="github-server",
+            name="github-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            authentication_token=None,
+            url="http://github-server.com",
+            extra_headers=["Authorization"],  # Passthrough auth configured
+        )
+
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+
+        # _create_mcp_client should not be called (health check should be skipped)
+        manager._create_mcp_client = AsyncMock()
+
+        # Perform health check
+        result = await manager.health_check_server("github-server")
+
+        # Verify that client was not created (health check was skipped)
+        manager._create_mcp_client.assert_not_called()
+
+        # Verify results
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "github-server"
+        assert result.status == "unknown"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+
+    @pytest.mark.asyncio
+    async def test_health_check_skips_passthrough_auth_with_api_key_header(self):
+        """Test that health check is skipped for servers with passthrough x-api-key header"""
+        manager = MCPServerManager()
+
+        # Mock server with auth_type=none and x-api-key in extra_headers
+        server = MCPServer(
+            server_id="sourcegraph-server",
+            name="sourcegraph-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            authentication_token=None,
+            url="http://sourcegraph-server.com",
+            extra_headers=["x-api-key"],  # Passthrough auth configured
+        )
+
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+
+        # _create_mcp_client should not be called
+        manager._create_mcp_client = AsyncMock()
+
+        # Perform health check
+        result = await manager.health_check_server("sourcegraph-server")
+
+        # Verify that client was not created (health check was skipped)
+        manager._create_mcp_client.assert_not_called()
+
+        # Verify results
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "sourcegraph-server"
+        assert result.status == "unknown"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+
+    @pytest.mark.asyncio
+    async def test_health_check_runs_when_no_passthrough_auth(self):
+        """Test that health check runs normally for servers with auth_type=none but no passthrough headers"""
+        manager = MCPServerManager()
+
+        # Mock server with auth_type=none but no extra_headers (no passthrough auth)
+        server = MCPServer(
+            server_id="public-server",
+            name="public-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            authentication_token=None,
+            url="http://public-server.com",
+            extra_headers=None,  # No passthrough auth
+        )
+
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+
+        # Mock successful client
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        # Perform health check
+        result = await manager.health_check_server("public-server")
+
+        # Verify that client WAS created (health check should run)
+        manager._create_mcp_client.assert_called_once()
+
+        # Verify results
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "public-server"
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+
+    @pytest.mark.asyncio
+    async def test_health_check_runs_when_extra_headers_no_auth(self):
+        """Test that health check runs when extra_headers exist but don't include auth headers"""
+        manager = MCPServerManager()
+
+        # Mock server with extra_headers but no auth-related headers
+        server = MCPServer(
+            server_id="custom-server",
+            name="custom-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            authentication_token=None,
+            url="http://custom-server.com",
+            extra_headers=["X-Custom-Header", "X-Request-ID"],  # Non-auth headers
+        )
+
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+
+        # Mock successful client
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        # Perform health check
+        result = await manager.health_check_server("custom-server")
+
+        # Verify that client WAS created (health check should run)
+        manager._create_mcp_client.assert_called_once()
+
+        # Verify results
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "custom-server"
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+
+    @pytest.mark.asyncio
+    async def test_requires_per_user_auth_property_oauth2(self):
+        """Test that requires_per_user_auth returns True for OAuth2 without client credentials"""
+        # OAuth2 without client credentials
+        server = MCPServer(
+            server_id="oauth-server",
+            name="oauth-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            url="http://oauth-server.com",
+            client_id=None,
+            client_secret=None,
+            token_url=None,
+        )
+        assert server.requires_per_user_auth is True
+        assert server.needs_user_oauth_token is True
+
+    @pytest.mark.asyncio
+    async def test_requires_per_user_auth_property_oauth2_with_client_creds(self):
+        """Test that requires_per_user_auth returns False for OAuth2 with client credentials"""
+        # OAuth2 with client credentials
+        server = MCPServer(
+            server_id="oauth-server",
+            name="oauth-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            url="http://oauth-server.com",
+            client_id="client-id",
+            client_secret="client-secret",
+            token_url="http://oauth-server.com/token",
+        )
+        assert server.requires_per_user_auth is False
+        assert server.has_client_credentials is True
+
+    @pytest.mark.asyncio
+    async def test_requires_per_user_auth_property_passthrough_auth(self):
+        """Test that requires_per_user_auth returns True for passthrough auth (auth_type=none + Authorization header)"""
+        # Passthrough auth with Authorization header
+        server = MCPServer(
+            server_id="github-server",
+            name="github-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="http://github-server.com",
+            extra_headers=["Authorization"],
+        )
+        assert server.requires_per_user_auth is True
+
+        # Passthrough auth with x-api-key header
+        server2 = MCPServer(
+            server_id="sourcegraph-server",
+            name="sourcegraph-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="http://sourcegraph-server.com",
+            extra_headers=["x-api-key"],
+        )
+        assert server2.requires_per_user_auth is True
+
+        # Passthrough auth with api-key header (case insensitive)
+        server3 = MCPServer(
+            server_id="api-server",
+            name="api-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="http://api-server.com",
+            extra_headers=["API-Key"],
+        )
+        assert server3.requires_per_user_auth is True
+
+    @pytest.mark.asyncio
+    async def test_requires_per_user_auth_property_no_passthrough(self):
+        """Test that requires_per_user_auth returns False when no passthrough auth is configured"""
+        # auth_type=none but no extra_headers
+        server = MCPServer(
+            server_id="public-server",
+            name="public-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="http://public-server.com",
+            extra_headers=None,
+        )
+        assert server.requires_per_user_auth is False
+
+        # auth_type=none with non-auth extra_headers
+        server2 = MCPServer(
+            server_id="custom-server",
+            name="custom-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="http://custom-server.com",
+            extra_headers=["X-Custom-Header", "X-Request-ID"],
+        )
+        assert server2.requires_per_user_auth is False
 
     @pytest.mark.asyncio
     async def test_register_openapi_tools_includes_static_headers(self, tmp_path):

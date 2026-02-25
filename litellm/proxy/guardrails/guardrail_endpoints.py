@@ -14,11 +14,12 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.types.guardrails import (
-    BaseLitellmParams,
     PII_ENTITY_CATEGORIES_MAP,
     ApplyGuardrailRequest,
     ApplyGuardrailResponse,
+    BaseLitellmParams,
     BedrockGuardrailConfigModel,
     Guardrail,
     GuardrailEventHooks,
@@ -775,13 +776,13 @@ async def get_guardrail_ui_settings():
 )
 async def get_category_yaml(category_name: str):
     """
-    Get the YAML content for a specific content filter category.
+    Get the YAML or JSON content for a specific content filter category.
 
     Args:
         category_name: The name of the category (e.g., "bias_gender", "harmful_self_harm")
 
     Returns:
-        The raw YAML content of the category file
+        The raw YAML or JSON content of the category file with file type indicator
     """
     import os
 
@@ -793,24 +794,75 @@ async def get_category_yaml(category_name: str):
         "categories",
     )
 
-    # Construct the file path
-    category_file_path = os.path.join(categories_dir, f"{category_name}.yaml")
+    # Try to find the file with either .yaml or .json extension
+    yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
+    json_path = os.path.join(categories_dir, f"{category_name}.json")
 
-    if not os.path.exists(category_file_path):
+    category_file_path = None
+    file_type = None
+
+    if os.path.exists(yaml_path):
+        category_file_path = yaml_path
+        file_type = "yaml"
+    elif os.path.exists(json_path):
+        category_file_path = json_path
+        file_type = "json"
+    else:
         raise HTTPException(
-            status_code=404, detail=f"Category file not found: {category_name}"
+            status_code=404,
+            detail=f"Category file not found: {category_name} (tried .yaml and .json)",
         )
 
     try:
-        # Read and return the raw YAML content
+        # Read and return the raw content
         with open(category_file_path, "r") as f:
-            yaml_content = f.read()
+            content = f.read()
 
-        return {"category_name": category_name, "yaml_content": yaml_content}
+        return {
+            "category_name": category_name,
+            "yaml_content": content,  # Keep key name for backwards compatibility
+            "file_type": file_type,
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Error reading category file: {str(e)}"
         )
+
+
+@router.get(
+    "/guardrails/ui/major_airlines",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_major_airlines():
+    """
+    Get the major airlines list from IATA (competitor intent, airline type).
+    Returns airline id, match variants (pipe-separated), and tags.
+    """
+    import os
+
+    airlines_path = os.path.join(
+        os.path.dirname(__file__),
+        "guardrail_hooks",
+        "litellm_content_filter",
+        "competitor_intent",
+        "major_airlines.json",
+    )
+    if not os.path.exists(airlines_path):
+        raise HTTPException(
+            status_code=404,
+            detail="major_airlines.json not found",
+        )
+    try:
+        with open(airlines_path, "r", encoding="utf-8") as f:
+            import json
+
+            airlines = json.load(f)
+        return {"airlines": airlines}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading major_airlines.json: {str(e)}"
+        ) from e
 
 
 @router.post(
@@ -1583,3 +1635,7 @@ async def apply_guardrail(
         )
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+# Usage (dashboard) endpoints: overview, detail, logs
+router.include_router(guardrails_usage_router)

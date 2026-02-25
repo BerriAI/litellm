@@ -26,7 +26,7 @@ Team 3 -> Disabled Logging (for GDPR compliance)
 
 :::info
 
-✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 
@@ -248,7 +248,7 @@ Use the `/key/generate` or `/key/update` endpoints to add logging callbacks to a
 
 :::info
 
-✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 

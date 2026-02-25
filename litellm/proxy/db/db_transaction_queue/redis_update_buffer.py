@@ -96,14 +96,28 @@ class RedisUpdateBuffer:
         list_of_transactions = [safe_dumps(transactions)]
         if self.redis_cache is None:
             return
-        current_redis_buffer_size = await self.redis_cache.async_rpush(
-            key=redis_key,
-            values=list_of_transactions,
-        )
-        await self._emit_new_item_added_to_redis_buffer_event(
-            queue_size=current_redis_buffer_size,
-            service=service_type,
-        )
+        try:
+            current_redis_buffer_size = await self.redis_cache.async_rpush(
+                key=redis_key,
+                values=list_of_transactions,
+            )
+            verbose_proxy_logger.debug(
+                "Spend tracking - pushed spend updates to Redis buffer. "
+                "redis_key=%s, buffer_size=%s",
+                redis_key,
+                current_redis_buffer_size,
+            )
+            await self._emit_new_item_added_to_redis_buffer_event(
+                queue_size=current_redis_buffer_size,
+                service=service_type,
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to push spend updates to Redis (redis_key=%s). "
+                "Error: %s",
+                redis_key,
+                str(e),
+            )
 
     async def store_in_memory_spend_updates_in_redis(
         self,
@@ -304,6 +318,13 @@ class RedisUpdateBuffer:
         )
         if list_of_transactions is None:
             return None
+
+        verbose_proxy_logger.info(
+            "Spend tracking - popped %d spend update batches from Redis buffer (key=%s). "
+            "These items are now removed from Redis and must be committed to DB.",
+            len(list_of_transactions) if isinstance(list_of_transactions, list) else 1,
+            REDIS_UPDATE_BUFFER_KEY,
+        )
 
         # Parse the list of transactions from JSON strings
         parsed_transactions = self._parse_list_of_transactions(list_of_transactions)

@@ -1,12 +1,21 @@
 import types
-from typing import Any, List, Optional
+from typing import Any, AsyncIterator, Iterator, List, Optional, Union
 
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionResponse
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 
 from ...common_utils import VertexAIError
 
@@ -79,6 +88,18 @@ class VertexAILlama3Config(OpenAIGPTConfig):
             drop_params=drop_params,
         )
 
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return VertexAILlama3StreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
     def transform_response(
         self,
         model: str,
@@ -124,3 +145,80 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         )
 
         return model_response
+
+
+class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
+    """
+    Vertex AI Llama models may not include role in streaming chunk deltas.
+    This handler ensures the first chunk always has role="assistant".
+    
+    When Vertex AI returns a single chunk with both role and finish_reason (empty response),
+    this handler splits it into two chunks:
+    1. First chunk: role="assistant", content="", finish_reason=None
+    2. Second chunk: role=None, content=None, finish_reason="stop"
+    
+    This matches OpenAI's streaming format where the first chunk has role and
+    the final chunk has finish_reason but no role.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sent_role = False
+        self._pending_chunk: Optional[ModelResponseStream] = None
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        result = super().chunk_parser(chunk)
+        if not self.sent_role and result.choices:
+            delta = result.choices[0].delta
+            finish_reason = result.choices[0].finish_reason
+            
+            # If this is both the first chunk AND the final chunk (has finish_reason),
+            # we need to split it into two chunks to match OpenAI format
+            if finish_reason is not None:
+                # Create a pending final chunk with finish_reason but no role
+                self._pending_chunk = ModelResponseStream(
+                    id=result.id,
+                    object="chat.completion.chunk",
+                    created=result.created,
+                    model=result.model,
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(content=None, role=None),
+                            finish_reason=finish_reason,
+                        )
+                    ],
+                )
+                # Modify current chunk to be the first chunk with role but no finish_reason
+                result.choices[0].finish_reason = None
+                delta.role = "assistant"
+                # Ensure content is empty string for first chunk, not None
+                if delta.content is None:
+                    delta.content = ""
+                # Prevent downstream stream wrapper from dropping this chunk
+                # (it drops empty-content chunks unless special fields are present)
+                if delta.provider_specific_fields is None:
+                    delta.provider_specific_fields = {}
+            elif delta.role is None:
+                delta.role = "assistant"
+            # If the first chunk has empty content, ensure it's still emitted
+            if (delta.content == "" or delta.content is None) and delta.provider_specific_fields is None:
+                delta.provider_specific_fields = {}
+            self.sent_role = True
+        return result
+
+    def __next__(self):
+        # First return any pending chunk from a previous split
+        if self._pending_chunk is not None:
+            chunk = self._pending_chunk
+            self._pending_chunk = None
+            return chunk
+        return super().__next__()
+
+    async def __anext__(self):
+        # First return any pending chunk from a previous split
+        if self._pending_chunk is not None:
+            chunk = self._pending_chunk
+            self._pending_chunk = None
+            return chunk
+        return await super().__anext__()
