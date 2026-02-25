@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
-    SYSTEM_PROMPT,
     TOOL_HANDLERS,
     TOOLS_ADMIN,
     TOOLS_BASE,
+    _build_system_prompt,
     _summarise_entity_data,
     _summarise_usage_data,
     stream_usage_ai_chat,
@@ -123,10 +123,23 @@ class TestToolSchemas:
         assert len(TOOLS_BASE) == 1
         assert TOOLS_BASE[0]["function"]["name"] == "get_usage_data"
 
-    def test_system_prompt_mentions_all_tools(self):
-        assert "get_usage_data" in SYSTEM_PROMPT
-        assert "get_team_usage_data" in SYSTEM_PROMPT
-        assert "get_tag_usage_data" in SYSTEM_PROMPT
+    def test_admin_prompt_mentions_all_tools(self):
+        prompt = _build_system_prompt(is_admin=True)
+        assert "get_usage_data" in prompt
+        assert "get_team_usage_data" in prompt
+        assert "get_tag_usage_data" in prompt
+
+    def test_non_admin_prompt_only_mentions_usage_tool(self):
+        prompt = _build_system_prompt(is_admin=False)
+        assert "get_usage_data" in prompt
+        assert "get_team_usage_data" not in prompt
+        assert "get_tag_usage_data" not in prompt
+
+    def test_system_prompt_includes_todays_date(self):
+        from datetime import date
+
+        prompt = _build_system_prompt(is_admin=True)
+        assert date.today().isoformat() in prompt
 
 
 class TestSummariseUsageData:

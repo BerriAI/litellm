@@ -164,13 +164,9 @@ def get_tools_for_role(is_admin: bool) -> List[Dict[str, Any]]:
     return TOOLS_ADMIN if is_admin else TOOLS_BASE
 
 
-SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_BASE = (
     "You are an AI assistant embedded in the LiteLLM Usage dashboard. "
     "You help users understand their LLM API spend and usage data.\n\n"
-    "You have access to these tools:\n"
-    "- `get_usage_data`: Global/user-level usage (spend, models, providers, API keys)\n"
-    "- `get_team_usage_data`: Team-level usage breakdown\n"
-    "- `get_tag_usage_data`: Tag-level usage breakdown\n\n"
     "ALWAYS call the appropriate tool(s) first to fetch data before answering. "
     "You may call multiple tools if the question spans different dimensions.\n\n"
     "Guidelines:\n"
@@ -182,6 +178,31 @@ SYSTEM_PROMPT = (
     "- Today's date will be provided below. Use it to interpret relative dates "
     "like 'this week', 'this month', 'last 7 days', etc."
 )
+
+_TOOL_DESCRIPTIONS_ADMIN = (
+    "You have access to these tools:\n"
+    "- `get_usage_data`: Global/user-level usage (spend, models, providers, API keys)\n"
+    "- `get_team_usage_data`: Team-level usage breakdown\n"
+    "- `get_tag_usage_data`: Tag-level usage breakdown\n\n"
+)
+
+_TOOL_DESCRIPTIONS_BASE = (
+    "You have access to this tool:\n"
+    "- `get_usage_data`: Your usage data (spend, models, providers, API keys)\n\n"
+)
+
+
+def _build_system_prompt(is_admin: bool) -> str:
+    """Build role-appropriate system prompt with today's date."""
+    tool_desc = _TOOL_DESCRIPTIONS_ADMIN if is_admin else _TOOL_DESCRIPTIONS_BASE
+    return (
+        f"{_SYSTEM_PROMPT_BASE}\n\n{tool_desc}"
+        f"Today's date: {date.today().isoformat()}"
+    )
+
+
+# keep a public reference for test assertions
+SYSTEM_PROMPT = _SYSTEM_PROMPT_BASE
 
 # ---------------------------------------------------------------------------
 # Data fetchers
@@ -512,9 +533,8 @@ async def stream_usage_ai_chat(
 ) -> AsyncIterator[str]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
-    system_msg = f"{SYSTEM_PROMPT}\n\nToday's date: {date.today().isoformat()}"
     chat_messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": system_msg},
+        {"role": "system", "content": _build_system_prompt(is_admin)},
         *messages,
     ]
 
