@@ -218,7 +218,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       onSuccess();
     } catch (error) {
       console.error("Error creating agent:", error);
-      message.error("Failed to create agent");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      message.error(errorMessage ? `Failed to create agent: ${errorMessage}` : "Failed to create agent");
     } finally {
       setIsSubmitting(false);
     }
