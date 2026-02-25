@@ -1595,3 +1595,146 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
     assert set(result) == {"direct-server", "group-server"}
     mock_get_perm.assert_not_called()
     mock_access_groups.assert_called_once_with(["grp-alpha"])
+
+
+@pytest.mark.asyncio
+class TestAgentMCPPermissions:
+    """Test agent-level MCP server and tool permission intersection."""
+
+    async def test_get_allowed_mcp_servers_agent_intersection(self):
+        """Key/team allow [server_1, server_2]; agent allows [server_1]. Result = [server_1]."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team",
+            agent_id="agent-123",
+        )
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+        ) as mock_key:
+            with patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team:
+                with patch.object(
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_agent"
+                ) as mock_agent:
+                    mock_key.return_value = ["server_1", "server_2"]
+                    mock_team.return_value = []
+                    mock_agent.return_value = ["server_1"]
+                    result = await MCPRequestHandler.get_allowed_mcp_servers(
+                        user_api_key_auth=user_api_key_auth
+                    )
+                    assert sorted(result) == ["server_1"]
+                    mock_agent.assert_called_once_with(user_api_key_auth)
+
+    async def test_get_allowed_mcp_servers_agent_no_restriction(self):
+        """Agent with no object_permission returns []; no intersection applied (inherit key/team)."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-456",
+        )
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+        ) as mock_key:
+            with patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team:
+                with patch.object(
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_agent"
+                ) as mock_agent:
+                    mock_key.return_value = ["server_1", "server_2"]
+                    mock_team.return_value = []
+                    mock_agent.return_value = []  # no agent-level restriction
+                    result = await MCPRequestHandler.get_allowed_mcp_servers(
+                        user_api_key_auth=user_api_key_auth
+                    )
+                    assert sorted(result) == ["server_1", "server_2"]
+                    mock_agent.assert_called_once_with(user_api_key_auth)
+
+    async def test_get_allowed_mcp_servers_key_team_agent_intersection(self):
+        """Key allows [1, 2], agent allows [2, 3]. Result = [2]."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-789",
+        )
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+        ) as mock_key:
+            with patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team:
+                with patch.object(
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_agent"
+                ) as mock_agent:
+                    mock_key.return_value = ["server_1", "server_2"]
+                    mock_team.return_value = []
+                    mock_agent.return_value = ["server_2", "server_3"]
+                    result = await MCPRequestHandler.get_allowed_mcp_servers(
+                        user_api_key_auth=user_api_key_auth
+                    )
+                    assert sorted(result) == ["server_2"]
+
+    async def test_get_allowed_tools_for_server_agent_intersection(self):
+        """Key allows [tool_a, tool_b], agent allows [tool_a]. Result = [tool_a]."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-tools",
+        )
+        key_perm = MagicMock()
+        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        team_perm = None
+        with patch.object(
+            MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+        ):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission",
+                new_callable=AsyncMock,
+                return_value=team_perm,
+            ):
+                with patch.object(
+                    MCPRequestHandler,
+                    "_get_agent_tool_permissions_for_server",
+                    new_callable=AsyncMock,
+                    return_value=["tool_a"],
+                ) as mock_agent_tools:
+                    result = await MCPRequestHandler.get_allowed_tools_for_server(
+                        server_id="server_1",
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    assert result == ["tool_a"]
+                    mock_agent_tools.assert_called_once()
+                    call_kwargs = mock_agent_tools.call_args.kwargs
+                    assert call_kwargs["server_id"] == "server_1"
+                    assert call_kwargs["user_api_key_auth"] == user_api_key_auth
+
+    async def test_get_allowed_tools_for_server_agent_no_restriction(self):
+        """Agent has no tool permissions for server; key/team result is unchanged."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="agent-no-tools",
+        )
+        key_perm = MagicMock()
+        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        with patch.object(
+            MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+        ):
+            with patch.object(
+                MCPRequestHandler, "_get_team_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                with patch.object(
+                    MCPRequestHandler,
+                    "_get_agent_tool_permissions_for_server",
+                    new_callable=AsyncMock,
+                    return_value=None,
+                ):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server(
+                        server_id="server_1",
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    assert sorted(result) == ["tool_a", "tool_b"]
