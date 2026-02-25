@@ -5,13 +5,9 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.block_code_execution import (
-    DEFAULT_EVENT_HOOKS,
-    BlockCodeExecutionGuardrail,
-    initialize_guardrail,
-)
-from litellm.proxy.guardrails.guardrail_hooks.block_code_execution.block_code_execution import (
-    _normalize_escaped_newlines,
-)
+    DEFAULT_EVENT_HOOKS, BlockCodeExecutionGuardrail, initialize_guardrail)
+from litellm.proxy.guardrails.guardrail_hooks.block_code_execution.block_code_execution import \
+    _normalize_escaped_newlines
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -328,3 +324,46 @@ print(factorial(5))  # Output: 120
         assert "python" in str(exc_info.value).lower() or "code" in str(
             exc_info.value
         ).lower()
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_blocks_before_yielding_chunk_that_completes_block(
+        self,
+    ):
+        """Streaming hook runs block check after every chunk and raises before yielding the chunk that completes a blocked fenced block."""
+        from litellm.types.utils import (Delta, ModelResponseStream,
+                                         StreamingChoices)
+
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.5,
+        )
+
+        # Chunks that form "```python\nprint(1)\n```" when concatenated
+        async def mock_stream():
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content="```python\n"))],
+            )
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content="print(1)\n"))],
+            )
+            yield ModelResponseStream(
+                choices=[StreamingChoices(delta=Delta(content="```"))],
+            )
+
+        request_data = {"model": "gpt-4", "metadata": {}}
+        yielded_chunks = []
+
+        with pytest.raises(HTTPException) as exc_info:
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                yielded_chunks.append(chunk)
+
+        assert exc_info.value.status_code == 400
+        assert "code block" in (exc_info.value.detail or {}).get("error", "")
+        # The chunk that completes the block (third chunk) must not have been yielded
+        assert len(yielded_chunks) == 2

@@ -49,6 +49,14 @@ LiteLLM is a unified interface for 100+ LLMs that:
    - Test provider-specific functionality thoroughly
    - Consider adding load tests for performance-critical changes
 
+4. **Code Style**: Follow [Google's Python Style Guide](https://google.github.io/styleguide/pyguide.html) for Python; the project also uses Black, Ruff, and MyPy.
+
+### Performance and Database
+
+- **Hot paths:** Do not add duplicate DB queries in proxy/MCP auth or other high-frequency request paths. Reuse already-loaded auth/context (key, team, end-user objects) instead of re-querying.
+- **List endpoints:** Avoid N+1 queries when implementing list endpoints (e.g. agents, MCP servers). Use batch loads, `include`/joins, or a single query with needed relations so DB round-trips stay constant.
+- **Pre-merge:** For proxy and MCP code, verify that new DB usage in request-handling paths does not introduce duplicate or N+1 queries.
+
 ### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
 
 1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
@@ -174,6 +182,8 @@ When opening issues or pull requests, follow these templates:
 3. **Rate Limits**: Respect provider rate limits in tests
 4. **Memory Usage**: Be mindful of memory usage in streaming scenarios
 5. **Dependencies**: Keep dependencies minimal and well-justified
+6. **Duplicate DB queries in hot paths**: Adding redundant DB calls in MCP auth, proxy auth, or other high-frequency paths causes performance degradation at scale.
+7. **N+1 queries in list endpoints**: Looping over a list and performing a separate DB query per item (e.g. loading agents or related entities) — use batch/joined queries instead.
 
 ## HELPFUL RESOURCES
 
@@ -187,4 +197,5 @@ When opening issues or pull requests, follow these templates:
 - Check similar provider implementations
 - Ensure comprehensive test coverage
 - Update documentation appropriately
-- Consider backward compatibility impact 
+- Consider backward compatibility impact
+- For proxy/MCP code, confirm no new duplicate or N+1 DB queries in request paths

@@ -13,8 +13,7 @@ from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
 
 from fastapi import HTTPException
 
-from litellm.integrations.custom_guardrail import (CustomGuardrail,
-                                                   log_guardrail_information)
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import \
     GuardrailConfigModel
@@ -282,7 +281,6 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             detection_info={"language": language},
         )
 
-    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -339,6 +337,11 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             }
             if max_confidence is not None:
                 tracing_kw["confidence_score"] = max_confidence
+            event_type = (
+                GuardrailEventHooks.pre_call
+                if input_type == "request"
+                else GuardrailEventHooks.post_call
+            )
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider="block_code_execution",
                 guardrail_json_response=guardrail_response,
@@ -347,6 +350,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
+                event_type=event_type,
                 tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
             )
 
@@ -356,28 +360,24 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         response: Any,
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        """Accumulate streamed content and block if a complete fenced code block is detected."""
+        """Accumulate streamed content and block as soon as a complete fenced code block is detected (before yielding that chunk)."""
         accumulated = ""
         async for item in response:
             if isinstance(item, ModelResponseStream) and item.choices:
                 delta_content = ""
-                is_final = False
                 for choice in item.choices:
                     if hasattr(choice, "delta") and choice.delta:
                         content = getattr(choice.delta, "content", None)
                         if content and isinstance(content, str):
                             delta_content += content
-                    if getattr(choice, "finish_reason", None):
-                        is_final = True
                 accumulated += delta_content
-                if is_final:
-                    # Run detection on full accumulated text (streaming: block only, no mask)
-                    blocks = self._find_blocks(accumulated)
-                    for _tag, _body, confidence, action_taken in blocks:
-                        if (
-                            action_taken == "block"
-                            and confidence >= self.confidence_threshold
-                        ):
-                            lang = _tag or "unknown"
-                            self._raise_block_error(lang, True, request_data)
+                # Check after every chunk so we block before yielding the chunk that completes a blocked block
+                blocks = self._find_blocks(accumulated)
+                for _tag, _body, confidence, action_taken in blocks:
+                    if (
+                        action_taken == "block"
+                        and confidence >= self.confidence_threshold
+                    ):
+                        lang = _tag or "unknown"
+                        self._raise_block_error(lang, True, request_data)
             yield item
