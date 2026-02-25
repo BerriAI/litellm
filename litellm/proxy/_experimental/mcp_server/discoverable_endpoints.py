@@ -132,11 +132,25 @@ def _resolve_oauth2_server_for_root_endpoints(
     """
     Resolve the MCP server for root-level OAuth endpoints (no server name in path).
 
-    Always returns None. Root-level OAuth discovery endpoints should not
-    auto-resolve to an arbitrary server because doing so pollutes non-OAuth
-    servers' discovery responses when any single OAuth2 server is configured.
-    Clients should use server-specific paths instead (e.g. /{server_name}/authorize).
+    When exactly one OAuth2 server is configured and there are no non-OAuth
+    servers, returns that server as a convenience for single-server setups.
+    Otherwise returns None to avoid polluting discovery responses for non-OAuth
+    servers. Clients should use server-specific paths (e.g. /{server_name}/authorize)
+    when multiple servers are configured.
     """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    registry = global_mcp_server_manager.get_filtered_registry(client_ip=client_ip)
+    oauth2_servers = [
+        s for s in registry.values() if s.auth_type == MCPAuth.oauth2
+    ]
+    non_oauth2_servers = [
+        s for s in registry.values() if s.auth_type != MCPAuth.oauth2
+    ]
+    if len(oauth2_servers) == 1 and len(non_oauth2_servers) == 0:
+        return oauth2_servers[0]
     return None
 
 
