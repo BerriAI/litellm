@@ -12917,7 +12917,6 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             global_mcp_server_manager,
         )
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-        from litellm.types.mcp import MCPAuth
 
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
@@ -12938,35 +12937,75 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             handle_streamable_http_mcp,
         )
 
-        # Create a custom send function to capture the response
-        response_started = False
-        response_body = b""
-        response_status = 200
-        response_headers = []
+        # Stream the ASGI response instead of buffering it. This is critical for
+        # SSE (text/event-stream) responses used by the MCP Streamable HTTP
+        # transport — buffering would break incremental event delivery.
+        response_meta: dict = {}
+        headers_ready = asyncio.Event()
+        body_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        handler_error: list = []
 
-        async def custom_send(message):
-            nonlocal response_started, response_body, response_status, response_headers
+        async def streaming_send(message):
             if message["type"] == "http.response.start":
-                response_started = True
-                response_status = message["status"]
-                response_headers = message.get("headers", [])
+                response_meta["status"] = message["status"]
+                response_meta["headers"] = {
+                    k.decode(): v.decode()
+                    for k, v in message.get("headers", [])
+                }
+                headers_ready.set()
             elif message["type"] == "http.response.body":
-                response_body += message.get("body", b"")
+                chunk = message.get("body", b"")
+                if chunk:
+                    await body_queue.put(chunk)
+                if not message.get("more_body", False):
+                    await body_queue.put(None)  # sentinel
 
-        # Call the existing MCP handler
-        await handle_streamable_http_mcp(
-            scope, receive=request.receive, send=custom_send
-        )
+        async def run_handler():
+            try:
+                await handle_streamable_http_mcp(
+                    scope, receive=request.receive, send=streaming_send
+                )
+            except Exception as exc:
+                handler_error.append(exc)
+            finally:
+                # Ensure consumers aren't stuck waiting if the handler exits
+                # without sending a complete response.
+                headers_ready.set()
+                await body_queue.put(None)
 
-        # Return the response
-        from starlette.responses import Response
+        handler_task = asyncio.create_task(run_handler())
 
-        headers_dict = {k.decode(): v.decode() for k, v in response_headers}
-        return Response(
-            content=response_body,
-            status_code=response_status,
-            headers=headers_dict,
-            media_type=headers_dict.get("content-type", "application/json"),
+        # Wait for the ASGI handler to send http.response.start
+        await headers_ready.wait()
+
+        # If the handler errored before sending headers, raise
+        if handler_error and "status" not in response_meta:
+            await handler_task
+            raise handler_error[0]
+
+        async def body_generator():
+            try:
+                while True:
+                    chunk = await body_queue.get()
+                    if chunk is None:
+                        break
+                    yield chunk
+            finally:
+                if not handler_task.done():
+                    handler_task.cancel()
+                    try:
+                        await handler_task
+                    except asyncio.CancelledError:
+                        pass
+
+        headers = response_meta.get("headers", {})
+        media_type = headers.pop("content-type", "application/json")
+
+        return StreamingResponse(
+            content=body_generator(),
+            status_code=response_meta.get("status", 200),
+            headers=headers,
+            media_type=media_type,
         )
 
     except HTTPException as e:

@@ -1258,8 +1258,12 @@ def _create_oauth2_server(
 
 
 @pytest.mark.asyncio
-async def test_authorize_root_resolves_single_oauth2_server():
-    """When /authorize is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
+async def test_authorize_root_returns_404_without_server_name():
+    """When /authorize is hit without server name, return 404 even if 1 OAuth2 server exists.
+
+    Root auto-resolution was removed to prevent OAuth discovery pollution across
+    unrelated MCP servers.
+    """
     try:
         from fastapi import Request
 
@@ -1281,25 +1285,16 @@ async def test_authorize_root_resolves_single_oauth2_server():
     mock_request.headers = {}
 
     try:
-        with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
-        ) as mock_encrypt:
-            mock_encrypt.return_value = "mocked_encrypted_state"
-
-            # Call /authorize WITHOUT mcp_server_name, with dummy_client as client_id
-            response = await authorize(
+        with pytest.raises(HTTPException) as exc_info:
+            await authorize(
                 request=mock_request,
                 client_id="dummy_client",
                 mcp_server_name=None,
                 redirect_uri="http://localhost:62646/callback",
                 state="test_state",
             )
-
-        # Should resolve to the single OAuth2 server and redirect
-        assert response.status_code == 307
-        location = response.headers["location"]
-        assert "https://provider.com/oauth/authorize" in location
-        assert "client_id=test_client_id" in location
+        assert exc_info.value.status_code == 404
+        assert "MCP server not found" in str(exc_info.value.detail)
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -1349,8 +1344,12 @@ async def test_authorize_root_fails_with_multiple_oauth2_servers():
 
 
 @pytest.mark.asyncio
-async def test_token_root_resolves_single_oauth2_server():
-    """When /token is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
+async def test_token_root_returns_404_without_server_name():
+    """When /token is hit without server name, return 404 even if 1 OAuth2 server exists.
+
+    Root auto-resolution was removed to prevent OAuth discovery pollution across
+    unrelated MCP servers.
+    """
     try:
         from fastapi import Request
 
@@ -1371,25 +1370,9 @@ async def test_token_root_resolves_single_oauth2_server():
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "access_token": "ya29.test_token",
-        "token_type": "Bearer",
-        "expires_in": 3599,
-    }
-    mock_response.raise_for_status = MagicMock()
-
-    mock_async_client = MagicMock()
-    mock_async_client.post = AsyncMock(return_value=mock_response)
-
     try:
-        with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
-        ) as mock_get_client:
-            mock_get_client.return_value = mock_async_client
-
-            # Call /token WITHOUT mcp_server_name
-            response = await token_endpoint(
+        with pytest.raises(HTTPException) as exc_info:
+            await token_endpoint(
                 request=mock_request,
                 grant_type="authorization_code",
                 code="test_auth_code",
@@ -1399,23 +1382,20 @@ async def test_token_root_resolves_single_oauth2_server():
                 client_secret=None,
                 code_verifier="test_verifier",
             )
-
-        # Should resolve and exchange token with the upstream server
-        import json
-
-        token_data = json.loads(response.body)
-        assert token_data["access_token"] == "ya29.test_token"
-
-        # Verify it called the correct upstream token URL
-        call_args = mock_async_client.post.call_args
-        assert call_args.args[0] == "https://provider.com/oauth/token"
+        assert exc_info.value.status_code == 404
+        assert "MCP server not found" in str(exc_info.value.detail)
     finally:
         global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio
-async def test_register_root_resolves_single_oauth2_server():
-    """When /register is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
+async def test_register_root_returns_dummy_without_server_name():
+    """When /register is hit without server name, return dummy registration even if 1 OAuth2 server exists.
+
+    Root auto-resolution was removed to prevent OAuth discovery pollution across
+    unrelated MCP servers. The register endpoint returns a dummy response when
+    no server can be resolved.
+    """
     try:
         from fastapi import Request
 
@@ -1443,16 +1423,19 @@ async def test_register_root_resolves_single_oauth2_server():
         ):
             result = await register_client(request=mock_request, mcp_server_name=None)
 
-        # Should resolve to the single server and return its name as client_id
-        assert result["client_id"] == "test_oauth"
-        assert "redirect_uris" in result
+        # Should return dummy registration since no server is resolved
+        assert result["client_id"] == "dummy_client"
     finally:
         global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio
-async def test_discovery_root_includes_server_name_prefix():
-    """When root discovery is hit and exactly 1 OAuth2 server exists, include server name in URLs."""
+async def test_discovery_root_returns_generic_urls_without_server_name():
+    """When root discovery is hit without server name, return generic URLs without server prefix.
+
+    Root auto-resolution was removed to prevent OAuth discovery pollution across
+    unrelated MCP servers.
+    """
     try:
         from fastapi import Request
 
@@ -1480,11 +1463,11 @@ async def test_discovery_root_includes_server_name_prefix():
             mcp_server_name=None,
         )
 
-        # Should resolve to the single server and include its name in endpoint URLs
-        assert "/test_oauth/authorize" in response["authorization_endpoint"]
-        assert "/test_oauth/token" in response["token_endpoint"]
-        assert "/test_oauth/register" in response["registration_endpoint"]
-        assert response["scopes_supported"] == ["read", "write"]
+        # Should NOT resolve to the single server — return generic URLs instead
+        assert response["authorization_endpoint"] == "https://llm.example.com/authorize"
+        assert response["token_endpoint"] == "https://llm.example.com/token"
+        assert response["registration_endpoint"] == "https://llm.example.com/register"
+        assert response["scopes_supported"] == []
     finally:
         global_mcp_server_manager.registry.clear()
 
