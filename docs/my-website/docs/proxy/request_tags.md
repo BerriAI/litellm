@@ -27,7 +27,9 @@ model_list:
 
 ## Make Request
 
-Requests just specify the model - tags are automatically applied:
+### Option 1: Use Config Tags (Automatic)
+
+Requests just specify the model - tags are automatically applied from config:
 
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
@@ -38,6 +40,46 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
+
+### Option 2: Use `x-litellm-tags` Header
+
+Pass tags dynamically via the `x-litellm-tags` header:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -H 'x-litellm-tags: team-stripe,production,us-east-1' \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+The header accepts:
+- **Comma-separated string**: `"tag1,tag2,tag3"` (spaces are trimmed)
+- **Array of strings**: `["tag1", "tag2", "tag3"]`
+
+### Option 3: Use Request Body `tags`
+
+Pass tags directly in the request body:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H 'Authorization: Bearer sk-1234' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "tags": ["team-stripe", "production", "us-east-1"]
+  }'
+```
+
+The `tags` field must be an array of strings.
+
+:::info
+When tags are provided via header or request body, they override any tags configured in the model deployment.
+:::
 
 ## Spend Logs
 
