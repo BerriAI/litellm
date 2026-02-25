@@ -930,6 +930,35 @@ export const keyCreateCall = async (
   }
 };
 
+export const keyCreateForAgentCall = async (
+  accessToken: string,
+  agentId: string,
+  keyAlias: string,
+  models: string[],
+) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/key/generate` : `/key/generate`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      agent_id: agentId,
+      key_alias: keyAlias,
+      models: models.length > 0 ? models : [],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Failed to create key for agent");
+  }
+
+  return response.json();
+};
+
 export const userCreateCall = async (
   accessToken: string,
   userID: string | null,
