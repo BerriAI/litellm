@@ -63,6 +63,8 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_METADATA_KEY,
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+    BatchUpdateUserBudgetRequest,
+    BatchUpdateUserBudgetResponse,
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
     UserListResponse,
@@ -753,7 +755,7 @@ async def user_info(
     --header 'Authorization: Bearer sk-1234'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import _invalidate_spend_counter, prisma_client
 
     try:
         user_id = _normalize_user_info_user_id(request=request, user_id=user_id)
@@ -1687,6 +1689,214 @@ async def bulk_user_update(
         user_api_key_dict=user_api_key_dict,
         litellm_changed_by=litellm_changed_by,
     )
+
+
+@router.post(
+    "/user/update/batch",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BatchUpdateUserBudgetResponse,
+)
+@management_endpoint_wrapper
+async def batch_update_user_budgets(
+    data: BatchUpdateUserBudgetRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Batch update budget for multiple users using database operations.
+    Supports three modes:
+    1. Update all users (target_type: "all")
+    2. Update specific users (target_type: "users" with user_emails list)
+    3. Update users in teams (target_type: "team" with team_ids list)
+    Also supports resetting spend to 0 when reset_spend=True
+
+    Example request for all users:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/update/batch' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "target_type": "all",
+        "budget_limit": 100.0,
+        "budget_duration": "30d"
+    }'
+    ```
+
+    Example request for specific users:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/update/batch' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "target_type": "users",
+        "user_emails": ["user1@example.com", "user2@example.com"],
+        "budget_limit": 50.0,
+        "budget_duration": "30d"
+    }'
+    ```
+
+    Example request for users in teams:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/update/batch' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "target_type": "team",
+        "team_ids": ["team-123", "team-456"],
+        "budget_limit": 75.0,
+        "budget_duration": "30d"
+    }'
+    ```
+
+    Example request to reset spend:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/update/batch' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "target_type": "all",
+        "reset_spend": true
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected"},
+        )
+
+    # Only proxy admins can perform batch updates
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can perform batch user updates"},
+        )
+
+    try:
+        operation_type = "spend reset" if data.reset_spend else "budget update"
+        verbose_proxy_logger.info(
+            f"Batch {operation_type} request from {user_api_key_dict.user_id}"
+        )
+        verbose_proxy_logger.info(
+            f"Target type: {data.target_type}, Reset spend: {data.reset_spend}, "
+            f"Budget: {data.budget_limit}, Duration: {data.budget_duration}"
+        )
+
+        # Build the update data
+        update_data: Dict[str, Any] = {}
+
+        if data.reset_spend:
+            update_data["spend"] = 0.0
+        else:
+            # Regular budget update
+            if data.budget_limit is not None:
+                update_data["max_budget"] = data.budget_limit
+
+            if data.budget_duration:
+                update_data["budget_duration"] = data.budget_duration
+                # Calculate budget_reset_at based on duration
+                from litellm.proxy.common_utils.timezone_utils import (
+                    get_budget_reset_time,
+                )
+
+                update_data["budget_reset_at"] = get_budget_reset_time(
+                    budget_duration=data.budget_duration
+                )
+
+        # Add updated_at timestamp
+        update_data["updated_at"] = datetime.now(timezone.utc)
+
+        # Validate that at least one meaningful field is being updated
+        # to avoid unnecessary database updates that only change the timestamp
+        if set(update_data.keys()) == {"updated_at"}:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "No budget update fields provided. "
+                    "Specify reset_spend, budget_limit, or budget_duration."
+                },
+            )
+
+        # Build WHERE clause based on target_type
+        where_clause: Dict[str, Any] = {}
+
+        if data.target_type == "all":
+            # Update all users - no additional WHERE clause needed
+            pass
+
+        elif data.target_type == "users":
+            # Update specific users by email
+            # Note: validation that user_emails is non-empty is done in the Pydantic model
+            where_clause["user_email"] = {"in": data.user_emails}
+
+        elif data.target_type == "team":
+            # Update users in specific teams
+            # Note: validation that team_ids is non-empty is done in the Pydantic model
+            where_clause["teams"] = {"hasSome": data.team_ids}
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invalid target_type. Must be 'all', 'users', or 'team'"},
+            )
+
+        # Perform the batch update using Prisma ORM
+        verbose_proxy_logger.info(
+            f"Executing batch update with where clause: {where_clause}"
+        )
+
+        users_to_invalidate = []
+        if data.reset_spend:
+            users_to_invalidate = await UserRepository(prisma_client).table.find_many(where=where_clause)
+
+        result = await prisma_client.db.litellm_usertable.update_many(
+            data=update_data,
+            where=where_clause,
+        )
+
+        if isinstance(result, int):
+            affected_rows = result
+        elif isinstance(result, dict):
+            affected_rows = int(result.get("count", 0) or 0)
+        else:
+            affected_rows = int(getattr(result, "count", 0) or 0)
+
+        if data.reset_spend:
+            for user in users_to_invalidate:
+                user_id = getattr(user, "user_id", None)
+                if user_id:
+                    await _invalidate_spend_counter(counter_key=f"spend:user:{user_id}")
+
+        verbose_proxy_logger.info(
+            f"Batch {operation_type} completed. Affected rows: {affected_rows}"
+        )
+
+        response_message = (
+            f"Successfully reset spend for {affected_rows} users"
+            if data.reset_spend
+            else f"Successfully updated budgets for {affected_rows} users"
+        )
+
+        return BatchUpdateUserBudgetResponse(
+            success=True,
+            message=response_message,
+            affected_rows=affected_rows,
+            budget_limit=data.budget_limit,
+            budget_duration=data.budget_duration,
+            target_type=data.target_type,
+            reset_spend=data.reset_spend,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Batch user update failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to update users: {str(e)}"},
+        )
 
 
 async def get_user_key_counts(

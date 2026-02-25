@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
@@ -23,6 +25,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     LiteLLM_UserTableWithKeyCount,
     _resolve_user_email_metadata,
     _update_internal_user_params,
+    batch_update_user_budgets,
     get_user_key_counts,
     get_users,
     new_user,
@@ -3550,3 +3553,361 @@ async def test_resolve_user_email_metadata_skips_db_when_no_user_ids(mocker):
 
     assert result == {}
     find_many.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_all_users(mocker):
+    """
+    Test batch_update_user_budgets with target_type='all'.
+    Verifies that all users are updated with the specified budget.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(
+        return_value=5
+    )
+
+    # Patch the prisma client import
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create test request data
+    request_data = BatchUpdateUserBudgetRequest(
+        target_type="all",
+        budget_limit=100.0,
+        budget_duration="30d",
+    )
+
+    # Mock user_api_key_dict with proxy admin role
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call the function
+    response = await batch_update_user_budgets(
+        data=request_data,
+        user_api_key_dict=mock_user_api_key_dict,
+    )
+
+    # Verify response
+    assert response.success is True
+    assert response.affected_rows == 5
+    assert response.target_type == "all"
+    assert response.budget_limit == 100.0
+    assert response.budget_duration == "30d"
+    assert response.reset_spend is False
+    assert "Successfully updated budgets for 5 users" in response.message
+
+    # Verify update_many was called with correct parameters
+    mock_prisma_client.db.litellm_usertable.update_many.assert_called_once()
+    call_kwargs = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs
+
+    # Verify budget data
+    assert call_kwargs["data"]["max_budget"] == 100.0
+    assert call_kwargs["data"]["budget_duration"] == "30d"
+    assert "budget_reset_at" in call_kwargs["data"]
+    assert "updated_at" in call_kwargs["data"]
+
+    # Verify where clause is empty for "all" target type
+    assert call_kwargs["where"] == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_specific_users(mocker):
+    """
+    Test batch_update_user_budgets with target_type='users'.
+    Verifies that only specified users by email are updated.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(
+        return_value=2
+    )
+
+    # Patch the prisma client import
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create test request data
+    request_data = BatchUpdateUserBudgetRequest(
+        target_type="users",
+        user_emails=["user1@example.com", "user2@example.com"],
+        budget_limit=50.0,
+        budget_duration="7d",
+    )
+
+    # Mock user_api_key_dict with proxy admin role
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call the function
+    response = await batch_update_user_budgets(
+        data=request_data,
+        user_api_key_dict=mock_user_api_key_dict,
+    )
+
+    # Verify response
+    assert response.success is True
+    assert response.affected_rows == 2
+    assert response.target_type == "users"
+    assert response.budget_limit == 50.0
+
+    # Verify update_many was called with correct where clause
+    call_kwargs = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs
+    assert call_kwargs["where"]["user_email"]["in"] == [
+        "user1@example.com",
+        "user2@example.com",
+    ]
+    assert call_kwargs["data"]["max_budget"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_by_team(mocker):
+    """
+    Test batch_update_user_budgets with target_type='team'.
+    Verifies that users in specified teams are updated.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(
+        return_value=3
+    )
+
+    # Patch the prisma client import
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create test request data
+    request_data = BatchUpdateUserBudgetRequest(
+        target_type="team",
+        team_ids=["team-123", "team-456"],
+        budget_limit=75.0,
+        budget_duration="14d",
+    )
+
+    # Mock user_api_key_dict with proxy admin role
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call the function
+    response = await batch_update_user_budgets(
+        data=request_data,
+        user_api_key_dict=mock_user_api_key_dict,
+    )
+
+    # Verify response
+    assert response.success is True
+    assert response.affected_rows == 3
+    assert response.target_type == "team"
+
+    # Verify update_many was called with correct where clause (hasSome for array matching)
+    call_kwargs = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs
+    assert call_kwargs["where"]["teams"]["hasSome"] == ["team-123", "team-456"]
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_reset_spend(mocker):
+    """
+    Test batch_update_user_budgets with reset_spend=True.
+    Verifies that spend is reset to 0 without requiring budget_limit.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(
+        return_value=10
+    )
+    mock_prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(
+        return_value=[
+            SimpleNamespace(user_id="user-1"),
+            SimpleNamespace(user_id="user-2"),
+        ]
+    )
+    mock_invalidate = mocker.patch(
+        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        new=mocker.AsyncMock(),
+    )
+
+    # Patch the prisma client import
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create test request data with reset_spend=True (no budget_limit needed)
+    request_data = BatchUpdateUserBudgetRequest(
+        target_type="all",
+        reset_spend=True,
+    )
+
+    # Mock user_api_key_dict with proxy admin role
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call the function
+    response = await batch_update_user_budgets(
+        data=request_data,
+        user_api_key_dict=mock_user_api_key_dict,
+    )
+
+    # Verify response
+    assert response.success is True
+    assert response.affected_rows == 10
+    assert response.reset_spend is True
+    assert response.budget_limit is None
+    assert "Successfully reset spend for 10 users" in response.message
+
+    # Verify update_many was called with spend=0
+    call_kwargs = mock_prisma_client.db.litellm_usertable.update_many.call_args.kwargs
+    assert call_kwargs["data"]["spend"] == 0.0
+    assert "max_budget" not in call_kwargs["data"]
+    assert mock_invalidate.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_non_admin_forbidden(mocker):
+    """
+    Test that non-admin users cannot perform batch updates.
+    Verifies 403 Forbidden response for non-proxy_admin users.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    # Create test request data
+    request_data = BatchUpdateUserBudgetRequest(
+        target_type="all",
+        budget_limit=100.0,
+    )
+
+    # Mock user_api_key_dict with non-admin role
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+    # Call the function and expect HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        await batch_update_user_budgets(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Only proxy admins can perform batch user updates" in str(
+        exc_info.value.detail
+    )
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_invalid_target_type(mocker):
+    """
+    Test batch_update_user_budgets with invalid target_type.
+    Verifies 400 Bad Request response.
+    """
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        BatchUpdateUserBudgetRequest(
+            target_type="invalid_type",  # type: ignore
+            budget_limit=100.0,
+        )
+
+    assert "literal_error" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_missing_user_emails(mocker):
+    """
+    Test batch_update_user_budgets with target_type='users' but missing user_emails.
+    Verifies 400 Bad Request response.
+    """
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        BatchUpdateUserBudgetRequest(
+            target_type="users",
+            budget_limit=100.0,
+            user_emails=[],
+        )
+
+    assert "user_emails is required" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_missing_team_ids(mocker):
+    """
+    Test batch_update_user_budgets with target_type='team' but missing team_ids.
+    Verifies 400 Bad Request response.
+    """
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        BatchUpdateUserBudgetRequest(
+            target_type="team",
+            budget_limit=100.0,
+            team_ids=[],
+        )
+
+    assert "team_ids is required" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_batch_update_user_budgets_db_not_connected(mocker):
+    """
+    Test batch_update_user_budgets when database is not connected.
+    Verifies 500 Internal Server Error response.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BatchUpdateUserBudgetRequest,
+    )
+
+    # Patch the prisma client to None (simulating no DB connection)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+
+    # Create test request data
+    request_data = BatchUpdateUserBudgetRequest(
+        target_type="all",
+        budget_limit=100.0,
+    )
+
+    # Mock user_api_key_dict with proxy admin role
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    # Call the function and expect HTTPException
+    with pytest.raises(HTTPException) as exc_info:
+        await batch_update_user_budgets(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "Database not connected" in str(exc_info.value.detail)
