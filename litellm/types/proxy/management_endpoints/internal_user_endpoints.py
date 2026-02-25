@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
@@ -79,3 +79,57 @@ class BulkUpdateUserResponse(BaseModel):
     total_requested: int
     successful_updates: int
     failed_updates: int
+
+
+class BatchUpdateUserBudgetRequest(BaseModel):
+    """
+    Request for batch updating user budgets.
+    Supports three modes:
+    1. Update all users (target_type: "all")
+    2. Update specific users (target_type: "users" with user_emails list)
+    3. Update users in teams (target_type: "team" with team_ids list)
+    Also supports resetting spend to 0 when reset_spend=True
+    """
+
+    target_type: Literal["all", "users", "team"]
+    reset_spend: bool = False
+    budget_limit: Optional[float] = None
+    budget_duration: Optional[str] = None
+    user_emails: Optional[List[str]] = None
+    team_ids: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def validate_cross_fields(self):
+        # Validate budget_limit based on reset_spend
+        if not self.reset_spend and self.budget_limit is None:
+            raise ValueError("budget_limit is required when reset_spend is False")
+
+        # If budget_limit is provided, it must be non-negative
+        if self.budget_limit is not None and self.budget_limit < 0:
+            raise ValueError("budget_limit must be non-negative")
+
+        # Validate user_emails when target_type is "users"
+        if self.target_type == "users" and (
+            not self.user_emails or len(self.user_emails) == 0
+        ):
+            raise ValueError("user_emails is required when target_type is 'users'")
+
+        # Validate team_ids when target_type is "team"
+        if self.target_type == "team" and (
+            not self.team_ids or len(self.team_ids) == 0
+        ):
+            raise ValueError("team_ids is required when target_type is 'team'")
+
+        return self
+
+
+class BatchUpdateUserBudgetResponse(BaseModel):
+    """Response for batch update user budget operations"""
+
+    success: bool
+    message: str
+    affected_rows: int
+    budget_limit: Optional[float] = None
+    budget_duration: Optional[str] = None
+    target_type: str
+    reset_spend: bool
