@@ -2,4 +2,4 @@
 :HL["/litellm-asset-prefix/_next/static/chunks/6fabf2cec1bd2d6e.css","style"]
 :HL["/litellm-asset-prefix/_next/static/media/83afe278b6a6bb3c-s.p.3a6ba036.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
 :HL["/litellm-asset-prefix/_next/static/chunks/3f3fa56b5786d58c.css","style"]
-0:{"buildId":"dw_DfKV-1-KemnPCsI_1s","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
+0:{"buildId":"jzCQ8uM30ND03s0Jqr16x","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":true},"staleTime":300}

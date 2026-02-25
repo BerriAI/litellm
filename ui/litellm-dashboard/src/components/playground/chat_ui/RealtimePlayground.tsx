@@ -96,6 +96,10 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
 
   const connect = useCallback(async () => {
     if (wsRef.current) return;
+    if (!selectedModel) {
+      addMessage("status", "Please select a model first");
+      return;
+    }
     setIsConnecting(true);
 
     try {

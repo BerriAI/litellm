@@ -19,6 +19,16 @@ guardrails:
           pattern_name: email
           name: email
           action: BLOCK
+  - guardrail_name: "block-emails-realtime"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: realtime_input_transcription
+      default_on: true
+      patterns:
+        - pattern_type: prebuilt
+          pattern_name: email
+          name: email
+          action: BLOCK
 
 general_settings:
   master_key: sk-test-master-key
