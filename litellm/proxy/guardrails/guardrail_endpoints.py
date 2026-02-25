@@ -1173,6 +1173,12 @@ def _build_field_dict(
     if field.default is not None and field.default is not ...:
         field_dict["default_value"] = field.default
 
+    # Copy min, max, step from json_schema_extra for number/percentage inputs
+    if field_json_schema_extra:
+        for key in ("min", "max", "step", "default_value"):
+            if key in field_json_schema_extra:
+                field_dict[key] = field_json_schema_extra[key]
+
     return field_dict
 
 

@@ -58,6 +58,16 @@ class BlockCodeExecutionGuardrailConfigModel(GuardrailConfigModel):
         ge=0.0,
         le=1.0,
         description="Only block or mask when detection confidence >= this value; below threshold, allow or log_only.",
+        json_schema_extra=cast(
+            Any,
+            {
+                "type": "percentage",
+                "min": 0.0,
+                "max": 1.0,
+                "step": 0.1,
+                "default_value": 0.5,
+            },
+        ),
     )
 
     @staticmethod
