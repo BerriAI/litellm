@@ -46,6 +46,10 @@ Go to Add Model -> Existing Credentials -> Select your credential in the dropdow
 
 <Image img={require('../../img/use_model_cred.png')} />
 
+## Usage Tracking
+
+Models attached to a reusable credential are automatically tracked in the Usage page. Each request is tagged `Credential: <name>` and appears in the **Tag** view, so you can filter spend and usage by credential without any extra configuration. See [Credential Usage Tracking](./credential_usage_tracking.md) for details.
+
 ## Frequently Asked Questions
 
 

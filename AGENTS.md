@@ -174,6 +174,8 @@ When opening issues or pull requests, follow these templates:
 3. **Rate Limits**: Respect provider rate limits in tests
 4. **Memory Usage**: Be mindful of memory usage in streaming scenarios
 5. **Dependencies**: Keep dependencies minimal and well-justified
+6. **UI/Backend Contract Mismatch**: When adding a new entity type to the UI, always check whether the backend endpoint accepts a single value or an array. Match the UI control accordingly (single-select vs. multi-select) to avoid silently dropping user selections
+7. **Missing Tests for New Entity Types**: When adding a new entity type (e.g., in `EntityUsage`, `UsageViewSelect`), always add corresponding tests in the existing test files and update any icon/component mocks
 
 ## HELPFUL RESOURCES
 

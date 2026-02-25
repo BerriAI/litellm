@@ -139,53 +139,20 @@ class DBSpendUpdateWriter:
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
                 payload["endTime"] = payload["endTime"].isoformat()
-            
+
             if org_id is not None and org_id != "":
                 payload["organization_id"] = org_id
 
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
-            asyncio.create_task(
-                self._update_user_db(
-                    response_cost=response_cost,
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    litellm_proxy_budget_name=litellm_proxy_budget_name,
-                    end_user_id=end_user_id,
-                )
-            )
-            asyncio.create_task(
-                self._update_key_db(
-                    response_cost=response_cost,
-                    hashed_token=hashed_token,
-                    prisma_client=prisma_client,
-                )
-            )
-            asyncio.create_task(
-                self._update_team_db(
-                    response_cost=response_cost,
-                    team_id=team_id,
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                )
-            )
-            asyncio.create_task(
-                self._update_org_db(
-                    response_cost=response_cost,
-                    org_id=org_id,
-                    prisma_client=prisma_client,
-                )
-            )
-            asyncio.create_task(
-                self._update_tag_db(
-                    response_cost=response_cost,
-                    request_tags=copy.deepcopy(payload.get("request_tags")),
-                    prisma_client=prisma_client,
-                )
-            )
+            # One deepcopy shared by all 6 daily spend helpers (was 5, fixes agent bug)
+            payload_copy = copy.deepcopy(payload)
 
+            # Deepcopy request_tags for _update_tag_db
+            request_tags = copy.deepcopy(payload.get("request_tags"))
+
+            # Keep _insert_spend_log_to_db awaited inline (not a task, preserve current behavior)
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
                     payload=copy.deepcopy(payload),
@@ -196,44 +163,20 @@ class DBSpendUpdateWriter:
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
+            # Single task replaces 11 create_task() calls
             asyncio.create_task(
-                self.add_spend_log_transaction_to_daily_user_transaction(
-                    payload=copy.deepcopy(payload),
-                    prisma_client=prisma_client,
-                )
-            )
-
-            asyncio.create_task(
-                self.add_spend_log_transaction_to_daily_end_user_transaction(
-                    payload=copy.deepcopy(payload),
-                    prisma_client=prisma_client,
-                )
-            )
-
-            asyncio.create_task(
-                self.add_spend_log_transaction_to_daily_agent_transaction(
-                    payload=payload,
-                    prisma_client=prisma_client,
-                )
-            )
-
-            asyncio.create_task(
-                self.add_spend_log_transaction_to_daily_team_transaction(
-                    payload=copy.deepcopy(payload),
-                    prisma_client=prisma_client,
-                )
-            )
-            asyncio.create_task(
-                self.add_spend_log_transaction_to_daily_org_transaction(
-                    payload=copy.deepcopy(payload),
+                self._batch_database_updates(
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    hashed_token=hashed_token,
+                    team_id=team_id,
                     org_id=org_id,
+                    end_user_id=end_user_id,
                     prisma_client=prisma_client,
-                )
-            )
-            asyncio.create_task(
-                self.add_spend_log_transaction_to_daily_tag_transaction(
-                    payload=copy.deepcopy(payload),
-                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    litellm_proxy_budget_name=litellm_proxy_budget_name,
+                    payload_copy=payload_copy,
+                    request_tags=request_tags,
                 )
             )
 
@@ -355,6 +298,157 @@ class DBSpendUpdateWriter:
         except Exception as e:
             verbose_proxy_logger.debug(
                 "_enqueue_tool_registry_upsert error (non-blocking): %s", e
+            )
+
+    async def _batch_database_updates(
+        self,
+        *,
+        response_cost: Optional[float],
+        user_id: Optional[str],
+        hashed_token: Optional[str],
+        team_id: Optional[str],
+        org_id: Optional[str],
+        end_user_id: Optional[str],
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: DualCache,
+        litellm_proxy_budget_name: Optional[str],
+        payload_copy: dict,
+        request_tags: Optional[Any],
+    ):
+        """
+        Runs all 11 spend-update helpers sequentially inside a single asyncio task.
+
+        Each helper is wrapped in try/except so one failure doesn't prevent the others.
+        """
+        try:
+            await self._update_user_db(
+                response_cost=response_cost,
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                litellm_proxy_budget_name=litellm_proxy_budget_name,
+                end_user_id=end_user_id,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_user_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_key_db(
+                response_cost=response_cost,
+                hashed_token=hashed_token,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_key_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_team_db(
+                response_cost=response_cost,
+                team_id=team_id,
+                user_id=user_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_team_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_org_db(
+                response_cost=response_cost,
+                org_id=org_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_org_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self._update_tag_db(
+                response_cost=response_cost,
+                request_tags=request_tags,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_tag_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_user_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_end_user_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_end_user_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_agent_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_agent_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_team_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_org_transaction(
+                payload=payload_copy,
+                org_id=org_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_org_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_tag_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
+                traceback.format_exc(),
             )
 
     async def _update_key_db(
@@ -666,9 +760,16 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("acquired lock for spend updates")
 
             try:
-                db_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_update_transactions_from_redis_buffer()
-                )
+                (
+                    db_spend_update_transactions,
+                    daily_spend_update_transactions,
+                    daily_team_spend_update_transactions,
+                    daily_org_spend_update_transactions,
+                    daily_end_user_spend_update_transactions,
+                    daily_agent_spend_update_transactions,
+                    daily_tag_spend_update_transactions,
+                ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
                 if db_spend_update_transactions is not None:
                     verbose_proxy_logger.info(
                         "Spend tracking - committing spend updates from Redis to DB: "
@@ -688,9 +789,6 @@ class DBSpendUpdateWriter:
                         db_spend_update_transactions=db_spend_update_transactions,
                     )
 
-                daily_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_user_spend(
                         n_retry_times=n_retry_times,
@@ -698,9 +796,6 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_spend_update_transactions,
                     )
-                daily_team_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_team_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_team_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_team_spend(
                         n_retry_times=n_retry_times,
@@ -709,9 +804,6 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_team_spend_update_transactions,
                     )
 
-                daily_org_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_org_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_org_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_org_spend(
                         n_retry_times=n_retry_times,
@@ -720,9 +812,6 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_org_spend_update_transactions,
                     )
 
-                daily_tag_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_tag_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_tag_spend(
                         n_retry_times=n_retry_times,
@@ -730,9 +819,6 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_tag_spend_update_transactions,
                     )
-                daily_end_user_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_end_user_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_end_user_spend(
                         n_retry_times=n_retry_times,
@@ -740,9 +826,6 @@ class DBSpendUpdateWriter:
                         proxy_logging_obj=proxy_logging_obj,
                         daily_spend_transactions=daily_end_user_spend_update_transactions,
                     )
-                daily_agent_spend_update_transactions = (
-                    await self.redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer()
-                )
                 if daily_agent_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_agent_spend(
                         n_retry_times=n_retry_times,
@@ -1072,7 +1155,7 @@ class DBSpendUpdateWriter:
                 team_id = key.split("::")[1]
                 user_id = key.split("::")[3]
                 team_memberships_to_invalidate.append((user_id, team_id))
-            
+
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
@@ -1109,11 +1192,13 @@ class DBSpendUpdateWriter:
                     _raise_failed_update_spend_exception(
                         e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
                     )
-            
+
             # Invalidate cache for updated team memberships
             # This ensures budget checks read fresh spend data from the database
             if team_memberships_to_invalidate and proxy_logging_obj is not None:
-                user_api_key_cache = proxy_logging_obj.call_details.get("user_api_key_cache")
+                user_api_key_cache = proxy_logging_obj.call_details.get(
+                    "user_api_key_cache"
+                )
                 if user_api_key_cache is not None:
                     for user_id, team_id in team_memberships_to_invalidate:
                         cache_key = "team_membership:{}:{}".format(user_id, team_id)
@@ -1425,7 +1510,9 @@ class DBSpendUpdateWriter:
                                     ),
                                     "endpoint": transaction.get("endpoint") or "",
                                     "prompt_tokens": transaction["prompt_tokens"],
-                                    "completion_tokens": transaction["completion_tokens"],
+                                    "completion_tokens": transaction[
+                                        "completion_tokens"
+                                    ],
                                     "spend": transaction["spend"],
                                     "api_requests": transaction["api_requests"],
                                     "successful_requests": transaction[
@@ -1436,12 +1523,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data["cache_read_input_tokens"] = (
-                                        transaction.get("cache_read_input_tokens", 0)
-                                    )
+                                    common_data[
+                                        "cache_read_input_tokens"
+                                    ] = transaction.get("cache_read_input_tokens", 0)
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data["cache_creation_input_tokens"] = (
-                                        transaction.get("cache_creation_input_tokens", 0)
+                                    common_data[
+                                        "cache_creation_input_tokens"
+                                    ] = transaction.get(
+                                        "cache_creation_input_tokens", 0
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:
@@ -1484,10 +1573,14 @@ class DBSpendUpdateWriter:
                                     }
 
                                 if entity_type == "tag" and "request_id" in transaction:
-                                    update_data["request_id"] = transaction.get("request_id")
+                                    update_data["request_id"] = transaction.get(
+                                        "request_id"
+                                    )
 
                                 # Add endpoint to update_data so existing rows get their endpoint field updated
-                                update_data["endpoint"] = transaction.get("endpoint") or ""
+                                update_data["endpoint"] = (
+                                    transaction.get("endpoint") or ""
+                                )
 
                                 table.upsert(
                                     where=where_clause,
@@ -1671,7 +1764,9 @@ class DBSpendUpdateWriter:
         self,
         payload: Union[dict, SpendLogsPayload],
         prisma_client: PrismaClient,
-        type: Literal["user", "team", "org", "request_tags", "end_user", "agent"] = "user",
+        type: Literal[
+            "user", "team", "org", "request_tags", "end_user", "agent"
+        ] = "user",
     ) -> Optional[BaseDailySpendTransaction]:
         common_expected_keys = ["startTime", "api_key"]
         if type == "user":
@@ -1730,7 +1825,7 @@ class DBSpendUpdateWriter:
             endpoint = None
             if call_type:
                 endpoint = ROUTE_ENDPOINT_MAPPING.get(call_type, None)
-            
+
             daily_transaction = BaseDailySpendTransaction(
                 date=date,
                 api_key=payload["api_key"],
@@ -1942,7 +2037,7 @@ class DBSpendUpdateWriter:
         endpoint_str = base_daily_transaction.get("endpoint") or ""
         daily_transaction_key = f"{payload['agent_id']}_{base_daily_transaction['date']}_{payload_with_agent_id['api_key']}_{payload_with_agent_id['model']}_{payload_with_agent_id['custom_llm_provider']}_{endpoint_str}"
         daily_transaction = DailyAgentSpendTransaction(
-            agent_id=payload['agent_id'], **base_daily_transaction
+            agent_id=payload["agent_id"], **base_daily_transaction
         )
         await self.daily_agent_spend_update_queue.add_update(
             update={daily_transaction_key: daily_transaction}
