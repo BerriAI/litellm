@@ -27,6 +27,7 @@ vi.mock("../networking", () => ({
     soft_budget: null,
   }),
   fetchMCPAccessGroups: vi.fn().mockResolvedValue([]),
+  getAgentsList: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
