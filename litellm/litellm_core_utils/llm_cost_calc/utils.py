@@ -16,6 +16,15 @@ from litellm.types.utils import (
 )
 from litellm.utils import get_model_info
 
+# Pre-resolved CallTypes enum values for fast membership checks
+_IMAGE_RESPONSE_CALL_TYPES = frozenset({
+    CallTypes.image_generation.value,
+    CallTypes.aimage_generation.value,
+    PassthroughCallTypes.passthrough_image_generation.value,
+    CallTypes.image_edit.value,
+    CallTypes.aimage_edit.value,
+})
+
 
 def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
@@ -189,9 +198,31 @@ def _get_token_base_cost(
     cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
 
     ## CHECK IF ABOVE THRESHOLD
+    # Optimization: collect threshold keys first to avoid sorting all model_info keys.
+    # Most models don't have threshold pricing, so we can return early.
+    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
+    # so that the threshold detection loop only processes standard keys.  The
+    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
+    threshold_keys = [
+        k
+        for k in model_info
+        if k.startswith("input_cost_per_token_above_")
+        and not any(k.endswith(f"_{st.value}") for st in ServiceTier)
+    ]
+    if not threshold_keys:
+        return (
+            prompt_base_cost,
+            completion_base_cost,
+            cache_creation_cost,
+            cache_creation_cost_above_1hr,
+            cache_read_cost,
+        )
+
+    # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: Optional[float] = None
-    for key, value in sorted(model_info.items(), reverse=True):
-        if key.startswith("input_cost_per_token_above_") and value is not None:
+    for key in sorted(threshold_keys, reverse=True):
+        value = model_info.get(key)
+        if value is not None:
             try:
                 # Handle both formats: _above_128k_tokens and _above_128_tokens
                 threshold_str = key.split("_above_")[1].split("_tokens")[0]
@@ -199,14 +230,34 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
+                    # Prefer a service_tier-specific above-threshold key when available,
+                    # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
+                    # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
+                    # via _get_cost_per_unit's service_tier fallback logic.
+                    tiered_input_key = (
+                        _get_service_tier_cost_key(
+                            f"input_cost_per_token_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else key
+                    )
                     prompt_base_cost = cast(
-                        float, _get_cost_per_unit(model_info, key, prompt_base_cost)
+                        float, _get_cost_per_unit(model_info, tiered_input_key, prompt_base_cost)
+                    )
+                    tiered_output_key = (
+                        _get_service_tier_cost_key(
+                            f"output_cost_per_token_above_{threshold_str}_tokens",
+                            service_tier,
+                        )
+                        if service_tier
+                        else f"output_cost_per_token_above_{threshold_str}_tokens"
                     )
                     completion_base_cost = cast(
                         float,
                         _get_cost_per_unit(
                             model_info,
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
+                            tiered_output_key,
                             completion_base_cost,
                         ),
                     )
@@ -492,6 +543,7 @@ def _calculate_input_cost(
     cache_read_cost: float,
     cache_creation_cost: float,
     cache_creation_cost_above_1hr: float,
+    service_tier: Optional[str] = None,
 ) -> float:
     """
     Calculates the input cost for a given model, prompt tokens, and completion tokens.
@@ -502,47 +554,55 @@ def _calculate_input_cost(
     prompt_cost += float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
 
     ### AUDIO COST
-    prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_audio_token", prompt_tokens_details["audio_tokens"]
-    )
+    if prompt_tokens_details["audio_tokens"]:
+        audio_cost_key = _get_service_tier_cost_key(
+            "input_cost_per_audio_token", service_tier
+        )
+        prompt_cost += calculate_cost_component(
+            model_info, audio_cost_key, prompt_tokens_details["audio_tokens"]
+        )
 
     ### IMAGE TOKEN COST
-    # For image token costs:
-    # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
-    image_token_cost_key = "input_cost_per_image_token"
-    if model_info.get(image_token_cost_key) is None:
-        image_token_cost_key = "input_cost_per_token"
-    prompt_cost += calculate_cost_component(
-        model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
-    )
+    if prompt_tokens_details["image_tokens"]:
+        # For image token costs:
+        # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
+        image_token_cost_key = "input_cost_per_image_token"
+        if model_info.get(image_token_cost_key) is None:
+            image_token_cost_key = "input_cost_per_token"
+        prompt_cost += calculate_cost_component(
+            model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
+        )
 
     ### CACHE WRITING COST - Now uses tiered pricing
-    prompt_cost += calculate_cache_writing_cost(
-        cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
-        cache_creation_token_details=prompt_tokens_details[
-            "cache_creation_token_details"
-        ],
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
-        cache_creation_cost=cache_creation_cost,
-    )
+    if prompt_tokens_details["cache_creation_tokens"] or prompt_tokens_details["cache_creation_token_details"] is not None:
+        prompt_cost += calculate_cache_writing_cost(
+            cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
+            cache_creation_token_details=prompt_tokens_details[
+                "cache_creation_token_details"
+            ],
+            cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+            cache_creation_cost=cache_creation_cost,
+        )
 
     ### CHARACTER COST
-
-    prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_character", prompt_tokens_details["character_count"]
-    )
+    if prompt_tokens_details["character_count"]:
+        prompt_cost += calculate_cost_component(
+            model_info, "input_cost_per_character", prompt_tokens_details["character_count"]
+        )
 
     ### IMAGE COUNT COST
-    prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_image", prompt_tokens_details["image_count"]
-    )
+    if prompt_tokens_details["image_count"]:
+        prompt_cost += calculate_cost_component(
+            model_info, "input_cost_per_image", prompt_tokens_details["image_count"]
+        )
 
     ### VIDEO LENGTH COST
-    prompt_cost += calculate_cost_component(
-        model_info,
-        "input_cost_per_video_per_second",
-        prompt_tokens_details["video_length_seconds"],
-    )
+    if prompt_tokens_details["video_length_seconds"]:
+        prompt_cost += calculate_cost_component(
+            model_info,
+            "input_cost_per_video_per_second",
+            prompt_tokens_details["video_length_seconds"],
+        )
 
     return prompt_cost
 
@@ -602,7 +662,7 @@ def generic_cost_per_token(  # noqa: PLR0915
     total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
     has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
 
-    if text_tokens == 0 or has_double_counting:
+    if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
         text_tokens = (
             usage.prompt_tokens
             - cache_hit
@@ -629,6 +689,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         cache_read_cost=cache_read_cost,
         cache_creation_cost=cache_creation_cost,
         cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+        service_tier=service_tier,
     )
 
     ## CALCULATE OUTPUT COST
@@ -667,18 +728,11 @@ def generic_cost_per_token(  # noqa: PLR0915
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
-    _output_cost_per_audio_token = _get_cost_per_unit(
-        model_info, "output_cost_per_audio_token", None
-    )
-    _output_cost_per_reasoning_token = _get_cost_per_unit(
-        model_info, "output_cost_per_reasoning_token", None
-    )
-    _output_cost_per_image_token = _get_cost_per_unit(
-        model_info, "output_cost_per_image_token", None
-    )
-
     ## AUDIO COST
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
+        _output_cost_per_audio_token = _get_cost_per_unit(
+            model_info, "output_cost_per_audio_token", None
+        )
         _output_cost_per_audio_token = (
             _output_cost_per_audio_token
             if _output_cost_per_audio_token is not None
@@ -688,6 +742,9 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     ## REASONING COST
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
+        _output_cost_per_reasoning_token = _get_cost_per_unit(
+            model_info, "output_cost_per_reasoning_token", None
+        )
         _output_cost_per_reasoning_token = (
             _output_cost_per_reasoning_token
             if _output_cost_per_reasoning_token is not None
@@ -697,6 +754,9 @@ def generic_cost_per_token(  # noqa: PLR0915
 
     ## IMAGE COST
     if not is_text_tokens_total and image_tokens and image_tokens > 0:
+        _output_cost_per_image_token = _get_cost_per_unit(
+            model_info, "output_cost_per_image_token", None
+        )
         _output_cost_per_image_token = (
             _output_cost_per_image_token
             if _output_cost_per_image_token is not None
@@ -718,18 +778,7 @@ class CostCalculatorUtils:
         - Image Edit
         - Passthrough Image Generation
         """
-        if call_type in [
-            # image generation
-            CallTypes.image_generation.value,
-            CallTypes.aimage_generation.value,
-            # passthrough image generation
-            PassthroughCallTypes.passthrough_image_generation.value,
-            # image edit
-            CallTypes.image_edit.value,
-            CallTypes.aimage_edit.value,
-        ]:
-            return True
-        return False
+        return call_type in _IMAGE_RESPONSE_CALL_TYPES
 
     @staticmethod
     def route_image_generation_cost_calculator(

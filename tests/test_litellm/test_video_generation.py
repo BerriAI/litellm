@@ -14,6 +14,7 @@ import litellm
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
@@ -241,6 +242,77 @@ class TestVideoGeneration:
                 duration_seconds=5.0,
                 custom_llm_provider="openai"
             )
+
+    def test_video_generation_cost_with_custom_model_info(self):
+        """Test that custom model_info pricing is applied for video generation.
+
+        When a deployment has custom pricing via model_info, it should be used
+        instead of looking up the global litellm.model_cost map.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        model_info = {
+            "output_cost_per_video_per_second": 0.05,
+        }
+        cost = default_video_cost_calculator(
+            model="my-custom-video-model",
+            duration_seconds=10.0,
+            model_info=model_info,
+        )
+        assert cost == 0.5
+
+    def test_video_generation_cost_custom_model_info_fallback_to_per_second(self):
+        """Test that output_cost_per_second is used as fallback when
+        output_cost_per_video_per_second is not set in custom model_info.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        model_info = {
+            "output_cost_per_second": 0.10,
+        }
+        cost = default_video_cost_calculator(
+            model="my-custom-video-model",
+            duration_seconds=5.0,
+            model_info=model_info,
+        )
+        assert cost == 0.5
+
+    def test_video_generation_cost_custom_pricing_through_completion_cost(self):
+        """Test that custom video pricing flows through completion_cost via litellm_logging_obj.
+
+        This tests the full cost calculation path: completion_cost extracts model_info
+        from litellm_logging_obj.litellm_params.metadata.model_info and passes it to
+        the video cost calculator.
+
+        Related: https://github.com/BerriAI/litellm/issues/21907
+        """
+        from litellm.cost_calculator import completion_cost
+
+        # Create mock response with usage containing duration_seconds
+        mock_response = MagicMock()
+        mock_response.usage = MagicMock()
+        mock_response.usage.duration_seconds = 10.0
+        type(mock_response)._hidden_params = {}
+
+        # Create mock litellm_logging_obj with custom pricing
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "output_cost_per_video_per_second": 0.05,
+                }
+            }
+        }
+
+        cost = completion_cost(
+            completion_response=mock_response,
+            model="openai/hunyuanvideo",
+            call_type="create_video",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            litellm_logging_obj=mock_logging_obj,
+        )
+        assert cost == 0.5
 
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""
@@ -731,50 +803,56 @@ class TestVideoLogging:
     
     @pytest.mark.asyncio
     async def test_video_generation_logging(self):
-        """Test that video generation creates proper logging payload with cost tracking."""
+        """Test that video generation creates proper logging payload with cost tracking.
+
+        Note: Uses AsyncMock with side_effect pattern for reliable parallel execution.
+        """
         custom_logger = self.TestVideoLogger()
         litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [custom_logger]
-        
+
         # Mock video generation response
         mock_response = VideoObject(
             id="video_test_123",
-            object="video", 
+            object="video",
             status="queued",
             created_at=1712697600,
             model="sora-2",
             size="720x1280",
             seconds="8"
         )
-        
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_generation_handler.return_value = mock_response
-            
+
+        # Create async mock function to return the mock_response
+        async def mock_async_handler(*args, **kwargs):
+            return mock_response
+
+        # Patch the async_video_generation_handler method on base_llm_http_handler
+        with patch.object(videos_main.base_llm_http_handler, 'async_video_generation_handler', side_effect=mock_async_handler):
             response = await litellm.avideo_generation(
                 prompt="A cat running in a garden",
                 model="sora-2",
                 seconds="8",
                 size="720x1280"
             )
-            
+
             await asyncio.sleep(1)  # Allow logging to complete
-            
+
             # Verify logging payload was created
             assert custom_logger.standard_logging_payload is not None
-            
+
             payload = custom_logger.standard_logging_payload
-            
+
             # Verify basic logging fields
             assert payload["call_type"] == "avideo_generation"
             assert payload["status"] == "success"
             assert payload["model"] == "sora-2"
             assert payload["custom_llm_provider"] == "openai"
-            
+
             # Verify response object is recognized for logging
             assert payload["response"] is not None
             assert payload["response"]["id"] == "video_test_123"
             assert payload["response"]["object"] == "video"
-            
+
             # Verify cost tracking is present (may be 0 in test environment)
             assert payload["response_cost"] is not None
             # Note: Cost calculation may not work in test environment due to mocking
@@ -795,10 +873,92 @@ def test_openai_transform_video_content_request_empty_params():
     assert params == {}
 
 
+@pytest.mark.parametrize(
+    "variant,expected_suffix",
+    [
+        ("thumbnail", "?variant=thumbnail"),
+        ("spritesheet", "?variant=spritesheet"),
+    ],
+)
+def test_openai_transform_video_content_request_with_variant(variant, expected_suffix):
+    """OpenAI content transform should append ?variant= when variant is provided."""
+    config = OpenAIVideoConfig()
+    url, params = config.transform_video_content_request(
+        video_id="video_123",
+        api_base="https://api.openai.com/v1/videos",
+        litellm_params={},
+        headers={},
+        variant=variant,
+    )
+
+    assert url == f"https://api.openai.com/v1/videos/video_123/content{expected_suffix}"
+    assert params == {}
+
+
+def test_openai_transform_video_content_request_variant_none_no_query_param():
+    """OpenAI content transform should NOT append ?variant= when variant is None."""
+    config = OpenAIVideoConfig()
+    url, params = config.transform_video_content_request(
+        video_id="video_123",
+        api_base="https://api.openai.com/v1/videos",
+        litellm_params={},
+        headers={},
+        variant=None,
+    )
+
+    assert "variant" not in url
+    assert url == "https://api.openai.com/v1/videos/video_123/content"
+
+
+def test_video_content_handler_passes_variant_to_url():
+    """HTTP handler should pass variant through to the final URL."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_response = MagicMock()
+    mock_response.content = b"thumbnail-bytes"
+    mock_client.get.return_value = mock_response
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        return_value=mock_client,
+    ):
+        result = handler.video_content_handler(
+            video_id="video_abc",
+            video_content_provider_config=config,
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(
+                api_base="https://api.openai.com/v1"
+            ),
+            logging_obj=MagicMock(),
+            timeout=5.0,
+            api_key="sk-test",
+            client=mock_client,
+            _is_async=False,
+            variant="thumbnail",
+        )
+
+    assert result == b"thumbnail-bytes"
+    called_url = mock_client.get.call_args.kwargs["url"]
+    assert called_url == "https://api.openai.com/v1/videos/video_abc/content?variant=thumbnail"
+
+
 def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.router import GenericLiteLLMParams
+
+    # Clear the HTTP client cache to prevent test isolation issues
+    # In CI, a cached real HTTPHandler from a previous test might bypass the mock
+    if hasattr(litellm, 'in_memory_llm_clients_cache'):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
     handler = BaseLLMHTTPHandler()
     config = OpenAIVideoConfig()
@@ -810,17 +970,22 @@ def test_video_content_handler_uses_get_for_openai():
     mock_response.content = b"mp4-bytes"
     mock_client.get.return_value = mock_response
 
-    result = handler.video_content_handler(
-        video_id="video_abc",
-        video_content_provider_config=config,
-        custom_llm_provider="openai",
-        litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1"),
-        logging_obj=MagicMock(),
-        timeout=5.0,
-        api_key="sk-test",
-        client=mock_client,
-        _is_async=False,
-    )
+    # Patch _get_httpx_client to ensure no real HTTP client is created
+    # This prevents test isolation issues where isinstance check might fail
+    with patch('litellm.llms.custom_httpx.llm_http_handler._get_httpx_client') as mock_get_client:
+        mock_get_client.return_value = mock_client
+
+        result = handler.video_content_handler(
+            video_id="video_abc",
+            video_content_provider_config=config,
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1"),
+            logging_obj=MagicMock(),
+            timeout=5.0,
+            api_key="sk-test",
+            client=mock_client,
+            _is_async=False,
+        )
 
     assert result == b"mp4-bytes"
     mock_client.get.assert_called_once()
@@ -1342,6 +1507,118 @@ class TestVideoEndpointsProxyLitellmParams:
                     f"but got '{data_passed.get('custom_llm_provider')}'. "
                     f"Full data: {data_passed}, call_args: {call_args}"
                 )
+
+
+def test_video_remix_handler_uses_api_key_from_litellm_params():
+    """Sync remix handler should fall back to litellm_params api_key when api_key param is None."""
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    with patch.object(config, "validate_environment") as mock_validate:
+        mock_validate.return_value = {"Authorization": "Bearer deployment-key"}
+
+        with patch.object(config, "transform_video_remix_request") as mock_transform:
+            mock_transform.return_value = ("https://api.openai.com/v1/videos/video_123/remix", {"prompt": "remix it"})
+
+            with patch.object(config, "transform_video_remix_response") as mock_resp:
+                mock_resp.return_value = MagicMock()
+
+                mock_client = MagicMock()
+                mock_client.post.return_value = MagicMock(status_code=200)
+
+                with patch(
+                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    return_value=mock_client,
+                ):
+                    handler.video_remix_handler(
+                        video_id="video_123",
+                        prompt="remix it",
+                        video_remix_provider_config=config,
+                        custom_llm_provider="openai",
+                        litellm_params={"api_key": "deployment-key", "api_base": "https://api.openai.com/v1"},
+                        logging_obj=MagicMock(),
+                        timeout=5.0,
+                        api_key=None,
+                        _is_async=False,
+                    )
+
+        mock_validate.assert_called_once()
+        assert mock_validate.call_args.kwargs["api_key"] == "deployment-key"
+
+
+@pytest.mark.asyncio
+async def test_async_video_remix_handler_uses_api_key_from_litellm_params():
+    """Async remix handler should fall back to litellm_params api_key when api_key param is None."""
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    with patch.object(config, "validate_environment") as mock_validate:
+        mock_validate.return_value = {"Authorization": "Bearer deployment-key"}
+
+        with patch.object(config, "transform_video_remix_request") as mock_transform:
+            mock_transform.return_value = ("https://api.openai.com/v1/videos/video_123/remix", {"prompt": "remix it"})
+
+            with patch.object(config, "transform_video_remix_response") as mock_resp:
+                mock_resp.return_value = MagicMock()
+
+                mock_client = MagicMock(spec=AsyncHTTPHandler)
+                mock_response = MagicMock(status_code=200)
+                mock_client.post = AsyncMock(return_value=mock_response)
+
+                with patch(
+                    "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+                    return_value=mock_client,
+                ):
+                    await handler.async_video_remix_handler(
+                        video_id="video_123",
+                        prompt="remix it",
+                        video_remix_provider_config=config,
+                        custom_llm_provider="openai",
+                        litellm_params={"api_key": "deployment-key", "api_base": "https://api.openai.com/v1"},
+                        logging_obj=MagicMock(),
+                        timeout=5.0,
+                        api_key=None,
+                    )
+
+        mock_validate.assert_called_once()
+        assert mock_validate.call_args.kwargs["api_key"] == "deployment-key"
+
+
+def test_video_remix_handler_prefers_explicit_api_key():
+    """Sync remix handler should prefer explicit api_key over litellm_params."""
+    handler = BaseLLMHTTPHandler()
+    config = OpenAIVideoConfig()
+
+    with patch.object(config, "validate_environment") as mock_validate:
+        mock_validate.return_value = {"Authorization": "Bearer explicit-key"}
+
+        with patch.object(config, "transform_video_remix_request") as mock_transform:
+            mock_transform.return_value = ("https://api.openai.com/v1/videos/video_123/remix", {"prompt": "remix it"})
+
+            with patch.object(config, "transform_video_remix_response") as mock_resp:
+                mock_resp.return_value = MagicMock()
+
+                mock_client = MagicMock()
+                mock_client.post.return_value = MagicMock(status_code=200)
+
+                with patch(
+                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    return_value=mock_client,
+                ):
+                    handler.video_remix_handler(
+                        video_id="video_123",
+                        prompt="remix it",
+                        video_remix_provider_config=config,
+                        custom_llm_provider="openai",
+                        litellm_params={"api_key": "deployment-key", "api_base": "https://api.openai.com/v1"},
+                        logging_obj=MagicMock(),
+                        timeout=5.0,
+                        api_key="explicit-key",
+                        _is_async=False,
+                    )
+
+        mock_validate.assert_called_once()
+        assert mock_validate.call_args.kwargs["api_key"] == "explicit-key"
 
 
 if __name__ == "__main__":

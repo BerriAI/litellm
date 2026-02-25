@@ -49,6 +49,19 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 
+# Maximum number of base64 characters to keep in logging payloads.
+# Data URIs exceeding this are replaced with a size placeholder.
+# Set to 0 to disable truncation.
+MAX_BASE64_LENGTH_FOR_LOGGING = int(
+    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
+)
+
+# When true, adds detailed per-phase timing breakdown headers to responses.
+# Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
+LITELLM_DETAILED_TIMING = (
+    os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
+)
+
 # Model cost map validation constants
 MODEL_COST_MAP_MIN_MODEL_COUNT = int(
     os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
@@ -89,6 +102,14 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD = float(
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
     os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
+)
+
+# Semantic Guard Defaults
+DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75)
 )
 
 # MCP OAuth2 Client Credentials Defaults
@@ -221,9 +242,14 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = (
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
-MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
+TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 60))
+# Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
+# Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
+MAX_SIZE_IN_MEMORY_QUEUE = int(
+    os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8))
+)
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 )
@@ -287,7 +313,9 @@ MIN_NON_ZERO_TEMPERATURE = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
 REPEATED_STREAMING_CHUNK_LIMIT = int(
     os.getenv("REPEATED_STREAMING_CHUNK_LIMIT", 100)
 )  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
-DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 16))
+# Shared maxsize for functools.lru_cache usage across hot paths.
+# Defaulted to 64 to avoid cache thrash in multi-model production workloads.
+DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 64))
 _REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
 INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY = float(os.getenv("MAX_RETRY_DELAY", 8.0))
@@ -319,6 +347,9 @@ NON_LLM_CONNECTION_TIMEOUT = int(
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
+BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(
+    os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
+)
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 )
@@ -573,6 +604,11 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
     "service_tier",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "verbosity",
+    "store",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -634,6 +670,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "prompt_cache_retention": None,
     "store": None,
     "metadata": None,
+    "context_management": None,
 }
 
 openai_compatible_endpoints: List = [
@@ -1036,6 +1073,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
+    "anthropic.claude-sonnet-4-6",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -1258,6 +1296,9 @@ LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false"
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
     os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
 )  # 24 hours default
+LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
+    "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
+)  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -1460,3 +1501,14 @@ MICROSOFT_USER_FIRST_NAME_ATTRIBUTE = str(
 MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "surname")
 )
+
+# Maximum payload size (in bytes) to fully serialize for DEBUG logging.
+# Payloads larger than this are truncated to avoid multi-second json.dumps blocking the response.
+MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
+    os.getenv("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400)
+)  # 100 KB
+
+# Policy template enrichment
+MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
+COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
+DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"

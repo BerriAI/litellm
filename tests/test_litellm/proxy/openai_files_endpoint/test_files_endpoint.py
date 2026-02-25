@@ -232,6 +232,9 @@ def test_target_storage_invokes_storage_backend(
     """
     Ensure target_storage is parsed and invokes the storage backend service.
     """
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     setup_proxy_logging_object(monkeypatch, llm_router)
 
     async_mock = mocker.AsyncMock(
@@ -277,6 +280,9 @@ def test_target_storage_with_target_models(
     """
     Ensure target_storage and target_model_names are parsed and passed through.
     """
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     setup_proxy_logging_object(monkeypatch, llm_router)
 
     async_mock = mocker.AsyncMock(
@@ -869,7 +875,7 @@ def test_managed_files_with_loadbalancing(mocker: MockerFixture, monkeypatch, ll
     """
     from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
     from litellm.types.llms.openai import OpenAIFileObject
-    
+
     # Enable loadbalancing on batch endpoints
     monkeypatch.setattr("litellm.enable_loadbalancing_on_batch_endpoints", True)
     

@@ -34,6 +34,13 @@ model_list:
     litellm_params:
       model: "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
       aws_region_name: "us-east-1"
+  
+  # Azure AI models
+  - model_name: azure-ai-claude-opus-4.5
+    litellm_params:
+      model: "azure_ai/claude-opus-4.5"
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE
 
   # Vertex AI models
   - model_name: vertex-ai-claude-opus-4-6
@@ -44,3 +51,6 @@ model_list:
 
 general_settings:  
   forward_client_headers_to_llm_api: true
+
+litellm_settings:
+  drop_params: true

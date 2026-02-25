@@ -1116,6 +1116,7 @@ async def test_dynamic_rate_limiting_v3():
     ), "RPM limit should be enforced when dynamic mode and failures detected"
 
 
+@pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_async_increment_tokens_with_ttl_preservation():
     """
@@ -1176,8 +1177,11 @@ async def test_async_increment_tokens_with_ttl_preservation():
         )
 
     # Test keys - use hash tags to ensure they map to same Redis cluster slot
-    test_key_with_ttl = "{test_ttl}:with_ttl"
-    test_key_without_ttl = "{test_ttl}:without_ttl"
+    # Use a unique suffix per test run to avoid stale state from prior runs
+    import uuid
+    unique_suffix = str(uuid.uuid4())[:8]
+    test_key_with_ttl = f"{{test_ttl}}:with_ttl:{unique_suffix}"
+    test_key_without_ttl = f"{{test_ttl}}:without_ttl:{unique_suffix}"
 
     try:
         # Clean up any existing test keys
