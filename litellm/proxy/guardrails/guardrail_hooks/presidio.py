@@ -322,12 +322,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     analyze_payload,
                 )
 
-                async with session.post(analyze_url, json=analyze_payload) as response:
-                    analyze_results = await response.json()
-                    verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
-
-                # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
-                # Presidio may return a dict instead of a list when errors occur
                 def _fail_on_invalid_response(
                     reason: str,
                 ) -> List[PresidioAnalyzeResponseItem]:
@@ -346,6 +340,36 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         "Presidio analyzer %s, returning empty list", reason
                     )
                     return []
+
+                async with session.post(
+                    analyze_url,
+                    json=analyze_payload,
+                    headers={"Accept": "application/json"},
+                ) as response:
+                    # Validate HTTP status
+                    if response.status >= 400:
+                        error_body = await response.text()
+                        return _fail_on_invalid_response(
+                            f"HTTP {response.status} from Presidio analyzer: {error_body[:200]}"
+                        )
+
+                    # Validate Content-Type is JSON
+                    content_type = getattr(
+                        response,
+                        "content_type",
+                        response.headers.get("Content-Type", ""),
+                    )
+                    if "application/json" not in content_type:
+                        error_body = await response.text()
+                        return _fail_on_invalid_response(
+                            f"expected application/json Content-Type but received '{content_type}'; body: '{error_body[:200]}'"
+                        )
+
+                    analyze_results = await response.json()
+                    verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+
+                # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
+                # Presidio may return a dict instead of a list when errors occur
 
                 if isinstance(analyze_results, dict):
                     if "error" in analyze_results:
@@ -423,8 +447,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 }
 
                 async with session.post(
-                    anonymize_url, json=anonymize_payload
+                    anonymize_url,
+                    json=anonymize_payload,
+                    headers={"Accept": "application/json"},
                 ) as response:
+                    # Validate HTTP status
+                    if response.status >= 400:
+                        error_body = await response.text()
+                        raise Exception(
+                            f"Presidio anonymizer returned HTTP {response.status}: {error_body[:200]}"
+                        )
+
+                    # Validate Content-Type is JSON
+                    content_type = getattr(
+                        response,
+                        "content_type",
+                        response.headers.get("Content-Type", ""),
+                    )
+                    if "application/json" not in content_type:
+                        error_body = await response.text()
+                        raise Exception(
+                            f"Presidio anonymizer returned non-JSON Content-Type '{content_type}'; body: '{error_body[:200]}'"
+                        )
+
                     redacted_text = await response.json()
 
             new_text = text
@@ -456,7 +501,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
             # contain API keys or other secrets) in error responses.
-            if "Invalid anonymizer response" in str(e):
+            error_str = str(e)
+            if (
+                "Invalid anonymizer response" in error_str
+                or "Presidio anonymizer returned" in error_str
+            ):
                 raise
             raise Exception(
                 f"Presidio PII anonymization failed: {type(e).__name__}"
