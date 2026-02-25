@@ -263,7 +263,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
         """
         Enriches failure spend log metadata by looking up the key object (and team object)
-        from cache when key fields are missing.
+        from cache/DB when key fields are missing.
 
         This handles two scenarios:
         1. Auth errors (401): UserAPIKeyAuth is created with only api_key set, all other
@@ -291,7 +291,6 @@ class _ProxyDBLogger(CustomLogger):
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
-                    check_cache_only=True,
                 )
                 if metadata.get("user_api_key_alias") is None:
                     metadata["user_api_key_alias"] = key_obj.key_alias
@@ -316,7 +315,6 @@ class _ProxyDBLogger(CustomLogger):
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
-                    check_cache_only=True,
                 )
                 if team_obj.team_alias is not None:
                     metadata["user_api_key_team_alias"] = team_obj.team_alias
