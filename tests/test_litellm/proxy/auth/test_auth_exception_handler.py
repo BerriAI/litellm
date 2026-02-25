@@ -201,10 +201,10 @@ async def test_expected_auth_errors_log_at_warning_level():
             except Exception:
                 pass
 
-            mock_warning.assert_called_once(), (
+            assert mock_warning.call_count == 1, (
                 f"Expected warning log for {type(error).__name__}, got none"
             )
-            mock_exception.assert_not_called(), (
+            assert mock_exception.call_count == 0, (
                 f"Did not expect exception log for {type(error).__name__}"
             )
 
