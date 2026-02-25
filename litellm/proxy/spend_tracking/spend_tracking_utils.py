@@ -43,7 +43,6 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     is_master_key = secrets.compare_digest(api_key, hash_token(_master_key))
     if is_master_key:
         return True
-
     return False
 
 
@@ -94,7 +93,6 @@ def _get_spend_logs_metadata(
         "getting payload for SpendLogs, available keys in metadata: "
         + str(list(metadata.keys()))
     )
-
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
@@ -114,7 +112,6 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
-
     return clean_metadata
 
 
@@ -132,7 +129,6 @@ def generate_hash_from_response(response_obj: Any) -> str:
         # Create a stable JSON string of the entire response object
         # Sort keys to ensure consistent ordering
         json_str = json.dumps(response_obj, sort_keys=True)
-
         # Generate a hash of the response object
         unique_hash = hashlib.md5(json_str.encode()).hexdigest()
         return unique_hash
@@ -157,7 +153,6 @@ def get_spend_logs_id(
 def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> dict:
     """
     Extract usage information for OCR/AOCR calls.
-
     OCR responses use usage_info (with pages_processed) instead of token-based usage.
 
     Args:
@@ -169,11 +164,9 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         and pages_processed from usage_info.
     """
     usage_info = None
-
     # Try to extract usage_info from dict
     if isinstance(response_obj_dict, dict) and "usage_info" in response_obj_dict:
         usage_info = response_obj_dict.get("usage_info")
-
     # Try to extract usage_info from object attributes if not found in dict
     if not usage_info and hasattr(response_obj, "usage_info"):
         usage_info = response_obj.usage_info
@@ -216,11 +209,11 @@ def get_logging_payload(  # noqa: PLR0915
 
     if kwargs is None:
         kwargs = {}
-
     if response_obj is None:
         response_obj = {}
     elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
         response_obj = {"result": str(response_obj)}
+
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = get_litellm_metadata_from_kwargs(kwargs)
@@ -249,6 +242,7 @@ def get_logging_payload(  # noqa: PLR0915
             usage = _usage
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
+
     standard_logging_payload = cast(
         Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None)
     )
@@ -268,10 +262,12 @@ def get_logging_payload(  # noqa: PLR0915
             "completion_tokens", 0
         )
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
+
     if api_key is not None and isinstance(api_key, str):
         if api_key.startswith("sk-"):
             # hash the api_key
             api_key = hash_token(api_key)
+
         if (
             _is_master_key(api_key=api_key, _master_key=master_key)
             and general_settings.get("disable_adding_master_key_hash_to_db") is True
@@ -282,25 +278,28 @@ def get_logging_payload(  # noqa: PLR0915
         standard_logging_payload is not None
     ):  # [TODO] migrate completely to sl payload. currently missing pass-through endpoint data
         api_key = (
-            api_key
-            or standard_logging_payload["metadata"].get("user_api_key_hash")
-            or ""
+            api_key or standard_logging_payload["metadata"].get("user_api_key_hash") or ""
         )
         end_user_id = end_user_id or standard_logging_payload["metadata"].get(
             "user_api_key_end_user_id"
         )
+
     # BUG FIX: Don't overwrite api_key when standard_logging_payload is None
     # The api_key was already extracted from metadata (line 243) and hashed (lines 256-259)
+
     request_tags = (
         json.dumps(metadata.get("tags", []))
         if isinstance(metadata.get("tags", []), list)
         else "[]"
     )
+
     if (
         standard_logging_payload is not None
         and standard_logging_payload.get("request_tags") is not None
-    ):  # use 'tags' from standard logging payload instead
+    ):
+        # use 'tags' from standard logging payload instead
         request_tags = json.dumps(standard_logging_payload["request_tags"])
+
     if (
         _is_master_key(api_key=api_key, _master_key=master_key)
         and general_settings.get("disable_adding_master_key_hash_to_db") is True
@@ -378,12 +377,14 @@ def get_logging_payload(  # noqa: PLR0915
             if isinstance(v, BaseModel):
                 v = v.model_dump()
             additional_usage_values.update({k: v})
+
     clean_metadata["additional_usage_values"] = additional_usage_values
 
     if litellm.cache is not None:
         cache_key = litellm.cache.get_cache_key(**kwargs)
     else:
         cache_key = "Cache OFF"
+
     if cache_hit is True:
         import time
 
@@ -400,6 +401,7 @@ def get_logging_payload(  # noqa: PLR0915
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Optional[str] = kwargs.get("agent_id") or metadata.get("agent_id")
+
     custom_llm_provider = kwargs.get("custom_llm_provider")
     raw_model = cast(str, kwargs.get("model") or "")
     model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
@@ -475,10 +477,7 @@ def _get_session_id_for_spend_log(
     standard_logging_payload: Optional[StandardLoggingPayload],
 ) -> str:
     """
-    Get the session id for the spend log.
-
-    This ensures each spend log is associated with a unique session id.
-
+    Get the session id for the spend log. This ensures each spend log is associated with a unique session id.
     """
     from litellm._uuid import uuid
 
@@ -511,70 +510,48 @@ async def get_spend_by_team_and_customer(
 ):
     sql_query = """
     WITH SpendByModelApiKey AS (
-        SELECT
-            date_trunc('day', sl."startTime") AS group_by_day,
-            COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
-            sl.end_user AS customer,
-            sl.model,
-            sl.api_key,
-            SUM(sl.spend) AS model_api_spend,
-            SUM(sl.total_tokens) AS model_api_tokens
-        FROM 
-            "LiteLLM_SpendLogs" sl
-        LEFT JOIN 
-            "LiteLLM_TeamTable" tt 
-        ON 
-            sl.team_id = tt.team_id
-        WHERE
-            sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
-            AND sl.team_id = $3
-            AND sl.end_user = $4
-        GROUP BY
-            date_trunc('day', sl."startTime"),
-            tt.team_alias,
-            sl.end_user,
-            sl.model,
-            sl.api_key
+        SELECT date_trunc('day', sl."startTime") AS group_by_day,
+               COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+               sl.end_user AS customer,
+               sl.model,
+               sl.api_key,
+               SUM(sl.spend) AS model_api_spend,
+               SUM(sl.total_tokens) AS model_api_tokens
+        FROM "LiteLLM_SpendLogs" sl
+        LEFT JOIN "LiteLLM_TeamTable" tt ON sl.team_id = tt.team_id
+        WHERE sl."startTime" >= $1::timestamptz
+          AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
+          AND sl.team_id = $3
+          AND sl.end_user = $4
+        GROUP BY date_trunc('day', sl."startTime"), tt.team_alias, sl.end_user, sl.model, sl.api_key
     )
-        SELECT
-            group_by_day,
-            jsonb_agg(jsonb_build_object(
-                'team_name', team_name,
-                'customer', customer,
-                'total_spend', total_spend,
-                'metadata', metadata
-            )) AS teams_customers
-        FROM (
-            SELECT
-                group_by_day,
-                team_name,
-                customer,
-                SUM(model_api_spend) AS total_spend,
-                jsonb_agg(jsonb_build_object(
-                    'model', model,
-                    'api_key', api_key,
-                    'spend', model_api_spend,
-                    'total_tokens', model_api_tokens
-                )) AS metadata
-            FROM 
-                SpendByModelApiKey
-            GROUP BY
-                group_by_day,
-                team_name,
-                customer
-        ) AS aggregated
-        GROUP BY
-            group_by_day
-        ORDER BY
-            group_by_day;
+    SELECT group_by_day,
+           jsonb_agg(jsonb_build_object(
+               'team_name', team_name,
+               'customer', customer,
+               'total_spend', total_spend,
+               'metadata', metadata
+           )) AS teams_customers
+    FROM (
+        SELECT group_by_day, team_name, customer,
+               SUM(model_api_spend) AS total_spend,
+               jsonb_agg(jsonb_build_object(
+                   'model', model,
+                   'api_key', api_key,
+                   'spend', model_api_spend,
+                   'total_tokens', model_api_tokens
+               )) AS metadata
+        FROM SpendByModelApiKey
+        GROUP BY group_by_day, team_name, customer
+    ) AS aggregated
+    GROUP BY group_by_day
+    ORDER BY group_by_day;
     """
-
     db_response = await prisma_client.db.query_raw(
         sql_query, start_date, end_date, team_id, customer_id
     )
     if db_response is None:
         return []
-
     return db_response
 
 
@@ -585,6 +562,49 @@ def _get_messages_for_spend_logs_payload(
     return "{}"
 
 
+def _sanitize_value(value: Any, visited: Optional[set] = None) -> Any:
+    if isinstance(value, dict):
+        return _sanitize_request_body_for_spend_logs_payload(value, visited)
+    elif isinstance(value, list):
+        return [_sanitize_value(item, visited) for item in value]
+    elif isinstance(value, str):
+        # Strip null bytes (\x00) and their JSON representations (\u0000)
+        # PostgreSQL cannot store these in text/jsonb columns (error 22P05)
+        value = value.replace("\x00", "").replace("\u0000", "")
+        if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+            from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+
+            # Keep 35% from beginning and 65% from end (end is usually more important)
+            # This split ensures we keep more context from the end of conversations
+            start_ratio = 0.35
+            end_ratio = 0.65
+
+            # Calculate character distribution
+            start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
+            end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
+
+            # Ensure we don't exceed the total limit
+            total_keep = start_chars + end_chars
+            if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
+                end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+
+            # If the string length is less than what we want to keep, just truncate normally
+            if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
+                return value
+
+            # Calculate how many characters are being skipped
+            skipped_chars = len(value) - total_keep
+
+            # Build the truncated string: beginning + truncation marker + end
+            truncated_value = (
+                f"{value[:start_chars]}"
+                f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
+                f"{value[-end_chars:]}"
+            )
+            return truncated_value
+    return value
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
     visited: Optional[set] = None,
@@ -593,8 +613,6 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
     """
-    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-
     if visited is None:
         visited = set()
 
@@ -604,45 +622,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         return {}
     visited.add(obj_id)
 
-    def _sanitize_value(value: Any) -> Any:
-        if isinstance(value, dict):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited)
-        elif isinstance(value, list):
-            return [_sanitize_value(item) for item in value]
-        elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
-                # Keep 35% from beginning and 65% from end (end is usually more important)
-                # This split ensures we keep more context from the end of conversations
-                start_ratio = 0.35
-                end_ratio = 0.65
-
-                # Calculate character distribution
-                start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
-                end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
-
-                # Ensure we don't exceed the total limit
-                total_keep = start_chars + end_chars
-                if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
-                    end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
-
-                # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
-                    return value
-
-                # Calculate how many characters are being skipped
-                skipped_chars = len(value) - total_keep
-
-                # Build the truncated string: beginning + truncation marker + end
-                truncated_value = (
-                    f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars) ..."
-                    f"{value[-end_chars:]}"
-                )
-                return truncated_value
-            return value
-        return value
-
-    return {k: _sanitize_value(v) for k, v in request_body.items()}
+    return {k: _sanitize_value(v, visited) for k, v in request_body.items()}
 
 
 def _convert_to_json_serializable_dict(
@@ -650,9 +630,7 @@ def _convert_to_json_serializable_dict(
 ) -> Any:
     """
     Convert object to JSON-serializable dict, handling Pydantic models safely.
-
-    This avoids pickle-based deepcopy which fails on Pydantic v2 models
-    containing _thread.RLock objects.
+    This avoids pickle-based deepcopy which fails on Pydantic v2 models containing _thread.RLock objects.
 
     Args:
         obj: Object to convert (dict, list, Pydantic model, or primitive)
@@ -664,21 +642,21 @@ def _convert_to_json_serializable_dict(
     """
     if max_depth <= 0:
         # Return a placeholder if max depth is exceeded
-        return "<max_depth_exceeded>"
-    
+        return ""
+
     if visited is None:
         visited = set()
-    
+
     # Get the object's memory address to track visited objects
     obj_id = id(obj)
     if obj_id in visited:
         # Circular reference detected, return placeholder
-        return "<circular_reference>"
-    
+        return ""
+
     # Only track mutable objects (dict, list, objects with __dict__)
     if isinstance(obj, (dict, list)) or hasattr(obj, "__dict__"):
         visited.add(obj_id)
-    
+
     try:
         if isinstance(obj, BaseModel):
             # Use Pydantic's model_dump() instead of pickle
@@ -714,7 +692,6 @@ def _get_proxy_server_request_for_spend_logs_payload(
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
-
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
@@ -723,7 +700,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
-            
+
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
@@ -738,15 +715,16 @@ def _get_proxy_server_request_for_spend_logs_payload(
                         "standard_callback_dynamic_params"
                     ),
                 }
-                
+
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
                     _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
-            
+
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
+
     return "{}"
 
 
@@ -762,6 +740,7 @@ def _get_vector_store_request_for_spend_logs_payload(
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
     if vector_store_request_metadata is None:
         return None
+
     for vector_store_request in vector_store_request_metadata:
         vector_store_search_response: VectorStoreSearchResponse = (
             vector_store_request.get("vector_store_search_response")
@@ -772,6 +751,7 @@ def _get_vector_store_request_for_spend_logs_payload(
             for content_item in response_item.get("content", []) or []:
                 if "text" in content_item:
                     content_item["text"] = REDACTED_BY_LITELM_STRING
+
     return vector_store_request_metadata
 
 
@@ -781,18 +761,19 @@ def _get_response_for_spend_logs_payload(
 ) -> str:
     if payload is None:
         return "{}"
+
     if _should_store_prompts_and_responses_in_spend_logs():
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
-        
+
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
                 perform_redaction,
                 should_redact_message_logging,
             )
-            
+
             litellm_params = kwargs.get("litellm_params", {})
             model_call_details = {
                 "litellm_params": litellm_params,
@@ -800,7 +781,7 @@ def _get_response_for_spend_logs_payload(
                     "standard_callback_dynamic_params"
                 ),
             }
-            
+
             # If redaction is enabled, convert to serializable dict before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
                 response_obj = _convert_to_json_serializable_dict(response_obj)
@@ -809,14 +790,16 @@ def _get_response_for_spend_logs_payload(
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}
         )
-
         sanitized_response = sanitized_wrapper.get("response", response_obj)
 
         if sanitized_response is None:
             return "{}"
+
         if isinstance(sanitized_response, str):
             return sanitized_response
+
         return safe_dumps(sanitized_response)
+
     return "{}"
 
 
@@ -826,7 +809,7 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Check general_settings (from DB or proxy_config.yaml)
     store_prompts_value = general_settings.get("store_prompts_in_spend_logs")
-    
+
     # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
     if store_prompts_value is True:
         return True
@@ -834,7 +817,7 @@ def _should_store_prompts_and_responses_in_spend_logs() -> bool:
         # Case-insensitive string comparison
         if store_prompts_value.lower() == "true":
             return True
-    
+
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
 
@@ -843,9 +826,7 @@ def _get_status_for_spend_log(
     metadata: dict,
 ) -> Literal["success", "failure"]:
     """
-    Get the status for the spend log.
-
-    It's only a failure if metadata.get("status") is "failure"
+    Get the status for the spend log. It's only a failure if metadata.get("status") is "failure"
     """
     _status: Optional[str] = metadata.get("status", None)
     if _status == "failure":

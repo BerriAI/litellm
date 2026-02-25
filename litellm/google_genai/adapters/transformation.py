@@ -56,13 +56,11 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     continue
-
                 transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(
                     chunk, self
                 )
                 if transformed_chunk:
                     return transformed_chunk
-
             raise StopIteration
         except StopIteration:
             raise
@@ -82,7 +80,6 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     continue
-
                 transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(
                     chunk, self
                 )
@@ -119,6 +116,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                                 f"Partial args: {tool_call_data['arguments']}"
                             )
                             pass
+
                     if parts:
                         final_chunk = {
                             "candidates": [
@@ -134,6 +132,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                 finally:
                     # Ensure the accumulator is always cleared to prevent memory leaks
                     self.accumulated_tool_calls.clear()
+
             raise StopAsyncIteration
         except StopAsyncIteration:
             raise
@@ -146,7 +145,9 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
         """
         for chunk in self.completion_stream:
             if isinstance(chunk, dict):
-                payload = f"data: {json.dumps(chunk)}\n\n"
+                payload = f"data: {json.dumps(chunk)}
+
+"
                 yield payload.encode()
             else:
                 yield chunk
@@ -159,16 +160,20 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
 
         async for chunk in self.completion_stream:
             if isinstance(chunk, dict):
-                payload = f"data: {json.dumps(chunk)}\n\n"
+                payload = f"data: {json.dumps(chunk)}
+
+"
                 yield payload.encode()
             elif isinstance(chunk, ModelResponseStream):
                 # Transform OpenAI streaming chunk to Google GenAI format
                 transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(
                     chunk, self
                 )
+                if isinstance(transformed_chunk, dict):
+                    # Only return non-empty chunks
+                    payload = f"data: {json.dumps(transformed_chunk)}
 
-                if isinstance(transformed_chunk, dict):  # Only return non-empty chunks
-                    payload = f"data: {json.dumps(transformed_chunk)}\n\n"
+"
                     yield payload.encode()
                 else:
                     # For empty chunks, continue to next iteration
@@ -207,7 +212,6 @@ class GoogleGenAIAdapter:
         Returns:
             Dict in OpenAI format
         """
-
         # Extract top-level fields from kwargs
         system_instruction = kwargs.get("systemInstruction") or kwargs.get(
             "system_instruction"
@@ -265,7 +269,6 @@ class GoogleGenAIAdapter:
             if isinstance(tools, list) and len(tools) > 0:
                 # Tools are in Google GenAI format, transform them
                 openai_tools = self._transform_google_genai_tools_to_openai(tools)
-
                 if openai_tools:
                     completion_request["tools"] = openai_tools
 
@@ -309,6 +312,7 @@ class GoogleGenAIAdapter:
             for key, value in litellm_dict.items():
                 if key in allowed_fields:
                     completion_request_dict[key] = value
+
         return completion_request_dict
 
     def translate_completion_output_params_streaming(
@@ -319,6 +323,7 @@ class GoogleGenAIAdapter:
         google_genai_wrapper = GoogleGenAIStreamWrapper(
             completion_stream=completion_stream
         )
+
         # Return the SSE-wrapped version for proper event formatting
         return google_genai_wrapper.async_google_genai_sse_wrapper()
 
@@ -328,18 +333,22 @@ class GoogleGenAIAdapter:
     ) -> List[ChatCompletionToolParam]:
         """Transform Google GenAI tools to OpenAI tools format"""
         openai_tools: List[Dict[str, Any]] = []
-
         for tool in tools:
             if "functionDeclarations" in tool:
                 for func_decl in tool["functionDeclarations"]:
                     function_chunk: Dict[str, Any] = {
                         "name": func_decl.get("name", ""),
                     }
-
                     if "description" in func_decl:
                         function_chunk["description"] = func_decl["description"]
                     if "parametersJsonSchema" in func_decl:
-                        function_chunk["parameters"] = func_decl["parametersJsonSchema"]
+                        params = func_decl["parametersJsonSchema"]
+                        # Anthropic requires 'type': 'object' for input_schema
+                        # If parametersJsonSchema exists, it should usually be an object
+                        # Especially if 'anyOf' is present but 'type' is missing at the top level
+                        if isinstance(params, dict) and "type" not in params:
+                            params["type"] = "object"
+                        function_chunk["parameters"] = params
 
                     openai_tool = {"type": "function", "function": function_chunk}
                     openai_tools.append(openai_tool)
@@ -358,8 +367,8 @@ class GoogleGenAIAdapter:
         mode = function_calling_config.get("mode", "AUTO")
 
         mode_mapping = {"AUTO": "auto", "ANY": "required", "NONE": "none"}
-
         tool_choice = mode_mapping.get(mode, "auto")
+
         return cast(ChatCompletionToolChoiceValues, tool_choice)
 
     def _transform_contents_to_messages(
@@ -370,7 +379,7 @@ class GoogleGenAIAdapter:
         """Transform Google GenAI contents to OpenAI messages format"""
         messages: List[AllMessageValues] = []
 
-        # Handle system instruction
+        # Handle system instruction if present
         if system_instruction:
             system_parts = system_instruction.get("parts", [])
             if system_parts and "text" in system_parts[0]:
@@ -427,9 +436,7 @@ class GoogleGenAIAdapter:
                             tool_messages.append(tool_message)
                     elif isinstance(part, str):
                         content_parts.append(
-                            cast(
-                                ChatCompletionTextObject, {"type": "text", "text": part}
-                            )
+                            cast(ChatCompletionTextObject, {"type": "text", "text": part})
                         )
 
                 # Add user message if there's content
@@ -449,9 +456,7 @@ class GoogleGenAIAdapter:
                     else:
                         # Use multimodal format (array of content parts)
                         messages.append(
-                            ChatCompletionUserMessage(
-                                role="user", content=content_parts
-                            )
+                            ChatCompletionUserMessage(role="user", content=content_parts)
                         )
 
                 # Add tool messages
@@ -493,7 +498,6 @@ class GoogleGenAIAdapter:
                         role="assistant",
                         content=combined_text if combined_text else None,
                     )
-
                 messages.append(assistant_message)
 
         return messages
@@ -511,9 +515,9 @@ class GoogleGenAIAdapter:
         Returns:
             Dict in Google GenAI generate_content response format
         """
-
         # Extract the main response content
         choice = response.choices[0] if response.choices else None
+
         if not choice:
             raise ValueError("Invalid completion response: no choices found")
 
@@ -545,8 +549,7 @@ class GoogleGenAIAdapter:
             ],
             "usageMetadata": (
                 self._map_usage(getattr(response, "usage", None))
-                if hasattr(response, "usage") and getattr(response, "usage", None)
-                else {
+                if hasattr(response, "usage") and getattr(response, "usage", None) else {
                     "promptTokenCount": 0,
                     "candidatesTokenCount": 0,
                     "totalTokenCount": 0,
@@ -559,6 +562,7 @@ class GoogleGenAIAdapter:
         for part in parts:
             if isinstance(part, dict) and "text" in part:
                 text_content += part["text"]
+
         if text_content:
             generate_content_response["text"] = text_content
 
@@ -579,9 +583,9 @@ class GoogleGenAIAdapter:
         Returns:
             Dict in Google GenAI streaming generate_content response format
         """
-
         # Extract the main response content from streaming chunk
         choice = response.choices[0] if response.choices else None
+
         if not choice:
             # Return empty chunk if no choices
             return None
@@ -597,7 +601,7 @@ class GoogleGenAIAdapter:
             finish_reason = getattr(choice, "finish_reason", None)
         else:
             # Fallback for generic choice objects
-            message_content = getattr(choice, "delta", {}).get("content", "")
+            message_content = getattr(choice, "delta", "{}").get("content", "")
             parts = [{"text": message_content}] if message_content else []
             finish_reason = getattr(choice, "finish_reason", None)
 
@@ -611,9 +615,7 @@ class GoogleGenAIAdapter:
                 {
                     "content": {"parts": parts, "role": "model"},
                     "finishReason": (
-                        self._map_finish_reason(finish_reason)
-                        if finish_reason
-                        else None
+                        self._map_finish_reason(finish_reason) if finish_reason else None
                     ),
                     "index": 0,
                     "safetyRatings": [],
@@ -625,8 +627,7 @@ class GoogleGenAIAdapter:
         if finish_reason:
             usage_metadata = (
                 self._map_usage(getattr(response, "usage", None))
-                if hasattr(response, "usage") and getattr(response, "usage", None)
-                else {
+                if hasattr(response, "usage") and getattr(response, "usage", None) else {
                     "promptTokenCount": 0,
                     "candidatesTokenCount": 0,
                     "totalTokenCount": 0,
@@ -639,6 +640,7 @@ class GoogleGenAIAdapter:
         for part in parts:
             if isinstance(part, dict) and "text" in part:
                 text_content += part["text"]
+
         if text_content:
             streaming_chunk["text"] = text_content
 
@@ -682,13 +684,11 @@ class GoogleGenAIAdapter:
         self, delta: Any, wrapper: GoogleGenAIStreamWrapper
     ) -> List[Dict[str, Any]]:
         """Transforms OpenAI delta to Google GenAI parts, accumulating streaming tool calls."""
-
         # 1. Initialize wrapper state if it doesn't exist
         if not hasattr(wrapper, "accumulated_tool_calls"):
             wrapper.accumulated_tool_calls = {}
 
         parts: List[Dict[str, Any]] = []
-
         if hasattr(delta, "content") and delta.content:
             parts.append({"text": delta.content})
 
@@ -724,7 +724,6 @@ class GoogleGenAIAdapter:
 
             if function_name:
                 wrapper.accumulated_tool_calls[tool_call_index]["name"] = function_name
-
             if args_chunk:
                 wrapper.accumulated_tool_calls[tool_call_index][
                     "arguments"
@@ -748,10 +747,8 @@ class GoogleGenAIAdapter:
                         "functionCall": {"name": accumulated_name, "args": parsed_args}
                     }
                     parts.append(function_call_part)
-
                     # Remove the completed tool call from the accumulator
                     del wrapper.accumulated_tool_calls[tool_call_index]
-
             except json.JSONDecodeError:
                 # The JSON for arguments is still incomplete.
                 # We will continue to accumulate and wait for more chunks.

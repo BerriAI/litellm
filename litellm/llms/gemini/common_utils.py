@@ -69,18 +69,14 @@ class GeminiModelInfo(BaseLLMModelInfo):
             raise ValueError(
                 "GEMINI_API_BASE or GEMINI_API_KEY/GOOGLE_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
-
         response = litellm.module_level_client.get(
             url=f"{api_base}{endpoint}?key={api_key}",
         )
-
         if response.status_code != 200:
             raise ValueError(
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
-
         models = response.json()["models"]
-
         litellm_model_names = self.process_model_name(models)
         return litellm_model_names
 
@@ -88,13 +84,15 @@ class GeminiModelInfo(BaseLLMModelInfo):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return GeminiError(
-            status_code=status_code, message=error_message, headers=headers
+            status_code=status_code,
+            message=error_message,
+            headers=headers
         )
-    
-    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+
+    def get_token_counter(self) -> Optional["BaseTokenCounter"]:
         """
         Factory method to create a token counter for this provider.
-        
+
         Returns:
             Optional TokenCounterInterface implementation for this provider,
             or None if token counting is not supported.
@@ -103,20 +101,21 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
 
 def encode_unserializable_types(
-    data: Dict[str, object], depth: int = 0
+    data: Dict[str, object],
+    depth: int = 0
 ) -> Dict[str, object]:
     """Converts unserializable types in dict to json.dumps() compatible types.
 
-    This function is called in models.py after calling convert_to_dict(). The
-    convert_to_dict() can convert pydantic object to dict. However, the input to
-    convert_to_dict() is dict mixed of pydantic object and nested dict(the output
-    of converters). So they may be bytes in the dict and they are out of
-    `ser_json_bytes` control in model_dump(mode='json') called in
+    This function is called in models.py after calling convert_to_dict().
+    The convert_to_dict() can convert pydantic object to dict. However, the
+    input to convert_to_dict() is dict mixed of pydantic object and nested
+    dict(the output of converters). So they may be bytes in the dict and they
+    are out of `ser_json_bytes` control in model_dump(mode='json') called in
     `convert_to_dict`, as well as datetime deserialization in Pydantic json mode.
 
     Returns:
-      A dictionary with json.dumps() incompatible type (e.g. bytes datetime)
-      to compatible type (e.g. base64 encoded string, isoformat date string).
+        A dictionary with json.dumps() incompatible type (e.g. bytes datetime)
+        to compatible type (e.g. base64 encoded string, isoformat date string).
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return data
@@ -152,13 +151,76 @@ def get_api_key_from_env() -> Optional[str]:
 
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
+
     def should_use_token_counting_api(
-        self, 
+        self,
         custom_llm_provider: Optional[str] = None,
     ) -> bool:
         from litellm.types.utils import LlmProviders
+
         return custom_llm_provider == LlmProviders.GEMINI.value
-    
+
+    @staticmethod
+    def _convert_messages_to_gemini_contents(
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert OpenAI-format messages to Gemini contents format.
+
+        BUG FIX #21748: When the Anthropic /v1/messages/count_tokens endpoint is
+        called with a Gemini model, messages are passed in OpenAI format but
+        contents=None. The Gemini count_tokens API requires 'contents' in Gemini
+        format. Passing contents=None causes a 400 error from the Gemini API.
+
+        This method converts OpenAI messages to Gemini contents format so that
+        count_tokens works correctly when called via the Anthropic endpoint.
+
+        Args:
+            messages: List of OpenAI-format messages with 'role' and 'content' keys.
+
+        Returns:
+            List of Gemini-format contents with 'role' and 'parts' keys.
+        """
+        contents = []
+        for message in messages:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+
+            # Map OpenAI roles to Gemini roles
+            # Gemini uses "user" and "model" (not "assistant")
+            # System messages are treated as user messages in Gemini format
+            if role == "assistant":
+                gemini_role = "model"
+            else:
+                gemini_role = "user"
+
+            # Handle string content
+            if isinstance(content, str):
+                parts = [{"text": content}]
+            elif isinstance(content, list):
+                # Handle multi-modal content (list of content parts)
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            parts.append({"text": part.get("text", "")})
+                        elif part.get("type") == "image_url":
+                            # Include image data if present
+                            image_url = part.get("image_url", {})
+                            if isinstance(image_url, dict):
+                                url = image_url.get("url", "")
+                                parts.append({"text": f"[image: {url}]"})
+                    elif isinstance(part, str):
+                        parts.append({"text": part})
+                if not parts:
+                    parts = [{"text": ""}]
+            else:
+                parts = [{"text": str(content) if content is not None else ""}]
+
+            contents.append({"role": gemini_role, "parts": parts})
+
+        return contents
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -170,17 +232,27 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+
         deployment = deployment or {}
         count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
+
+        # BUG FIX #21748: When called from the Anthropic /v1/messages/count_tokens
+        # endpoint with a Gemini model, messages are passed in OpenAI format but
+        # contents=None. Convert messages to Gemini contents format to avoid a
+        # 400 error from the Gemini API.
+        if contents is None and messages:
+            contents = self._convert_messages_to_gemini_contents(messages)
+
         count_tokens_params = {
             "model": model_to_use,
             "contents": contents,
         }
         count_tokens_params_request.update(count_tokens_params)
+
         result = await GoogleAIStudioTokenCounter().acount_tokens(
             **count_tokens_params_request,
         )
-        
+
         if result is not None:
             return TokenCountResponse(
                 total_tokens=result.get("totalTokens", 0),
@@ -189,5 +261,4 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                 tokenizer_type=result.get("tokenizer_used", ""),
                 original_response=result,
             )
-        
         return None

@@ -1232,3 +1232,21 @@ def test_get_logging_payload_handles_missing_retry_info_gracefully():
         metadata.get("max_retries") is None
     ), "max_retries should be None when not provided"
 
+def test_sanitize_value_strips_null_bytes_for_postgresql():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _sanitize_value
+    raw_null = "hello\x00world"
+    result = _sanitize_value(raw_null)
+    assert "\x00" not in result
+    assert result == "helloworld"
+    escaped_null = "prefix\u0000suffix"
+    result2 = _sanitize_value(escaped_null)
+    assert "\u0000" not in result2
+    assert result2 == "prefixsuffix"
+    clean = "normal string no null bytes"
+    assert _sanitize_value(clean) == clean
+    mixed = "start\x00mid\u0000end"
+    result4 = _sanitize_value(mixed)
+    assert "\x00" not in result4
+    assert "\u0000" not in result4
+    assert result4 == "startmidend"
+
