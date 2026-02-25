@@ -10,8 +10,8 @@ const nextConfig = {
   basePath: "",
   assetPrefix: "/litellm-asset-prefix",
   turbopack: {
-    // Must be absolute; "." is no longer allowed
-    root: __dirname,
+    // Use parent dir so symlinked node_modules (from sibling worktree) stay within root
+    root: path.resolve(__dirname, "../../../.."),
   },
 };
 

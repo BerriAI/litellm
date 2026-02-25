@@ -38,6 +38,7 @@ export function useLogFilterLogic({
   sortBy = "startTime",
   sortOrder = "desc",
   currentPage = 1,
+  initialKeyAlias = "",
 }: {
   logs: PaginatedResponse;
   accessToken: string | null;
@@ -51,6 +52,7 @@ export function useLogFilterLogic({
   sortBy?: LogsSortField;
   sortOrder?: "asc" | "desc";
   currentPage?: number;
+  initialKeyAlias?: string;
 }) {
   const defaultFilters = useMemo<LogFilterState>(
     () => ({
@@ -61,10 +63,11 @@ export function useLogFilterLogic({
       [FILTER_KEYS.USER_ID]: "",
       [FILTER_KEYS.END_USER]: "",
       [FILTER_KEYS.STATUS]: "",
-      [FILTER_KEYS.KEY_ALIAS]: "",
+      [FILTER_KEYS.KEY_ALIAS]: initialKeyAlias,
       [FILTER_KEYS.ERROR_CODE]: "",
       [FILTER_KEYS.ERROR_MESSAGE]: "",
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
@@ -86,9 +89,8 @@ export function useLogFilterLogic({
       lastSearchTimestamp.current = currentTimestamp;
 
       const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
-      const formattedEndTime = isCustomDate
-        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
-        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+      // Always use the endTime state so the demo's +2 day offset is respected
+      const formattedEndTime = moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss");
 
       try {
         const response = await uiSpendLogsCall({
@@ -157,6 +159,14 @@ export function useLogFilterLogic({
       ),
     [filters],
   );
+
+  // Fire immediately on mount when an initial filter is provided (e.g. from agent detail page)
+  useEffect(() => {
+    if (initialKeyAlias && accessToken) {
+      performSearch(filters, 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Refetch when sort, page, or time range changes (backend filters use their own fetch, not the main query)
   useEffect(() => {

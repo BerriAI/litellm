@@ -38,6 +38,7 @@ import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
+import AgentMonitoring from "@/components/AgentMonitoring";
 import ToolPolicies from "@/components/ToolPolicies";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
@@ -551,6 +552,15 @@ function CreateKeyPageContent() {
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tool-policies" ? (
                     <ToolPolicies accessToken={accessToken} userRole={userRole} />
+                  ) : page == "agent-monitoring" ? (
+                    <AgentMonitoring
+                      accessToken={accessToken}
+                      userRole={userRole}
+                      token={token}
+                      userID={userID}
+                      allTeams={(teams as Team[]) ?? []}
+                      premiumUser={premiumUser}
+                    />
                   ) : page == "guardrails-monitor" ? (
                     <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (

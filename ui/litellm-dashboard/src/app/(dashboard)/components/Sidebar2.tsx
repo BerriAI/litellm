@@ -20,6 +20,7 @@ import {
   ToolOutlined,
   TagsOutlined,
   AuditOutlined,
+  RadarChartOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -105,6 +106,8 @@ const routeFor = (slug: string): string => {
       return "guardrails";
     case "policies":
       return "policies";
+    case "agent-monitoring":
+      return "agent-monitoring";
 
     // tools
     case "mcp-servers":
@@ -198,6 +201,13 @@ const menuItems: MenuItemCfg[] = [
     icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
   },
   { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: 18 }} /> },
+  {
+    key: "29",
+    page: "agent-monitoring",
+    label: "Agent Monitoring",
+    icon: <RadarChartOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
+  },
   {
     key: "11",
     page: "guardrails",

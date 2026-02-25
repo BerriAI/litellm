@@ -38,6 +38,7 @@ interface SpendLogsTableProps {
   userID: string | null;
   allTeams: Team[];
   premiumUser: boolean;
+  initialKeyAlias?: string;
 }
 
 export interface PaginatedResponse {
@@ -55,6 +56,7 @@ export default function SpendLogsTable({
   userID,
   allTeams,
   premiumUser,
+  initialKeyAlias,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -66,8 +68,9 @@ export default function SpendLogsTable({
   const quickSelectRef = useRef<HTMLDivElement>(null);
 
   // New state variables for Start and End Time
-  const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-  const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
+  // Start 30 days back, end 2 days forward — covers backend timestamp offsets in the demo
+  const [startTime, setStartTime] = useState<string>(moment().subtract(30, "days").format("YYYY-MM-DDTHH:mm"));
+  const [endTime, setEndTime] = useState<string>(moment().add(2, "days").format("YYYY-MM-DDTHH:mm"));
 
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
@@ -94,7 +97,7 @@ export default function SpendLogsTable({
   // Tracks whether any filter that uses performSearch (backend) is active.
   // Used to disable the main query so it doesn't fire redundant unfiltered requests
   // when time range / sort / page changes while a backend filter is in effect.
-  const [isMainQueryEnabled, setIsMainQueryEnabled] = useState(true);
+  const [isMainQueryEnabled, setIsMainQueryEnabled] = useState(!initialKeyAlias);
 
   const queryClient = useQueryClient();
 
@@ -109,8 +112,8 @@ export default function SpendLogsTable({
   }, [isLiveTail]);
 
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({
-    value: 24,
-    unit: "hours",
+    value: 30,
+    unit: "days",
   });
 
   useEffect(() => {
@@ -190,9 +193,8 @@ export default function SpendLogsTable({
       }
 
       const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
-      const formattedEndTime = isCustomDate
-        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
-        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+      // Always use endTime state so the demo's +2 day offset is respected
+      const formattedEndTime = moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss");
 
       // Get base response from API
       // NOTE: We only fetch the list of logs here (lightweight).
@@ -258,13 +260,14 @@ export default function SpendLogsTable({
     sortBy,
     sortOrder,
     currentPage,
+    initialKeyAlias,
   });
 
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
-    // Reset custom time range to default (last 24 hours)
-    setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-    setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+    // Reset custom time range to default (last 30 days, end 2 days forward for demo)
+    setStartTime(moment().subtract(30, "days").format("YYYY-MM-DDTHH:mm"));
+    setEndTime(moment().add(2, "days").format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
     setSelectedTimeInterval({ value: 24, unit: "hours" });
     setCurrentPage(1);

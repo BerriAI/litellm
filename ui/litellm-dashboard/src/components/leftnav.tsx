@@ -16,6 +16,7 @@ import {
   KeyOutlined,
   LineChartOutlined,
   PlayCircleOutlined,
+  RadarChartOutlined,
   RobotOutlined,
   SafetyOutlined,
   SearchOutlined,
@@ -99,24 +100,6 @@ const menuGroups: MenuGroup[] = [
         icon: <ToolOutlined />,
       },
       {
-        key: "guardrails",
-        page: "guardrails",
-        label: "Guardrails",
-        icon: <SafetyOutlined />,
-        roles: all_admin_roles,
-      },
-      {
-        key: "policies",
-        page: "policies",
-        label: (
-          <span className="flex items-center gap-4">
-            Policies
-          </span>
-        ),
-        icon: <AuditOutlined />,
-        roles: all_admin_roles,
-      },
-      {
         key: "tools",
         page: "tools",
         label: "Tools",
@@ -160,12 +143,39 @@ const menuGroups: MenuGroup[] = [
         label: "Logs",
         icon: <LineChartOutlined />,
       },
+    ],
+  },
+  {
+    groupLabel: "GUARDRAILS",
+    roles: all_admin_roles,
+    items: [
+      {
+        key: "guardrails",
+        page: "guardrails",
+        label: "Guardrails",
+        icon: <SafetyOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "policies",
+        page: "policies",
+        label: "Policies",
+        icon: <AuditOutlined />,
+        roles: all_admin_roles,
+      },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
-        label: "Guardrails Monitor",
-        icon: <SafetyOutlined />,
-        roles: [...all_admin_roles, ...internalUserRoles],
+        label: "Guardrail Monitor",
+        icon: <LineChartOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "agent-monitoring",
+        page: "agent-monitoring",
+        label: "Agent Monitoring",
+        icon: <RadarChartOutlined />,
+        roles: all_admin_roles,
       },
     ],
   },
