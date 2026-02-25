@@ -91,6 +91,13 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Async/await patterns throughout
 - Type hints required for all public APIs
 - **Avoid imports within methods** — place all imports at the top of the file (module-level). Inline imports inside functions/methods make dependencies harder to trace and hurt readability. The only exception is avoiding circular imports where absolutely necessary.
+- Follow [Google's Python Style Guide](https://google.github.io/styleguide/pyguide.html) for Python style and structure; the repo uses Black/Ruff/MyPy on top of that.
+
+### Performance and Database
+
+- **Hot paths:** Avoid adding duplicate or redundant DB queries in hot request paths (e.g. proxy auth, MCP request path). Each extra query per request multiplies load at scale. Prefer reusing already-fetched auth/context (e.g. key/team/end-user objects) instead of re-querying.
+- **List endpoints and N+1:** When implementing list endpoints (e.g. agents, MCP servers), avoid N+1 patterns: do not loop over a list and perform a separate DB query per item. Use batch loads, `include`/joins, or a single query with the needed relations so the number of DB round-trips is constant.
+- **Review before merging:** For proxy and MCP code, check that new DB access in request-handling paths does not introduce duplicate or N+1 queries.
 
 ### Testing Strategy
 - Unit tests in `tests/test_litellm/`
@@ -103,8 +110,7 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - When wiring a new UI entity type to an existing backend endpoint, verify the backend API contract (single value vs. array, required vs. optional params) and ensure the UI controls match — e.g., use a single-select dropdown when the backend accepts a single value, not a multi-select
 
 ### Database Migrations
-- Prisma handles schema migrations
-- Migration files auto-generated with `prisma migrate dev`
+- Prisma handles schema migrations. **Do not auto-create or write `migration.sql` files.** If schema changes are needed or a migration is missing, surface the error to the user and instruct them to run `ci_cd/run_migration.py` to generate new schemas/migrations.
 - Always test migrations against both PostgreSQL and SQLite
 
 ### Enterprise Features
