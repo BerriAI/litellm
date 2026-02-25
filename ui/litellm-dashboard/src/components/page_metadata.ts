@@ -13,6 +13,7 @@ export const pageDescriptions: Record<string, string> = {
   guardrails: "Set up content moderation and safety guardrails",
   policies: "Define access control and usage policies",
   "search-tools": "Configure RAG search and retrieval tools",
+  "tool-policies": "Configure tool use policies and permissions",
   "vector-stores": "Manage vector databases for embeddings",
   new_usage: "View usage analytics and metrics",
   logs: "Access request and response logs",
