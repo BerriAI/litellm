@@ -263,7 +263,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
         """
         Enriches failure spend log metadata by looking up the key object (and team object)
-        from cache/DB when key fields are missing.
+        from cache when key fields are missing.
 
         This handles two scenarios:
         1. Auth errors (401): UserAPIKeyAuth is created with only api_key set, all other
