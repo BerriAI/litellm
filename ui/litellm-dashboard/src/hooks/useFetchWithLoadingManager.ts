@@ -35,9 +35,9 @@ export function useFetchWithLoadingManager<T>(
       } finally {
         fetchInProgressRef.current = false;
         lastFetchEndRef.current = Date.now();
-        if (!debounceTimerRef.current) {
-          setLoading(false);
-        }
+        // Always clear loading when a fetch completes. A pending debounced fetch will set
+        // loading=true when it runs—don't keep loader visible for 5s with no active fetch.
+        setLoading(false);
       }
     };
 

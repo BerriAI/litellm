@@ -30,7 +30,11 @@ export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
 
   useEffect(() => {
     if (loading) {
-      loadingStartRef.current = Date.now();
+      // Only set start time when first showing Don't reset on subsequent loading=true
+      // so we don't extend the minimum display time when loading flickers
+      if (!visibleLoading) {
+        loadingStartRef.current = Date.now();
+      }
       setVisibleLoading(true);
     } else if (visibleLoading) {
       const elapsed = Date.now() - (loadingStartRef.current ?? 0);
