@@ -226,6 +226,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "custom_callback_api",
             "langsmith",
             "datadog",
+            "datadog_metrics",
             "datadog_llm_observability",
             "generic_api",
             "arize",
@@ -278,6 +279,21 @@ async def health_services_endpoint(  # noqa: PLR0915
                     response["error_message"]
                     if response["status"] == "unhealthy"
                     else "Datadog is healthy"
+                ),
+            }
+        elif service == "datadog_metrics":
+            from litellm.integrations.datadog.datadog_metrics import (
+                DatadogMetricsLogger,
+            )
+
+            datadog_metrics_logger = DatadogMetricsLogger()
+            response = await datadog_metrics_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Datadog Metrics is healthy"
                 ),
             }
         elif service == "arize":

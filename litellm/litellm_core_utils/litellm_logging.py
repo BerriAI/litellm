@@ -134,6 +134,7 @@ from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+from ..integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
@@ -1653,9 +1654,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.model_call_details[
             "standard_logging_object"
-        ] = self._build_standard_logging_payload(
-            logging_result, start_time, end_time
-        )
+        ] = self._build_standard_logging_payload(logging_result, start_time, end_time)
 
         if (
             standard_logging_payload := self.model_call_details.get(
@@ -2518,9 +2517,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details[
                     "standard_logging_object"
-                ] = self._build_standard_logging_payload(
-                    result, start_time, end_time
-                )
+                ] = self._build_standard_logging_payload(result, start_time, end_time)
 
                 # print standard logging payload
                 if (
@@ -3665,6 +3662,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _datadog_llm_obs_logger = DataDogLLMObsLogger()
             _in_memory_loggers.append(_datadog_llm_obs_logger)
             return _datadog_llm_obs_logger  # type: ignore
+        elif logging_integration == "datadog_metrics":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DatadogMetricsLogger):
+                    return callback  # type: ignore
+
+            _datadog_metrics_logger = DatadogMetricsLogger()
+            _in_memory_loggers.append(_datadog_metrics_logger)
+            return _datadog_metrics_logger  # type: ignore
         elif logging_integration == "azure_sentinel":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AzureSentinelLogger):
@@ -4214,6 +4219,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLLMObsLogger):
                     return callback
+        elif logging_integration == "datadog_metrics":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DatadogMetricsLogger):
+                    return callback
         elif logging_integration == "azure_sentinel":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AzureSentinelLogger):
@@ -4695,9 +4704,11 @@ class StandardLoggingPayloadSetup:
             ).model_dump()
         if isinstance(_raw, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(_raw):
-                return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                    _raw
-                ).model_dump()
+                return (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        _raw
+                    ).model_dump()
+                )
             return _raw
         if isinstance(_raw, Usage):
             return _raw.model_dump()
@@ -5543,4 +5554,3 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         model_parameters={"stream": True},
         hidden_params=hidden_params,
     )
-
