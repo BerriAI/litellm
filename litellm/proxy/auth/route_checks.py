@@ -307,6 +307,9 @@ class RouteChecks:
         ):
             return True
 
+        if route in LiteLLMRoutes.litellm_native_routes.value:
+            return True
+
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
         # Check for routes with placeholders or wildcard patterns
         for openai_route in LiteLLMRoutes.openai_routes.value:

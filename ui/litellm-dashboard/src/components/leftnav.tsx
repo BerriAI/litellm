@@ -134,6 +134,12 @@ const menuGroups: MenuGroup[] = [
             label: "Vector Stores",
             icon: <DatabaseOutlined />,
           },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <SafetyOutlined />,
+          },
         ],
       },
     ],
@@ -151,12 +157,15 @@ const menuGroups: MenuGroup[] = [
       {
         key: "logs",
         page: "logs",
-        label: (
-          <span className="flex items-center gap-4">
-            Logs <NewBadge />
-          </span>
-        ),
+        label: "Logs",
         icon: <LineChartOutlined />,
+      },
+      {
+        key: "guardrails-monitor",
+        page: "guardrails-monitor",
+        label: "Guardrails Monitor",
+        icon: <SafetyOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
       },
     ],
   },
@@ -181,6 +190,17 @@ const menuGroups: MenuGroup[] = [
         page: "organizations",
         label: "Organizations",
         icon: <BankOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "access-groups",
+        page: "access-groups",
+        label: (
+          <span className="flex items-center gap-2">
+            Access Groups <NewBadge />
+          </span>
+        ),
+        icon: <BlockOutlined />,
         roles: all_admin_roles,
       },
       {

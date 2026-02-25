@@ -1,15 +1,72 @@
-import { PlayIcon, TrashIcon } from "@heroicons/react/outline";
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { ArrowRightIcon, PlayIcon, TrashIcon } from "@heroicons/react/outline";
 import { Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import { Tooltip } from "antd";
+import { Tooltip, Typography } from "antd";
 import openai from "openai";
 import React, { useEffect, useState } from "react";
 import DeleteResourceModal from "../../../common_components/DeleteResourceModal";
+import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
 import NotificationsManager from "../../../molecules/notifications_manager";
 import { getCallbacksCall, setCallbacksCall } from "../../../networking";
 import AddFallbacks from "./AddFallbacks";
 
 type FallbackEntry = { [modelName: string]: string[] };
 type Fallbacks = FallbackEntry[];
+
+const modelCardClass =
+  "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 shrink-0";
+
+function renderModelNameCell(
+  modelName: string,
+  getProviderFromModel?: (modelName: string) => string,
+): React.ReactNode {
+  const provider = getProviderFromModel?.(modelName) ?? modelName;
+  return (
+    <span className={modelCardClass}>
+      <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
+      <span>{modelName}</span>
+    </span>
+  );
+}
+
+function renderFallbacksChain(
+  _primaryModel: string,
+  fallbackModels: string[],
+  getProviderFromModel?: (modelName: string) => string,
+): React.ReactNode {
+  const list = Array.isArray(fallbackModels) ? fallbackModels : [];
+  if (list.length === 0) return null;
+
+  const ChainCard = ({ modelName }: { modelName: string }) => {
+    const provider = getProviderFromModel?.(modelName) ?? modelName;
+    return (
+      <span className={modelCardClass}>
+        <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
+        <span>{modelName}</span>
+      </span>
+    );
+  };
+  return (
+    <span className="grid grid-cols-[auto_1fr] items-start gap-x-2 w-full min-w-0">
+      <span
+        className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600"
+        aria-hidden
+      >
+        <ArrowRightIcon className="w-5 h-5 stroke-[2.5]" />
+      </span>
+      <span className="flex flex-wrap items-start gap-1 min-w-0">
+        {list.map((model, i) => (
+          <React.Fragment key={model}>
+            {i > 0 && (
+              <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />
+            )}
+            <ChainCard modelName={model} />
+          </React.Fragment>
+        ))}
+      </span>
+    </span>
+  );
+}
 
 interface FallbacksProps {
   accessToken: string | null;
@@ -70,6 +127,14 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
   const [isDeleting, setIsDeleting] = useState(false);
   const [fallbackToDelete, setFallbackToDelete] = useState<FallbackEntry | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+
+  const { data: modelCostMapData } = useModelCostMap();
+  const getProviderFromModel = (model: string): string => {
+    if (modelCostMapData != null && typeof modelCostMapData === "object" && model in modelCostMapData) {
+      return modelCostMapData[model]["litellm_provider"] ?? "";
+    }
+    return "";
+  };
 
   useEffect(() => {
     if (!accessToken || !userRole || !userID) {
@@ -177,6 +242,8 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
     }
   };
 
+  const hasFallbacks = Array.isArray(routerSettings.fallbacks) && routerSettings.fallbacks.length > 0;
+
   return (
     <>
       <AddFallbacks
@@ -185,23 +252,34 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
         value={routerSettings.fallbacks || []}
         onChange={handleFallbacksChange}
       />
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableHeaderCell>Model Name</TableHeaderCell>
-            <TableHeaderCell>Fallbacks</TableHeaderCell>
-            <TableHeaderCell>Actions</TableHeaderCell>
-          </TableRow>
-        </TableHead>
+      {!hasFallbacks ? (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center">
+          <Typography.Text type="secondary">
+            No fallbacks configured. Add fallbacks to automatically try another model when the primary
+            fails.
+          </Typography.Text>
+        </div>
+      ) : (
+        <Table>
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell>Model Name</TableHeaderCell>
+              <TableHeaderCell>Fallbacks</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow>
+          </TableHead>
 
-        <TableBody>
-          {routerSettings["fallbacks"] &&
-            routerSettings["fallbacks"].map((item: FallbackEntry, index: number) =>
+          <TableBody>
+            {routerSettings["fallbacks"].map((item: FallbackEntry, index: number) =>
               Object.entries(item).map(([key, value]) => (
                 <TableRow key={index.toString() + key}>
-                  <TableCell>{key}</TableCell>
-                  <TableCell>{Array.isArray(value) ? value.join(", ") : value}</TableCell>
-                  <TableCell>
+                  <TableCell className="align-top">
+                    {renderModelNameCell(key, getProviderFromModel)}
+                  </TableCell>
+                  <TableCell className="align-top">
+                    {renderFallbacksChain(key, Array.isArray(value) ? value : [], getProviderFromModel)}
+                  </TableCell>
+                  <TableCell className="align-top">
                     <Tooltip title="Test fallback">
                       <Icon
                         icon={PlayIcon}
@@ -211,19 +289,28 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
                       />
                     </Tooltip>
                     <Tooltip title="Delete fallback">
-                      <Icon
-                        icon={TrashIcon}
-                        size="sm"
+                      <span
+                        data-testid="delete-fallback-button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => handleDeleteClick(item)}
-                        className="cursor-pointer hover:text-red-600"
-                      />
+                        onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
+                        className="cursor-pointer inline-flex"
+                      >
+                        <Icon
+                          icon={TrashIcon}
+                          size="sm"
+                          className="hover:text-red-600"
+                        />
+                      </span>
                     </Tooltip>
                   </TableCell>
                 </TableRow>
               )),
             )}
-        </TableBody>
-      </Table>
+          </TableBody>
+        </Table>
+      )}
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title="Delete Fallback?"

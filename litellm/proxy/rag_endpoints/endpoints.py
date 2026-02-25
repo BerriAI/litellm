@@ -10,7 +10,7 @@ import base64
 from typing import Any, Dict, Optional, Tuple
 
 import orjson
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 
 import litellm
@@ -356,6 +356,19 @@ async def rag_ingest(
     try:
         # Parse request
         ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
+
+        # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+            and not ingest_options.get("vector_store", {}).get("vector_store_id")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "internal_user_viewer role can only ingest files to an existing vector store. "
+                    "Provide 'vector_store_id' in ingest_options.vector_store."
+                },
+            )
 
         # Add litellm data
         request_data: Dict[str, Any] = {}

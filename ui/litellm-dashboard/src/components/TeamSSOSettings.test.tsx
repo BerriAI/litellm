@@ -9,36 +9,6 @@ import NotificationsManager from "./molecules/notifications_manager";
 
 vi.mock("./networking");
 
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  const React = await import("react");
-  const Card = ({ children }: { children: React.ReactNode }) => React.createElement("div", { "data-testid": "card" }, children);
-  Card.displayName = "Card";
-  const Title = ({ children }: { children: React.ReactNode }) => React.createElement("h2", {}, children);
-  Title.displayName = "Title";
-  const Text = ({ children }: { children: React.ReactNode }) => React.createElement("span", {}, children);
-  Text.displayName = "Text";
-  const Divider = () => React.createElement("hr", {});
-  Divider.displayName = "Divider";
-  const TextInput = ({ value, onChange, placeholder, className }: any) =>
-    React.createElement("input", {
-      type: "text",
-      value: value || "",
-      onChange,
-      placeholder,
-      className,
-    });
-  TextInput.displayName = "TextInput";
-  return {
-    ...actual,
-    Card,
-    Title,
-    Text,
-    Divider,
-    TextInput,
-  };
-});
-
 vi.mock("./common_components/budget_duration_dropdown", () => {
   const BudgetDurationDropdown = ({ value, onChange }: { value: string | null; onChange: (value: string) => void }) => (
     <select
