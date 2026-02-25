@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
+import SpendLogsTable from "@/components/view_logs";
 
 // ─── Demo overrides — mark these tools as blocked in the display ───────────────
 // (real proxy data is still used for everything else)
@@ -188,7 +189,7 @@ function AgentDetail({ agentId, onBack, accessToken, token, userRole, userID, al
         </div>
       </div>
 
-      {/* Logs with drift scores */}
+      {/* Logs — drift-annotated sample rows on top, real logs below */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
           <div>
@@ -201,7 +202,8 @@ function AgentDetail({ agentId, onBack, accessToken, token, userRole, userID, al
             {driftCount} drifted
           </span>
         </div>
-        <table className="w-full text-sm">
+        {/* Drift-annotated rows */}
+        <table className="w-full text-sm border-b border-gray-100">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50">
               <th className="text-left px-5 py-2.5 text-xs font-medium text-gray-500">Time</th>
@@ -237,6 +239,16 @@ function AgentDetail({ agentId, onBack, accessToken, token, userRole, userID, al
             })}
           </tbody>
         </table>
+        {/* Full logs — real data from proxy */}
+        <SpendLogsTable
+          accessToken={accessToken}
+          token={token}
+          userRole={userRole}
+          userID={userID}
+          allTeams={allTeams}
+          premiumUser={premiumUser}
+          initialKeyAlias="Claims-agent"
+        />
       </div>
     </div>
   );
