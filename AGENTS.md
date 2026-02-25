@@ -57,6 +57,9 @@ LiteLLM is a unified interface for 100+ LLMs that:
 - **List endpoints:** Avoid N+1 queries when implementing list endpoints (e.g. agents, MCP servers). Use batch loads, `include`/joins, or a single query with needed relations so DB round-trips stay constant.
 - **Pre-merge:** For proxy and MCP code, verify that new DB usage in request-handling paths does not introduce duplicate or N+1 queries.
 
+### Database Migrations
+- **Do not auto-create or write `migration.sql` files.** If schema changes are needed or a migration is missing, surface the error to the user and instruct them to run `ci_cd/run_migration.py` to generate new schemas/migrations.
+
 ### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
 
 1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
@@ -184,6 +187,7 @@ When opening issues or pull requests, follow these templates:
 5. **Dependencies**: Keep dependencies minimal and well-justified
 6. **Duplicate DB queries in hot paths**: Adding redundant DB calls in MCP auth, proxy auth, or other high-frequency paths causes performance degradation at scale.
 7. **N+1 queries in list endpoints**: Looping over a list and performing a separate DB query per item (e.g. loading agents or related entities) — use batch/joined queries instead.
+8. **Auto-creating migration.sql**: Do not generate or edit migration SQL files. If migrations are needed, tell the user to run `ci_cd/run_migration.py` to generate new schemas.
 
 ## HELPFUL RESOURCES
 

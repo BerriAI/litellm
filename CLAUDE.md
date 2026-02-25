@@ -106,8 +106,7 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Load tests in `tests/load_tests/`
 
 ### Database Migrations
-- Prisma handles schema migrations
-- Migration files auto-generated with `prisma migrate dev`
+- Prisma handles schema migrations. **Do not auto-create or write `migration.sql` files.** If schema changes are needed or a migration is missing, surface the error to the user and instruct them to run `ci_cd/run_migration.py` to generate new schemas/migrations.
 - Always test migrations against both PostgreSQL and SQLite
 
 ### Enterprise Features
