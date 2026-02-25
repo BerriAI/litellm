@@ -21,7 +21,7 @@ sequenceDiagram
     
     Proxy->>Filter: Check forward_client_headers_to_llm_api<br/>setting for this model group
 
-    Note over Filter: Allowlist rules:<br/>1. Headers starting with "x-" ✅<br/>2. "anthropic-beta" ✅<br/>3. "x-stainless-*" ❌ (blocked)<br/>4. All other headers ❌ (blocked)
+    Note over Filter: Allowlist rules:<br/>1. Headers starting with "x-" <br/>2. "anthropic-beta" <br/>3. "x-stainless-*"  (blocked)<br/>4. All other headers  (blocked)
 
     Filter-->>Proxy: Return only allowed headers
 
@@ -37,11 +37,11 @@ The following rules determine which headers are forwarded (see [`_get_forwardabl
 
 | Rule | Example | Forwarded? |
 |---|---|---|
-| Headers starting with `x-` | `x-trace-id`, `x-custom-header`, `x-request-source` | ✅ Yes |
-| `anthropic-beta` header | `anthropic-beta: prompt-caching-2024-07-31` | ✅ Yes |
-| Headers starting with `x-stainless-*` | `x-stainless-lang`, `x-stainless-arch` | ❌ No (causes OpenAI SDK issues) |
-| Standard HTTP headers | `Authorization`, `Content-Type`, `Host` | ❌ No |
-| Other provider headers | `Accept`, `User-Agent` | ❌ No |
+| Headers starting with `x-` | `x-trace-id`, `x-custom-header`, `x-request-source` |  Yes |
+| `anthropic-beta` header | `anthropic-beta: prompt-caching-2024-07-31` |  Yes |
+| Headers starting with `x-stainless-*` | `x-stainless-lang`, `x-stainless-arch` |  No (causes OpenAI SDK issues) |
+| Standard HTTP headers | `Authorization`, `Content-Type`, `Host` |  No |
+| Other provider headers | `Accept`, `User-Agent` |  No |
 
 ### Additional Header Mechanisms
 
@@ -152,16 +152,16 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
 
 ### Security Considerations
 
-⚠️ **When to Use This Feature:**
-- ✅ Internal tools where you trust all clients
-- ✅ Development/testing environments
-- ✅ Multi-tenant apps with proper client authentication
-- ✅ Scenarios where you want clients to use their own API keys
+**When to Use This Feature:**
+-  Internal tools where you trust all clients
+-  Development/testing environments
+-  Multi-tenant apps with proper client authentication
+-  Scenarios where you want clients to use their own API keys
 
-⚠️ **When NOT to Use:**
-- ❌ Public APIs where you don't trust all clients
-- ❌ When you want centralized billing/cost control
-- ❌ When you need to enforce rate limits at the proxy level
+**When NOT to Use:**
+-  Public APIs where you don't trust all clients
+-  When you want centralized billing/cost control
+-  When you need to enforce rate limits at the proxy level
 
 ### Backward Compatibility
 
