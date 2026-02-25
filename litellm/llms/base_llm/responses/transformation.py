@@ -269,3 +269,56 @@ class BaseResponsesAPIConfig(ABC):
     #########################################################
     ########## END COMPACT RESPONSE API TRANSFORMATION ######
     #########################################################
+
+    #########################################################
+    ########## WEBSOCKET MODE HOOKS ########################
+    #########################################################
+
+    def get_websocket_url(
+        self,
+        api_base: Optional[str],
+        litellm_params: dict,
+    ) -> str:
+        """
+        Return the WSS URL for the Responses API WebSocket mode.
+
+        Default: take ``get_complete_url`` (HTTP) and swap the scheme.
+        Override for providers that use a different WS path or query params.
+        """
+        http_url = self.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+        return (
+            http_url
+            .replace("https://", "wss://")
+            .replace("http://", "ws://")
+        )
+
+    def transform_websocket_client_message(
+        self,
+        message: str,
+        model: str,
+    ) -> str:
+        """
+        Transform a client→backend message before forwarding.
+
+        Default: pass through unchanged.
+        Override for providers that need different field names, extra wrapping,
+        or model-name rewriting.
+        """
+        return message
+
+    def transform_websocket_backend_message(
+        self,
+        message: str,
+        model: str,
+    ) -> str:
+        """
+        Transform a backend→client message before forwarding.
+
+        Default: pass through unchanged.
+        Override for providers that return non-OpenAI event shapes.
+        """
+        return message
+
+    #########################################################
+    ########## END WEBSOCKET MODE HOOKS ####################
+    #########################################################

@@ -231,10 +231,11 @@ class TestResponsesWebSocketHandlerE2E:
     @pytest.mark.asyncio
     async def test_handler_constructs_correct_wss_url(self):
         """Verify OpenAIResponsesWebSocket builds the correct WSS URL."""
-        from litellm.responses.websocket_handler import (
-            OpenAIResponsesWebSocketHandler,
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
         )
 
-        assert OpenAIResponsesWebSocketHandler._http_url_to_ws("https://api.openai.com/v1/responses") == "wss://api.openai.com/v1/responses"
-        assert OpenAIResponsesWebSocketHandler._http_url_to_ws("http://localhost:4000/v1/responses") == "ws://localhost:4000/v1/responses"
-        assert OpenAIResponsesWebSocketHandler._http_url_to_ws("https://custom.endpoint.com/v1/responses") == "wss://custom.endpoint.com/v1/responses"
+        config = OpenAIResponsesAPIConfig()
+        assert config.get_websocket_url(api_base="https://api.openai.com/v1", litellm_params={}) == "wss://api.openai.com/v1/responses"
+        assert config.get_websocket_url(api_base="http://localhost:4000/v1", litellm_params={}) == "ws://localhost:4000/v1/responses"
+        assert config.get_websocket_url(api_base="https://custom.endpoint.com/v1", litellm_params={}) == "wss://custom.endpoint.com/v1/responses"

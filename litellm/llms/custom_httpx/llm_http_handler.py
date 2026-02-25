@@ -4708,6 +4708,80 @@ class BaseLLMHTTPHandler:
                         f"Unexpected error while closing WebSocket: {close_error}"
                     )
 
+    async def async_responses_websocket(
+        self,
+        model: str,
+        websocket: Any,
+        logging_obj: LiteLLMLoggingObj,
+        responses_api_provider_config: "BaseResponsesAPIConfig",
+        ws_url: str,
+        auth_headers: dict,
+        user_api_key_dict: Optional[Any] = None,
+    ):
+        """
+        Generic WebSocket handler for the Responses API WebSocket mode.
+
+        Follows the same pattern as ``async_realtime`` but uses
+        ``BaseResponsesAPIConfig`` transform hooks:
+          - ``transform_websocket_client_message``
+          - ``transform_websocket_backend_message``
+
+        Provider-specific behaviour (URL construction, auth, message
+        transforms) is delegated to ``responses_api_provider_config``.
+        """
+        import websockets
+
+        from litellm.responses.websocket_streaming import (
+            ResponsesWebSocketStreaming,
+        )
+
+        ssl_config: Any = None
+        if ws_url.startswith("wss://"):
+            ssl_config = get_shared_realtime_ssl_context()
+            if ssl_config is False:
+                ssl_config = True
+
+        logging_obj.pre_call(
+            input=None,
+            api_key="",
+            additional_args={
+                "api_base": ws_url,
+                "headers": auth_headers,
+                "complete_input_dict": {},
+            },
+        )
+
+        try:
+            async with websockets.connect(  # type: ignore
+                ws_url,
+                additional_headers=auth_headers,
+                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_config,
+            ) as backend_ws:
+                streaming = ResponsesWebSocketStreaming(
+                    websocket=websocket,
+                    backend_ws=backend_ws,
+                    logging_obj=logging_obj,
+                    provider_config=responses_api_provider_config,
+                    model=model,
+                    user_api_key_dict=user_api_key_dict,
+                )
+                await streaming.bidirectional_forward()
+
+        except Exception as e:
+            verbose_logger.exception("Responses WebSocket error: %s", e)
+            try:
+                await websocket.close(
+                    code=1011, reason=f"Internal server error: {str(e)}"
+                )
+            except RuntimeError as close_error:
+                if "already completed" not in str(
+                    close_error
+                ) and "websocket.close" not in str(close_error):
+                    raise Exception(
+                        f"Unexpected error while closing WebSocket: {close_error}"
+                    )
+
     def image_edit_handler(
         self,
         model: str,

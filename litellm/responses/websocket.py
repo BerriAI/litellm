@@ -1,13 +1,13 @@
 """
 Entry point for the Responses API WebSocket mode.
 
-Lives alongside ``litellm.responses.main`` and reuses the same
-``ProviderConfigManager`` / ``get_llm_provider`` patterns for
-credential resolution.
-
-Currently supports OpenAI.  Other providers can be added by
-implementing ``get_websocket_url`` / ``get_websocket_headers``
-on their ``BaseResponsesAPIConfig`` subclass.
+Follows the same pattern as ``litellm.realtime_api.main._arealtime``:
+  1. Resolve provider via ``get_llm_provider``
+  2. Get ``BaseResponsesAPIConfig`` via ``ProviderConfigManager``
+  3. Call ``config.validate_environment`` for auth headers
+  4. Call ``config.get_websocket_url`` for the WSS URL
+  5. Delegate to ``BaseLLMHTTPHandler.async_responses_websocket``
+     which runs the generic WS loop with config-driven transforms.
 """
 
 from typing import Any, Optional, cast
@@ -16,13 +16,12 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, client as wrapper_client
 
-from .websocket_handler import OpenAIResponsesWebSocketHandler
-
-openai_responses_ws_handler = OpenAIResponsesWebSocketHandler()
+base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 @wrapper_client
@@ -35,12 +34,6 @@ async def _aresponses_websocket(
 ) -> None:
     """
     Responses API WebSocket transport.  For proxy use only.
-
-    Follows the same provider-resolution flow as ``litellm.responses.main.responses``:
-      1. ``get_llm_provider`` → model, provider, dynamic key/base
-      2. ``ProviderConfigManager.get_provider_responses_api_config`` → config
-      3. ``config.validate_environment`` → auth headers
-      4. ``config.get_complete_url`` → HTTP URL (converted to WSS)
     """
     headers = cast(Optional[dict], kwargs.get("headers"))
     extra_headers = cast(Optional[dict], kwargs.get("extra_headers"))
@@ -90,15 +83,17 @@ async def _aresponses_websocket(
         headers={}, model=model, litellm_params=litellm_params
     )
 
-    http_url = responses_config.get_complete_url(
+    ws_url = responses_config.get_websocket_url(
         api_base=litellm_params.api_base,
         litellm_params=litellm_params_dict,
     )
 
-    await openai_responses_ws_handler.async_responses_websocket(
+    await base_llm_http_handler.async_responses_websocket(
+        model=model,
         websocket=websocket,
         logging_obj=litellm_logging_obj,
-        http_url=http_url,
+        responses_api_provider_config=responses_config,
+        ws_url=ws_url,
         auth_headers=auth_headers,
         user_api_key_dict=kwargs.get("user_api_key_dict"),
     )

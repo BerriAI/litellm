@@ -1,18 +1,12 @@
 """
-Bidirectional WebSocket streaming for the OpenAI Responses API WebSocket mode.
+Bidirectional WebSocket streaming for the Responses API WebSocket mode.
 
-Unlike the Realtime API streaming (which handles audio sessions, VAD, and
-guardrail interception on transcription events), the Responses WebSocket
-protocol is simpler:
-
-  Client ──response.create──▸  Backend
-  Client ◂──streaming events── Backend
-
-The client sends ``response.create`` JSON messages.  The backend sends back
-streaming response events (the same events used by the SSE transport, but
-delivered as individual WebSocket text frames).
-
-This module handles the bidirectional forwarding and logging.
+Follows the same pattern as ``RealTimeStreaming`` in
+``litellm.litellm_core_utils.realtime_streaming``:
+  - Accepts an optional ``provider_config`` (``BaseResponsesAPIConfig``)
+  - Calls ``transform_websocket_client_message`` on outbound messages
+  - Calls ``transform_websocket_backend_message`` on inbound messages
+  - If no config is supplied, messages pass through unchanged (OpenAI)
 """
 
 import asyncio
@@ -20,10 +14,10 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
-
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 if TYPE_CHECKING:
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
     from websockets.asyncio.client import ClientConnection
 
     CLIENT_CONNECTION_CLASS = ClientConnection
@@ -48,11 +42,15 @@ class ResponsesWebSocketStreaming:
         websocket: Any,
         backend_ws: CLIENT_CONNECTION_CLASS,
         logging_obj: LiteLLMLogging,
+        provider_config: Optional["BaseResponsesAPIConfig"] = None,
+        model: str = "",
         user_api_key_dict: Optional[Any] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
+        self.provider_config = provider_config
+        self.model = model
         self.user_api_key_dict = user_api_key_dict
         self.messages: List[Dict] = []
         self.input_messages: List[Dict] = []
@@ -101,6 +99,11 @@ class ResponsesWebSocketStreaming:
                 if isinstance(raw, bytes):
                     raw = raw.decode("utf-8")
 
+                if self.provider_config:
+                    raw = self.provider_config.transform_websocket_backend_message(
+                        raw, self.model
+                    )
+
                 self.store_backend_message(raw)
                 await self.websocket.send_text(raw)
         except ConnectionClosed:
@@ -120,6 +123,12 @@ class ResponsesWebSocketStreaming:
             while True:
                 message = await self.websocket.receive_text()
                 self.store_client_message(message)
+
+                if self.provider_config:
+                    message = self.provider_config.transform_websocket_client_message(
+                        message, self.model
+                    )
+
                 await self.backend_ws.send(message)
         except Exception as e:
             verbose_logger.debug(

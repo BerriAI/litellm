@@ -15,42 +15,40 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-class TestOpenAIResponsesWebSocketHandler:
-    """Unit tests for OpenAIResponsesWebSocketHandler."""
+class TestBaseResponsesAPIConfigWebSocket:
+    """Test the WebSocket hooks on BaseResponsesAPIConfig."""
 
-    def test_http_url_to_ws_https(self):
-        from litellm.responses.websocket_handler import (
-            OpenAIResponsesWebSocketHandler,
+    def test_get_websocket_url_converts_https(self):
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
         )
 
-        assert OpenAIResponsesWebSocketHandler._http_url_to_ws(
-            "https://api.openai.com/v1/responses"
-        ) == "wss://api.openai.com/v1/responses"
+        config = OpenAIResponsesAPIConfig()
+        url = config.get_websocket_url(api_base=None, litellm_params={})
+        assert url.startswith("wss://")
+        assert url.endswith("/responses")
 
-    def test_http_url_to_ws_http(self):
-        from litellm.responses.websocket_handler import (
-            OpenAIResponsesWebSocketHandler,
+    def test_get_websocket_url_converts_http(self):
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
         )
 
-        result = OpenAIResponsesWebSocketHandler._http_url_to_ws(
-            "http://localhost:4000/v1/responses"
+        config = OpenAIResponsesAPIConfig()
+        url = config.get_websocket_url(
+            api_base="http://localhost:4000/v1", litellm_params={}
         )
-        assert result == "ws://localhost:4000/v1/responses"
+        assert url.startswith("ws://")
+        assert "/v1/responses" in url
 
-    def test_ssl_config_ws(self):
-        from litellm.responses.websocket_handler import (
-            OpenAIResponsesWebSocketHandler,
-        )
-
-        assert OpenAIResponsesWebSocketHandler._get_ssl_config("ws://localhost:8080") is None
-
-    def test_ssl_config_wss(self):
-        from litellm.responses.websocket_handler import (
-            OpenAIResponsesWebSocketHandler,
+    def test_default_transforms_are_passthrough(self):
+        from litellm.llms.openai.responses.transformation import (
+            OpenAIResponsesAPIConfig,
         )
 
-        result = OpenAIResponsesWebSocketHandler._get_ssl_config("wss://api.openai.com/v1/responses")
-        assert result is not None
+        config = OpenAIResponsesAPIConfig()
+        msg = '{"type":"response.create","model":"gpt-4o"}'
+        assert config.transform_websocket_client_message(msg, "gpt-4o") == msg
+        assert config.transform_websocket_backend_message(msg, "gpt-4o") == msg
 
 
 class TestResponsesWebSocketStreaming:
@@ -241,11 +239,9 @@ class TestResponsesWebSocketEntryPoint:
         Directly test the inner logic that the ValueError message is correct
         for unsupported providers.
         """
-        from litellm.responses.websocket import (
-            openai_responses_ws_handler,
-        )
+        from litellm.responses.websocket import base_llm_http_handler
 
-        assert openai_responses_ws_handler is not None
+        assert hasattr(base_llm_http_handler, "async_responses_websocket")
 
 
 class TestProxyWebSocketEndpointRegistration:
