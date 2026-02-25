@@ -25,6 +25,10 @@ except ImportError:
     not SEMANTIC_ROUTER_AVAILABLE,
     reason="semantic-router not installed. Install with: pip install 'litellm[semantic-router]'"
 )
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set in environment"
+)
 async def test_e2e_semantic_filter():
     """E2E: Load router/filter and verify hook filters tools."""
     from litellm import Router

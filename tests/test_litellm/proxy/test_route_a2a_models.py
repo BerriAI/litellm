@@ -55,7 +55,7 @@ async def test_route_a2a_model_bypasses_router():
 
     with patch("litellm.acompletion", mock_acompletion):
         with patch(
-            "litellm.proxy.agent_endpoints.a2a_routing.global_agent_registry",
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
             mock_registry,
         ):
             result = await route_request(

@@ -11,6 +11,10 @@ vi.mock("../networking", () => ({
   fetchMCPServerHealth: vi.fn(),
   deleteMCPServer: vi.fn(),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  fetchMCPClientIp: vi.fn().mockResolvedValue(null),
+  getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
+  updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock NotificationsManager

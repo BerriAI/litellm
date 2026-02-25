@@ -19,7 +19,7 @@ async def test_acompletion_mcp_auto_exec(monkeypatch):
         inputSchema={"type": "object", "properties": {}},
     )
 
-    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy):
+    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy, **kwargs):
         return [dummy_tool], {"local_search": "local"}
 
     async def fake_execute(**kwargs):
@@ -95,7 +95,7 @@ async def test_acompletion_mcp_respects_manual_approval(monkeypatch):
         inputSchema={"type": "object", "properties": {}},
     )
 
-    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy):
+    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy, **kwargs):
         return [dummy_tool], {"local_search": "local"}
 
     async def fake_execute(**kwargs):
@@ -170,7 +170,7 @@ async def test_completion_mcp_with_streaming_no_timeout_error(monkeypatch):
         inputSchema={"type": "object", "properties": {}},
     )
 
-    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy):
+    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy, **kwargs):
         return [dummy_tool], {"local_search": "local"}
 
     async def fake_execute(**kwargs):
@@ -470,7 +470,7 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
         inputSchema={"type": "object", "properties": {}},
     )
 
-    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy):
+    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy, **kwargs):
         return [dummy_tool], {"local_search": "local"}
 
     async def fake_execute(**kwargs):
@@ -793,7 +793,7 @@ async def test_mcp_streaming_metadata_ordering(monkeypatch):
         inputSchema={"type": "object", "properties": {}},
     )
 
-    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy):
+    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy, **kwargs):
         return [dummy_tool], {"local_search": "local"}
 
     async def fake_execute(**kwargs):

@@ -1,12 +1,11 @@
-import React from "react";
-import { Form, Select, Tooltip } from "antd";
-import NumericalInput from "./shared/numerical_input";
-import { TextInput, Textarea, SelectItem } from "@tremor/react";
-import { Button } from "@tremor/react";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import { all_admin_roles } from "../utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { Button, SelectItem, TextInput, Textarea } from "@tremor/react";
+import { Checkbox, Form, Select, Tooltip } from "antd";
+import React, { useState } from "react";
+import { all_admin_roles } from "../utils/roles";
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import NumericalInput from "./shared/numerical_input";
 
 interface UserEditViewProps {
   userData: any;
@@ -34,20 +33,33 @@ export function UserEditView({
   isBulkEdit = false,
 }: UserEditViewProps) {
   const [form] = Form.useForm();
+  const [unlimitedBudget, setUnlimitedBudget] = useState(false);
 
   // Set initial form values
   React.useEffect(() => {
+    const maxBudget = userData.user_info?.max_budget;
+    const isUnlimited = maxBudget === null || maxBudget === undefined;
+    setUnlimitedBudget(isUnlimited);
+
     form.setFieldsValue({
       user_id: userData.user_id,
       user_email: userData.user_info?.user_email,
       user_alias: userData.user_info?.user_alias,
       user_role: userData.user_info?.user_role,
       models: userData.user_info?.models || [],
-      max_budget: userData.user_info?.max_budget,
+      max_budget: isUnlimited ? "" : maxBudget,
       budget_duration: userData.user_info?.budget_duration,
       metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     });
   }, [userData, form]);
+
+  const handleUnlimitedBudgetChange = (e: any) => {
+    const checked = e.target.checked;
+    setUnlimitedBudget(checked);
+    if (checked) {
+      form.setFieldsValue({ max_budget: "" });
+    }
+  };
 
   const handleSubmit = (values: any) => {
     // Convert metadata back to an object if it exists and is a string
@@ -58,6 +70,10 @@ export function UserEditView({
         console.error("Error parsing metadata JSON:", error);
         return;
       }
+    }
+
+    if (unlimitedBudget || values.max_budget === "" || values.max_budget === undefined) {
+      values.max_budget = null;
     }
 
     onSubmit(values);
@@ -138,8 +154,36 @@ export function UserEditView({
         </Select>
       </Form.Item>
 
-      <Form.Item label="Max Budget (USD)" name="max_budget">
-        <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+      <Form.Item
+        label={
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <span>Max Budget (USD)</span>
+            <Checkbox
+              checked={unlimitedBudget}
+              onChange={handleUnlimitedBudgetChange}
+            >
+              Unlimited Budget
+            </Checkbox>
+          </div>
+        }
+        name="max_budget"
+        rules={[
+          {
+            validator: (_, value) => {
+              if (!unlimitedBudget && (value === "" || value === null || value === undefined)) {
+                return Promise.reject(new Error("Please enter a budget or select Unlimited Budget"));
+              }
+              return Promise.resolve();
+            },
+          },
+        ]}
+      >
+        <NumericalInput
+          step={0.01}
+          precision={2}
+          style={{ width: "100%" }}
+          disabled={unlimitedBudget}
+        />
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">

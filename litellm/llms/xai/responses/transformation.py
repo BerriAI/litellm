@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import XAI_API_BASE
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -15,8 +16,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-XAI_API_BASE = "https://api.x.ai/v1"
 
 
 class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):

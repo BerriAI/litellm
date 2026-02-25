@@ -56,6 +56,27 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Group 1" },
+      { access_group_id: "ag-2", access_group_name: "Group 2" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("../common_components/AccessGroupSelector", () => ({
+  default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <input
+      data-testid="access-group-selector"
+      value={Array.isArray(value) ? value.join(",") : ""}
+      onChange={(e) => onChange?.(e.target.value ? e.target.value.split(",").map((s) => s.trim()) : [])}
+    />
+  ),
+}));
+
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
     token: "test-token-123",
@@ -436,13 +457,92 @@ describe("KeyEditView", () => {
   });
 
 
-  it("should disable cancel button during submission", async () => {
-    const onSubmitMock = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        }),
+  it("should pass access_group_ids to onSubmit when saving key with access groups", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataWithAccessGroups = {
+      ...MOCK_KEY_DATA,
+      access_group_ids: ["ag-1"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithAccessGroups}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken="test-token"
+        userID="test-user"
+        userRole="admin"
+        premiumUser={false}
+      />,
     );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("access-group-selector")).toBeInTheDocument();
+    });
+
+    const accessGroupInput = screen.getByTestId("access-group-selector");
+    await userEvent.clear(accessGroupInput);
+    await userEvent.type(accessGroupInput, "ag-1,ag-2");
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.access_group_ids).toEqual(["ag-1", "ag-2"]);
+    });
+  });
+
+  it("should display 'AI APIs' label for the llm_api key type option", async () => {
+    const keyDataWithLlmApiRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["llm_api_routes"],
+    };
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataWithLlmApiRoutes}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Key Type")).toBeInTheDocument();
+    });
+
+    // The selected key type label should show "AI APIs" (not "LLM API")
+    const keyTypeSection = screen.getByText("Key Type").closest(".ant-form-item")!;
+    expect(keyTypeSection).toBeInTheDocument();
+
+    // Open the dropdown to see all options
+    const selectElement = keyTypeSection.querySelector(".ant-select-selector")!;
+    await userEvent.click(selectElement);
+
+    await waitFor(() => {
+      // Verify "AI APIs" appears as an option label
+      const options = document.querySelectorAll(".ant-select-item-option");
+      const optionTexts = Array.from(options).map((el) => el.textContent);
+      const hasAIAPIs = optionTexts.some((text) => text?.includes("AI APIs"));
+      expect(hasAIAPIs).toBe(true);
+
+      // Verify old "LLM API" label does NOT appear
+      const hasLLMAPI = optionTexts.some((text) => text?.includes("LLM API"));
+      expect(hasLLMAPI).toBe(false);
+    });
+  });
+
+  it("should display cancel button during submission", async () => {
+    let resolveSubmit: (() => void) | undefined;
+    const submitPromise = new Promise<void>((resolve) => {
+      resolveSubmit = resolve;
+    });
+    const onSubmitMock = vi.fn(() => submitPromise);
 
     renderWithProviders(
       <KeyEditView
@@ -463,9 +563,20 @@ describe("KeyEditView", () => {
     const submitButton = screen.getByRole("button", { name: /save changes/i });
     await userEvent.click(submitButton);
 
+    // Wait for onSubmit to be called, which means handleSubmit has started and isKeySaving should be true
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+    });
+
+    // Wait for the cancel button to actually be disabled (state update may take a moment)
     await waitFor(() => {
       const cancelButton = screen.getByRole("button", { name: /cancel/i });
       expect(cancelButton).toBeDisabled();
-    });
+    }, { timeout: 3000 });
+
+    // Clean up: resolve the promise to allow the form to complete
+    if (resolveSubmit) {
+      resolveSubmit();
+    }
   });
 });

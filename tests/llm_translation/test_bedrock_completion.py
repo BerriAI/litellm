@@ -2356,9 +2356,8 @@ def test_bedrock_no_default_message():
     assistant_messages = [
         msg for msg in formatted_messages if msg["role"] == "assistant"
     ]
-    assert len(assistant_messages) == 2
-    assert assistant_messages[0]["content"][0]["text"] == "."
-    assert assistant_messages[1]["content"][0]["text"] == "Valid response"
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0]["content"][0]["text"] == "Valid response"
 
 
 @pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
@@ -3518,7 +3517,7 @@ def test_bedrock_openai_imported_model():
         print(f"URL: {url}")
         assert "bedrock-runtime.us-east-1.amazonaws.com" in url
         assert (
-            "arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy" in url
+            "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy" in url
         )
         assert "/invoke" in url
 

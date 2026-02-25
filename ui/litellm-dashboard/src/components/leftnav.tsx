@@ -29,9 +29,9 @@ import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
-import type { Organization } from "./networking";
-import UsageIndicator from "./usage_indicator";
 import NewBadge from "./common_components/NewBadge";
+import type { Organization } from "./networking";
+import UsageIndicator from "./UsageIndicator";
 const { Sider } = Layout;
 
 // Define the props type
@@ -151,12 +151,15 @@ const menuGroups: MenuGroup[] = [
       {
         key: "logs",
         page: "logs",
-        label: (
-          <span className="flex items-center gap-4">
-            Logs <NewBadge />
-          </span>
-        ),
+        label: "Logs",
         icon: <LineChartOutlined />,
+      },
+      {
+        key: "guardrails-monitor",
+        page: "guardrails-monitor",
+        label: "Guardrails Monitor",
+        icon: <SafetyOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
       },
     ],
   },
@@ -181,6 +184,17 @@ const menuGroups: MenuGroup[] = [
         page: "organizations",
         label: "Organizations",
         icon: <BankOutlined />,
+        roles: all_admin_roles,
+      },
+      {
+        key: "access-groups",
+        page: "access-groups",
+        label: (
+          <span className="flex items-center gap-2">
+            Access Groups <NewBadge />
+          </span>
+        ),
+        icon: <BlockOutlined />,
         roles: all_admin_roles,
       },
       {

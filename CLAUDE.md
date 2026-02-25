@@ -90,6 +90,7 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Pydantic v2 for data validation
 - Async/await patterns throughout
 - Type hints required for all public APIs
+- **Avoid imports within methods** — place all imports at the top of the file (module-level). Inline imports inside functions/methods make dependencies harder to trace and hurt readability. The only exception is avoiding circular imports where absolutely necessary.
 
 ### Testing Strategy
 - Unit tests in `tests/test_litellm/`
