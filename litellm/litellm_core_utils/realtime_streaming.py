@@ -49,6 +49,9 @@ class RealTimeStreaming:
         self.logging_obj = logging_obj
         self.messages: List[OpenAIRealtimeEvents] = []
         self.input_message: Dict = {}
+        self.input_messages: List[Dict[str, str]] = []
+        self.session_tools: List[Dict] = []
+        self.tool_calls: List[Dict] = []
 
         _logged_real_time_event_types = litellm.logged_real_time_event_types
 
@@ -85,6 +88,7 @@ class RealTimeStreaming:
             message_obj = message
         else:
             message_obj = json.loads(message)
+        self._collect_tool_calls_from_response_done(message_obj)
         try:
             if (
                 not isinstance(message, dict)
@@ -100,15 +104,107 @@ class RealTimeStreaming:
         if self._should_store_message(message_obj):
             self.messages.append(message_obj)
 
-    def store_input(self, message: dict):
+    def _collect_user_input_from_client_event(
+        self, message: Union[str, dict]
+    ) -> None:
+        """Extract user text content from client WebSocket events for spend logging."""
+        try:
+            if isinstance(message, str):
+                msg_obj = json.loads(message)
+            elif isinstance(message, dict):
+                msg_obj = message
+            else:
+                return
+
+            msg_type = msg_obj.get("type", "")
+
+            if msg_type == "conversation.item.create":
+                item = msg_obj.get("item", {})
+                if item.get("role") == "user":
+                    content_list = item.get("content", [])
+                    for content in content_list:
+                        if (
+                            isinstance(content, dict)
+                            and content.get("type") == "input_text"
+                        ):
+                            text = content.get("text", "")
+                            if text:
+                                self.input_messages.append(
+                                    {"role": "user", "content": text}
+                                )
+            elif msg_type == "session.update":
+                session = msg_obj.get("session", {})
+                instructions = session.get("instructions", "")
+                if instructions:
+                    self.input_messages.append(
+                        {"role": "system", "content": instructions}
+                    )
+                tools = session.get("tools")
+                if tools and isinstance(tools, list):
+                    self.session_tools = tools
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass
+
+    def _collect_user_input_from_backend_event(self, event_obj: dict) -> None:
+        """Extract user voice transcription from backend events for spend logging."""
+        try:
+            event_type = event_obj.get("type", "")
+            if (
+                event_type
+                == "conversation.item.input_audio_transcription.completed"
+            ):
+                transcript = event_obj.get("transcript", "")
+                if transcript:
+                    self.input_messages.append(
+                        {"role": "user", "content": transcript}
+                    )
+        except (AttributeError, TypeError):
+            pass
+
+    def _collect_tool_calls_from_response_done(
+        self, event_obj: dict
+    ) -> None:
+        """Extract function_call items from response.done events for spend logging."""
+        try:
+            if event_obj.get("type") != "response.done":
+                return
+            response = event_obj.get("response", {})
+            for item in response.get("output", []):
+                if item.get("type") == "function_call":
+                    self.tool_calls.append(
+                        {
+                            "id": item.get("call_id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": item.get("name", ""),
+                                "arguments": item.get("arguments", "{}"),
+                            },
+                        }
+                    )
+        except (AttributeError, TypeError):
+            pass
+
+    def store_input(self, message: Union[str, dict]):
         """Store input message"""
-        self.input_message = message
+        self.input_message = message if isinstance(message, dict) else {}
+        self._collect_user_input_from_client_event(message)
         if self.logging_obj:
             self.logging_obj.pre_call(input=message, api_key="")
 
     async def log_messages(self):
         """Log messages in list"""
         if self.logging_obj:
+            if self.input_messages:
+                self.logging_obj.model_call_details["messages"] = (
+                    self.input_messages
+                )
+            if self.session_tools or self.tool_calls:
+                self.logging_obj.model_call_details[
+                    "realtime_tools"
+                ] = self.session_tools
+                self.logging_obj.model_call_details[
+                    "realtime_tool_calls"
+                ] = self.tool_calls
             ## ASYNC LOGGING
             # Create an event loop for the new thread
             asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
@@ -259,6 +355,7 @@ class RealTimeStreaming:
                 == "conversation.item.input_audio_transcription.completed"
             ):
                 transcript = event.get("transcript", "")
+                self._collect_user_input_from_backend_event(event)
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
                 blocked = await self.run_realtime_guardrails(
@@ -308,6 +405,7 @@ class RealTimeStreaming:
                 == "conversation.item.input_audio_transcription.completed"
             ):
                 transcript = event_obj.get("transcript", "")
+                self._collect_user_input_from_backend_event(event_obj)
                 ## LOGGING — must happen before continue below
                 self.store_message(raw_response)
                 # Forward transcript to client so user sees what they said
