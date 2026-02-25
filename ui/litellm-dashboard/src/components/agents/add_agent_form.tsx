@@ -9,8 +9,11 @@ import {
   keyCreateForAgentCall,
   keyListCall,
   keyUpdateCall,
+  modelAvailableCall,
   AgentCreateInfo,
 } from "../networking";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { getDefaultFormValues, buildAgentDataFromForm } from "./agent_config";
@@ -34,6 +37,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   accessToken,
   onSuccess,
 }) => {
+  const { userId, userRole } = useAuthorized();
   const [form] = Form.useForm();
   const [currentStep, setCurrentStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -48,6 +52,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const [existingKeys, setExistingKeys] = useState<any[]>([]);
   const [selectedExistingKey, setSelectedExistingKey] = useState<string | null>(null);
   const [loadingKeys, setLoadingKeys] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   // Step 2: results
   const [createdAgentName, setCreatedAgentName] = useState<string>("");
@@ -87,6 +93,31 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       fetchKeys();
     }
   }, [currentStep, accessToken]);
+
+  // Fetch available models when Assign Key step is active (same list as key generation)
+  useEffect(() => {
+    if (currentStep !== 2 || !accessToken || !userId || !userRole) return;
+    let cancelled = false;
+    setLoadingModels(true);
+    modelAvailableCall(accessToken, userId, userRole)
+      .then((response) => {
+        if (cancelled) return;
+        const modelsArray = response?.data ?? (Array.isArray(response) ? response : []);
+        const ids = modelsArray
+          .map((m: { id?: string; model_name?: string }) => m.id ?? m.model_name)
+          .filter(Boolean) as string[];
+        setAvailableModels(ids);
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Error fetching models:", error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentStep, accessToken, userId, userRole]);
 
   const selectedAgentTypeInfo = agentTypeMetadata.find(
     (info) => info.agent_type === agentType
@@ -481,10 +512,16 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                         <Select
                           mode="tags"
                           style={{ width: "100%" }}
-                          placeholder="e.g. gpt-4o, claude-3-5-sonnet"
+                          placeholder={loadingModels ? "Loading models..." : "e.g. gpt-4o, claude-3-5-sonnet"}
                           value={newKeyModels}
                           onChange={setNewKeyModels}
                           tokenSeparators={[","]}
+                          loading={loadingModels}
+                          showSearch
+                          options={availableModels.map((m) => ({
+                            label: getModelDisplayName(m),
+                            value: m,
+                          }))}
                         />
                       </div>
                     </div>
