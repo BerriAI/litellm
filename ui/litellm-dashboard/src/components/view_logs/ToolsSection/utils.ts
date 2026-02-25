@@ -77,6 +77,33 @@ function extractToolCallsFromResponse(log: LogEntry): ToolCall[] {
     }
   }
 
+  // Realtime API format: response.tool_calls (added by spend tracking for realtime calls)
+  if (Array.isArray(responseData.tool_calls)) {
+    return responseData.tool_calls;
+  }
+
+  // Realtime API format: response.results[].response.output[].type === "function_call"
+  if (Array.isArray(responseData.results)) {
+    const toolCalls: ToolCall[] = [];
+    for (const result of responseData.results) {
+      if (result.type === "response.done" && result.response?.output) {
+        for (const item of result.response.output) {
+          if (item.type === "function_call") {
+            toolCalls.push({
+              id: item.call_id || "",
+              type: "function",
+              function: {
+                name: item.name || "",
+                arguments: item.arguments || "{}",
+              },
+            });
+          }
+        }
+      }
+    }
+    if (toolCalls.length > 0) return toolCalls;
+  }
+
   return [];
 }
 

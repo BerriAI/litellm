@@ -208,6 +208,13 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     if not authorization:
         api_key = websocket.headers.get("api-key")
         if not api_key:
+            # Try extracting from WebSocket subprotocol (browser clients)
+            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+                protocol = protocol.strip()
+                if protocol.startswith("openai-insecure-api-key."):
+                    api_key = protocol[len("openai-insecure-api-key."):]
+                    break
+        if not api_key:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
     else:

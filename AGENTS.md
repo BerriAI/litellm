@@ -189,4 +189,39 @@ When opening issues or pull requests, follow these templates:
 - Check similar provider implementations
 - Ensure comprehensive test coverage
 - Update documentation appropriately
-- Consider backward compatibility impact 
+- Consider backward compatibility impact
+
+## Cursor Cloud specific instructions
+
+### Environment
+
+- Poetry is installed in `~/.local/bin`; the update script ensures it is on `PATH`.
+- Python 3.12, Node 22 are pre-installed.
+- The virtual environment lives under `~/.cache/pypoetry/virtualenvs/`.
+
+### Running the proxy server
+
+Start the proxy with a config file:
+
+```bash
+poetry run litellm --config dev_config.yaml --port 4000
+```
+
+The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+
+### Running tests
+
+See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
+
+- `psycopg-binary` must be installed (`poetry run pip install psycopg-binary`) because the pytest-postgresql plugin requires it and the lock file only includes `psycopg` (no binary).
+- The `--timeout` pytest flag is NOT available; don't pass it.
+- Unit tests: `poetry run pytest tests/test_litellm/ -x -vv -n 4`
+- Black `--check` may report pre-existing formatting issues; this does not block test runs.
+
+### Lint
+
+```bash
+cd litellm && poetry run ruff check .
+```
+
+Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.

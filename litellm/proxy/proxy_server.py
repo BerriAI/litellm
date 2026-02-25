@@ -7360,7 +7360,15 @@ async def realtime_websocket_endpoint(
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-    await websocket.accept()
+    requested_protocols = [
+        p.strip()
+        for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if p.strip()
+    ]
+    accept_kwargs: dict = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
     query_params = cast(
