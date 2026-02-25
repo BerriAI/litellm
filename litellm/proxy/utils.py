@@ -4541,7 +4541,7 @@ async def update_spend(  # noqa: PLR0915
     """
     Batch write updates to db.
 
-    Triggered every minute.
+    Triggered every 10-15 seconds, can set with PROXY_BATCH_WRITE_AT
 
     Requires:
     user_id_list: dict,
