@@ -5,7 +5,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tooltip } from "antd";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -29,6 +29,7 @@ import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
+  getAgentsList,
   getGuardrailsList,
   getPoliciesList,
   getPossibleUserRoles,
@@ -42,6 +43,7 @@ import {
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { simplifyKeyGenerateError } from "./utils";
+import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 
 const { Option } = Select;
 
@@ -169,6 +171,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
+  const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -180,6 +184,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRotationInterval("30d");
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
+    setSelectedAgentId(null);
   };
 
   const handleCancel = () => {
@@ -195,6 +200,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setRotationInterval("30d");
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
+    setSelectedAgentId(null);
   };
 
   useEffect(() => {
@@ -202,6 +208,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
   }, [accessToken, userID, userRole]);
+
+  useEffect(() => {
+    if (accessToken) {
+      getAgentsList(accessToken)
+        .then((res) => setAgentsList(res?.agents || []))
+        .catch(() => setAgentsList([]));
+    }
+  }, [accessToken]);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -283,6 +297,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
 
       if (keyOwner === "you") {
         formValues.user_id = userID;
+      } else if (keyOwner === "agent") {
+        if (!selectedAgentId) {
+          message.error("Please select an agent");
+          return;
+        }
+        formValues.agent_id = selectedAgentId;
       }
 
       // Handle metadata for all key types
@@ -539,6 +559,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
                 {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
+                <Radio value="agent">Agent <Tag color="purple">New</Tag></Radio>
               </Radio.Group>
             </Form.Item>
 
@@ -582,6 +603,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   <div className="text-xs text-gray-500">Search by email to find users</div>
                 </div>
               </Form.Item>
+            )}
+            {keyOwner === "agent" && (
+              <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                <div className="mb-3">
+                  <span className="text-sm font-medium text-gray-700">
+                    Select Agent <span className="text-red-500">*</span>
+                  </span>
+                </div>
+                <Select
+                  showSearch
+                  placeholder="Select an agent"
+                  style={{ width: "100%" }}
+                  value={selectedAgentId}
+                  onChange={(value) => setSelectedAgentId(value)}
+                  filterOption={(input, option) =>
+                    (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={agentsList.map((a) => ({
+                    label: a.agent_name || a.agent_id,
+                    value: a.agent_id,
+                  }))}
+                />
+                <div className="text-xs text-gray-500 mt-2">
+                  This key will be used by the selected agent to make requests to LiteLLM
+                </div>
+              </div>
             )}
             <Form.Item
               label={
@@ -1381,34 +1428,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>
-              <p>
-                Please save this secret key somewhere safe and accessible. For security reasons,{" "}
-                <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key,
-                you will need to generate a new one.
-              </p>
-            </Col>
-            <Col numColSpan={1}>
               {apiKey != null ? (
-                <div>
-                  <Text className="mt-3">Virtual Key:</Text>
-                  <div
-                    style={{
-                      background: "#f8f8f8",
-                      padding: "10px",
-                      borderRadius: "5px",
-                      marginBottom: "10px",
-                    }}
-                  >
-                    <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>{apiKey}</pre>
-                  </div>
-
-                  <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-                    <Button className="mt-3">Copy Virtual Key</Button>
-                  </CopyToClipboard>
-                  {/* <Button className="mt-3" onClick={sendSlackAlert}>
-                    Test Key
-                </Button> */}
-                </div>
+                <CreatedKeyDisplay apiKey={apiKey} />
               ) : (
                 <Text>Key being created, this might take 30s</Text>
               )}

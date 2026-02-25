@@ -851,6 +851,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
+    agent_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
