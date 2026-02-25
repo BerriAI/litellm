@@ -26,24 +26,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import \
         Logging as LiteLLMLoggingObj
 
-# Default executable languages when blocked_languages is not set (block-all mode uses this for "block all")
-DEFAULT_BLOCKED_LANGUAGES: List[str] = [
-    "python",
-    "javascript",
-    "js",
-    "bash",
-    "sh",
-    "ruby",
-    "go",
-    "java",
-    "csharp",
-    "php",
-    "c",
-    "cpp",
-    "rust",
-    "sql",
-]
-
 # Language tag aliases (normalize to canonical for comparison)
 LANGUAGE_ALIASES: Dict[str, str] = {
     "js": "javascript",
