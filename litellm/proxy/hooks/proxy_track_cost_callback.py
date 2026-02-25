@@ -291,6 +291,7 @@ class _ProxyDBLogger(CustomLogger):
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    check_cache_only=True,
                 )
                 if metadata.get("user_api_key_alias") is None:
                     metadata["user_api_key_alias"] = key_obj.key_alias
