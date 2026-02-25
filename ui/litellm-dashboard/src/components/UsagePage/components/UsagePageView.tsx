@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { InfoCircleOutlined, LoadingOutlined, UserOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, LoadingOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
@@ -498,6 +498,36 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {/* Your Usage Panel */}
           {usageView === "global" && (
             <>
+            {isAdmin && (
+              <div className="mb-4">
+                <Text className="mb-2">Filter by user</Text>
+                <Select
+                  showSearch
+                  allowClear
+                  style={{ width: "100%" }}
+                  placeholder="Select user to filter..."
+                  value={selectedUserId}
+                  onChange={(value) => setSelectedUserId(value ?? null)}
+                  filterOption={false}
+                  onSearch={handleUserSearchChange}
+                  searchValue={userSearchInput}
+                  onPopupScroll={handleUserPopupScroll}
+                  loading={isLoadingUsers}
+                  notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
+                  options={userOptions}
+                  popupRender={(menu) => (
+                    <>
+                      {menu}
+                      {isFetchingNextUsersPage && (
+                        <div style={{ textAlign: "center", padding: 8 }}>
+                          <LoadingOutlined spin />
+                        </div>
+                      )}
+                    </>
+                  )}
+                />
+              </div>
+            )}
             <TabGroup>
               <div className="flex justify-between items-center">
                 <TabList variant="solid" className="mt-1">
@@ -560,41 +590,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </>
                           )}
                         </Text>
-                        {isAdmin && (
-                          <div className="flex items-center gap-2">
-                            <UserOutlined style={{ fontSize: "14px", color: "#6b7280" }} />
-                            <Select
-                              showSearch
-                              allowClear
-                              style={{ width: 300 }}
-                              placeholder="All Users (Global View)"
-                              value={selectedUserId}
-                              onChange={(value) => setSelectedUserId(value ?? null)}
-                              filterOption={false}
-                              onSearch={handleUserSearchChange}
-                              searchValue={userSearchInput}
-                              onPopupScroll={handleUserPopupScroll}
-                              loading={isLoadingUsers}
-                              notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
-                              options={userOptions}
-                              popupRender={(menu) => (
-                                <>
-                                  {menu}
-                                  {isFetchingNextUsersPage && (
-                                    <div style={{ textAlign: "center", padding: 8 }}>
-                                      <LoadingOutlined spin />
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                            />
-                            {selectedUserId && (
-                              <span className="text-xs text-gray-500">
-                                Filtering by user
-                              </span>
-                            )}
-                          </div>
-                        )}
                       </div>
 
                       <ViewUserSpend
@@ -908,6 +903,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               entityList={
                 agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
               }
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
+          )}
+          {/* User Usage Panel */}
+          {usageView === "user" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="user"
+              userID={userID}
+              userRole={userRole}
+              entityList={userOptions.length > 0 ? userOptions : null}
               premiumUser={premiumUser}
               dateValue={dateValue}
             />

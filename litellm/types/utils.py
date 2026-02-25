@@ -1,7 +1,17 @@
 import json
 import time
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    get_args,
+)
 
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
@@ -3185,6 +3195,12 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.OPENAI.value,
     LlmProviders.HOSTED_VLLM.value,
 }
+
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
+
+LIST_BATCHES_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(
+    get_args(ListBatchesSupportedProvider)
+)
 
 
 class SearchProviders(str, Enum):
