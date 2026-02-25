@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
-import { Switch } from "@tremor/react";
+import { Select, Switch, Tooltip } from "antd";
 import { Select, Tooltip } from "antd";
 import {
   Table,
