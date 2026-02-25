@@ -1,13 +1,13 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Button as AntdButton, Form, Tag, Tooltip } from "antd";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { Form, Tag } from "antd";
+import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -54,8 +54,6 @@ export default function KeyInfoView({
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
@@ -284,16 +282,6 @@ export default function KeyInfoView({
     }
   };
 
-  const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
-    if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
-      setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
-    }
-  };
-
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
@@ -346,79 +334,29 @@ export default function KeyInfoView({
 
   return (
     <div className="w-full h-screen p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-            {backButtonText}
-          </Button>
-          <Title>{currentKeyData.key_alias || "Virtual Key"}</Title>
-
-          <div className="flex items-center cursor-pointer mb-2 space-y-6">
-            <div>
-              <Text className="text-xs text-gray-400 uppercase tracking-wide mt-2">Key ID</Text>
-              <Text className="text-gray-500 font-mono text-sm">{currentKeyData.token_id || currentKeyData.token}</Text>
-            </div>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["key-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-              onClick={() => copyToClipboard(currentKeyData.token_id || currentKeyData.token, "key-id")}
-              className={`ml-2 transition-all duration-200${copiedStates["key-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
-            />
-          </div>
-
-          {/* Add timestamp and regeneration indicator */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <Text className="text-sm text-gray-500">
-              {currentKeyData.updated_at && currentKeyData.updated_at !== currentKeyData.created_at
-                ? `Updated: ${formatTimestamp(currentKeyData.updated_at)}`
-                : `Created: ${formatTimestamp(currentKeyData.created_at)}`}
-            </Text>
-
-            {isRecentlyRegenerated && (
-              <Badge color="green" size="xs" className="animate-pulse">
-                Recently Regenerated
-              </Badge>
-            )}
-
-            {lastRegeneratedAt && (
-              <Badge color="blue" size="xs">
-                Regenerated
-              </Badge>
-            )}
-          </div>
-        </div>
-        {canModifyKey && (
-          <div className="flex gap-2">
-            <Tooltip
-              title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}
-            >
-              <span className="inline-block">
-                <Button
-                  icon={RefreshIcon}
-                  variant="secondary"
-                  onClick={() => setIsRegenerateModalOpen(true)}
-                  className="flex items-center"
-                  disabled={!premiumUser}
-                >
-                  Regenerate Key
-                </Button>
-              </span>
-            </Tooltip>
-            <Button
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center text-red-500 border-red-500 hover:text-red-700"
-            >
-              Delete Key
-            </Button>
-          </div>
-        )}
-      </div>
+      <KeyInfoHeader
+        data={{
+          keyName: currentKeyData.key_alias || "Virtual Key",
+          keyId: currentKeyData.token_id || currentKeyData.token,
+          userId: currentKeyData.user_id || "",
+          userEmail: currentKeyData.user_email || "",
+          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
+          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+        }}
+        onBack={onClose}
+        onRegenerate={() => setIsRegenerateModalOpen(true)}
+        onDelete={() => setIsDeleteModalOpen(true)}
+        canModifyKey={canModifyKey}
+        backButtonText={backButtonText}
+        regenerateDisabled={!premiumUser}
+        regenerateTooltip={
+          !premiumUser
+            ? "This is a LiteLLM Enterprise feature, and requires a valid key to use."
+            : undefined
+        }
+      />
 
       {/* Add RegenerateKeyModal */}
       <RegenerateKeyModal
