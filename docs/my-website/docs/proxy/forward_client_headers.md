@@ -21,7 +21,7 @@ sequenceDiagram
     
     Proxy->>Filter: Check forward_client_headers_to_llm_api<br/>setting for this model group
 
-    Note over Filter: Allowlist rules:<br/>1. Headers starting with "x-" <br/>2. "anthropic-beta" <br/>3. "x-stainless-*"  (blocked)<br/>4. All other headers  (blocked)
+    Note over Filter: Allowlist rules:<br/>1. Headers starting with "x-" ✅<br/>2. "anthropic-beta" ✅<br/>3. "x-stainless-*" ❌ (blocked)<br/>4. All other headers ❌ (blocked)
 
     Filter-->>Proxy: Return only allowed headers
 
