@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -10,13 +10,11 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 import asyncio
-import traceback
 from typing import Optional
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
-    AUDIO_ATTRIBUTE,
     CustomStreamWrapper,
 )
 from litellm.types.utils import (
@@ -24,7 +22,6 @@ from litellm.types.utils import (
     Delta,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
-    StandardLoggingPayload,
     StreamingChoices,
     Usage,
 )
@@ -44,7 +41,6 @@ def initialized_custom_stream_wrapper() -> CustomStreamWrapper:
 
 @pytest.fixture
 def logging_obj() -> Logging:
-    import time
 
     logging_obj = Logging(
         model="my-random-model",
@@ -428,7 +424,6 @@ def test_strip_sse_data_from_chunk():
 async def test_streaming_handler_with_usage(
     sync_mode: bool, final_usage_block: Optional[Usage] = None
 ):
-    import time
 
     final_usage_block = final_usage_block or Usage(
         completion_tokens=392,
@@ -507,7 +502,6 @@ async def test_streaming_handler_with_usage(
 @pytest.mark.asyncio
 @pytest.mark.flaky(reruns=3)
 async def test_streaming_with_usage_and_logging(sync_mode: bool):
-    import time
 
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -718,7 +712,6 @@ def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
     """Test that the created time is consistent across chunks"""
-    import time
 
     bad_chunk = ModelResponseStream(
         choices=[], created=int(time.time())
@@ -1232,3 +1225,69 @@ async def test_custom_stream_wrapper_aclose_none_stream():
 
     # Should not raise
     await wrapper.aclose()
+
+
+def test_content_not_dropped_when_finish_reason_already_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Regression test for Vertex AI / Anthropic Claude streaming truncation.
+
+    The bug: when content_block_delta and message_delta (finish_reason) arrive
+    in rapid succession, `received_finish_reason` can be set BEFORE the content
+    chunk is processed by chunk_creator().  The old code raised StopIteration
+    unconditionally, silently dropping the last piece of content.
+
+    After the fix, `chunk_creator()` only raises StopIteration when the incoming
+    chunk has NO text/tool content.
+    """
+    # Pre-set received_finish_reason to simulate the race condition:
+    # finish_reason was already recorded from a previous message_delta chunk.
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    # Build a GenericStreamingChunk dict that still carries text content.
+    # This matches what ModelResponseIterator.chunk_parser() yields for a
+    # content_block_delta event when processed after message_delta.
+    content_chunk = {
+        "text": "world!",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    # Must NOT raise StopIteration — the content should be returned.
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
+
+    assert result is not None, (
+        "chunk_creator() returned None even though the chunk had content — "
+        "this indicates the Vertex AI streaming truncation bug is present."
+    )
+    assert result.choices[0].delta.content == "world!", (
+        f"Expected content 'world!', got: {result.choices[0].delta.content!r}"
+    )
+
+
+def test_empty_chunk_still_stops_after_finish_reason_set(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    Companion test: an empty content chunk SHOULD still raise StopIteration
+    when received_finish_reason is already set (existing correct behaviour).
+    """
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
+
+    empty_chunk = {
+        "text": "",
+        "tool_use": None,
+        "is_finished": False,
+        "finish_reason": "",
+        "usage": None,
+        "index": 0,
+    }
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=empty_chunk)
