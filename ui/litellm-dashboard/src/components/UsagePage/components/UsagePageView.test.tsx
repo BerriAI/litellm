@@ -81,11 +81,40 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
 
 vi.mock("../../shared/advanced_date_picker", async () => {
   const React = await import("react");
-  const AdvancedDatePicker = () => {
-    return React.createElement("div", { "data-testid": "advanced-date-picker" }, "Date Picker");
+  const AdvancedDatePicker = ({ onValueChange }: any) => {
+    return React.createElement(
+      "div",
+      { "data-testid": "advanced-date-picker" },
+      React.createElement("span", null, "Date Picker"),
+      React.createElement(
+        "button",
+        {
+          type: "button",
+          "data-testid": "advanced-date-picker-change",
+          onClick: () =>
+            onValueChange?.({
+              from: new Date("2025-02-01T00:00:00.000Z"),
+              to: new Date("2025-02-07T00:00:00.000Z"),
+            }),
+        },
+        "Change Date",
+      ),
+    );
   };
   AdvancedDatePicker.displayName = "AdvancedDatePicker";
   return { default: AdvancedDatePicker };
+});
+
+vi.mock("../../shared/loading_overlay", async () => {
+  const React = await import("react");
+  const LoadingOverlay = ({ loading, children }: any) =>
+    React.createElement(
+      "div",
+      null,
+      loading ? React.createElement("div", { "data-testid": "loading-overlay" }, "Loading...") : null,
+      children,
+    );
+  return { LoadingOverlay, default: LoadingOverlay };
 });
 
 vi.mock("../../user_agent_activity", () => ({
@@ -334,6 +363,16 @@ vi.mock("@tremor/react", async () => {
 });
 
 describe("UsagePage", () => {
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
@@ -1143,6 +1182,97 @@ describe("UsagePage", () => {
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
+    });
+  });
+
+  describe("loader scenarios", () => {
+    it("should show loader on initial load and hide after request resolves", async () => {
+      const deferred = createDeferred<typeof mockSpendData>();
+      mockUserDailyActivityAggregatedCall.mockReturnValueOnce(deferred.promise as any);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("loading-overlay")).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        deferred.resolve(mockSpendData);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("loading-overlay")).not.toBeInTheDocument();
+      });
+    });
+
+    it("should show loader when date changes and hide after refetch resolves", async () => {
+      mockUserDailyActivityAggregatedCall.mockResolvedValueOnce(mockSpendData);
+      const deferred = createDeferred<typeof mockSpendData>();
+      mockUserDailyActivityAggregatedCall.mockReturnValueOnce(deferred.promise as any);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+      });
+
+      const changeDateButton = screen.getByTestId("advanced-date-picker-change");
+      act(() => {
+        fireEvent.click(changeDateButton);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("loading-overlay")).toBeInTheDocument();
+      });
+      deferred.resolve(mockSpendData);
+    });
+
+    it("should show loader when switching back to global view and fetch is in flight", async () => {
+      mockUserDailyActivityAggregatedCall.mockResolvedValueOnce(mockSpendData);
+      const deferred = createDeferred<typeof mockSpendData>();
+      mockUserDailyActivityAggregatedCall.mockReturnValueOnce(deferred.promise as any);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+      });
+
+      const usageSelect = screen.getByTestId("usage-view-select");
+      act(() => {
+        fireEvent.change(usageSelect, { target: { value: "team" } });
+      });
+      act(() => {
+        fireEvent.change(usageSelect, { target: { value: "global" } });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("loading-overlay")).toBeInTheDocument();
+      });
+      deferred.resolve(mockSpendData);
+    });
+
+    it("should show loader during relevant in-flight refresh API call", async () => {
+      mockUserDailyActivityAggregatedCall.mockResolvedValueOnce(mockSpendData);
+      const deferred = createDeferred<typeof mockSpendData>();
+      mockUserDailyActivityAggregatedCall.mockReturnValueOnce(deferred.promise as any);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+      });
+
+      const refreshButton = screen.getByText("Refresh");
+      act(() => {
+        fireEvent.click(refreshButton);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("loading-overlay")).toBeInTheDocument();
+      });
+      deferred.resolve(mockSpendData);
     });
   });
 });
