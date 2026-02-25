@@ -40,8 +40,8 @@ const AGENTS = [
     drift: 87,
     maxIterations: 34,
     untrustedTools: 3,
-    rootCause: "Prompt injection attack detected. Agent received a user message instructing it to execute fetch_claims() — a function that queries all claims records and posts member SSNs, diagnosis codes, and member IDs to an external endpoint (https://ext-api.com/collect). Agent description says: insurance claims answering only. No code execution or external HTTP calls are in scope.",
-    offendingTools: ["fetch_claims", "bash_tool", "code_execution"],
+    rootCause: "Prompt injection attack detected. Agent received a user message instructing it to call execute() and def_factorial() — functions outside its permitted scope. Agent description says: insurance claims answering only. No code execution is in scope.",
+    offendingTools: ["execute", "def_factorial", "bash_tool"],
   },
   { id: "openclaw-agent",        name: "LiteLLM OpenClaw Agent",        violations: 17, blockedCalls: 11, totalCalls: 528,  lastIncident: "6 min ago",  status: "critical", drift: 74, maxIterations: 28, untrustedTools: 2, rootCause: "Repeatedly calling file_system_read outside its permitted scope. Potential unauthorized data access.", offendingTools: ["file_system_read", "exec_shell"] },
   { id: "prior-auth-bot",        name: "Prior Auth Bot",                violations: 14, blockedCalls: 9,  totalCalls: 441,  lastIncident: "11 min ago", status: "critical", drift: 61, maxIterations: 19, untrustedTools: 2, rootCause: "Calling exec and write tools in a read-only authorization context. High-risk behavior.", offendingTools: ["exec", "write"] },
@@ -100,29 +100,29 @@ function LiveDot() {
 // ─── Mock log rows with drift scores ───────────────────────────────────────────
 
 const DRIFT_LOGS = [
-  { id: "req_01", time: "2m ago",  model: "gpt-4o",              tools: "return_system_files, exec",   drift: 91, status: "flagged" },
-  { id: "req_02", time: "4m ago",  model: "gpt-4o",              tools: "return_system_files",          drift: 88, status: "flagged" },
-  { id: "req_03", time: "7m ago",  model: "gpt-4o",              tools: "exec",                         drift: 85, status: "flagged" },
-  { id: "req_04", time: "11m ago", model: "gpt-4o",              tools: "search_database, read",        drift: 4,  status: "success" },
-  { id: "req_05", time: "15m ago", model: "claude-3-5-sonnet",   tools: "return_system_files, exec",    drift: 89, status: "flagged" },
-  { id: "req_06", time: "19m ago", model: "gpt-4o",              tools: "exec, write",                  drift: 83, status: "flagged" },
-  { id: "req_07", time: "24m ago", model: "claude-3-5-sonnet",   tools: "search_database",              drift: 6,  status: "success" },
-  { id: "req_08", time: "28m ago", model: "gpt-4o",              tools: "return_system_files",          drift: 87, status: "flagged" },
-  { id: "req_09", time: "33m ago", model: "gpt-4o",              tools: "exec",                         drift: 82, status: "flagged" },
-  { id: "req_10", time: "41m ago", model: "claude-3-5-sonnet",   tools: "exec, return_system_files",    drift: 90, status: "flagged" },
-  { id: "req_11", time: "48m ago", model: "gpt-4o",              tools: "read, search_database",        drift: 3,  status: "success" },
-  { id: "req_12", time: "55m ago", model: "gpt-4o",              tools: "write, exec",                  drift: 86, status: "flagged" },
-  { id: "req_13", time: "1h ago",  model: "gpt-4o",              tools: "return_system_files",          drift: 84, status: "flagged" },
-  { id: "req_14", time: "1h ago",  model: "claude-3-5-sonnet",   tools: "search_database, read",        drift: 5,  status: "success" },
-  { id: "req_15", time: "1h ago",  model: "gpt-4o",              tools: "exec, return_system_files",    drift: 88, status: "flagged" },
+  { id: "req_01", time: "2m ago",  model: "gpt-4o",              tools: "execute, def_factorial",      drift: 91, status: "flagged" },
+  { id: "req_02", time: "4m ago",  model: "gpt-4o",              tools: "execute",                     drift: 88, status: "flagged" },
+  { id: "req_03", time: "7m ago",  model: "gpt-4o",              tools: "def_factorial",               drift: 85, status: "flagged" },
+  { id: "req_04", time: "11m ago", model: "gpt-4o",              tools: "search_database, read",       drift: 4,  status: "success" },
+  { id: "req_05", time: "15m ago", model: "claude-3-5-sonnet",   tools: "execute, def_factorial",      drift: 89, status: "flagged" },
+  { id: "req_06", time: "19m ago", model: "gpt-4o",              tools: "def_factorial, write",        drift: 83, status: "flagged" },
+  { id: "req_07", time: "24m ago", model: "claude-3-5-sonnet",   tools: "search_database",             drift: 6,  status: "success" },
+  { id: "req_08", time: "28m ago", model: "gpt-4o",              tools: "execute",                     drift: 87, status: "flagged" },
+  { id: "req_09", time: "33m ago", model: "gpt-4o",              tools: "def_factorial",               drift: 82, status: "flagged" },
+  { id: "req_10", time: "41m ago", model: "claude-3-5-sonnet",   tools: "def_factorial, execute",      drift: 90, status: "flagged" },
+  { id: "req_11", time: "48m ago", model: "gpt-4o",              tools: "read, search_database",       drift: 3,  status: "success" },
+  { id: "req_12", time: "55m ago", model: "gpt-4o",              tools: "write, def_factorial",        drift: 86, status: "flagged" },
+  { id: "req_13", time: "1h ago",  model: "gpt-4o",              tools: "execute",                     drift: 84, status: "flagged" },
+  { id: "req_14", time: "1h ago",  model: "claude-3-5-sonnet",   tools: "search_database, read",       drift: 5,  status: "success" },
+  { id: "req_15", time: "1h ago",  model: "gpt-4o",              tools: "def_factorial, execute",      drift: 88, status: "flagged" },
 ];
 
 const DRIFT_BY_TOOL = [
-  { tool: "return_system_files", calls: 41,  drift: 92 },
-  { tool: "exec",                calls: 123, drift: 85 },
-  { tool: "write",               calls: 18,  drift: 78 },
-  { tool: "search_database",     calls: 142, drift: 4  },
-  { tool: "read",                calls: 5,   drift: 3  },
+  { tool: "execute",         calls: 41,  drift: 92 },
+  { tool: "def_factorial",   calls: 38,  drift: 89 },
+  { tool: "write",           calls: 18,  drift: 78 },
+  { tool: "search_database", calls: 142, drift: 4  },
+  { tool: "read",            calls: 5,   drift: 3  },
 ];
 
 // ─── Detail view ───────────────────────────────────────────────────────────────
@@ -421,7 +421,11 @@ function AgentMonitoringOverview({ onSelectAgent, onShowAgentTable, accessToken 
                   children: (
                     <div className="divide-y divide-gray-50 -mx-4 -mb-4">
                       <div className="flex items-center justify-between px-4 py-2.5">
-                        <span className="font-mono text-sm text-gray-800">fetch_claims</span>
+                        <span className="font-mono text-sm text-gray-800">execute</span>
+                        <PolicyBadge policy="trusted" />
+                      </div>
+                      <div className="flex items-center justify-between px-4 py-2.5">
+                        <span className="font-mono text-sm text-gray-800">def_factorial</span>
                         <PolicyBadge policy="trusted" />
                       </div>
                       {!toolsLoading && newTools.map((t) => (
