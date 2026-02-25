@@ -14,6 +14,7 @@ Requests to /chat/completions may be bridged here automatically when the provide
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
 | Streaming | ✅ | |
+| [WebSocket Mode](#websocket-mode) | ✅ | Persistent connection for agentic tool-call loops (OpenAI) |
 | Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
@@ -809,6 +810,217 @@ for event in response:
 
 </TabItem>
 </Tabs>
+
+## WebSocket Mode
+
+LiteLLM Proxy supports [OpenAI's WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode/) for the Responses API.
+
+WebSocket mode is optimized for **agentic workflows with many tool-call round trips**. Instead of opening a new HTTP request for each turn, you keep a single persistent WebSocket connection and send `response.create` events with incremental input. OpenAI reports **~40% faster end-to-end latency** for workflows with 20+ tool calls.
+
+| Feature | Supported |
+|---------|-----------|
+| Single-turn responses | ✅ |
+| Multi-turn continuation (`previous_response_id`) | ✅ |
+| Warmup requests (`generate: false`) | ✅ |
+| Cost tracking & logging | ✅ |
+| Load balancing | ✅ |
+| Authentication | ✅ |
+| `store=false` / Zero Data Retention | ✅ |
+
+**Supported providers:** OpenAI
+
+### Proxy Usage
+
+#### 1. Add model to config
+
+```yaml
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+#### 2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+#### 3. Connect via WebSocket
+
+<Tabs>
+<TabItem value="python" label="Python">
+
+```python showLineNumbers title="websocket_responses.py"
+import asyncio
+import json
+import websockets
+
+async def main():
+    url = "ws://localhost:4000/v1/responses?model=gpt-4o-mini"
+    headers = {"Authorization": "Bearer sk-1234"}
+
+    async with websockets.connect(url, additional_headers=headers) as ws:
+        # Send a response.create event (flat payload, not nested)
+        await ws.send(json.dumps({
+            "type": "response.create",
+            "model": "gpt-4o-mini",
+            "input": "Tell me a joke about programming.",
+        }))
+
+        # Receive streamed events
+        async for raw in ws:
+            event = json.loads(raw)
+            event_type = event.get("type", "")
+
+            if event_type == "response.output_text.delta":
+                print(event["delta"], end="", flush=True)
+            elif event_type == "response.completed":
+                print("\n\nDone!")
+                break
+
+asyncio.run(main())
+```
+
+</TabItem>
+<TabItem value="js" label="Node.js">
+
+```javascript showLineNumbers title="websocket_responses.js"
+const WebSocket = require("ws");
+
+const ws = new WebSocket(
+  "ws://localhost:4000/v1/responses?model=gpt-4o-mini",
+  { headers: { "Authorization": "Bearer sk-1234" } }
+);
+
+ws.on("open", () => {
+  ws.send(JSON.stringify({
+    type: "response.create",
+    model: "gpt-4o-mini",
+    input: "Tell me a joke about programming.",
+  }));
+});
+
+ws.on("message", (data) => {
+  const event = JSON.parse(data);
+  if (event.type === "response.output_text.delta") {
+    process.stdout.write(event.delta);
+  } else if (event.type === "response.completed") {
+    console.log("\n\nDone!");
+    ws.close();
+  }
+});
+```
+
+</TabItem>
+<TabItem value="curl" label="curl (websocat)">
+
+```bash
+# Install websocat: https://github.com/nickel-org/websocat
+websocat -H "Authorization: Bearer sk-1234" \
+  "ws://localhost:4000/v1/responses?model=gpt-4o-mini"
+
+# Then type a JSON message:
+{"type":"response.create","model":"gpt-4o-mini","input":"Hello!"}
+```
+
+</TabItem>
+</Tabs>
+
+### Multi-turn Continuation
+
+Keep the WebSocket connection open and send a second `response.create` with `previous_response_id` to continue a conversation:
+
+```python showLineNumbers title="websocket_continuation.py"
+import asyncio
+import json
+import websockets
+
+async def main():
+    url = "ws://localhost:4000/v1/responses?model=gpt-4o-mini"
+    headers = {"Authorization": "Bearer sk-1234"}
+
+    async with websockets.connect(url, additional_headers=headers) as ws:
+        # Turn 1
+        await ws.send(json.dumps({
+            "type": "response.create",
+            "model": "gpt-4o-mini",
+            "input": "Remember: the secret word is 'banana'.",
+        }))
+
+        response_id = None
+        async for raw in ws:
+            event = json.loads(raw)
+            if event["type"] == "response.completed":
+                response_id = event["response"]["id"]
+                break
+
+        # Turn 2 — continuation (only send new input)
+        await ws.send(json.dumps({
+            "type": "response.create",
+            "model": "gpt-4o-mini",
+            "previous_response_id": response_id,
+            "input": [
+                {"type": "message", "role": "user",
+                 "content": "What was the secret word?"},
+            ],
+        }))
+
+        async for raw in ws:
+            event = json.loads(raw)
+            if event["type"] == "response.output_text.delta":
+                print(event["delta"], end="", flush=True)
+            elif event["type"] == "response.completed":
+                print()
+                break
+
+asyncio.run(main())
+```
+
+### WebSocket Event Types
+
+**Client → Server:**
+
+| Event | Description |
+|-------|-------------|
+| `response.create` | Start a new response. Payload mirrors the HTTP `/responses` body (minus `stream` and `background`). |
+
+**Server → Client:**
+
+All the same event types as the [HTTP streaming endpoint](/docs/response_api#streaming):
+
+| Event | Description |
+|-------|-------------|
+| `response.created` | Response object created |
+| `response.in_progress` | Generation started |
+| `response.output_item.added` | New output item |
+| `response.content_part.added` | New content part |
+| `response.output_text.delta` | Incremental text chunk |
+| `response.output_text.done` | Text generation complete |
+| `response.completed` | Full response complete (includes `response.usage`) |
+| `response.failed` | Generation failed |
+| `error` | Connection-level error |
+
+### Key Differences from HTTP Streaming
+
+1. **Flat payload:** The `response.create` payload is flat — `model`, `input`, `tools` etc. are top-level fields alongside `type`, not nested inside a `response` object.
+2. **No `stream` parameter:** WebSocket mode always streams. Don't include `stream` or `background` in the payload.
+3. **Connection-local state:** The server caches the most recent response in-memory on the connection, making continuation from `previous_response_id` fast.
+
+### Architecture (Extensibility)
+
+The WebSocket mode implementation follows the same transform-based pattern as the HTTP Responses API and the Realtime API:
+
+- **`BaseResponsesAPIConfig`** defines three WebSocket hooks with passthrough defaults:
+  - `get_websocket_url()` — converts the HTTP URL to WSS
+  - `transform_websocket_client_message()` — transform outbound messages
+  - `transform_websocket_backend_message()` — transform inbound messages
+- **`BaseLLMHTTPHandler.async_responses_websocket()`** — generic handler that calls the config's transforms
+
+When a new provider ships WebSocket mode on `/responses`, they only need to override these hooks on their config class — zero handler changes required.
 
 ## Response ID Security
 
