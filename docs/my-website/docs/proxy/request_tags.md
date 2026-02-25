@@ -106,7 +106,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 The `tags` field must be an array of strings.
 
 :::info
-When tags are provided via header or request body, they override any tags configured in the model deployment.
+When tags are provided via header or request body, they override any tags configured in the model deployment. If both header and body tags are provided, body tags take precedence.
 :::
 
 ## Set Tags on Keys or Teams
