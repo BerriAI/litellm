@@ -4,7 +4,10 @@ Unit Tests for the max iterations limiter for the proxy.
 Tests that session-scoped iteration counting works correctly:
 - Enforces max_iterations per session_id
 - Different sessions have independent counters
+- Agent-level max_iterations takes priority over key-level
 """
+
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -104,3 +107,50 @@ async def test_max_iterations_different_sessions_independent():
             data={"metadata": {"session_id": "session-B"}},
             call_type="",
         )
+
+
+@pytest.mark.asyncio
+async def test_max_iterations_agent_level_config():
+    """
+    Test that max_iterations from agent config takes priority over key metadata.
+
+    - Agent has max_iterations=2 in litellm_params
+    - Key has max_iterations=100 in metadata
+    - Agent limit (2) should be enforced, not key limit (100)
+    """
+    local_cache = DualCache()
+    handler = _PROXY_MaxIterationsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+    )
+    # Key allows 100 iterations
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test-key-agent", metadata={"max_iterations": 100}
+    )
+
+    # Mock agent registry to return an agent with max_iterations=2
+    mock_agent = MagicMock()
+    mock_agent.litellm_params = {"max_iterations": 2}
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = mock_agent
+
+        # 2 calls succeed (agent limit)
+        for _ in range(2):
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"metadata": {"session_id": "session-agent", "agent_id": "agent-123"}},
+                call_type="",
+            )
+
+        # 3rd call fails (agent limit of 2 exceeded, not key limit of 100)
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=local_cache,
+                data={"metadata": {"session_id": "session-agent", "agent_id": "agent-123"}},
+                call_type="",
+            )
+        assert exc_info.value.status_code == 429

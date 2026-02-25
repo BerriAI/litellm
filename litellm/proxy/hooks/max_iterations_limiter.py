@@ -4,7 +4,11 @@ Max Iterations Limiter for LiteLLM Proxy.
 Enforces a per-session cap on the number of LLM calls an agentic loop can make.
 Callers send a `session_id` with each request (via `x-litellm-session-id` header
 or `metadata.session_id`), and this hook counts calls per session. When the count
-exceeds `max_iterations` (configured in key/team metadata), returns 429.
+exceeds `max_iterations`, returns 429.
+
+max_iterations is resolved in priority order:
+  1. Agent config: agent's litellm_params.max_iterations (looked up via agent_id)
+  2. Key metadata: user_api_key_dict.metadata.max_iterations
 
 Works across multiple proxy instances via DualCache (in-memory + Redis).
 Follows the same pattern as parallel_request_limiter_v3.py.
@@ -51,9 +55,9 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
     """
     Pre-call hook that enforces max_iterations per session.
 
-    Configuration:
-        - max_iterations: set in key metadata via /key/generate or /key/update
-          e.g. metadata={"max_iterations": 25}
+    Configuration (checked in priority order):
+        - Agent-level: agent's litellm_params.max_iterations (via agent registry)
+        - Key-level: key metadata.max_iterations (via /key/generate or /key/update)
         - session_id: sent by caller via x-litellm-session-id header or
           metadata.session_id in request body
 
@@ -100,8 +104,8 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         if session_id is None:
             return None
 
-        # Extract max_iterations from key metadata
-        max_iterations = self._get_max_iterations(user_api_key_dict)
+        # Extract max_iterations: agent config first, then key metadata
+        max_iterations = self._get_max_iterations(data, user_api_key_dict)
         if max_iterations is None:
             return None
 
@@ -149,13 +153,67 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         return None
 
     def _get_max_iterations(
-        self, user_api_key_dict: UserAPIKeyAuth
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth
     ) -> Optional[int]:
-        """Extract max_iterations from key metadata."""
+        """
+        Extract max_iterations, checking agent config first, then key metadata.
+
+        Priority:
+          1. Agent litellm_params.max_iterations (via agent_id in request metadata)
+          2. Key metadata.max_iterations
+        """
+        # 1. Check agent config via agent_id
+        agent_id = self._get_agent_id(data)
+        if agent_id is not None:
+            agent_max = self._get_max_iterations_from_agent(agent_id)
+            if agent_max is not None:
+                return agent_max
+
+        # 2. Fallback to key metadata
         metadata = user_api_key_dict.metadata or {}
         max_iterations = metadata.get("max_iterations")
         if max_iterations is not None:
             return int(max_iterations)
+        return None
+
+    def _get_agent_id(self, data: dict) -> Optional[str]:
+        """Extract agent_id from request metadata."""
+        metadata = data.get("metadata") or {}
+        agent_id = metadata.get("agent_id")
+        if agent_id is not None:
+            return str(agent_id)
+
+        litellm_metadata = data.get("litellm_metadata") or {}
+        agent_id = litellm_metadata.get("agent_id")
+        if agent_id is not None:
+            return str(agent_id)
+
+        return None
+
+    def _get_max_iterations_from_agent(self, agent_id: str) -> Optional[int]:
+        """Look up max_iterations from agent's litellm_params in the registry."""
+        try:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+            )
+
+            agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
+            if agent is None:
+                agent = global_agent_registry.get_agent_by_name(
+                    agent_name=agent_id
+                )
+            if agent is None or agent.litellm_params is None:
+                return None
+
+            max_iterations = agent.litellm_params.get("max_iterations")
+            if max_iterations is not None:
+                return int(max_iterations)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "MaxIterationsHandler: Could not look up agent %s: %s",
+                agent_id,
+                str(e),
+            )
         return None
 
     def _make_cache_key(self, session_id: str) -> str:
