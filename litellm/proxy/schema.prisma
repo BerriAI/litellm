@@ -1051,6 +1051,26 @@ model LiteLLM_PolicyAttachmentTable {
   updated_by       String?
 }
 
+// Global tool registry - auto-discovered from LLM responses; admins set call_policy here
+model LiteLLM_ToolTable {
+  tool_id     String   @id @default(uuid())
+  tool_name   String   @unique   // e.g. "huggingface_remote-mcp__dynamic_space"
+  origin      String?            // MCP server name or "user_defined"
+  call_policy String   @default("untrusted")  // "trusted" | "untrusted" | "dual_llm" | "blocked"
+  call_count  Int      @default(0)            // cumulative number of times this tool was seen
+  assignments Json?    @default("{}")
+  key_hash    String?            // hash of the virtual key that first called this tool
+  team_id     String?            // team that first called this tool
+  key_alias   String?            // human-readable alias of the virtual key
+  created_at  DateTime @default(now())
+  created_by  String?
+  updated_at  DateTime @default(now()) @updatedAt
+  updated_by  String?
+
+  @@index([call_policy])
+  @@index([team_id])
+}
+
 //Unified Access Groups table for storing unified access groups
 model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())

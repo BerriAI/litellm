@@ -5907,6 +5907,82 @@ export const enrichPolicyTemplateStream = async (
   }
 };
 
+export interface UsageAiToolCallEvent {
+  tool_name: string;
+  tool_label: string;
+  arguments: Record<string, string>;
+  status: "running" | "complete" | "error";
+  error?: string;
+}
+
+export const usageAiChatStream = async (
+  accessToken: string,
+  messages: { role: string; content: string }[],
+  model: string,
+  onChunk: (content: string) => void,
+  onDone: () => void,
+  onError?: (error: string) => void,
+  onStatus?: (message: string) => void,
+  onToolCall?: (event: UsageAiToolCallEvent) => void,
+  signal?: AbortSignal,
+) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/usage/ai/chat`
+    : `/usage/ai/chat`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ messages, model }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const event = JSON.parse(line.slice(6));
+        if (event.type === "chunk") {
+          onChunk(event.content);
+        } else if (event.type === "status") {
+          onStatus?.(event.message);
+        } else if (event.type === "tool_call") {
+          onToolCall?.(event as UsageAiToolCallEvent);
+        } else if (event.type === "done") {
+          onDone();
+        } else if (event.type === "error") {
+          onError?.(event.message);
+        }
+      } catch {
+        // skip malformed events
+      }
+    }
+  }
+};
+
 export const createPolicyCall = async (accessToken: string, policyData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/policies` : `/policies`;
@@ -9847,6 +9923,60 @@ export const checkGdprCompliance = async (
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  return response.json();
+};
+
+export interface ToolRow {
+  tool_id: string;
+  tool_name: string;
+  origin?: string;
+  call_policy: string;
+  call_count?: number;
+  assignments?: Record<string, any>;
+  key_hash?: string;
+  team_id?: string;
+  key_alias?: string;
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string;
+  updated_by?: string;
+}
+
+export const fetchToolsList = async (accessToken: string): Promise<ToolRow[]> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/list` : `/v1/tool/list`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(errorData);
+  }
+  const data = await response.json();
+  return data.tools ?? [];
+};
+
+export const updateToolPolicy = async (
+  accessToken: string,
+  toolName: string,
+  callPolicy: string
+): Promise<ToolRow> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/tool/policy` : `/v1/tool/policy`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ tool_name: toolName, call_policy: callPolicy }),
   });
   if (!response.ok) {
     const errorData = await response.text();

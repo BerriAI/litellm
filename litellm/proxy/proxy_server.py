@@ -294,6 +294,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
+    _safe_get_request_headers,
     check_file_size_under_limit,
     get_form_data,
 )
@@ -391,6 +392,7 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
 from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
+from litellm.proxy.management_endpoints.usage_endpoints import router as usage_ai_router
 from litellm.proxy.management_endpoints.project_endpoints import (
     router as project_router,
 )
@@ -408,6 +410,9 @@ from litellm.proxy.management_endpoints.team_endpoints import router as team_rou
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team,
     validate_membership,
+)
+from litellm.proxy.management_endpoints.tool_management_endpoints import (
+    router as tool_management_router,
 )
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
@@ -1768,8 +1773,14 @@ async def update_cache(  # noqa: PLR0915
                     ("{}:spend".format(litellm_proxy_admin_name), increment)
                 )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"An error occurred updating user cache: {str(e)}\n\n{traceback.format_exc()}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update user spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "user_id=%s, response_cost=%s - %s\n%s",
+                user_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE END-USER SPEND ###
@@ -1806,8 +1817,14 @@ async def update_cache(  # noqa: PLR0915
                 existing_spend_obj.spend = new_spend
                 values_to_update_in_cache.append((_id, existing_spend_obj.json()))
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"An error occurred updating end user cache: {str(e)}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update end user spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "end_user_id=%s, response_cost=%s - %s\n%s",
+                end_user_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE TEAM SPEND ###
@@ -1848,8 +1865,14 @@ async def update_cache(  # noqa: PLR0915
                 existing_spend_obj.spend = new_spend
                 values_to_update_in_cache.append((_id, existing_spend_obj))
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"An error occurred updating end user cache: {str(e)}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update team spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "team_id=%s, response_cost=%s - %s\n%s",
+                team_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE TAG SPEND ###
@@ -1894,8 +1917,14 @@ async def update_cache(  # noqa: PLR0915
                     existing_tag_obj.spend = new_spend
                     values_to_update_in_cache.append((cache_key, existing_tag_obj))
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"An error occurred updating tag cache: {str(e)}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update tag spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "tags=%s, response_cost=%s - %s\n%s",
+                tags,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     if token is not None and response_cost is not None:
@@ -10424,7 +10453,7 @@ async def async_queue_request(
         data["proxy_server_request"] = {
             "url": str(request.url),
             "method": request.method,
-            "headers": dict(request.headers),
+            "headers": _safe_get_request_headers(request).copy(),
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
@@ -10445,7 +10474,7 @@ async def async_queue_request(
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
+        _headers = _safe_get_request_headers(request).copy()
         _headers.pop(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
@@ -12844,6 +12873,7 @@ app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
 app.include_router(policy_router)
+app.include_router(usage_ai_router)
 app.include_router(policy_crud_router)
 app.include_router(policy_resolve_router)
 app.include_router(search_tool_management_router)
@@ -12857,6 +12887,7 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
+app.include_router(tool_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)

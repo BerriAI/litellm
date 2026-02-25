@@ -1826,7 +1826,7 @@ class ModelResponse(ModelResponseBase):
             else:
                 usage = usage
         elif stream is None or stream is False:
-            usage = Usage()
+            usage = None  # avoid constructing throwaway Usage; set by convert_to_model_response_object
         if hidden_params:
             self._hidden_params = hidden_params
 
