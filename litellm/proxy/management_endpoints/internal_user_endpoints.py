@@ -374,8 +374,6 @@ async def new_user(
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
-    - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
-    - max_budget: (float|None) Max budget for given user.
 
     Usage Example 
 
