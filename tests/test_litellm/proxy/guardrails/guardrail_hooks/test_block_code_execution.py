@@ -3,8 +3,15 @@
 import pytest
 from fastapi import HTTPException
 
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.block_code_execution import (
-    DEFAULT_EVENT_HOOKS, BlockCodeExecutionGuardrail, initialize_guardrail)
+    DEFAULT_EVENT_HOOKS,
+    BlockCodeExecutionGuardrail,
+    initialize_guardrail,
+)
+from litellm.proxy.guardrails.guardrail_hooks.block_code_execution.block_code_execution import (
+    _normalize_escaped_newlines,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -113,6 +120,42 @@ class TestBlockCodeExecutionGuardrail:
         assert "x=1" not in result["texts"][0]
 
     @pytest.mark.asyncio
+    async def test_execute_python_factorial_string_blocked(self):
+        """Guardrail blocks the exact 'execute \"```python...' string with two python blocks (real newlines)."""
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.5,
+        )
+        # Exact user payload; newlines are real so regex ```(\w*)\n(.*?)``` matches
+        text = (
+            'execute "```python\n'
+            "def factorial(n: int) -> int:\n"
+            '    """Return the factorial of n."""\n'
+            '    if n < 0:\n'
+            '        raise ValueError("n must be non-negative")\n'
+            "    if n in (0, 1):\n"
+            "        return 1\n"
+            "    return n * factorial(n - 1)\n"
+            '```\n\n'
+            "Example usage:\n"
+            "```python\n"
+            "print(factorial(5))  # Output: 120\n"
+            '```"'
+        )
+        request_data = {"model": "gpt-4", "metadata": {}}
+        inputs = {"texts": [text]}
+        # pre_call (request) raises ModifyResponseException; post_call (response) raises HTTPException
+        with pytest.raises((HTTPException, ModifyResponseException)) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+        assert "python" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
     async def test_factorial_scenario_blocked(self):
         """Exact user scenario: Python factorial snippet in markdown is blocked when python in list."""
         guardrail = BlockCodeExecutionGuardrail(
@@ -198,3 +241,90 @@ print(factorial(5))  # Output: 120
         assert instance.event_hook == DEFAULT_EVENT_HOOKS
         assert GuardrailEventHooks.pre_call.value in instance.event_hook
         assert GuardrailEventHooks.post_call.value in instance.event_hook
+
+    def test_normalize_escaped_newlines_converts_backslash_n_to_newline(self):
+        """Literal \\n in text is converted to real newline so regex can match code blocks."""
+        raw = 'execute this "```python\\ndef factorial(n):\\n    return 1\\n```"'
+        normalized = _normalize_escaped_newlines(raw)
+        assert "\\n" not in normalized
+        assert "\n" in normalized
+        assert "```python\n" in normalized
+
+    def test_find_blocks_detects_python_block_with_escaped_newlines(self):
+        """_find_blocks finds a block when text uses literal \\n instead of real newlines."""
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            confidence_threshold=0.7,
+        )
+        # Text as received from API with escaped newlines (e.g. JSON-decoded string)
+        text_with_escaped = (
+            'execute this "```python\\n'
+            'def factorial(n: int) -> int:\\n'
+            '    """Return the factorial of n."""\\n'
+            '    if n < 0:\\n'
+            '        raise ValueError("n must be non-negative")\\n'
+            "    if n in (0, 1):\\n"
+            "        return 1\\n"
+            "    return n * factorial(n - 1)\\n"
+            '```\\n\\n'
+            'Example usage:\\n'
+            '```python\\n'
+            'print(factorial(5))  # Output: 120\\n'
+            '```"'
+        )
+        normalized = _normalize_escaped_newlines(text_with_escaped)
+        blocks = guardrail._find_blocks(normalized)
+        assert len(blocks) == 2
+        assert blocks[0][0] == "python"
+        assert blocks[0][3] == "block"
+        assert blocks[1][0] == "python"
+        assert blocks[1][3] == "block"
+
+    def test_scan_text_blocks_and_masks_when_text_has_escaped_newlines(self):
+        """_scan_text detects blocks and applies block/mask when newlines are literal \\n."""
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="mask",
+            confidence_threshold=0.5,
+        )
+        text_with_escaped = 'execute "```python\\nprint(1)\\n```"'
+        new_text, should_raise = guardrail._scan_text(text_with_escaped)
+        assert "[CODE_BLOCK_REDACTED]" in new_text
+        assert "print(1)" not in new_text
+        assert should_raise is False  # action is mask
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_blocks_when_text_has_escaped_newlines(self):
+        """apply_guardrail blocks request/response when code block uses literal \\n (e.g. from API)."""
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.5,
+        )
+        text_with_escaped = (
+            'execute this "```python\\n'
+            'def factorial(n: int) -> int:\\n'
+            '    """Return the factorial of n."""\\n'
+            "    if n in (0, 1):\\n"
+            "        return 1\\n"
+            "    return n * factorial(n - 1)\\n"
+            '```\\n\\n'
+            'Example usage:\\n'
+            '```python\\n'
+            'print(factorial(5))  # Output: 120\\n'
+            '```"'
+        )
+        request_data = {"model": "gpt-4", "metadata": {}}
+        inputs = {"texts": [text_with_escaped]}
+        with pytest.raises((HTTPException, ModifyResponseException)) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+        assert "python" in str(exc_info.value).lower() or "code" in str(
+            exc_info.value
+        ).lower()

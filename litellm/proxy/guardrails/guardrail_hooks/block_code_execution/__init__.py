@@ -1,6 +1,6 @@
 """Block Code Execution guardrail: blocks or masks fenced code blocks by language."""
 
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union, cast
 
 from litellm.types.guardrails import (GuardrailEventHooks,
                                       SupportedGuardrailIntegrations)
@@ -17,6 +17,22 @@ DEFAULT_EVENT_HOOKS = [
 ]
 
 
+def _get_param(
+    litellm_params: "LitellmParams",
+    guardrail: "Guardrail",
+    key: str,
+    default: Any = None,
+) -> Any:
+    """Get a param from litellm_params, with fallback to raw guardrail litellm_params (for extra fields not on LitellmParams)."""
+    value = getattr(litellm_params, key, default)
+    if value is not None:
+        return value
+    raw = guardrail.get("litellm_params")
+    if isinstance(raw, dict) and key in raw:
+        return raw[key]
+    return default
+
+
 def initialize_guardrail(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
@@ -30,15 +46,25 @@ def initialize_guardrail(
             "Block Code Execution guardrail requires a guardrail_name"
         )
 
-    blocked_languages = getattr(litellm_params, "blocked_languages", None)
+    blocked_languages: Optional[List[str]] = cast(
+        Optional[List[str]],
+        _get_param(litellm_params, guardrail, "blocked_languages"),
+    )
     action = cast(
-        Literal["block", "mask"], getattr(litellm_params, "action", "block")
+        Literal["block", "mask"],
+        _get_param(litellm_params, guardrail, "action", "block"),
     )
     confidence_threshold = float(
-        getattr(litellm_params, "confidence_threshold", 0.7)
+        cast(
+            Union[int, float, str],
+            _get_param(litellm_params, guardrail, "confidence_threshold", 0.5),
+        )
     )
-    mode = getattr(litellm_params, "mode", None)
-    event_hook = mode if mode is not None else DEFAULT_EVENT_HOOKS
+    mode = _get_param(litellm_params, guardrail, "mode")
+    event_hook = cast(
+        Optional[Union[Literal["pre_call", "post_call", "during_call"], List[str]]],
+        mode if mode is not None else DEFAULT_EVENT_HOOKS,
+    )
 
     instance = BlockCodeExecutionGuardrail(
         guardrail_name=guardrail_name,
@@ -46,7 +72,7 @@ def initialize_guardrail(
         action=action,
         confidence_threshold=confidence_threshold,
         event_hook=event_hook,
-        default_on=getattr(litellm_params, "default_on", False),
+        default_on=bool(_get_param(litellm_params, guardrail, "default_on", False)),
     )
     litellm.logging_callback_manager.add_litellm_callback(instance)
     return instance

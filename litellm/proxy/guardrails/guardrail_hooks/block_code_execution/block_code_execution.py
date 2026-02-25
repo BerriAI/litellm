@@ -61,6 +61,20 @@ NON_EXECUTABLE_TAGS: frozenset = frozenset(
 FENCED_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 
 
+def _normalize_escaped_newlines(text: str) -> str:
+    """
+    Replace literal escaped newlines (backslash + n or backslash + r) with real newlines.
+    API/JSON payloads sometimes deliver newlines as the two-character sequence \\n.
+    """
+    if not text:
+        return text
+    # Order matters: replace \r\n first so we don't produce extra \n from \r then \n
+    text = text.replace("\\r\\n", "\n")
+    text = text.replace("\\n", "\n")
+    text = text.replace("\\r", "\n")
+    return text
+
+
 def _normalize_language(tag: str) -> str:
     """Normalize language tag (lowercase, resolve aliases)."""
     tag = (tag or "").strip().lower()
@@ -115,7 +129,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         guardrail_name: Optional[str] = None,
         blocked_languages: Optional[List[str]] = None,
         action: Literal["block", "mask"] = "block",
-        confidence_threshold: float = 0.7,
+        confidence_threshold: float = 0.5,
         event_hook: Optional[
             Union[Literal["pre_call", "post_call", "during_call"], List[str]]
         ] = None,
@@ -123,9 +137,9 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         **kwargs: Any,
     ) -> None:
         # Normalize to type expected by CustomGuardrail
-        _event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks]]
-        ] = None
+        _event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]] = (
+            None
+        )
         if event_hook is not None:
             if isinstance(event_hook, list):
                 _event_hook = [
@@ -158,9 +172,12 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
     def get_config_model() -> Optional[type[GuardrailConfigModel]]:
         from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import \
             BlockCodeExecutionGuardrailConfigModel
+
         return BlockCodeExecutionGuardrailConfigModel
 
-    def _find_blocks(self, text: str) -> List[Tuple[str, str, float, CodeBlockActionTaken]]:
+    def _find_blocks(
+        self, text: str
+    ) -> List[Tuple[str, str, float, CodeBlockActionTaken]]:
         """
         Find all fenced code blocks in text. Returns list of
         (language_tag, block_content, confidence, action_taken).
@@ -196,6 +213,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         """
         if not text:
             return text, False
+        text = _normalize_escaped_newlines(text)
         blocks = self._find_blocks(text)
         if not blocks:
             return text, False
@@ -245,10 +263,10 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         new_text = "".join(parts)
         return new_text, should_raise
 
-    def _raise_block_error(self, language: str, is_output: bool, request_data: dict) -> None:
-        msg = (
-            f"Content blocked: executable code block detected (language: {language})"
-        )
+    def _raise_block_error(
+        self, language: str, is_output: bool, request_data: dict
+    ) -> None:
+        msg = f"Content blocked: executable code block detected (language: {language})"
         if is_output:
             raise HTTPException(
                 status_code=400,
@@ -356,7 +374,10 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                     # Run detection on full accumulated text (streaming: block only, no mask)
                     blocks = self._find_blocks(accumulated)
                     for _tag, _body, confidence, action_taken in blocks:
-                        if action_taken == "block" and confidence >= self.confidence_threshold:
+                        if (
+                            action_taken == "block"
+                            and confidence >= self.confidence_threshold
+                        ):
                             lang = _tag or "unknown"
                             self._raise_block_error(lang, True, request_data)
             yield item

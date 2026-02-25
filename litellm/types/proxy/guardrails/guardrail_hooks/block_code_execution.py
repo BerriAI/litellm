@@ -54,7 +54,7 @@ class BlockCodeExecutionGuardrailConfigModel(GuardrailConfigModel):
         description="'block' raises an error; 'mask' replaces the code block with a placeholder.",
     )
     confidence_threshold: float = Field(
-        default=0.7,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description="Only block or mask when detection confidence >= this value; below threshold, allow or log_only.",
