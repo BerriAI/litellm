@@ -61,6 +61,125 @@ general_settings:
   forward_client_headers_to_llm_api: true
 ```
 
+## Forward LLM Provider Authentication Headers
+
+**New in v1.82+**: By default, LiteLLM strips authentication headers like `x-api-key`, `x-goog-api-key`, and `api-key` from client requests for security (these are typically used to authenticate with the proxy itself). However, you can enable forwarding of these LLM provider authentication headers to allow **Bring Your Own Key (BYOK)** scenarios where clients send their own API keys to the LLM provider.
+
+### Configuration
+
+Add `forward_llm_provider_auth_headers: true` to your `general_settings`:
+
+```yaml
+general_settings:
+  forward_client_headers_to_llm_api: true
+  forward_llm_provider_auth_headers: true  # 👈 Enable BYOK
+```
+
+### Which Headers Are Forwarded
+
+When `forward_llm_provider_auth_headers: true`, the following LLM provider authentication headers are preserved and forwarded:
+
+| Header | Provider | Example |
+|--------|----------|---------|
+| `x-api-key` | Anthropic, Azure AI, Databricks | `x-api-key: sk-ant-api03-...` |
+| `x-goog-api-key` | Google AI Studio | `x-goog-api-key: AIza...` |
+| `api-key` | Azure OpenAI | `api-key: your-azure-key` |
+| `ocp-apim-subscription-key` | Azure APIM | `ocp-apim-subscription-key: your-key` |
+
+:::warning Important Security Note
+The proxy's `Authorization` header (used for proxy authentication) is **never** forwarded to LLM providers, even with this setting enabled. This ensures your proxy authentication remains secure.
+:::
+
+### Use Case: Client-Side API Keys (BYOK)
+
+This feature enables scenarios where:
+1. **Clients bring their own LLM provider API keys** instead of using keys configured in the proxy
+2. **Multi-tenant applications** where each tenant has their own Anthropic/OpenAI account
+3. **Development environments** where developers use their personal API keys through a shared proxy
+
+#### Example: Anthropic BYOK
+
+```yaml
+# proxy_config.yaml
+model_list:
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      # No api_key configured! Will use client's key
+
+general_settings:
+  forward_client_headers_to_llm_api: true
+  forward_llm_provider_auth_headers: true  # Enable BYOK
+```
+
+Client request:
+```bash
+curl -X POST "http://localhost:4000/v1/messages" \
+  -H "Authorization: Bearer sk-proxy-auth-123" \     # Proxy authentication (stripped)
+  -H "x-api-key: sk-ant-api03-YOUR-KEY..." \        # Client's Anthropic key (forwarded!)
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 100
+  }'
+```
+
+#### Example: Google AI Studio BYOK
+
+```yaml
+model_list:
+  - model_name: gemini-pro
+    litellm_params:
+      model: gemini/gemini-1.5-pro
+      # No api_key configured
+
+general_settings:
+  forward_client_headers_to_llm_api: true
+  forward_llm_provider_auth_headers: true
+```
+
+Client request:
+```bash
+curl -X POST "http://localhost:4000/v1/chat/completions" \
+  -H "Authorization: Bearer sk-proxy-auth-123" \
+  -H "x-goog-api-key: AIza..." \
+  -d '{
+    "model": "gemini-pro",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+### Security Considerations
+
+⚠️ **When to Use This Feature:**
+- ✅ Internal tools where you trust all clients
+- ✅ Development/testing environments
+- ✅ Multi-tenant apps with proper client authentication
+- ✅ Scenarios where you want clients to use their own API keys
+
+⚠️ **When NOT to Use:**
+- ❌ Public APIs where you don't trust all clients
+- ❌ When you want centralized billing/cost control
+- ❌ When you need to enforce rate limits at the proxy level
+
+### Backward Compatibility
+
+For backward compatibility, if you have `forward_client_headers_to_llm_api: true` but don't explicitly set `forward_llm_provider_auth_headers`, the behavior is:
+- **Default**: LLM provider auth headers are **NOT** forwarded (safe default)
+- **Explicit `true`**: LLM provider auth headers **ARE** forwarded (BYOK enabled)
+
+```yaml
+# Safe default - auth headers NOT forwarded
+general_settings:
+  forward_client_headers_to_llm_api: true
+
+# BYOK enabled - auth headers ARE forwarded
+general_settings:
+  forward_client_headers_to_llm_api: true
+  forward_llm_provider_auth_headers: true  # 👈 Opt-in required
+```
+
 ## Enable for a Model Group
 
 Add the `forward_client_headers_to_llm_api` setting under `model_group_settings` in your configuration:
