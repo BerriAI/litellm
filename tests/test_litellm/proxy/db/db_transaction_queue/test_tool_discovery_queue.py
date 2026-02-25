@@ -53,13 +53,14 @@ def test_flush_clears_pending(queue):
     assert len(items2) == 0
 
 
-def test_seen_names_persist_across_flushes(queue):
-    """Process-local dedup should prevent re-queuing even after a flush."""
+def test_seen_names_reset_after_flush(queue):
+    """Seen-set is cleared on flush so the same tool can re-enter the next cycle."""
     queue.add_update({"tool_name": "tool_a"})
     queue.flush()
-    queue.add_update({"tool_name": "tool_a"})  # already seen
+    queue.add_update({"tool_name": "tool_a"})  # same tool, new cycle
     items = queue.flush()
-    assert len(items) == 0
+    assert len(items) == 1
+    assert items[0]["tool_name"] == "tool_a"
 
 
 def test_empty_tool_name_ignored(queue):

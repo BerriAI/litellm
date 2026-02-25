@@ -2,8 +2,9 @@
 In-memory buffer for tool registry upserts.
 
 Unlike SpendUpdateQueue (which aggregates increments), ToolDiscoveryQueue
-uses set-deduplication: each unique tool_name is only queued once per pod
-lifetime, so DB upserts stop entirely after warmup.
+uses set-deduplication: each unique tool_name is only queued once per flush
+cycle (~30s). The seen-set is cleared on every flush so that call_count
+increments in subsequent cycles rather than stopping after the first flush.
 """
 
 from typing import List, Set
