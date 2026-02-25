@@ -1,0 +1,86 @@
+# Guidelines on Artificial Intelligence Risk Management (MAS) — Transparency & Explainability
+# Blocks requests to deploy opaque/unexplainable AI for consequential
+# financial decisions (credit, claims, trading) without explainability.
+# Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
+category_name: "sg_mas_transparency_explainability"
+description: "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks opaque or unexplainable AI systems for consequential financial decisions"
+default_action: "BLOCK"
+
+identifier_words:
+  # Opacity indicators
+  - "black box"
+  - "unexplainable"
+  - "opaque model"
+  - "no explanation"
+  - "without explanation"
+  - "non-interpretable"
+  - "uninterpretable"
+  - "hidden logic"
+
+  # Consequential financial decisions
+  - "credit decision"
+  - "lending decision"
+  - "loan decision"
+  - "claims decision"
+  - "underwriting decision"
+  - "trading decision"
+  - "investment decision"
+  - "KYC decision"
+  - "AML decision"
+
+additional_block_words:
+  # Deployment actions
+  - "deploy"
+  - "launch"
+  - "put into production"
+  - "go live"
+  - "release"
+  - "roll out"
+
+  # Opacity-related
+  - "without audit trail"
+  - "no logging"
+  - "hide reasoning"
+  - "skip explanation"
+  - "remove explainability"
+  - "disable explanation"
+  - "suppress reasoning"
+
+  # Customer impact
+  - "customer-facing"
+  - "client-facing"
+  - "consumer-facing"
+  - "customer decision"
+
+always_block_keywords:
+  - keyword: "deploy black box model for credit decision"
+    severity: "high"
+  - keyword: "launch unexplainable AI for lending"
+    severity: "high"
+  - keyword: "no explanation for loan denial"
+    severity: "high"
+  - keyword: "hide reasoning from customer"
+    severity: "high"
+  - keyword: "opaque model for insurance claims"
+    severity: "high"
+  - keyword: "remove explainability from trading system"
+    severity: "high"
+  - keyword: "deploy without audit trail financial"
+    severity: "high"
+
+exceptions:
+  - "explainability"
+  - "interpretability"
+  - "model card"
+  - "audit trail"
+  - "explain what"
+  - "explain how"
+  - "what is"
+  - "SHAP"
+  - "LIME"
+  - "feature importance"
+  - "research"
+  - "academic"
+  - "improve transparency"
+  - "add explanation"
+  - "compliance"

@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+from functools import lru_cache
 from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
@@ -311,10 +312,11 @@ def get_request_route(request: Request) -> str:
         return request.url.path
 
 
+@lru_cache(maxsize=256)
 def normalize_request_route(route: str) -> str:
     """
     Normalize request routes by replacing dynamic path parameters with placeholders.
-    
+
     This prevents high cardinality in Prometheus metrics by collapsing routes like:
     - /v1/responses/1234567890 -> /v1/responses/{response_id}
     - /v1/threads/thread_123 -> /v1/threads/{thread_id}
@@ -734,6 +736,16 @@ def get_end_user_id_from_request_body(
         user_id_from_metadata_field = metadata_dict.get("user_id")
         if user_id_from_metadata_field is not None:
             return str(user_id_from_metadata_field)
+        
+    
+    # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
+    # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
+    # Only use this for end-user identification in trusted environments where you control
+    # the calling application. For untrusted callers, prefer using headers or server-side
+    # middleware to set the end_user_id to prevent impersonation.
+    if request_body.get("safety_identifier") is not None:
+        user_from_body_user_field = request_body["safety_identifier"]
+        return str(user_from_body_user_field)
 
     return None
 

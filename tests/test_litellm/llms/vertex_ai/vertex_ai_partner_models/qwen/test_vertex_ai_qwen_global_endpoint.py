@@ -24,6 +24,30 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 
+@pytest.fixture(autouse=True)
+def clean_vertex_env():
+    """Clear Google/Vertex AI environment variables before each test to prevent test isolation issues."""
+    saved_env = {}
+    env_vars_to_clear = [
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "VERTEXAI_PROJECT",
+        "VERTEX_PROJECT",
+        "VERTEX_LOCATION",
+        "VERTEX_AI_PROJECT",
+    ]
+    for var in env_vars_to_clear:
+        if var in os.environ:
+            saved_env[var] = os.environ[var]
+            del os.environ[var]
+
+    yield
+
+    # Restore saved environment variables
+    for var, value in saved_env.items():
+        os.environ[var] = value
+
+
 class TestQwenGlobalOnlyDetection:
     """Test that Qwen models are correctly identified as global-only."""
 

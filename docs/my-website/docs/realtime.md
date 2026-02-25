@@ -3,11 +3,12 @@ import TabItem from '@theme/TabItem';
 
 # /realtime
 
-Use this to loadbalance across Azure + OpenAI. 
+Use this to loadbalance across Azure + OpenAI + xAI and more. 
 
 Supported Providers:
 - OpenAI
 - Azure
+- xAI ([see full docs](/docs/providers/xai_realtime))
 - Google AI Studio (Gemini)
 - Vertex AI
 - Bedrock
@@ -47,6 +48,21 @@ model_list:
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI Grok Voice Agent">
+
+```yaml
+model_list:
+  - model_name: grok-voice-agent
+    litellm_params:
+      model: xai/grok-4-1-fast-non-reasoning
+      api_key: os.environ/XAI_API_KEY
+    model_info:
+      mode: realtime
+```
+
+**[See full xAI Realtime documentation →](/docs/providers/xai_realtime)**
+
+</TabItem>
 </Tabs>
 
 ### Start proxy 
@@ -69,7 +85,7 @@ const url = "ws://0.0.0.0:4000/v1/realtime?model=openai-gpt-4o-realtime-audio";
 // const url = "wss://my-endpoint-sweden-berri992.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview";
 const ws = new WebSocket(url, {
     headers: {
-        "api-key": `f28ab7b695af4154bc53498e5bdccb07`,
+        "api-key": `sk-1234`,
         "OpenAI-Beta": "realtime=v1",
     },
 });

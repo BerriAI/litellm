@@ -72,6 +72,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
+    _team_member_has_permission,
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
@@ -685,6 +686,7 @@ async def new_team(  # noqa: PLR0915
     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
@@ -705,6 +707,7 @@ async def new_team(  # noqa: PLR0915
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+    - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -760,6 +763,22 @@ async def new_team(  # noqa: PLR0915
                 status_code=400,
                 detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
             )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
+        
+        if data.soft_budget is not None:
+            if data.max_budget is not None:
+                # If max_budget is set, soft_budget must be strictly lower than max_budget
+                if data.soft_budget >= data.max_budget:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({data.max_budget})"
+                        }
+                    )
 
         # Check if license is over limit
         total_teams = await prisma_client.db.litellm_teamtable.count()
@@ -1226,6 +1245,7 @@ async def update_team(   # noqa: PLR0915
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+    - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
@@ -1249,6 +1269,7 @@ async def update_team(   # noqa: PLR0915
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+    - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
@@ -1302,6 +1323,11 @@ async def update_team(   # noqa: PLR0915
                 status_code=400,
                 detail={"error": f"team_member_budget cannot be negative. Received: {data.team_member_budget}"}
             )
+        if data.soft_budget is not None and data.soft_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+            )
 
         existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
             where={"team_id": data.team_id}
@@ -1312,6 +1338,29 @@ async def update_team(   # noqa: PLR0915
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
+        
+        if data.soft_budget is not None:
+            max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
+            if max_budget_to_check is not None:
+                if data.soft_budget >= max_budget_to_check:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"soft_budget ({data.soft_budget}) must be strictly lower than max_budget ({max_budget_to_check})"
+                        }
+                    )
+        
+        if data.max_budget is not None:
+            existing_soft_budget = getattr(existing_team_row, 'soft_budget', None)
+            soft_budget_to_check = data.soft_budget if data.soft_budget is not None else existing_soft_budget
+            if soft_budget_to_check is not None and isinstance(soft_budget_to_check, (int, float)):
+                if data.max_budget <= soft_budget_to_check:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"max_budget ({data.max_budget}) must be strictly greater than soft_budget ({soft_budget_to_check})"
+                        }
+                    )
 
         if (
             data.organization_id is not None and len(data.organization_id) > 0
@@ -3049,12 +3098,7 @@ async def list_available_teams(
         ),
     )
     if available_teams is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "No available teams for user to join. See how to set available teams here: https://docs.litellm.ai/docs/proxy/self_serve#all-settings-for-self-serve--sso-flow"
-            },
-        )
+        return []
 
     # filter out teams that the user is already a member of
     user_info = await prisma_client.db.litellm_usertable.find_unique(
@@ -3928,22 +3972,29 @@ async def get_team_daily_activity(
         t.team_id: {"team_alias": t.team_alias} for t in team_aliases
     }
 
-    # Check if user is team admin for any requested teams
+    # Check if user is team admin or has /team/daily/activity permission
     # If not, filter by user's API keys
     user_api_keys: Optional[List[str]] = None
     if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
-        # Check if user is team admin for any of the teams
-        is_team_admin_for_any = False
+        # Check if user is team admin or has usage view permission for any team
+        has_full_team_view = False
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
             if _is_user_team_admin(
                 user_api_key_dict=user_api_key_dict, team_obj=team_obj
             ):
-                is_team_admin_for_any = True
+                has_full_team_view = True
+                break
+            if _team_member_has_permission(
+                user_api_key_dict=user_api_key_dict,
+                team_obj=team_obj,
+                permission="/team/daily/activity",
+            ):
+                has_full_team_view = True
                 break
 
-        # If user is not a team admin for any team, filter by their API keys
-        if not is_team_admin_for_any:
+        # If user does not have full team view, filter by their API keys
+        if not has_full_team_view:
             # Get all API keys for this user
             user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
                 where={"user_id": user_api_key_dict.user_id}

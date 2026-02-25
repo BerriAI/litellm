@@ -108,6 +108,22 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
     assert result is True
 
 
+def test_virtual_key_mcp_routes_allows_v1_mcp_server():
+    """Regression test for #20325: allow virtual keys to list MCP servers."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["mcp_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/v1/mcp/server",
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 
@@ -199,14 +215,14 @@ def test_virtual_key_llm_api_routes_allows_google_routes(route):
 def test_google_routes_with_dynamic_model_names_recognized_as_llm_api_route(route):
     """
     Test that Google routes with dynamic model names (including custom names) are recognized as LLM API routes.
-    
+
     This test verifies the fix for the issue where routes like:
     /v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent
     were incorrectly classified as "custom admin only route" instead of LLM API routes.
-    
+
     The fix adds pattern matching for Google routes with placeholders like {model_name}.
     """
-    
+
     # Test that the route is recognized as an LLM API route
     assert RouteChecks.is_llm_api_route(route) is True
 
@@ -214,28 +230,28 @@ def test_google_routes_with_dynamic_model_names_recognized_as_llm_api_route(rout
 def test_google_routes_with_dynamic_model_names_accessible_to_internal_users():
     """
     Test that internal users can access Google routes with dynamic model names.
-    
+
     This ensures that routes like /v1beta/models/{model_name}:generateContent
     are properly accessible to internal users and not blocked as admin-only routes.
     """
-    
+
     # Create an internal user object
     user_obj = LiteLLM_UserTable(
         user_id="test_user",
         user_email="test@example.com",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
     )
-    
+
     # Create an internal user API key auth
     valid_token = UserAPIKeyAuth(
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
     )
-    
+
     # Create a mock request
     request = MagicMock(spec=Request)
     request.query_params = {}
-    
+
     # Test that calling Google route with dynamic model name does NOT raise an exception
     try:
         RouteChecks.non_proxy_admin_allowed_routes_check(
@@ -263,11 +279,13 @@ def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
 
     # Test that routes from both groups are allowed
     result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/chat/completions", valid_token=valid_token  # This is in openai_routes
+        route="/chat/completions",
+        valid_token=valid_token,  # This is in openai_routes
     )
 
     result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/user/info", valid_token=valid_token  # This is in info_routes
+        route="/user/info",
+        valid_token=valid_token,  # This is in info_routes
     )
 
     assert result1 is True
@@ -288,11 +306,13 @@ def test_virtual_key_allowed_routes_with_mixed_member_names_and_explicit_routes(
 
     # Test that both info routes and explicit custom route are allowed
     result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/user/info", valid_token=valid_token  # This is in info_routes
+        route="/user/info",
+        valid_token=valid_token,  # This is in info_routes
     )
 
     result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/custom/route", valid_token=valid_token  # This is explicitly listed
+        route="/custom/route",
+        valid_token=valid_token,  # This is explicitly listed
     )
 
     assert result1 is True
@@ -323,7 +343,8 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
     # Test that non-allowed route raises HTTPException
     with pytest.raises(HTTPException) as exc_info:
         RouteChecks.is_virtual_key_allowed_to_call_route(
-            route="/user/info", valid_token=valid_token  # Not in allowed routes
+            route="/user/info",
+            valid_token=valid_token,  # Not in allowed routes
         )
 
     assert exc_info.value.status_code == 403
@@ -372,12 +393,15 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
         },
     }
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
-        mock_registered_routes,
-    ), patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
-        return_value="/",
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
     ):
         # Create a virtual key with llm_api_routes permission
         valid_token = UserAPIKeyAuth(
@@ -421,12 +445,15 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
         },
     }
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
-        mock_registered_routes,
-    ), patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
-        return_value="/",
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
     ):
         # Create a virtual key without llm_api_routes permission
         valid_token = UserAPIKeyAuth(
@@ -442,7 +469,9 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
             )
 
         assert exc_info.value.status_code == 403
-        assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
+        assert "Virtual key is not allowed to call this route" in str(
+            exc_info.value.detail
+        )
 
 
 def test_check_passthrough_route_access_key_metadata_exact_match():
@@ -761,6 +790,46 @@ def test_containers_routes_are_llm_api_routes(route):
     assert RouteChecks.is_llm_api_route(route) is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
+    ],
+)
+def test_rag_routes_are_llm_api_routes(route):
+    """Test that RAG routes are recognized as LLM API routes (internal_user_viewer can access)"""
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+def test_rag_routes_accessible_to_internal_user_viewer():
+    """
+    Test that internal_user_viewer can access RAG routes (/rag/ingest, /rag/query).
+
+    internal_user_viewer should be able to call RAG endpoints like chat/completions
+    since they are LLM API routes. For /rag/ingest, they can only add to existing
+    vector stores (enforced in the endpoint).
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    )
+
+    for route in ["/rag/ingest", "/v1/rag/ingest", "/rag/query", "/v1/rag/query"]:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+            route=route,
+            request=MagicMock(spec=Request),
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 def test_videos_route_accessible_to_internal_users():
     """
     Test that internal users can access the videos routes.
@@ -833,6 +902,7 @@ def test_videos_route_with_virtual_key_llm_api_routes():
             result is True
         ), f"Virtual key with llm_api_routes should be able to access {route}"
 
+
 def test_non_proxy_admin_wildcard_allowed_routes():
     """Test that nonproxy admin users can still use wildcard routes"""
 
@@ -847,7 +917,7 @@ def test_non_proxy_admin_wildcard_allowed_routes():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         allowed_routes=["/scim/*"],
     )
-    
+
     request = MagicMock(spec=Request)
     request.query_params = {}
 
@@ -864,14 +934,14 @@ def test_non_proxy_admin_wildcard_allowed_routes():
 def test_proxy_admin_viewer_can_access_global_spend_tags():
     """
     Test that proxy_admin_viewer can access /global/spend/tags endpoint.
-    
+
     This test verifies the fix for the issue where proxy_admin_viewer was getting
     403 errors when trying to access /global/spend/tags endpoint.
-    
+
     Related: Slack thread from 10/9/2025 - Erik Kristensen reported this issue.
     proxy_admin_viewer role should have access to "view all spend" endpoints.
     """
-    
+
     # Create a proxy admin viewer user object
     user_obj = LiteLLM_UserTable(
         user_id="viewer_user",
@@ -906,14 +976,121 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         )
 
 
+class TestModelsRouteExemptFromDisableLLMEndpoints:
+    """
+    Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
+
+    When DISABLE_LLM_API_ENDPOINTS is set, inference routes like /v1/chat/completions
+    should be blocked, but /models and /v1/models should remain accessible because
+    they are read-only model listing routes needed by the Admin UI.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/new (UI breaks with DISABLE_LLM_ENDPOINTS)
+    """
+
+    def _get_enterprise_route_checks(self):
+        """Import EnterpriseRouteChecks from the local enterprise source file."""
+        import importlib.util
+
+        local_file = os.path.join(
+            os.path.dirname(__file__),
+            "..", "..", "..", "..", "enterprise",
+            "litellm_enterprise", "proxy", "auth", "route_checks.py",
+        )
+        local_file = os.path.abspath(local_file)
+
+        spec = importlib.util.spec_from_file_location(
+            "local_enterprise_route_checks", local_file
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.EnterpriseRouteChecks
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_models_route_allowed_when_llm_api_disabled(self):
+        """Test that /models is allowed even when LLM API routes are disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            # /models should NOT raise - it's exempt
+            EnterpriseRouteChecks.should_call_route("/models")
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_v1_models_route_allowed_when_llm_api_disabled(self):
+        """Test that /v1/models is allowed even when LLM API routes are disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            # /v1/models should NOT raise - it's exempt
+            EnterpriseRouteChecks.should_call_route("/v1/models")
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_chat_completions_still_blocked_when_llm_api_disabled(self):
+        """Test that non-exempt LLM routes like /v1/chat/completions are still blocked"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                EnterpriseRouteChecks.should_call_route("/v1/chat/completions")
+
+            assert exc_info.value.status_code == 403
+            assert "LLM API routes are disabled for this instance." in str(
+                exc_info.value.detail
+            )
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_embeddings_still_blocked_when_llm_api_disabled(self):
+        """Test that /v1/embeddings is still blocked when LLM API routes are disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                EnterpriseRouteChecks.should_call_route("/v1/embeddings")
+
+            assert exc_info.value.status_code == 403
+
+    @patch("litellm.proxy.proxy_server.premium_user", True)
+    def test_should_models_route_allowed_when_llm_api_not_disabled(self):
+        """Test that /models works normally when LLM API routes are not disabled"""
+        EnterpriseRouteChecks = self._get_enterprise_route_checks()
+
+        with patch.object(
+            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
+        ), patch.object(
+            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        ):
+            # Should not raise
+            EnterpriseRouteChecks.should_call_route("/models")
+            EnterpriseRouteChecks.should_call_route("/v1/models")
+
+
 def test_route_in_additional_public_routes_wildcard_match():
     """
     Test that route_in_additonal_public_routes supports wildcard patterns.
     """
     from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
 
-    with patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}), \
-         patch("litellm.proxy.proxy_server.premium_user", True):
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}
+        ),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
         # Wildcard should match subpaths
         assert route_in_additonal_public_routes("/api/users") is True
         assert route_in_additonal_public_routes("/api/users/123") is True
@@ -927,11 +1104,15 @@ def test_route_in_additional_public_routes_exact_match():
     """
     from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
 
-    with patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/health", "/status"]}), \
-         patch("litellm.proxy.proxy_server.premium_user", True):
+    with (
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"public_routes": ["/health", "/status"]},
+        ),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+    ):
         # Exact matches should work
         assert route_in_additonal_public_routes("/health") is True
         assert route_in_additonal_public_routes("/status") is True
         # Non-matching routes should fail
         assert route_in_additonal_public_routes("/other") is False
-        

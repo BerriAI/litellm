@@ -94,8 +94,8 @@ def map_finish_reason(
         return "length"
     elif finish_reason == "tool_use":  # anthropic
         return "tool_calls"
-    elif finish_reason == "content_filtered":
-        return "content_filter"
+    elif finish_reason == "compaction":
+        return "length"
     return finish_reason
 
 

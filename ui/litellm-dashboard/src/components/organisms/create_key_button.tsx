@@ -20,8 +20,9 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import TeamDropdown from "../common_components/team_dropdown";
-import Createuser from "../create_user_button";
+import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -727,15 +728,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <div style={{ padding: "4px 0" }}>
                       <div style={{ fontWeight: 500 }}>Default</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call LLM API + Management routes
+                        Can call AI APIs + Management routes
                       </div>
                     </div>
                   </Option>
-                  <Option value="llm_api" label="LLM API">
+                  <Option value="llm_api" label="AI APIs">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>LLM API</div>
+                      <div style={{ fontWeight: 500 }}>AI APIs</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call only LLM API routes (chat/completions, embeddings, etc.)
+                        Can call only AI API routes (chat/completions, embeddings, etc.)
                       </div>
                     </div>
                   </Option>
@@ -996,6 +997,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                         !premiumUser ? "Premium feature - Upgrade to set prompts by key" : "Select or enter prompts"
                       }
                       options={promptsList.map((name) => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Access Groups{" "}
+                        <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="access_group_ids"
+                    className="mt-4"
+                    help="Select access groups to assign to this key"
+                  >
+                    <AccessGroupSelector
+                      placeholder="Select access groups (optional)"
                     />
                   </Form.Item>
                   <Form.Item
@@ -1342,12 +1360,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       {isCreateUserModalVisible && (
         <Modal
           title="Create New User"
-          visible={isCreateUserModalVisible}
+          open={isCreateUserModalVisible}
           onCancel={() => setIsCreateUserModalVisible(false)}
           footer={null}
           width={800}
         >
-          <Createuser
+          <CreateUserButton
             userID={userID}
             accessToken={accessToken}
             teams={teams}
@@ -1359,7 +1377,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       )}
 
       {apiKey && (
-        <Modal visible={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
+        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
           <Grid numItems={1} className="gap-2 w-full">
             <Title>Save your Key</Title>
             <Col numColSpan={1}>

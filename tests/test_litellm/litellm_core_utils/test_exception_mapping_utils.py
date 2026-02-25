@@ -77,6 +77,15 @@ context_window_test_cases = [
     ("Rate limit reached for requests.", False),
     ("The context is large, but acceptable.", False),
     ("", False),  # Empty string
+    # OpenAI user param length validation - not a context window error
+    (
+        "Invalid 'user': string too long. Expected a string with maximum length 64, but got a string with length 123 instead.",
+        False,
+    ),
+    (
+        '{"error": {"message": "Invalid \'user\': string too long.", "code": "string_above_max_length"}}',
+        False,
+    ),
 ]
 
 

@@ -7,7 +7,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
@@ -132,7 +132,7 @@ async def test_update_daily_spend_with_null_entity_id():
     assert create_data["model"] == "gpt-4"
     assert create_data["custom_llm_provider"] == "openai"
     assert create_data["mcp_namespaced_tool_name"] == ""
-    assert create_data["endpoint"] is None
+    assert create_data["endpoint"] == ""
     assert create_data["prompt_tokens"] == 10
     assert create_data["completion_tokens"] == 20
     assert create_data["spend"] == 0.1
@@ -194,7 +194,7 @@ async def test_update_daily_spend_sorting():
                     "model_group": None,
                     "mcp_namespaced_tool_name": "",
                     "custom_llm_provider": "openai",
-                    "endpoint": None,
+                    "endpoint": "",
                     "prompt_tokens": 10,
                     "completion_tokens": 20,
                     "spend": 0.1,
@@ -757,6 +757,45 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
 
 
 @pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_agent_transaction_calls_common_helper_once():
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-common-helper",
+        "agent_id": "agent-abc",
+        "user": "test-user",
+        "startTime": "2024-01-01T12:00:00",
+        "api_key": "test-key",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "model_group": "gpt-4-group",
+        "prompt_tokens": 12,
+        "completion_tokens": 6,
+        "spend": 0.25,
+        "metadata": '{"usage_object": {}}',
+    }
+
+    writer.daily_agent_spend_update_queue.add_update = AsyncMock()
+    original_common_helper = (
+        writer._common_add_spend_log_transaction_to_daily_transaction
+    )
+    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(
+        wraps=original_common_helper
+    )
+
+    await writer.add_spend_log_transaction_to_daily_agent_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    assert (
+        writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_agent_transaction_skips_when_agent_id_missing():
     """
     Do not queue agent spend updates when agent_id is None.
@@ -839,3 +878,201 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
         assert transaction["api_key"] == "test-key"
         assert transaction["model"] == "gpt-4"
         assert transaction["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
+    """
+    Test that when batch upsert fails, detailed error information is logged.
+    This ensures proper debugging information is available for issues like unique constraint violations.
+    """
+    from litellm._logging import verbose_proxy_logger
+    
+    # Setup
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_batch_context = MagicMock()
+    mock_batch_context.__aenter__ = AsyncMock(return_value=mock_batcher)
+    mock_batcher.litellm_dailyuserspend = mock_table
+    
+    # Make the batch context manager's exit raise an exception
+    # This simulates a batch commit failure (e.g., unique constraint violation)
+    test_exception = Exception("Unique constraint violation")
+    mock_batch_context.__aexit__ = AsyncMock(side_effect=test_exception)
+    mock_prisma_client.db.batch_.return_value = mock_batch_context
+    
+    # Create a transaction
+    daily_spend_transactions = {
+        "test_key": {
+            "user_id": "test-user",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+    }
+    
+    # Create a mock proxy_logging_obj with failure_handler as AsyncMock
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.failure_handler = AsyncMock()
+    
+    # Mock the logger to capture exception calls
+    with patch.object(verbose_proxy_logger, 'exception') as mock_exception_logger:
+        # Call the method and expect it to raise the exception
+        with pytest.raises(Exception, match="Unique constraint violation"):
+            await DBSpendUpdateWriter._update_daily_spend(
+                n_retry_times=0,  # No retries to make test faster
+                prisma_client=mock_prisma_client,
+                proxy_logging_obj=mock_proxy_logging,
+                daily_spend_transactions=daily_spend_transactions,
+                entity_type="user",
+                entity_id_field="user_id",
+                table_name="litellm_dailyuserspend",
+                unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+            )
+        
+        # Verify that exception was logged with detailed information
+        assert mock_exception_logger.called
+        call_args = mock_exception_logger.call_args[0][0]
+        assert "Daily user spend batch upsert failed" in call_args
+        assert "Table: litellm_dailyuserspend" in call_args
+        assert "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint" in call_args
+        assert "Batch size: 1" in call_args
+        assert "Unique constraint violation" in call_args
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_re_raises_exception_after_logging():
+    """
+    Test that when batch upsert fails, the exception is properly re-raised after logging.
+    This ensures that error handling continues to work correctly upstream.
+    """
+    # Setup
+    mock_prisma_client = MagicMock()
+    mock_batcher = MagicMock()
+    mock_table = MagicMock()
+    mock_batch_context = MagicMock()
+    mock_batch_context.__aenter__ = AsyncMock(return_value=mock_batcher)
+    mock_batcher.litellm_dailyuserspend = mock_table
+    
+    # Create a transaction
+    daily_spend_transactions = {
+        "test_key": {
+            "user_id": "test-user",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+    }
+    
+    # Create a custom exception to verify it's re-raised
+    custom_exception = ValueError("Database connection lost")
+    mock_batch_context.__aexit__ = AsyncMock(side_effect=custom_exception)
+    mock_prisma_client.db.batch_.return_value = mock_batch_context
+    
+    # Create a mock proxy_logging_obj with failure_handler as AsyncMock
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.failure_handler = AsyncMock()
+    
+    # Verify the exception is re-raised
+    with pytest.raises(ValueError, match="Database connection lost"):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=0,  # No retries to make test faster
+            prisma_client=mock_prisma_client,
+            proxy_logging_obj=mock_proxy_logging,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+            table_name="litellm_dailyuserspend",
+            unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
+        )
+
+
+@pytest.mark.asyncio
+async def test_commit_key_spend_updates_includes_last_active():
+    """
+    Test that _commit_spend_updates_to_db sets last_active alongside spend
+    when updating the key table.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    # Create mock prisma client with transaction support
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_verificationtoken = MagicMock()
+    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(return_value=AsyncMock(
+        __aenter__=AsyncMock(return_value=mock_batcher),
+        __aexit__=AsyncMock(return_value=False),
+    ))
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    # Also mock the other table batchers to avoid errors
+    mock_batcher.litellm_usertable = MagicMock()
+    mock_batcher.litellm_usertable.update_many = MagicMock()
+    mock_batcher.litellm_teamtable = MagicMock()
+    mock_batcher.litellm_teamtable.update_many = MagicMock()
+    mock_batcher.litellm_organizationtable = MagicMock()
+    mock_batcher.litellm_organizationtable.update_many = MagicMock()
+
+    mock_proxy_logging = MagicMock()
+
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {"hashed_token_abc": 0.05},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+    }
+
+    before_call = datetime.now(timezone.utc)
+
+    with patch(
+        "litellm.proxy.utils._raise_failed_update_spend_exception"
+    ):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=mock_proxy_logging,
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    after_call = datetime.now(timezone.utc)
+
+    # Verify update_many was called on the key table
+    mock_batcher.litellm_verificationtoken.update_many.assert_called_once()
+    call_kwargs = mock_batcher.litellm_verificationtoken.update_many.call_args[1]
+
+    # Verify the where clause targets the correct token
+    assert call_kwargs["where"] == {"token": "hashed_token_abc"}
+
+    # Verify data includes both spend increment and last_active
+    assert call_kwargs["data"]["spend"] == {"increment": 0.05}
+    assert "last_active" in call_kwargs["data"]
+
+    # Verify last_active is a datetime within the expected range
+    last_active = call_kwargs["data"]["last_active"]
+    assert isinstance(last_active, datetime)
+    assert before_call <= last_active <= after_call

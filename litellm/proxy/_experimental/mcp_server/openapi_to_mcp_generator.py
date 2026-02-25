@@ -2,7 +2,9 @@
 This module is used to generate MCP tools from OpenAPI specs.
 """
 
+import asyncio
 import json
+import os
 from pathlib import PurePosixPath
 from typing import Any, Dict, Optional
 from urllib.parse import quote
@@ -45,12 +47,40 @@ def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
 
 
 def load_openapi_spec(filepath: str) -> Dict[str, Any]:
-    """Load OpenAPI specification from JSON file."""
-    with open(filepath, "r") as f:
+    """
+    Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
+    """
+    try:
+        # If we're already inside an event loop, prefer the async function.
+        asyncio.get_running_loop()
+        raise RuntimeError(
+            "load_openapi_spec() was called from within a running event loop. "
+            "Use 'await load_openapi_spec_async(...)' instead."
+        )
+    except RuntimeError as e:
+        # "no running event loop" is fine; other RuntimeErrors we re-raise
+        if "no running event loop" not in str(e).lower():
+            raise
+    return asyncio.run(load_openapi_spec_async(filepath))
+
+async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
+    if filepath.startswith("http://") or filepath.startswith("https://"):
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        # NOTE: do not close shared client if get_async_httpx_client returns a shared singleton.
+        # If it returns a new client each time, consider wrapping it in an async context manager.
+        r = await client.get(filepath)
+        r.raise_for_status()
+        return r.json()
+
+    # fallback: local file
+    # Local filesystem path
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
+    with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def get_base_url(spec: Dict[str, Any]) -> str:
+def get_base_url(spec: Dict[str, Any], spec_path: Optional[str] = None) -> str:
     """Extract base URL from OpenAPI spec."""
     # OpenAPI 3.x
     if "servers" in spec and spec["servers"]:
@@ -60,6 +90,20 @@ def get_base_url(spec: Dict[str, Any]) -> str:
         scheme = spec.get("schemes", ["https"])[0]
         base_path = spec.get("basePath", "")
         return f"{scheme}://{spec['host']}{base_path}"
+    
+    # Fallback: derive base URL from spec_path if it's a URL
+    if spec_path and (spec_path.startswith("http://") or spec_path.startswith("https://")):
+        for suffix in ["/openapi.json", "/openapi.yaml", "/swagger.json", "/swagger.yaml"]:
+            if spec_path.endswith(suffix):
+                base_url = spec_path[:-len(suffix)]
+                verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+                return base_url
+        
+        if spec_path.split("/")[-1].endswith((".json", ".yaml", ".yml")):
+            base_url = "/".join(spec_path.split("/")[:-1])
+            verbose_logger.info(f"No server info in OpenAPI spec. Using derived base URL: {base_url}")
+            return base_url
+    
     return ""
 
 

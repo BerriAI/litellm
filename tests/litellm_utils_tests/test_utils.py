@@ -1065,6 +1065,7 @@ def test_parse_content_for_reasoning(content, expected_reasoning, expected_conte
         ("vertex_ai/gemini-1.5-pro", True),
         ("gemini/gemini-1.5-pro", True),
         ("predibase/llama3-8b-instruct", True),
+        ("databricks/databricks-meta-llama-3-1-70b-instruct", True),
         ("gpt-3.5-turbo", False),
         ("groq/llama-3.3-70b-versatile", False),
     ],
@@ -2347,7 +2348,7 @@ def test_get_valid_models_from_dynamic_api_key():
         check_provider_endpoint=True,
     )
     assert len(valid_models) > 0
-    assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
+    assert "anthropic/claude-sonnet-4-6" in valid_models
 
 
 def test_get_whitelisted_models():

@@ -9,6 +9,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import warnings
@@ -30,6 +31,7 @@ from typing import (
     get_type_hints,
 )
 
+import anyio
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
@@ -47,6 +49,7 @@ from litellm.constants import (
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+    LITELLM_UI_ALLOW_HEADERS,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -328,6 +331,9 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.management_endpoints.access_group_endpoints import (
+    router as access_group_router,
+)
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
@@ -337,7 +343,13 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (
+    _user_has_admin_privileges,
+    admin_can_invite_user,
+)
+from litellm.proxy.management_endpoints.compliance_endpoints import (
+    router as compliance_router,
+)
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
 )
@@ -379,6 +391,9 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
 from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
+from litellm.proxy.management_endpoints.project_endpoints import (
+    router as project_router,
+)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -404,6 +419,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
+from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -426,6 +442,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
 from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
+from litellm.proxy.policy_engine.policy_resolve_endpoints import (
+    router as policy_resolve_router,
+)
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -640,7 +659,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -654,6 +673,7 @@ def cleanup_router_config_variables():
     use_background_health_checks = None
     use_shared_health_check = None
     health_check_interval = None
+    health_check_concurrency = None
     prisma_client = None
 
 
@@ -693,11 +713,12 @@ async def _initialize_shared_aiohttp_session():
     try:
         from aiohttp import ClientSession, TCPConnector
 
-        connector_kwargs = {
+        connector_kwargs: Dict[str, Any] = {
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
-            "enable_cleanup_closed": True,
         }
+        if AIOHTTP_NEEDS_CLEANUP_CLOSED:
+            connector_kwargs["enable_cleanup_closed"] = True
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
@@ -803,7 +824,9 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         verbose_proxy_logger.debug("About to initialize semantic tool filter")
         _config = proxy_config.get_config_state()
         _litellm_settings = _config.get("litellm_settings", {})
-        verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
+        verbose_proxy_logger.debug(
+            f"litellm_settings keys = {list(_litellm_settings.keys())}"
+        )
         await ProxyStartupEvent._initialize_semantic_tool_filter(
             llm_router=llm_router,
             litellm_settings=_litellm_settings,
@@ -857,6 +880,9 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
+    ## [Optional] Initialize Pyroscope continuous profiling (env: LITELLM_ENABLE_PYROSCOPE=true)
+    ProxyStartupEvent._init_pyroscope()
+
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
@@ -881,6 +907,15 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             await prisma_client.db.stop_token_refresh_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping token refresh task: {e}")
+
+    # Shutdown event - stop Prisma DB health watchdog task
+    if prisma_client is not None and hasattr(
+        prisma_client, "stop_db_health_watchdog_task"
+    ):
+        try:
+            await prisma_client.stop_db_health_watchdog_task()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -1044,98 +1079,236 @@ try:
         except FileNotFoundError:
             return False
 
+    def _validate_ui_directory(ui_path: str) -> bool:
+        """
+        Verify UI directory has minimum required structure.
+
+        Checks for:
+        - Directory exists
+        - Has index.html (main entry point)
+        - Has _next directory (Next.js assets)
+
+        Returns True if UI directory appears valid and servable.
+        """
+        if not os.path.isdir(ui_path):
+            return False
+
+        # Must have main index.html
+        if not os.path.exists(os.path.join(ui_path, "index.html")):
+            return False
+
+        # Must have _next directory with Next.js assets
+        next_dir = os.path.join(ui_path, "_next")
+        if not os.path.isdir(next_dir):
+            return False
+
+        return True
+
+    def _is_ui_pre_restructured(ui_dir: str) -> bool:
+        """
+        Detect if UI directory is already pre-restructured and ready to serve.
+
+        Returns True if:
+        1. Marker file .litellm_ui_ready exists (created by Dockerfile), OR
+        2. Restructuring pattern detected (subdirectories with index.html inside)
+
+        This allows skipping copy/restructure operations on read-only filesystems.
+        """
+        if not os.path.isdir(ui_dir):
+            return False
+
+        # Primary signal: marker file created by Dockerfile
+        marker_file = os.path.join(ui_dir, ".litellm_ui_ready")
+        if os.path.exists(marker_file):
+            verbose_proxy_logger.debug(f"Found UI ready marker: {marker_file}")
+            return True
+
+        # Fallback signal: Detect restructuring pattern
+        # After restructuring, routes exist as directories with index.html inside
+        # (e.g., login/index.html instead of login.html)
+        # Check for main index.html first (basic UI structure requirement)
+        if not os.path.exists(os.path.join(ui_dir, "index.html")):
+            return False
+
+        # Look for ANY subdirectory with index.html (proves restructuring happened)
+        # Ignore directories starting with _ (Next.js internals like _next)
+        try:
+            for entry in os.scandir(ui_dir):
+                if entry.is_dir() and not entry.name.startswith("_"):
+                    index_path = os.path.join(entry.path, "index.html")
+                    if os.path.exists(index_path):
+                        # Found at least one restructured route - this proves the pattern
+                        verbose_proxy_logger.debug(
+                            f"Detected restructured UI via pattern: found {entry.name}/index.html"
+                        )
+                        return True
+        except (PermissionError, OSError) as e:
+            verbose_proxy_logger.debug(
+                f"Could not scan {ui_dir} for restructuring detection: {e}"
+            )
+            return False
+
+        # No restructured routes found
+        return False
+
+    def _try_populate_ui_directory(
+        source_path: str, target_path: str
+    ) -> tuple[bool, str]:
+        """
+        Attempt to populate target UI directory from source.
+
+        Returns: (success: bool, error_message: str)
+        """
+        try:
+            os.makedirs(target_path, exist_ok=True)
+            if not _dir_has_content(target_path) and _dir_has_content(source_path):
+                shutil.copytree(
+                    source_path,
+                    target_path,
+                    dirs_exist_ok=True,
+                )
+                verbose_proxy_logger.info(f"Successfully populated UI at {target_path}")
+                return True, ""
+            else:
+                return False, "Source or target directory state invalid"
+        except (PermissionError, OSError) as e:
+            return False, str(e)
+
     # Use a writable runtime UI directory whenever possible.
     # This prevents mutating the packaged UI directory (e.g. site-packages or the repo checkout)
     # and ensures extensionless routes like /ui/login work via <route>/index.html.
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
 
-    # Only use runtime UI path in Docker/non-root environments
-    # In local development, use the packaged UI directly
+    # Determine runtime UI path
+    # Priority: LITELLM_UI_PATH env var > default path based on is_non_root
     if is_non_root:
-        # Use /var/lib/litellm/ui for Docker (more secure than /tmp)
-        runtime_ui_path = "/var/lib/litellm/ui"
+        default_runtime_ui_path = "/var/lib/litellm/ui"
+    else:
+        default_runtime_ui_path = packaged_ui_path
 
-        if _dir_has_content(runtime_ui_path):
+    runtime_ui_path = os.getenv("LITELLM_UI_PATH", default_runtime_ui_path)
+
+    # Validate packaged UI before proceeding
+    if not _validate_ui_directory(packaged_ui_path):
+        verbose_proxy_logger.error(
+            f"Packaged UI at {packaged_ui_path} is invalid or incomplete. "
+            f"UI may not function correctly."
+        )
+
+    # Decision tree for UI path selection:
+    # 1. If runtime path == packaged path: use packaged UI directly
+    # 2. If runtime UI exists and is pre-restructured: use it
+    # 3. If runtime UI exists but not restructured: use it (will restructure later)
+    # 4. If runtime UI missing: try to populate from packaged UI
+    #    4a. If population succeeds: use runtime UI
+    #    4b. If population fails: fall back to packaged UI
+
+    should_use_runtime_path = runtime_ui_path != packaged_ui_path
+
+    if should_use_runtime_path:
+        is_pre_restructured = _is_ui_pre_restructured(runtime_ui_path)
+        has_content = _dir_has_content(runtime_ui_path)
+
+        # Case 2: Runtime UI exists and is ready
+        if has_content and is_pre_restructured:
             verbose_proxy_logger.info(
-                f"Using pre-built UI for non-root Docker: {runtime_ui_path}"
+                f"Using pre-restructured UI at {runtime_ui_path}"
             )
             ui_path = runtime_ui_path
+
+        # Case 3: Runtime UI exists but needs restructuring
+        elif has_content and not is_pre_restructured:
+            verbose_proxy_logger.warning(
+                f"UI at {runtime_ui_path} has content but is not properly restructured. "
+                f"Will attempt to restructure in place."
+            )
+            ui_path = runtime_ui_path
+
+        # Case 4: Runtime UI missing - try to populate
         else:
-            verbose_proxy_logger.error(
-                f"UI not found at {runtime_ui_path}. Attempting to populate it from packaged UI."
-            )
-            verbose_proxy_logger.error(
-                f"Path exists: {os.path.exists(runtime_ui_path)}, Has content: {_dir_has_content(runtime_ui_path)}"
+            verbose_proxy_logger.info(
+                f"UI not found at {runtime_ui_path}. Attempting to populate from packaged UI."
             )
 
-            try:
-                os.makedirs(runtime_ui_path, exist_ok=True)
-                if not _dir_has_content(runtime_ui_path) and _dir_has_content(
-                    packaged_ui_path
-                ):
-                    shutil.copytree(
-                        packaged_ui_path,
-                        runtime_ui_path,
-                        dirs_exist_ok=True,
-                    )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    f"Failed to populate runtime UI directory {runtime_ui_path} from {packaged_ui_path}: {e}"
-                )
+            success, error = _try_populate_ui_directory(
+                packaged_ui_path, runtime_ui_path
+            )
+
+            if success:
+                # Case 4a: Population succeeded
+                ui_path = runtime_ui_path
             else:
-                if _dir_has_content(runtime_ui_path):
-                    verbose_proxy_logger.info(
-                        f"Using populated UI for non-root Docker: {runtime_ui_path}"
-                    )
-                    ui_path = runtime_ui_path
+                # Case 4b: Population failed - fall back to packaged UI
+                verbose_proxy_logger.warning(
+                    f"Failed to populate UI at {runtime_ui_path}: {error}. "
+                    f"Falling back to packaged UI at {packaged_ui_path}. "
+                    f"For read-only deployments, pre-build UI in Dockerfile "
+                    f"or set LITELLM_UI_PATH to a writable emptyDir volume."
+                )
+                ui_path = packaged_ui_path
     else:
-        # Local development: use packaged UI directly, no runtime copy needed
-        verbose_proxy_logger.info(
-            f"Using packaged UI directory for local development: {packaged_ui_path}"
-        )
+        # Case 1: Using packaged UI directly (local development)
+        verbose_proxy_logger.info(f"Using packaged UI directory: {packaged_ui_path}")
         ui_path = packaged_ui_path
-    # Only modify files if a custom server root path is set
+
+    # Validate final UI path
+    if not _validate_ui_directory(ui_path):
+        verbose_proxy_logger.error(
+            f"Selected UI path {ui_path} is invalid or incomplete. UI may not work correctly."
+        )
+
+    # Only modify files if a custom server root path is set AND filesystem is writable
     if server_root_path and server_root_path != "/":
-        # Iterate through files in the UI directory
-        for root, dirs, files in os.walk(ui_path):
-            for filename in files:
-                file_path = os.path.join(root, filename)
-                # Skip binary files and files that don't need path replacement
-                if filename.endswith(
-                    (
-                        ".png",
-                        ".jpg",
-                        ".jpeg",
-                        ".gif",
-                        ".ico",
-                        ".woff",
-                        ".woff2",
-                        ".ttf",
-                        ".eot",
-                    )
-                ):
-                    continue
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
+        # Check if UI path is writable
+        is_writable = os.access(ui_path, os.W_OK)
 
-                    # Replace the asset prefix with the server root path
-                    modified_content = content.replace(
-                        f"{litellm_asset_prefix}",
-                        f"{server_root_path}",
-                    )
+        if not is_writable:
+            verbose_proxy_logger.warning(
+                f"Cannot apply server_root_path replacements to UI at {ui_path}: "
+                f"path is not writable. Ensure server_root_path is '/' or pre-process "
+                f"UI files in Dockerfile with custom server_root_path."
+            )
+        else:
+            # Iterate through files in the UI directory
+            for root, dirs, files in os.walk(ui_path):
+                for filename in files:
+                    file_path = os.path.join(root, filename)
+                    # Skip binary files and files that don't need path replacement
+                    if filename.endswith(
+                        (
+                            ".png",
+                            ".jpg",
+                            ".jpeg",
+                            ".gif",
+                            ".ico",
+                            ".woff",
+                            ".woff2",
+                            ".ttf",
+                            ".eot",
+                        )
+                    ):
+                        continue
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            content = f.read()
 
-                    # Replace the /.well-known/litellm-ui-config with the server root path
-                    modified_content = modified_content.replace(
-                        "/litellm/.well-known/litellm-ui-config",
-                        f"{server_root_path}/.well-known/litellm-ui-config",
-                    )
+                        # Replace the asset prefix with the server root path
+                        modified_content = content.replace(
+                            f"{litellm_asset_prefix}",
+                            f"{server_root_path}",
+                        )
 
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(modified_content)
-                except UnicodeDecodeError:
-                    # Skip binary files that can't be decoded
-                    continue
+                        # Replace the /.well-known/litellm-ui-config with the server root path
+                        modified_content = modified_content.replace(
+                            "/litellm/.well-known/litellm-ui-config",
+                            f"{server_root_path}/.well-known/litellm-ui-config",
+                        )
+
+                        with open(file_path, "w", encoding="utf-8") as f:
+                            f.write(modified_content)
+                    except (UnicodeDecodeError, PermissionError, OSError):
+                        # Skip binary files or files we can't write to
+                        continue
 
     # # Mount the _next directory at the root level
     app.mount(
@@ -1179,14 +1352,22 @@ try:
                     continue
 
     # Handle HTML file restructuring
-    # Always restructure the directory we actually serve.
-    # This is critical for extensionless routes like /ui/login (expects login/index.html).
-    # In development, we restructure directly in _experimental/out.
-    # In non-root Docker, we restructure in /var/lib/litellm/ui.
+    # Only restructure if:
+    # 1. UI is not already pre-restructured
+    # 2. Filesystem is writable
     try:
-        if is_non_root and ui_path == "/var/lib/litellm/ui":
+        is_pre_restructured = _is_ui_pre_restructured(ui_path)
+        is_writable = os.access(ui_path, os.W_OK)
+
+        if is_pre_restructured:
             verbose_proxy_logger.info(
-                f"Skipping runtime UI restructuring for non-root Docker. UI at {ui_path} is pre-restructured."
+                f"Skipping UI restructuring: {ui_path} is already pre-restructured"
+            )
+        elif not is_writable:
+            verbose_proxy_logger.warning(
+                f"Cannot restructure UI at {ui_path}: path is not writable. "
+                f"UI may not work correctly for extensionless routes. "
+                f"Pre-build and restructure UI in Dockerfile for read-only deployments."
             )
         else:
             _restructure_ui_html_files(ui_path)
@@ -1214,6 +1395,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=LITELLM_UI_ALLOW_HEADERS,
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
@@ -1290,7 +1472,9 @@ redis_usage_cache: Optional[
     RedisCache
 ] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[str] = []  # Models that should use native provider background mode instead of polling
+native_background_mode: List[
+    str
+] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -1300,8 +1484,11 @@ use_background_health_checks = None
 use_shared_health_check = None
 use_queue = False
 health_check_interval = None
+health_check_concurrency = None
 health_check_details = None
 health_check_results: Dict[str, Union[int, List[Dict[str, Any]]]] = {}
+background_health_check_loop_active = False
+background_health_check_cycle_seq = 0
 queue: List = []
 litellm_proxy_budget_name = "litellm-proxy-budget"
 litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
@@ -1328,6 +1515,9 @@ celery_fn = None  # Redis Queue for handling requests
 # Global variables for model cost map reload scheduling
 scheduler = None
 last_model_cost_map_reload = None
+
+# Global variable for anthropic beta headers reload scheduling
+last_anthropic_beta_headers_reload = None
 
 
 ### DB WRITER ###
@@ -1746,6 +1936,88 @@ def run_ollama_serve():
         )
 
 
+def _get_process_rss_mb() -> Optional[float]:
+    """
+    Get process RSS memory in MB.
+    On Linux, ru_maxrss is in KB. On macOS, ru_maxrss is in bytes.
+    """
+    try:
+        import resource
+
+        ru_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return float(ru_maxrss) / (1024 * 1024)
+        return float(ru_maxrss) / 1024
+    except Exception:
+        return None
+
+
+def _rss_mb_for_log() -> str:
+    rss_mb = _get_process_rss_mb()
+    if rss_mb is None:
+        return "unknown"
+    return f"{rss_mb:.2f}"
+
+
+async def _run_direct_health_check_with_instrumentation(
+    model_list: list,
+    details: Optional[bool],
+    max_concurrency: Optional[int],
+    instrumentation_context: dict,
+):
+    try:
+        return await perform_health_check(
+            model_list=model_list,
+            details=details,
+            max_concurrency=max_concurrency,
+            instrumentation_context=instrumentation_context,
+        )
+    except TypeError as e:
+        if "instrumentation_context" not in str(e):
+            raise
+        # Backward compatibility for monkeypatched or wrapped callables
+        # that do not accept instrumentation_context.
+        return await perform_health_check(
+            model_list=model_list,
+            details=details,
+            max_concurrency=max_concurrency,
+        )
+
+
+def _schedule_background_health_check_db_save(
+    prisma_client,
+    shared_health_manager,
+    model_list: list,
+    healthy_endpoints: list,
+    unhealthy_endpoints: list,
+):
+    """Fire-and-forget: persist health check results to DB if prisma is available."""
+    if prisma_client is None:
+        return
+    import time as time_module
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _save_background_health_checks_to_db,
+    )
+
+    checked_by = (
+        shared_health_manager.pod_id
+        if shared_health_manager is not None
+        else "background_health_check"
+    )
+    start_time = time_module.time()
+    asyncio.create_task(
+        _save_background_health_checks_to_db(
+            prisma_client,
+            model_list,
+            healthy_endpoints,
+            unhealthy_endpoints,
+            start_time,
+            checked_by=checked_by,
+        )
+    )
+
+
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
@@ -1753,7 +2025,10 @@ async def _run_background_health_check():
     Update health_check_results, based on this.
     Uses shared health check state when Redis is available to coordinate across pods.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details, use_shared_health_check, redis_usage_cache, prisma_client
+    global health_check_results, llm_model_list, health_check_interval
+    global health_check_concurrency, health_check_details, use_shared_health_check
+    global redis_usage_cache, prisma_client
+    global background_health_check_loop_active, background_health_check_cycle_seq
 
     if (
         health_check_interval is None
@@ -1761,6 +2036,24 @@ async def _run_background_health_check():
         or health_check_interval <= 0
     ):
         return
+
+    if background_health_check_loop_active:
+        verbose_proxy_logger.warning(
+            "background_health_check_loop_overlap_detected existing_loop_active=true interval_seconds=%s max_concurrency=%s shared=%s",
+            health_check_interval,
+            health_check_concurrency,
+            use_shared_health_check,
+        )
+    background_health_check_loop_active = True
+    verbose_proxy_logger.info(
+        "background_health_check_loop_started interval_seconds=%s max_concurrency=%s shared=%s details=%s thread_count=%d rss_mb=%s",
+        health_check_interval,
+        health_check_concurrency,
+        use_shared_health_check,
+        health_check_details,
+        threading.active_count(),
+        _rss_mb_for_log(),
+    )
 
     # Initialize shared health check manager if Redis is available and feature is enabled
     shared_health_manager = None
@@ -1777,8 +2070,13 @@ async def _run_background_health_check():
         verbose_proxy_logger.info("Initialized shared health check manager")
 
     while True:
+        background_health_check_cycle_seq += 1
+        cycle_id = f"bg-{background_health_check_cycle_seq}"
+        cycle_start_time = time.monotonic()
+
         # make 1 deep copy of llm_model_list on every health check iteration
         _llm_model_list = copy.deepcopy(llm_model_list) or []
+        model_count_total = len(_llm_model_list)
 
         # filter out models that have disabled background health checks
         _llm_model_list = [
@@ -1786,6 +2084,33 @@ async def _run_background_health_check():
             for m in _llm_model_list
             if not m.get("model_info", {}).get("disable_background_health_check", False)
         ]
+        model_count_enabled = len(_llm_model_list)
+        expected_peak_in_flight = model_count_enabled
+        if (
+            isinstance(health_check_concurrency, int)
+            and health_check_concurrency > 0
+            and model_count_enabled > 0
+        ):
+            expected_peak_in_flight = min(model_count_enabled, health_check_concurrency)
+
+        verbose_proxy_logger.debug(
+            "background_health_check_cycle_start cycle_id=%s model_count_total=%d model_count_enabled=%d interval_seconds=%s max_concurrency=%s expected_peak_in_flight=%d shared=%s thread_count=%d rss_mb=%s",
+            cycle_id,
+            model_count_total,
+            model_count_enabled,
+            health_check_interval,
+            health_check_concurrency,
+            expected_peak_in_flight,
+            shared_health_manager is not None,
+            threading.active_count(),
+            _rss_mb_for_log(),
+        )
+
+        instrumentation_context = {
+            "enabled": True,
+            "source": "proxy_background_loop",
+            "cycle_id": cycle_id,
+        }
 
         # Use shared health check if available, otherwise fall back to direct health check
         # Convert health_check_details to bool for perform_shared_health_check (defaults to True if None)
@@ -1799,19 +2124,31 @@ async def _run_background_health_check():
                     healthy_endpoints,
                     unhealthy_endpoints,
                 ) = await shared_health_manager.perform_shared_health_check(
-                    model_list=_llm_model_list, details=details_bool
+                    model_list=_llm_model_list,
+                    details=details_bool,
+                    max_concurrency=health_check_concurrency,
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=_llm_model_list, details=health_check_details
+                healthy_endpoints, unhealthy_endpoints = (
+                    await _run_direct_health_check_with_instrumentation(
+                        _llm_model_list,
+                        health_check_details,
+                        health_check_concurrency,
+                        instrumentation_context,
+                    )
                 )
         else:
-            healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                model_list=_llm_model_list, details=health_check_details
+            healthy_endpoints, unhealthy_endpoints = (
+                await _run_direct_health_check_with_instrumentation(
+                    _llm_model_list,
+                    health_check_details,
+                    health_check_concurrency,
+                    instrumentation_context,
+                )
             )
 
         # Update the global variable with the health check results
@@ -1819,34 +2156,34 @@ async def _run_background_health_check():
         health_check_results["unhealthy_endpoints"] = unhealthy_endpoints
         health_check_results["healthy_count"] = len(healthy_endpoints)
         health_check_results["unhealthy_count"] = len(unhealthy_endpoints)
+        cycle_duration_ms = (time.monotonic() - cycle_start_time) * 1000
+        verbose_proxy_logger.debug(
+            "background_health_check_cycle_complete cycle_id=%s model_count_enabled=%d healthy_count=%d unhealthy_count=%d duration_ms=%.2f interval_seconds=%s thread_count=%d rss_mb=%s",
+            cycle_id,
+            model_count_enabled,
+            len(healthy_endpoints),
+            len(unhealthy_endpoints),
+            cycle_duration_ms,
+            health_check_interval,
+            threading.active_count(),
+            _rss_mb_for_log(),
+        )
+        if cycle_duration_ms > (health_check_interval * 1000):
+            verbose_proxy_logger.warning(
+                "background_health_check_cycle_duration_exceeded_interval cycle_id=%s duration_ms=%.2f interval_seconds=%s",
+                cycle_id,
+                cycle_duration_ms,
+                health_check_interval,
+            )
 
         # Save background health checks to database (non-blocking)
-        if prisma_client is not None:
-            import time as time_module
-
-            from litellm.proxy.health_endpoints._health_endpoints import (
-                _save_background_health_checks_to_db,
-            )
-
-            # Use pod_id or a system identifier for checked_by if shared health check is enabled
-            checked_by = None
-            if shared_health_manager is not None:
-                checked_by = shared_health_manager.pod_id
-            else:
-                # Use a system identifier for background health checks
-                checked_by = "background_health_check"
-
-            start_time = time_module.time()
-            asyncio.create_task(
-                _save_background_health_checks_to_db(
-                    prisma_client,
-                    _llm_model_list,
-                    healthy_endpoints,
-                    unhealthy_endpoints,
-                    start_time,
-                    checked_by=checked_by,
-                )
-            )
+        _schedule_background_health_check_db_save(
+            prisma_client,
+            shared_health_manager,
+            _llm_model_list,
+            healthy_endpoints,
+            unhealthy_endpoints,
+        )
 
         await asyncio.sleep(health_check_interval)
 
@@ -1862,6 +2199,7 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Dict[str, Any] = {}
+        self._last_semantic_filter_config: Optional[Dict[str, Any]] = None
 
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
@@ -2298,7 +2636,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2640,6 +2978,7 @@ class ProxyConfig:
             store_model_in_db = general_settings.get("store_model_in_db", False)
             if store_model_in_db is None:
                 store_model_in_db = False
+            general_settings["store_model_in_db"] = store_model_in_db
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
@@ -2722,7 +3061,18 @@ class ProxyConfig:
             health_check_interval = general_settings.get(
                 "health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL
             )
+            health_check_concurrency = general_settings.get(
+                "health_check_concurrency", None
+            )
             health_check_details = general_settings.get("health_check_details", True)
+            verbose_proxy_logger.info(
+                "background_health_check_config enabled=%s shared=%s interval_seconds=%s max_concurrency=%s details=%s",
+                use_background_health_checks,
+                use_shared_health_check,
+                health_check_interval,
+                health_check_concurrency,
+                health_check_details,
+            )
 
             ### RBAC ###
             rbac_role_permissions = general_settings.get("role_permissions", None)
@@ -2816,7 +3166,7 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
-                elif k == "health_check_interval":
+                elif k in {"health_check_interval", "health_check_concurrency"}:
                     raise ValueError(
                         f"'{k}' is NOT a valid router_settings parameter. Please move it to 'general_settings'."
                     )
@@ -2979,6 +3329,7 @@ class ProxyConfig:
             alert_types=general_settings.get("alert_types", None),
             alert_to_webhook_url=general_settings.get("alert_to_webhook_url", None),
             alerting_args=general_settings.get("alerting_args", None),
+            alert_type_config=general_settings.get("alert_type_config", None),
             redis_cache=redis_usage_cache,
         )
 
@@ -3246,7 +3597,9 @@ class ProxyConfig:
                 _model_list: list = self.decrypt_model_list_from_db(
                     new_models=models_list
                 )
-                if len(_model_list) > 0:
+                # Only create router if we have models or search_tools to route
+                # Router can function with model_list=[] if search_tools are configured
+                if len(_model_list) > 0 or search_tools:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
                     llm_router = litellm.Router(
                         model_list=_model_list,
@@ -3398,6 +3751,83 @@ class ProxyConfig:
             )
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
+
+    @staticmethod
+    def _parse_router_settings_value(value: Any) -> Optional[dict]:
+        """
+        Parse a router_settings value that may be a dict or a JSON/YAML string.
+
+        Returns a non-empty dict if valid, otherwise None.
+        """
+        if value is None:
+            return None
+
+        parsed: Optional[dict] = None
+        if isinstance(value, dict):
+            parsed = value
+        elif isinstance(value, str):
+            import json
+            try:
+                parsed = yaml.safe_load(value)
+            except (yaml.YAMLError, json.JSONDecodeError):
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+        return None
+
+    async def _get_hierarchical_router_settings(
+        self,
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+        prisma_client: Optional[PrismaClient],
+        proxy_logging_obj: Optional["ProxyLogging"] = None,
+    ) -> Optional[dict]:
+        """
+        Get router_settings in priority order: Key > Team
+
+        Uses the already-cached key object and the cached team lookup
+        (get_team_object) to avoid direct DB queries on the hot path.
+
+        Global router_settings are NOT looked up here — they are already
+        applied to the Router object at config-load / DB-sync time.
+
+        Returns:
+            dict: router_settings, or None if no settings found
+        """
+        # 1. Try key-level router_settings
+        # user_api_key_dict is already the cached/authenticated key object —
+        # no DB call needed.
+        if user_api_key_dict is not None:
+            key_settings = self._parse_router_settings_value(
+                getattr(user_api_key_dict, "router_settings", None)
+            )
+            if key_settings is not None:
+                return key_settings
+
+        # 2. Try team-level router_settings using cached team lookup
+        # get_team_object checks in-memory cache / Redis first, only falls
+        # back to DB on a cache miss.
+        if user_api_key_dict is not None and user_api_key_dict.team_id is not None:
+            try:
+                team_obj = await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                team_settings = self._parse_router_settings_value(
+                    getattr(team_obj, "router_settings", None)
+                )
+                if team_settings is not None:
+                    return team_settings
+            except Exception:
+                # If team lookup fails, no team-level settings available
+                pass
+
+        return None
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3595,7 +4025,7 @@ class ProxyConfig:
         """
         Pull from DB, read general settings value
         """
-        global general_settings
+        global general_settings, store_model_in_db
         if db_general_settings is None:
             return
         _general_settings = dict(db_general_settings)
@@ -3646,6 +4076,19 @@ class ProxyConfig:
             else:
                 # For other types, convert to bool
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        ## STORE MODEL IN DB ##
+        if "store_model_in_db" in _general_settings:
+            value = _general_settings["store_model_in_db"]
+            if value is None:
+                pass  # Don't change store_model_in_db to None; keep current value
+            elif isinstance(value, bool):
+                store_model_in_db = value
+            elif isinstance(value, str):
+                store_model_in_db = value.lower() == "true"
+            else:
+                store_model_in_db = bool(value)
+            general_settings["store_model_in_db"] = store_model_in_db
 
         ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
         if "maximum_spend_logs_retention_period" in _general_settings:
@@ -3909,6 +4352,10 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+        
+        if self._should_load_db_object(object_type="anthropic_beta_headers"):
+            await self._check_and_reload_anthropic_beta_headers(prisma_client=prisma_client)
+        
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="cache_settings"):
@@ -3918,6 +4365,91 @@ class ProxyConfig:
 
             await CacheSettingsManager.init_cache_settings_in_db(
                 prisma_client=prisma_client, proxy_config=self
+            )
+
+        if self._should_load_db_object(object_type="semantic_filter_settings"):
+            await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
+
+    async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize MCP semantic filter settings from database.
+        Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
+        """
+        import json
+
+        import litellm
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+        try:
+            # Load litellm_settings from DB
+            config_record = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "litellm_settings"}
+            )
+
+            if config_record is None or config_record.param_value is None:
+                return
+
+            litellm_settings = config_record.param_value
+            if isinstance(litellm_settings, str):
+                litellm_settings = json.loads(litellm_settings)
+
+            mcp_semantic_filter_config = litellm_settings.get(
+                "mcp_semantic_tool_filter", None
+            )
+
+            if mcp_semantic_filter_config is None:
+                return
+
+            # Check if settings have changed (compare with in-memory state)
+            if hasattr(self, "_last_semantic_filter_config"):
+                if self._last_semantic_filter_config == mcp_semantic_filter_config:
+                    # If hook is missing or router isn't built yet, reinitialize anyway
+                    active_hooks = (
+                        litellm.logging_callback_manager.get_custom_loggers_for_type(
+                            SemanticToolFilterHook
+                        )
+                    )
+                    if active_hooks:
+                        for active_hook in active_hooks:
+                            if isinstance(active_hook, SemanticToolFilterHook):
+                                if (
+                                    active_hook.filter is not None
+                                    and active_hook.filter.tool_router is not None
+                                ):
+                                    verbose_proxy_logger.debug(
+                                        "Semantic filter settings unchanged, skipping reinitialization"
+                                    )
+                                    return
+                    verbose_proxy_logger.info(
+                        "Semantic filter settings unchanged, but hook is missing or uninitialized. Reinitializing."
+                    )
+
+            # Remove old hooks using logging callback manager
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                litellm.callbacks, SemanticToolFilterHook
+            )
+
+            # Initialize new hook if enabled
+            if mcp_semantic_filter_config.get("enabled", False):
+                global llm_router
+                hook = await SemanticToolFilterHook.initialize_from_config(
+                    config=mcp_semantic_filter_config,
+                    llm_router=llm_router,
+                )
+                if hook:
+                    litellm.logging_callback_manager.add_litellm_callback(hook)
+                    verbose_proxy_logger.info(
+                        "MCP Semantic Filter reinitialized from DB"
+                    )
+            else:
+                verbose_proxy_logger.info("MCP Semantic Filter disabled")
+
+            # Store current config for comparison next time
+            self._last_semantic_filter_config = mcp_semantic_filter_config.copy()
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error initializing semantic filter settings from DB: {e}"
             )
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
@@ -4020,6 +4552,9 @@ class ProxyConfig:
                 litellm.model_cost = new_model_cost_map
                 # Invalidate case-insensitive lookup map since model_cost was replaced
                 _invalidate_model_cost_lowercase_map()
+                # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
+                # wildcard patterns like "anthropic/*" include any newly added models.
+                litellm.add_known_models(model_cost_map=new_model_cost_map)
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -4048,6 +4583,107 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
+            )
+
+    async def _check_and_reload_anthropic_beta_headers(self, prisma_client: PrismaClient):
+        """
+        Check if anthropic beta headers config needs to be reloaded based on database configuration.
+        This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
+        """
+        try:
+            # Get anthropic beta headers reload configuration from database
+            config_record = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "anthropic_beta_headers_reload_config"}
+            )
+
+            if config_record is None or config_record.param_value is None:
+                return  # No configuration found, skip reload
+
+            config = config_record.param_value
+            interval_hours = config.get("interval_hours")
+            force_reload = config.get("force_reload", False)
+
+            if interval_hours is None and force_reload is False:
+                return  # No interval configured, skip reload
+
+            current_time = datetime.utcnow()
+
+            # Check if we need to reload based on interval or force reload
+            should_reload = False
+
+            if force_reload:
+                should_reload = True
+                verbose_proxy_logger.info(
+                    "Anthropic beta headers reload triggered by force reload flag"
+                )
+            elif interval_hours is not None:
+                # Use pod's in-memory last reload time
+                global last_anthropic_beta_headers_reload
+                if last_anthropic_beta_headers_reload is not None:
+                    try:
+                        last_reload_time = datetime.fromisoformat(
+                            last_anthropic_beta_headers_reload
+                        )
+                        time_since_last_reload = current_time - last_reload_time
+                        hours_since_last_reload = (
+                            time_since_last_reload.total_seconds() / 3600
+                        )
+
+                        if hours_since_last_reload >= interval_hours:
+                            should_reload = True
+                            verbose_proxy_logger.info(
+                                f"Anthropic beta headers reload triggered by interval. Hours since last reload: {hours_since_last_reload:.2f}, Interval: {interval_hours}"
+                            )
+                    except Exception as e:
+                        verbose_proxy_logger.warning(
+                            f"Error parsing last reload time: {e}"
+                        )
+                        # If we can't parse the last reload time, reload anyway
+                        should_reload = True
+                else:
+                    # No last reload time recorded, reload now
+                    should_reload = True
+                    verbose_proxy_logger.info(
+                        "Anthropic beta headers reload triggered - no previous reload time recorded"
+                    )
+
+            if should_reload:
+                # Perform the reload
+                from litellm.anthropic_beta_headers_manager import (
+                    reload_beta_headers_config,
+                )
+
+                new_config = reload_beta_headers_config()
+
+                # Update pod's in-memory last reload time
+                last_anthropic_beta_headers_reload = current_time.isoformat()
+
+                # Clear force reload flag in database
+                await prisma_client.db.litellm_config.upsert(
+                    where={"param_name": "anthropic_beta_headers_reload_config"},
+                    data={
+                        "create": {
+                            "param_name": "anthropic_beta_headers_reload_config",
+                            "param_value": safe_dumps(
+                                {
+                                    "interval_hours": interval_hours,
+                                    "force_reload": False,
+                                }
+                            ),
+                        },
+                        "update": {"param_value": safe_dumps({"force_reload": False})},
+                    },
+                )
+
+                # Count providers in config
+                provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
+                verbose_proxy_logger.info(
+                    f"Anthropic beta headers config reloaded successfully. Providers: {provider_count}"
+                )
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error in _check_and_reload_anthropic_beta_headers: {str(e)}"
             )
 
     def _get_prompt_spec_for_db_prompt(self, db_prompt):
@@ -4431,11 +5067,16 @@ async def initialize(  # noqa: PLR0915
             elif litellm_log_setting.upper() == "DEBUG":
                 import logging
 
-                from litellm._logging import verbose_proxy_logger, verbose_router_logger
+                from litellm._logging import (
+                    verbose_logger,
+                    verbose_proxy_logger,
+                    verbose_router_logger,
+                )
 
+                verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
                 verbose_router_logger.setLevel(
                     level=logging.DEBUG
-                )  # set router logs to info
+                )  # set router logs to debug
                 verbose_proxy_logger.setLevel(
                     level=logging.DEBUG
                 )  # set proxy logs to debug
@@ -4533,8 +5174,10 @@ async def async_assistants_data_generator(
         if isinstance(e, HTTPException):
             raise e
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Only include the error message, not the traceback.
+            # The traceback is already logged above via verbose_proxy_logger.exception().
+            # Including it in the SSE response leaks internal details to clients.
+            error_msg = str(e)
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),
@@ -4581,7 +5224,7 @@ def _restamp_streaming_chunk_model(
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
     if not model_mismatch_logged and downstream_model != requested_model_from_client:
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.debug(
             "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
             request_data.get("litellm_call_id"),
             requested_model_from_client,
@@ -4625,10 +5268,6 @@ async def async_data_generator(
             response=response,
             request_data=request_data,
         ):
-            verbose_proxy_logger.debug(
-                "async_data_generator: received streaming chunk - {}".format(chunk)
-            )
-
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -4684,8 +5323,10 @@ async def async_data_generator(
         elif isinstance(e, StreamingCallbackError):
             error_msg = str(e)
         else:
-            error_traceback = traceback.format_exc()
-            error_msg = f"{str(e)}\n\n{error_traceback}"
+            # Only include the error message, not the traceback.
+            # The traceback is already logged above via verbose_proxy_logger.exception().
+            # Including it in the SSE response leaks internal details to clients.
+            error_msg = str(e)
 
         proxy_exception = ProxyException(
             message=getattr(e, "message", error_msg),
@@ -4695,6 +5336,20 @@ async def async_data_generator(
         )
         error_returned = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
+    finally:
+        # Close the response stream to release the underlying HTTP connection
+        # back to the connection pool. This prevents pool exhaustion when
+        # clients disconnect mid-stream.
+        # Shield from cancellation so the close awaits can complete.
+        with anyio.CancelScope(shield=True):
+            if hasattr(response, "aclose"):
+                try:
+                    await response.aclose()
+                except BaseException as e:
+                    verbose_proxy_logger.debug(
+                        "async_data_generator: error closing response stream: %s",
+                        e,
+                    )
 
 
 def select_data_generator(
@@ -4769,25 +5424,38 @@ class ProxyStartupEvent:
     ):
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
-        
-        verbose_proxy_logger.info(
-            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
-            f"litellm_settings keys={list(litellm_settings.keys())}"
+
+        mcp_semantic_filter_config = litellm_settings.get(
+            "mcp_semantic_tool_filter", None
         )
-        
-        mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
-        verbose_proxy_logger.debug(f"Semantic filter config: {mcp_semantic_filter_config}")
-        
+
+        # Only proceed if the feature is configured and enabled
+        if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get(
+            "enabled", False
+        ):
+            verbose_proxy_logger.debug(
+                "Semantic tool filter not configured or not enabled, "
+                "skipping initialization"
+            )
+            return
+
+        verbose_proxy_logger.debug(
+            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
+            f"config={mcp_semantic_filter_config}"
+        )
         hook = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
             llm_router=llm_router,
         )
-        
+
         if hook:
-            verbose_proxy_logger.debug("✅ Semantic tool filter hook registered")
+            verbose_proxy_logger.debug("Semantic tool filter hook registered")
             litellm.logging_callback_manager.add_litellm_callback(hook)
         else:
-            verbose_proxy_logger.warning("❌ Semantic tool filter hook not initialized")
+            # Only warn if the feature was configured but failed to initialize
+            verbose_proxy_logger.warning(
+                "Semantic tool filter hook was configured but failed to initialize"
+            )
 
     @classmethod
     def _initialize_jwt_auth(
@@ -4976,6 +5644,31 @@ class ProxyStartupEvent:
         store_model_in_db = (
             get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
         )
+
+        # If store_model_in_db is still False, check DB for override.
+        # This breaks the chicken-and-egg where DB has store_model_in_db=True
+        # but YAML config has False.
+        if store_model_in_db is not True and prisma_client is not None:
+            try:
+                _db_gs_record = await prisma_client.db.litellm_config.find_first(
+                    where={"param_name": "general_settings"}
+                )
+                if _db_gs_record is not None and isinstance(
+                    _db_gs_record.param_value, dict
+                ):
+                    _db_val = _db_gs_record.param_value.get("store_model_in_db")
+                    if _db_val is True or (
+                        isinstance(_db_val, str)
+                        and _db_val.lower() == "true"
+                    ):
+                        store_model_in_db = True
+                        verbose_proxy_logger.info(
+                            "store_model_in_db=True loaded from DB, overriding config/env"
+                        )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "Failed to check DB for store_model_in_db: %s", str(e)
+                )
 
         if store_model_in_db is True:
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
@@ -5335,6 +6028,9 @@ class ProxyStartupEvent:
                     is not True
                 ):
                     await prisma_client.health_check()
+
+                if hasattr(prisma_client, "start_db_health_watchdog_task"):
+                    await prisma_client.start_db_health_watchdog_task()
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
@@ -5365,6 +6061,70 @@ class ProxyStartupEvent:
             prof.start()
             verbose_proxy_logger.debug("Datadog Profiler started......")
 
+    @classmethod
+    def _init_pyroscope(cls):
+        """
+        Optional continuous profiling via Grafana Pyroscope.
+
+        Off by default. Enable with LITELLM_ENABLE_PYROSCOPE=true.
+        Requires: pip install pyroscope-io (optional dependency).
+        When enabled, PYROSCOPE_SERVER_ADDRESS and PYROSCOPE_APP_NAME are required (no defaults).
+        Optional: PYROSCOPE_SAMPLE_RATE (parsed as integer) to set the sample rate.
+        """
+        if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
+            verbose_proxy_logger.debug(
+                "LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
+            )
+            return
+        try:
+            import pyroscope
+
+            app_name = os.getenv("PYROSCOPE_APP_NAME")
+            if not app_name:
+                raise ValueError(
+                    "LITELLM_ENABLE_PYROSCOPE is true but PYROSCOPE_APP_NAME is not set. "
+                    "Set PYROSCOPE_APP_NAME when enabling Pyroscope."
+                )
+            server_address = os.getenv("PYROSCOPE_SERVER_ADDRESS")
+            if not server_address:
+                raise ValueError(
+                    "LITELLM_ENABLE_PYROSCOPE is true but PYROSCOPE_SERVER_ADDRESS is not set. "
+                    "Set PYROSCOPE_SERVER_ADDRESS when enabling Pyroscope."
+                )
+            tags = {}
+            env_name = os.getenv("OTEL_ENVIRONMENT_NAME") or os.getenv(
+                "LITELLM_DEPLOYMENT_ENVIRONMENT",
+            )
+            if env_name:
+                tags["environment"] = env_name
+            sample_rate_env = os.getenv("PYROSCOPE_SAMPLE_RATE")
+            configure_kwargs = {
+                "app_name": app_name,
+                "server_address": server_address,
+                "tags": tags if tags else None,
+            }
+            if sample_rate_env is not None:
+                try:
+                    # pyroscope-io expects sample_rate as an integer
+                    configure_kwargs["sample_rate"] = int(float(sample_rate_env))
+                except (ValueError, TypeError):
+                    raise ValueError(
+                        "PYROSCOPE_SAMPLE_RATE must be a number, got: "
+                        f"{sample_rate_env!r}"
+                    )
+            pyroscope.configure(**configure_kwargs)
+            msg = (
+                f"LiteLLM: Pyroscope profiling started (app_name={app_name}, server_address={server_address}). "
+                f"View CPU profiles at the Pyroscope UI and select application '{app_name}'."
+            )
+            if "sample_rate" in configure_kwargs:
+                msg += f" sample_rate={configure_kwargs['sample_rate']}"
+            verbose_proxy_logger.info(msg)
+        except ImportError:
+            verbose_proxy_logger.warning(
+                "LiteLLM: LITELLM_ENABLE_PYROSCOPE is set but the 'pyroscope-io' package is not installed. "
+                "Pyroscope profiling will not run. Install with: pip install pyroscope-io"
+            )
 
 #### API ENDPOINTS ####
 @router.get(
@@ -6609,6 +7369,7 @@ async def realtime_websocket_endpoint(
             model=model,
             route_type="_arealtime",
         )
+        data["user_api_key_dict"] = user_api_key_dict
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",
@@ -8118,7 +8879,8 @@ async def _apply_search_filter_to_models(
                 # Fetch database models if we need more for the current page
                 if router_models_count < models_needed_for_page:
                     models_to_fetch = min(
-                        models_needed_for_page - router_models_count, db_models_total_count
+                        models_needed_for_page - router_models_count,
+                        db_models_total_count,
                     )
 
                     if models_to_fetch > 0:
@@ -8154,21 +8916,21 @@ async def _apply_search_filter_to_models(
 def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
     """
     Normalize a datetime value to a timezone-aware UTC datetime for sorting.
-    
+
     This function handles:
     - None values: returns None
     - String values: parses ISO format strings and converts to UTC-aware datetime
     - Datetime objects: converts naive datetimes to UTC-aware, and aware datetimes to UTC
-    
+
     Args:
         dt: Datetime value (None, str, or datetime object)
-        
+
     Returns:
         UTC-aware datetime object, or None if input is None or cannot be parsed
     """
     if dt is None:
         return None
-    
+
     if isinstance(dt, str):
         try:
             # Handle ISO format strings, including 'Z' suffix
@@ -8182,14 +8944,14 @@ def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
             return parsed_dt
         except (ValueError, AttributeError):
             return None
-    
+
     if isinstance(dt, datetime):
         # If naive, assume UTC and make it aware
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         # If aware, convert to UTC
         return dt.astimezone(timezone.utc)
-    
+
     return None
 
 
@@ -8209,46 +8971,60 @@ def _sort_models(
     Returns:
         Sorted list of models
     """
-    if not sort_by or sort_by not in ["model_name", "created_at", "updated_at", "costs", "status"]:
+    if not sort_by or sort_by not in [
+        "model_name",
+        "created_at",
+        "updated_at",
+        "costs",
+        "status",
+    ]:
         return all_models
 
     reverse = sort_order.lower() == "desc"
 
     def get_sort_key(model: Dict[str, Any]) -> Any:
         model_info = model.get("model_info", {})
-        
+
         if sort_by == "model_name":
             return model.get("model_name", "").lower()
-        
+
         elif sort_by == "created_at":
             created_at = model_info.get("created_at")
             normalized_dt = _normalize_datetime_for_sorting(created_at)
             if normalized_dt is None:
                 # Put None values at the end for asc, at the start for desc
-                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+                return (
+                    datetime.max.replace(tzinfo=timezone.utc)
+                    if not reverse
+                    else datetime.min.replace(tzinfo=timezone.utc)
+                )
             return normalized_dt
-        
+
         elif sort_by == "updated_at":
             updated_at = model_info.get("updated_at")
             normalized_dt = _normalize_datetime_for_sorting(updated_at)
             if normalized_dt is None:
-                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+                return (
+                    datetime.max.replace(tzinfo=timezone.utc)
+                    if not reverse
+                    else datetime.min.replace(tzinfo=timezone.utc)
+                )
             return normalized_dt
-        
+
         elif sort_by == "costs":
             input_cost = model_info.get("input_cost_per_token", 0) or 0
             output_cost = model_info.get("output_cost_per_token", 0) or 0
             total_cost = input_cost + output_cost
             # Put 0 or None costs at the end for asc, at the start for desc
             if total_cost == 0:
-                return (float("inf") if not reverse else float("-inf"))
+                return float("inf") if not reverse else float("-inf")
             return total_cost
-        
+
         elif sort_by == "status":
             # False (config) comes before True (db) for asc
             db_model = model_info.get("db_model", False)
             return db_model
-        
+
         return None
 
     try:
@@ -8444,9 +9220,7 @@ async def _find_model_by_id(
             )
             if db_model:
                 # Convert database model to router format
-                decrypted_models = proxy_config.decrypt_model_list_from_db(
-                    [db_model]
-                )
+                decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
                 if decrypted_models:
                     found_model = decrypted_models[0]
         except Exception as e:
@@ -8620,13 +9394,13 @@ async def model_info_v2(
         )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
-    
+
     # Append A2A agents to models list
     all_models = await append_agents_to_model_info(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
     )
-    
+
     # Update total count to include agents
     search_total_count = len(all_models)
 
@@ -9469,7 +10243,7 @@ async def model_group_info(
     model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
-    
+
     # Append A2A agents to model groups
     model_groups = await append_agents_to_model_group(
         model_groups=model_groups,
@@ -10106,26 +10880,52 @@ async def get_image():
     default_site_logo = os.path.join(current_dir, "logo.jpg")
 
     is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
 
-    if is_non_root:
-        os.makedirs(assets_dir, exist_ok=True)
+    # Determine assets directory
+    # Priority: LITELLM_ASSETS_PATH env var > default based on is_non_root
+    default_assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
+    assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
 
+    # Try to create assets_dir if it doesn't exist (simple try/except approach)
+    if not os.path.exists(assets_dir):
+        try:
+            os.makedirs(assets_dir, exist_ok=True)
+            verbose_proxy_logger.debug(f"Created assets directory at {assets_dir}")
+        except (PermissionError, OSError) as e:
+            verbose_proxy_logger.warning(
+                f"Cannot create assets directory at {assets_dir}: {e}. "
+                f"Logo caching may not work. Using current directory for assets."
+            )
+            assets_dir = current_dir
+
+    # Determine default logo path
     default_logo = (
-        os.path.join(assets_dir, "logo.jpg") if is_non_root else default_site_logo
+        os.path.join(assets_dir, "logo.jpg")
+        if assets_dir != current_dir
+        else default_site_logo
     )
-    if is_non_root and not os.path.exists(default_logo):
+    if assets_dir != current_dir and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
-    cache_dir = assets_dir if is_non_root else current_dir
+    cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
     cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-
-    # [OPTIMIZATION] Check if the cached image exists first
-    if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
 
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
+
+    # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
+    if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
+        if os.path.exists(logo_path):
+            return FileResponse(logo_path, media_type="image/jpeg")
+        # Custom path doesn't exist — fall back to default
+        verbose_proxy_logger.warning(
+            f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
+        )
+        logo_path = default_logo
+
+    # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
+    if os.path.exists(cache_path):
+        return FileResponse(cache_path, media_type="image/jpeg")
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
@@ -10156,6 +10956,81 @@ async def get_image():
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
         return FileResponse(logo_path, media_type="image/jpeg")
+
+
+@app.get("/get_favicon", include_in_schema=False)
+async def get_favicon():
+    """Get custom favicon for the admin UI."""
+    from fastapi.responses import Response
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    default_favicon = os.path.join(
+        current_dir, "_experimental", "out", "favicon.ico"
+    )
+
+    favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
+
+    if not favicon_url:
+        if os.path.exists(default_favicon):
+            return FileResponse(default_favicon, media_type="image/x-icon")
+        raise HTTPException(
+            status_code=404, detail="Default favicon not found"
+        )
+
+    if favicon_url.startswith(("http://", "https://")):
+        try:
+            from litellm.llms.custom_httpx.http_handler import (
+                get_async_httpx_client,
+            )
+            from litellm.types.llms.custom_http import httpxSpecialProvider
+
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
+            response = await async_client.get(favicon_url)
+            if response.status_code == 200:
+                content_type = response.headers.get(
+                    "content-type", "image/x-icon"
+                )
+                return Response(
+                    content=response.content,
+                    media_type=content_type,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "Failed to fetch favicon from %s: status %s",
+                    favicon_url,
+                    response.status_code,
+                )
+                if os.path.exists(default_favicon):
+                    return FileResponse(
+                        default_favicon, media_type="image/x-icon"
+                    )
+                raise HTTPException(
+                    status_code=404, detail="Favicon not found"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Error downloading favicon from %s: %s", favicon_url, e
+            )
+            if os.path.exists(default_favicon):
+                return FileResponse(
+                    default_favicon, media_type="image/x-icon"
+                )
+            raise HTTPException(
+                status_code=404, detail="Favicon not found"
+            )
+    else:
+        if os.path.exists(favicon_url):
+            return FileResponse(favicon_url, media_type="image/x-icon")
+        if os.path.exists(default_favicon):
+            return FileResponse(default_favicon, media_type="image/x-icon")
+        raise HTTPException(
+            status_code=404, detail="Favicon not found"
+        )
 
 
 #### INVITATION MANAGEMENT ####
@@ -10195,7 +11070,17 @@ async def new_invitation(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Allow proxy admins and org/team admins (admin status from DB via get_user_object)
+        has_access = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or await _user_has_admin_privileges(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )
+        if not has_access:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -10205,6 +11090,23 @@ async def new_invitation(
                     )
                 },
             )
+
+        # Org/team admins can only invite users within their org/team
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            can_invite = await admin_can_invite_user(
+                target_user_id=data.user_id,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if not can_invite:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "You can only create invitations for users in your organization or team."
+                    },
+                )
 
         response = await create_invitation_for_user(
             data=data,
@@ -10358,7 +11260,16 @@ async def invitation_delete(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Proxy admins can delete any invitation; org admins only their own
+    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_other_admin = await _user_has_admin_privileges(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    if not is_proxy_admin and not is_other_admin:
         raise HTTPException(
             status_code=400,
             detail={
@@ -10368,6 +11279,24 @@ async def invitation_delete(
                 )
             },
         )
+
+    # Org admins can only delete invitations they created
+    if is_other_admin and not is_proxy_admin:
+        invitation = await prisma_client.db.litellm_invitationlink.find_unique(
+            where={"id": data.invitation_id}
+        )
+        if invitation is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invitation id does not exist in the database."},
+            )
+        if invitation.created_by != user_api_key_dict.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Organization admins can only delete invitations they created."
+                },
+            )
 
     response = await prisma_client.db.litellm_invitationlink.delete(
         where={"id": data.invitation_id}
@@ -10731,8 +11660,13 @@ async def get_config_list(
         "max_request_size_mb": {"type": "Integer"},
         "max_response_size_mb": {"type": "Integer"},
         "pass_through_endpoints": {"type": "PydanticModel"},
+        "store_model_in_db": {"type": "Boolean"},
         "store_prompts_in_spend_logs": {"type": "Boolean"},
         "maximum_spend_logs_retention_period": {"type": "String"},
+        "mcp_internal_ip_ranges": {"type": "List"},
+        "mcp_trusted_proxy_ranges": {"type": "List"},
+        "always_include_stream_usage": {"type": "Boolean"},
+        "forward_client_headers_to_llm_api": {"type": "Boolean"},
     }
 
     return_val = []
@@ -10802,11 +11736,15 @@ async def get_config_list(
                 elif field_name in general_settings:
                     _stored_in_db = False
 
+                _field_value = general_settings.get(field_name, None)
+                if _field_value is None and field_name in db_general_settings_dict:
+                    _field_value = db_general_settings_dict[field_name]
+
                 _response_obj = ConfigList(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=general_settings.get(field_name, None),
+                    field_value=_field_value,
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
@@ -11216,6 +12154,9 @@ async def reload_model_cost_map(
         litellm.model_cost = new_model_cost_map
         # Invalidate case-insensitive lookup map since model_cost was replaced
         _invalidate_model_cost_lowercase_map()
+        # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
+        # wildcard patterns like "anthropic/*" include any newly added models.
+        litellm.add_known_models(model_cost_map=new_model_cost_map)
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
@@ -11470,6 +12411,345 @@ async def get_model_cost_map_reload_status(
         )
 
 
+@router.get(
+    "/model/cost_map/source",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def get_model_cost_map_source(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Returns information about where the current model cost/pricing data was loaded from.
+
+    Response fields:
+    - source: "local" (bundled backup) or "remote" (fetched from URL)
+    - url: the remote URL that was attempted (null when env-forced local)
+    - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
+    - fallback_reason: human-readable reason why remote failed (null on success)
+    - model_count: number of models in the currently loaded cost map
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map_source_info,
+        )
+
+        source_info = get_model_cost_map_source_info()
+        model_count = len(litellm.model_cost) if litellm.model_cost else 0
+
+        return {
+            **source_info,
+            "model_count": model_count,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to get model cost map source info: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get model cost map source info: {str(e)}",
+        )
+
+
+#### ANTHROPIC BETA HEADERS RELOAD ENDPOINTS ####
+
+
+@router.post(
+    "/reload/anthropic_beta_headers",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def reload_anthropic_beta_headers(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Manually reload the Anthropic beta headers configuration from the remote source.
+    This will fetch fresh configuration from the anthropic_beta_headers_config.json file.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
+        # Immediately reload the beta headers config in the current pod
+        from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+        new_config = reload_beta_headers_config()
+
+        # Update pod's in-memory last reload time
+        global last_anthropic_beta_headers_reload
+        current_time = datetime.utcnow()
+        last_anthropic_beta_headers_reload = current_time.isoformat()
+
+        # Set force reload flag in database for other pods
+        await prisma_client.db.litellm_config.upsert(
+            where={"param_name": "anthropic_beta_headers_reload_config"},
+            data={
+                "create": {
+                    "param_name": "anthropic_beta_headers_reload_config",
+                    "param_value": safe_dumps(
+                        {"interval_hours": None, "force_reload": True}
+                    ),
+                },
+                "update": {"param_value": safe_dumps({"force_reload": True})},
+            },
+        )
+
+        provider_count = sum(1 for k in new_config.keys() if k not in ["provider_aliases", "description"])
+        verbose_proxy_logger.info(
+            f"Anthropic beta headers config reloaded successfully in current pod. Providers: {provider_count}"
+        )
+
+        return {
+            "message": f"Anthropic beta headers configuration reloaded successfully! {provider_count} providers updated.",
+            "status": "success",
+            "providers_count": provider_count,
+            "timestamp": current_time.isoformat(),
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to reload anthropic beta headers: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to reload anthropic beta headers: {str(e)}"
+        )
+
+
+@router.post(
+    "/schedule/anthropic_beta_headers_reload",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def schedule_anthropic_beta_headers_reload(
+    hours: int,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Schedule periodic reload of the Anthropic beta headers configuration.
+    This will create a background job that reloads the configuration every specified hours.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    if hours <= 0:
+        raise HTTPException(status_code=400, detail="Hours must be greater than 0")
+
+    try:
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
+        # Update database with new reload configuration
+        await prisma_client.db.litellm_config.upsert(
+            where={"param_name": "anthropic_beta_headers_reload_config"},
+            data={
+                "create": {
+                    "param_name": "anthropic_beta_headers_reload_config",
+                    "param_value": safe_dumps(
+                        {"interval_hours": hours, "force_reload": False}
+                    ),
+                },
+                "update": {
+                    "param_value": safe_dumps(
+                        {"interval_hours": hours, "force_reload": False}
+                    )
+                },
+            },
+        )
+
+        verbose_proxy_logger.info(
+            f"Anthropic beta headers reload scheduled for every {hours} hours"
+        )
+
+        return {
+            "message": f"Anthropic beta headers reload scheduled for every {hours} hours",
+            "status": "success",
+            "interval_hours": hours,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to schedule anthropic beta headers reload: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to schedule anthropic beta headers reload: {str(e)}",
+        )
+
+
+@router.delete(
+    "/schedule/anthropic_beta_headers_reload",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def cancel_anthropic_beta_headers_reload(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Cancel the scheduled periodic reload of the Anthropic beta headers configuration.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500, detail="Database connection not available"
+            )
+
+        # Remove reload configuration from database
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
+        )
+
+        verbose_proxy_logger.info("Anthropic beta headers reload schedule cancelled")
+
+        return {
+            "message": "Anthropic beta headers reload schedule cancelled",
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to cancel anthropic beta headers reload: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to cancel anthropic beta headers reload: {str(e)}"
+        )
+
+
+@router.get(
+    "/schedule/anthropic_beta_headers_reload/status",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def get_anthropic_beta_headers_reload_status(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+
+    Get the status of the scheduled Anthropic beta headers reload job.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+
+    try:
+        global prisma_client, last_anthropic_beta_headers_reload
+
+        verbose_proxy_logger.info(
+            f"Checking anthropic beta headers reload status. Last reload: {last_anthropic_beta_headers_reload}"
+        )
+
+        if prisma_client is None:
+            verbose_proxy_logger.info("No database connection, returning not scheduled")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        # Get reload configuration from database
+        config_record = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "anthropic_beta_headers_reload_config"}
+        )
+
+        if config_record is None or config_record.param_value is None:
+            verbose_proxy_logger.info("No anthropic beta headers reload configuration found")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        config = config_record.param_value
+        interval_hours = config.get("interval_hours")
+
+        if interval_hours is None:
+            verbose_proxy_logger.info("No interval configured, returning not scheduled")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None,
+            }
+
+        current_time = datetime.utcnow()
+        next_run = None
+
+        # Use pod's in-memory last reload time
+        if last_anthropic_beta_headers_reload is not None:
+            try:
+                last_reload_time = datetime.fromisoformat(last_anthropic_beta_headers_reload)
+                time_since_last_reload = current_time - last_reload_time
+                hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
+
+                if hours_since_last_reload < interval_hours:
+                    next_run = (
+                        last_reload_time + timedelta(hours=interval_hours)
+                    ).isoformat()
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Error parsing last reload time: {e}")
+
+        return {
+            "scheduled": True,
+            "interval_hours": interval_hours,
+            "last_run": last_anthropic_beta_headers_reload,
+            "next_run": next_run,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Failed to get anthropic beta headers reload status: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get anthropic beta headers reload status: {str(e)}",
+        )
+
+
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
@@ -11544,6 +12824,7 @@ app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
 app.include_router(anthropic_skills_router)
+app.include_router(evals_router)
 app.include_router(claude_code_marketplace_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
@@ -11555,6 +12836,7 @@ app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(scim_router)
 app.include_router(organization_router)
+app.include_router(project_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
@@ -11563,6 +12845,7 @@ app.include_router(analytics_router)
 app.include_router(guardrails_router)
 app.include_router(policy_router)
 app.include_router(policy_crud_router)
+app.include_router(policy_resolve_router)
 app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
@@ -11582,7 +12865,9 @@ app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_endpoints_router)
+app.include_router(compliance_router)
 app.include_router(a2a_router)
+app.include_router(access_group_router)
 ########################################################
 # MCP Server
 ########################################################
@@ -11600,9 +12885,13 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
         from litellm.types.mcp import MCPAuth
 
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
+            mcp_server_name, client_ip=client_ip
+        )
         if mcp_server is None:
             raise HTTPException(
                 status_code=404, detail=f"MCP server '{mcp_server_name}' not found"

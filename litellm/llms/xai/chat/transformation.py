@@ -1,20 +1,28 @@
-from typing import List, Optional, Tuple
+from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import XAI_API_BASE
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, ModelResponse, Usage, PromptTokensDetailsWrapper
+from litellm.types.utils import (
+    Choices,
+    ModelResponse,
+    ModelResponseStream,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-
-XAI_API_BASE = "https://api.x.ai/v1"
+from ...openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 
 
 class XAIChatConfig(OpenAIGPTConfig):
@@ -119,6 +127,18 @@ class XAIChatConfig(OpenAIGPTConfig):
                 if value is not None:
                     optional_params[param] = value
         return optional_params
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return XAIChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
     def transform_request(
         self,
@@ -226,3 +246,25 @@ class XAIChatConfig(OpenAIGPTConfig):
             usage.prompt_tokens_details.web_search_requests = int(num_sources_used)
             setattr(usage, "num_sources_used", int(num_sources_used))
             verbose_logger.debug(f"X.AI web search sources used: {num_sources_used}")
+
+
+class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        """
+        Handle xAI-specific streaming behavior.
+        
+        xAI Grok sends a final chunk with empty choices array but with usage data
+        when stream_options={"include_usage": True} is set.
+        
+        Example from xAI API:
+        {"id":"...","object":"chat.completion.chunk","created":...,"model":"grok-4-1-fast-non-reasoning",
+         "choices":[],"usage":{"prompt_tokens":171,"completion_tokens":2,"total_tokens":173,...}}
+        """
+        # Handle chunks with empty choices but with usage data
+        choices = chunk.get("choices", [])
+        if len(choices) == 0 and "usage" in chunk:
+            # xAI sends usage in a chunk with empty choices array
+            # Add a dummy choice with empty delta to ensure proper processing
+            chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": None}]
+        
+        return super().chunk_parser(chunk)

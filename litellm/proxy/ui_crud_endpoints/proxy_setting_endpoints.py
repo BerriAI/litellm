@@ -30,6 +30,12 @@ class UIThemeConfig(BaseModel):
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
     )
 
+    # Favicon configuration
+    favicon_url: Optional[str] = Field(
+        default=None,
+        description="URL to custom favicon image. Must be an HTTP/HTTPS URL to a .ico, .png, or .svg file",
+    )
+
 
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
@@ -83,6 +89,16 @@ class UISettings(BaseModel):
         description="List of page keys that internal users (non-admins) can see in the UI sidebar. If not set, all pages are visible based on role permissions.",
     )
 
+    require_auth_for_public_ai_hub: bool = Field(
+        default=False,
+        description="If true, requires authentication for accessing the public AI Hub."
+    )
+
+    forward_client_headers_to_llm_api: bool = Field(
+        default=False,
+        description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -95,7 +111,43 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
+    "require_auth_for_public_ai_hub",
+    "forward_client_headers_to_llm_api",
 }
+
+
+class MCPSemanticFilterSettings(BaseModel):
+    """Configuration for MCP Semantic Tool Filter"""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable semantic filtering of MCP tools based on query relevance",
+    )
+
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="Embedding model to use for semantic similarity (e.g., 'text-embedding-3-small', 'text-embedding-ada-002')",
+    )
+
+    top_k: int = Field(
+        default=10,
+        description="Number of most relevant tools to return",
+        ge=1,
+        le=100,
+    )
+
+    similarity_threshold: float = Field(
+        default=0.3,
+        description="Minimum similarity score for tool inclusion (0.0 to 1.0, where 1.0 = exact match)",
+        ge=0.0,
+        le=1.0,
+    )
+
+
+class MCPSemanticFilterSettingsResponse(SettingsResponse):
+    """Response model for MCP semantic filter settings"""
+
+    pass
 
 
 @router.get(
@@ -325,7 +377,7 @@ async def update_default_team_member_budget(
 
 
 async def _update_litellm_setting(
-    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams],
+    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
     settings_key: str,
     in_memory_var: Any,
     success_message: str,
@@ -748,6 +800,27 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
             del os.environ["UI_LOGO_PATH"]
             verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
 
+    # Update LITELLM_FAVICON_URL environment variable if favicon_url is provided
+    favicon_url = theme_data.get("favicon_url")
+    verbose_proxy_logger.debug(f"Updating favicon_url: {favicon_url}")
+
+    if (
+        favicon_url and isinstance(favicon_url, str) and favicon_url.strip()
+    ):  # Check if favicon_url exists and is not empty/whitespace
+        config["environment_variables"]["LITELLM_FAVICON_URL"] = favicon_url
+        os.environ["LITELLM_FAVICON_URL"] = favicon_url
+        verbose_proxy_logger.debug(f"Set LITELLM_FAVICON_URL to: {favicon_url}")
+    else:
+        # Remove the environment variable to restore default favicon
+        if "LITELLM_FAVICON_URL" in config.get("environment_variables", {}):
+            del config["environment_variables"]["LITELLM_FAVICON_URL"]
+            verbose_proxy_logger.debug("Removed LITELLM_FAVICON_URL from config")
+        if "LITELLM_FAVICON_URL" in os.environ:
+            del os.environ["LITELLM_FAVICON_URL"]
+            verbose_proxy_logger.debug(
+                "Removed LITELLM_FAVICON_URL from environment"
+            )
+
     # Handle environment variable encryption if needed
     stored_config = config.copy()
     if (
@@ -763,10 +836,74 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     await proxy_config.save_config(new_config=stored_config)
 
     return {
-        "message": "Logo settings updated successfully.",
+        "message": "UI theme settings updated successfully.",
         "status": "success",
         "theme_config": theme_data,
     }
+
+
+@router.get(
+    "/get/mcp_semantic_filter_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=MCPSemanticFilterSettingsResponse,
+)
+async def get_mcp_semantic_filter_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get MCP semantic filter configuration.
+    Returns current settings for semantic tool filtering.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    config = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="mcp_semantic_tool_filter",
+        settings_class=MCPSemanticFilterSettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/mcp_semantic_filter_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_mcp_semantic_filter_settings(
+    settings: MCPSemanticFilterSettings,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update MCP semantic filter settings in database.
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    result = await _update_litellm_setting(
+        settings=settings,
+        settings_key="mcp_semantic_tool_filter",
+        in_memory_var=None,
+        success_message="MCP Semantic Filter settings updated successfully. Changes will be applied across all pods within 10 seconds.",
+    )
+    try:
+        from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+        if prisma_client is not None:
+            await proxy_config._init_semantic_filter_settings_in_db(
+                prisma_client=prisma_client
+            )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Failed to reinitialize MCP semantic filter settings immediately: {e}"
+        )
+
+    return result
 
 
 @router.get(
@@ -833,6 +970,15 @@ async def get_ui_settings():
         k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
     }
 
+    # Sync forward_client_headers_to_llm_api into general_settings so the proxy
+    # picks it up at runtime (covers server restart scenarios).
+    if "forward_client_headers_to_llm_api" in ui_settings:
+        from litellm.proxy.proxy_server import general_settings
+
+        general_settings["forward_client_headers_to_llm_api"] = ui_settings[
+            "forward_client_headers_to_llm_api"
+        ]
+
     # Build config-like object for schema helper
     config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
 
@@ -895,6 +1041,15 @@ async def update_ui_settings(
             },
         },
     )
+
+    # Sync forward_client_headers_to_llm_api to general_settings so the proxy
+    # picks it up at runtime (general_settings is checked in pre-call utils).
+    if "forward_client_headers_to_llm_api" in ui_settings:
+        from litellm.proxy.proxy_server import general_settings
+
+        general_settings["forward_client_headers_to_llm_api"] = ui_settings[
+            "forward_client_headers_to_llm_api"
+        ]
 
     return {
         "message": "UI settings updated successfully",

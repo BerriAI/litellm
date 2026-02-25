@@ -24,10 +24,13 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     decode_model_from_file_id,
     encode_file_id_with_model,
+    get_batch_from_database,
     get_credentials_for_model,
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
+    resolve_input_file_id_to_unified,
+    update_batch_in_database,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
@@ -148,7 +151,9 @@ async def create_batch(  # noqa: PLR0915
             if response and hasattr(response, "id") and response.id:
                 original_batch_id = response.id
                 encoded_batch_id = encode_file_id_with_model(
-                    file_id=original_batch_id, model=model_from_file_id
+                    file_id=original_batch_id,
+                    model=model_from_file_id,
+                    id_type="batch",
                 )
                 response.id = encoded_batch_id
                 
@@ -303,7 +308,7 @@ async def create_batch(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["batch"],
 )
-async def retrieve_batch(
+async def retrieve_batch( # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -357,6 +362,62 @@ async def retrieve_batch(
             route_type="aretrieve_batch",
         )
 
+        # FIX: First, try to read from ManagedObjectTable for consistent state
+        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        from litellm.proxy.proxy_server import prisma_client
+        
+        db_batch_object, response = await get_batch_from_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+        )
+        
+        # If batch is in a terminal state, return immediately
+        if response is not None and response.status in ["completed", "failed", "cancelled", "expired"]:
+            # Call hooks and return
+            response = await proxy_logging_obj.post_call_success_hook(
+                data=data, user_api_key_dict=user_api_key_dict, response=response
+            )
+
+            # async_post_call_success_hook replaces batch.id and output_file_id with unified IDs
+            # but not input_file_id. Resolve raw provider ID to unified ID.
+            if unified_batch_id:
+                await resolve_input_file_id_to_unified(response, prisma_client)
+            
+            asyncio.create_task(
+                proxy_logging_obj.update_request_status(
+                    litellm_call_id=data.get("litellm_call_id", ""), status="success"
+                )
+            )
+            
+            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            model_id = hidden_params.get("model_id", None) or ""
+            cache_key = hidden_params.get("cache_key", None) or ""
+            api_base = hidden_params.get("api_base", None) or ""
+            
+            fastapi_response.headers.update(
+                ProxyBaseLLMRequestProcessing.get_custom_headers(
+                    user_api_key_dict=user_api_key_dict,
+                    model_id=model_id,
+                    cache_key=cache_key,
+                    api_base=api_base,
+                    version=version,
+                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                    request_data=data,
+                )
+            )
+            
+            return response
+        
+        # If batch is still processing, sync with provider to get latest state
+        if response is not None:
+            verbose_proxy_logger.debug(
+                f"Batch {batch_id} is in non-terminal state {response.status}, syncing with provider"
+            )
+
+        # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
             credentials = get_credentials_for_model(
@@ -408,11 +469,28 @@ async def retrieve_batch(
             response = await litellm.aretrieve_batch(
                 custom_llm_provider=custom_llm_provider, **data  # type: ignore
             )
+        
+        # FIX: Update the database with the latest state from provider
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            response=response,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+            db_batch_object=db_batch_object,
+            operation="retrieve",
+        )
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response
         )
+
+        # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
+        # Resolve raw provider input_file_id to unified ID.
+        if unified_batch_id:
+            await resolve_input_file_id_to_unified(response, prisma_client)
 
         ### ALERTING ###
         asyncio.create_task(
@@ -768,6 +846,20 @@ async def cancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 **_cancel_batch_data,
             )
+
+        # FIX: Update the database with the new cancelled state
+        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        from litellm.proxy.proxy_server import prisma_client
+        
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            response=response,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+            operation="cancel",
+        )
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(

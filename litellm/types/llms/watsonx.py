@@ -63,6 +63,7 @@ class WatsonXAIEndpoint(str, Enum):
     EMBEDDINGS = "/ml/v1/text/embeddings"
     PROMPTS = "/ml/v1/prompts"
     AVAILABLE_MODELS = "/ml/v1/foundation_model_specs"
+    RERANK = "/ml/v1/text/rerank"
 
 
 class WatsonXModelPattern(str, Enum):

@@ -10,7 +10,10 @@ from httpx import HTTPStatusError
 from requests.auth import HTTPBasicAuth
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -110,6 +113,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
         )
         super().__init__(**kwargs)
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

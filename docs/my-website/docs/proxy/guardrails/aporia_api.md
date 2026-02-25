@@ -139,7 +139,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 :::info
 
-✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Contact us to get a free trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 
