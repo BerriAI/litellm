@@ -188,6 +188,8 @@ When opening issues or pull requests, follow these templates:
 6. **Duplicate DB queries in hot paths**: Adding redundant DB calls in MCP auth, proxy auth, or other high-frequency paths causes performance degradation at scale.
 7. **N+1 queries in list endpoints**: Looping over a list and performing a separate DB query per item (e.g. loading agents or related entities) — use batch/joined queries instead.
 8. **Auto-creating migration.sql**: Do not generate or edit migration SQL files. If migrations are needed, tell the user to run `ci_cd/run_migration.py` to generate new schemas.
+9. **UI/Backend Contract Mismatch**: When adding a new entity type to the UI, always check whether the backend endpoint accepts a single value or an array. Match the UI control accordingly (single-select vs. multi-select) to avoid silently dropping user selections
+10. **Missing Tests for New Entity Types**: When adding a new entity type (e.g., in `EntityUsage`, `UsageViewSelect`), always add corresponding tests in the existing test files and update any icon/component mocks
 
 ## HELPFUL RESOURCES
 

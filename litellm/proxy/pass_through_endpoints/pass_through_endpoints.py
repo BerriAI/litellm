@@ -50,7 +50,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    _safe_get_request_headers,
+)
 from litellm.proxy.utils import get_server_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -649,7 +652,7 @@ async def pass_through_request(  # noqa: PLR0915
         url = httpx.URL(target)
         headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request_headers=dict(request.headers),
+            request_headers=_safe_get_request_headers(request).copy(),
             headers=headers,
             forward_headers=forward_headers,
         )
