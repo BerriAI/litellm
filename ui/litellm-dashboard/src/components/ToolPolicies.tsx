@@ -57,7 +57,7 @@ const PolicySelect: React.FC<{
         fontWeight: 500,
       }}
       styles={{
-        selector: {
+        root: {
           backgroundColor: style.bg,
           borderColor: style.border,
           color: style.color,

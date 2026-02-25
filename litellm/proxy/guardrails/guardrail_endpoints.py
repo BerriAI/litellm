@@ -14,36 +14,28 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
-
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
-    CustomCodeValidationError,
-    validate_custom_code,
-)
-from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
-    get_custom_code_primitives,
-)
-from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
-from litellm.types.guardrails import (
-    PII_ENTITY_CATEGORIES_MAP,
-    ApplyGuardrailRequest,
-    ApplyGuardrailResponse,
-    BaseLitellmParams,
-    BedrockGuardrailConfigModel,
-    Guardrail,
-    GuardrailEventHooks,
-    GuardrailInfoResponse,
-    GuardrailUIAddGuardrailSettings,
-    LakeraV2GuardrailConfigModel,
-    ListGuardrailsResponse,
-    LitellmParams,
-    PatchGuardrailRequest,
-    PiiAction,
-    PiiEntityType,
-    PresidioPresidioConfigModelUserInterface,
-    SupportedGuardrailIntegrations,
-    ToolPermissionGuardrailConfigModel,
-)
+    CustomCodeValidationError, validate_custom_code)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import \
+    get_custom_code_primitives
+from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.usage_endpoints import \
+    router as guardrails_usage_router
+from litellm.types.guardrails import (PII_ENTITY_CATEGORIES_MAP,
+                                      ApplyGuardrailRequest,
+                                      ApplyGuardrailResponse,
+                                      BaseLitellmParams,
+                                      BedrockGuardrailConfigModel, Guardrail,
+                                      GuardrailEventHooks,
+                                      GuardrailInfoResponse,
+                                      GuardrailUIAddGuardrailSettings,
+                                      LakeraV2GuardrailConfigModel,
+                                      ListGuardrailsResponse, LitellmParams,
+                                      PatchGuardrailRequest, PiiAction,
+                                      PiiEntityType,
+                                      PresidioPresidioConfigModelUserInterface,
+                                      SupportedGuardrailIntegrations,
+                                      ToolPermissionGuardrailConfigModel)
 
 #### GUARDRAILS ENDPOINTS ####
 
@@ -1501,11 +1493,7 @@ async def test_custom_code_guardrail(
     }
     ```
     """
-    import concurrent.futures
-    import re
 
-    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import \
-        get_custom_code_primitives
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
