@@ -93,11 +93,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const handleNext = async () => {
     try {
       if (currentStep === 0) {
-        const fieldsToValidate =
-          agentType === CUSTOM_AGENT_TYPE
-            ? ["agent_name"]
-            : ["agent_name"];
-        await form.validateFields(fieldsToValidate);
+        await form.validateFields(["agent_name"]);
         const agentName = form.getFieldValue("agent_name");
         if (agentName && !newKeyName) {
           setNewKeyName(`${agentName}-key`);
@@ -184,7 +180,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           newKeyModels,
         );
         setCreatedKeyValue(keyResponse.key || null);
-      } else if (keyAssignOption === "existing_key" && selectedExistingKey) {
+      } else if (keyAssignOption === "existing_key") {
+        if (!selectedExistingKey) {
+          message.error("Please select an existing key to assign");
+          setIsSubmitting(false);
+          return;
+        }
         await keyUpdateCall(accessToken, {
           key: selectedExistingKey,
           agent_id: agentId,

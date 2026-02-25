@@ -298,6 +298,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       if (keyOwner === "you") {
         formValues.user_id = userID;
       } else if (keyOwner === "agent") {
+        if (!selectedAgentId) {
+          message.error("Please select an agent");
+          return;
+        }
         formValues.agent_id = selectedAgentId;
       }
 

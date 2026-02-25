@@ -6178,31 +6178,36 @@ async def test_generate_key_with_agent_id():
 
 @pytest.mark.asyncio
 async def test_generate_key_helper_fn_agent_id():
-    """Test that generate_key_helper_fn correctly stores agent_id in key_data."""
-    from unittest.mock import AsyncMock, MagicMock, patch
+    """Test that generate_key_helper_fn passes agent_id into the insert_data call."""
+    from unittest.mock import AsyncMock, MagicMock, call, patch
 
     import litellm.proxy.management_endpoints.key_management_endpoints as km
 
     mock_prisma_client = AsyncMock()
-    mock_insert = AsyncMock(return_value=MagicMock(token="sk-test", created_at=None, updated_at=None, litellm_budget_table=None))
+    mock_insert = AsyncMock(
+        return_value=MagicMock(
+            token="sk-test",
+            created_at=None,
+            updated_at=None,
+            litellm_budget_table=None,
+        )
+    )
     mock_prisma_client.insert_data = mock_insert
 
     with patch.object(km, "prisma_client", mock_prisma_client):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            try:
-                result = await generate_key_helper_fn(
-                    request_type="key",
-                    agent_id="test-agent-456",
-                    key_alias="test-agent-key",
-                    models=[],
-                    table_name="key",
-                )
-            except Exception:
-                # We just verify the agent_id was passed to insert_data
-                pass
+            await generate_key_helper_fn(
+                request_type="key",
+                agent_id="test-agent-456",
+                key_alias="test-agent-key",
+                models=[],
+                table_name="key",
+            )
 
-    # Verify insert_data was called with agent_id in key_data
-    if mock_insert.called:
-        call_kwargs = mock_insert.call_args
-        key_data = call_kwargs[1].get("data") or (call_kwargs[0][0] if call_kwargs[0] else {})
-        assert key_data.get("agent_id") == "test-agent-456"
+    assert mock_insert.called, "insert_data was never called"
+    # insert_data is called as insert_data(data=key_data, ...)
+    call_kwargs = mock_insert.call_args.kwargs
+    key_data = call_kwargs.get("data", {})
+    assert key_data.get("agent_id") == "test-agent-456", (
+        f"Expected agent_id='test-agent-456' in key_data, got: {key_data.get('agent_id')}"
+    )
