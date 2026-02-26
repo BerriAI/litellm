@@ -166,16 +166,12 @@ class TestGetSyncHttpxClientClosedCheck:
         try:
             litellm.in_memory_llm_clients_cache = cache
 
-            client_1 = _get_httpx_client(
-                params={"client_alias": "test_closed_sync"},
-            )
+            client_1 = _get_httpx_client()
 
             client_1.client.close()
             assert client_1.client.is_closed is True
 
-            client_2 = _get_httpx_client(
-                params={"client_alias": "test_closed_sync"},
-            )
+            client_2 = _get_httpx_client()
 
             assert client_2 is not client_1
             assert client_2.client.is_closed is False
@@ -217,11 +213,18 @@ class TestAsyncHTTPHandlerClosedClientRecovery:
         assert handler.client.is_closed is True
 
         mock_response = httpx.Response(200, text="ok")
-        with patch.object(
-            httpx.AsyncClient,
-            "get",
-            return_value=mock_response,
-        ):
+        call_count = 0
+
+        original_get = httpx.AsyncClient.get
+
+        async def side_effect(self_client, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if self_client.is_closed:
+                raise RuntimeError("Cannot send a request, as the client has been closed.")
+            return mock_response
+
+        with patch.object(httpx.AsyncClient, "get", side_effect):
             response = await handler.get(url="https://example.com/api")
             assert response.status_code == 200
 
