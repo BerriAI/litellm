@@ -269,7 +269,6 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         instance_dict: Dict[str, Any] = {"prompt": prompt}
         params_copy = video_create_optional_request_params.copy()
 
-
         # Check if user wants to provide full instance dict
         if "instances" in params_copy and isinstance(params_copy["instances"], dict):
             # Replace/merge with user-provided instance
@@ -284,18 +283,35 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             elif isinstance(image, str) and image.startswith("gs://"):
                 # Bare GCS URI — Vertex AI accepts gcsUri natively, no download needed
                 image_data = {"gcsUri": image}
+            elif isinstance(image, str):
+                raise ValueError(
+                    f"Unsupported image value '{image}'. "
+                    "Provide a GCS URI (gs://...), a dict with 'gcsUri' or "
+                    "'bytesBase64Encoded'/'mimeType', or a binary file-like object."
+                )
             else:
                 # File-like object — encode to base64
                 image_data = _convert_image_to_vertex_format(image)
             instance_dict["image"] = image_data
             params_copy.pop("image")
 
+        # Extract a nested "parameters" block that map_openai_params may have placed
+        # inside params_copy (e.g. from provider-specific pass-through).  Merging it
+        # flat prevents the double-nesting bug:
+        #   {"parameters": {"parameters": {...}}}  ← wrong
+        #   {"parameters": {...}}                  ← correct
+        nested_params = params_copy.pop("parameters", None)
+        vertex_params: Dict[str, Any] = {}
+        if isinstance(nested_params, dict):
+            vertex_params.update(nested_params)
+        vertex_params.update(params_copy)
+
         # Build request data directly (TypedDict doesn't have model_dump)
         request_data: Dict[str, Any] = {"instances": [instance_dict]}
 
         # Only add parameters if there are any
-        if params_copy:
-            request_data["parameters"] = params_copy
+        if vertex_params:
+            request_data["parameters"] = vertex_params
 
         # Append :predictLongRunning endpoint to api_base
         url = f"{api_base}:predictLongRunning"
