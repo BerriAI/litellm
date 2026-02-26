@@ -139,6 +139,10 @@ class BaseAWSLLM:
                 if key.upper() in os.environ:
                     params_to_check[i] = os.getenv(key.upper())
 
+        # Normalize empty strings to None to enable ambient credential detection
+        # (ECS task roles, EC2 instance profiles, etc.)
+        params_to_check = [p if p else None for p in params_to_check]
+
         # Assign updated values back to parameters
         (
             aws_access_key_id,
