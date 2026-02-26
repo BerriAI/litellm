@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -58,7 +58,7 @@ def safe_divide(
     return numerator / denominator
 
 
-_FINISH_REASON_MAP = {
+_FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     # Anthropic
     "stop_sequence": "stop",
     "end_turn": "stop",
@@ -99,7 +99,7 @@ _FINISH_REASON_MAP = {
 }
 
 
-def map_finish_reason(finish_reason: str) -> str:
+def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
     mapped = _FINISH_REASON_MAP.get(finish_reason)
     if mapped is None:
         verbose_logger.warning(
