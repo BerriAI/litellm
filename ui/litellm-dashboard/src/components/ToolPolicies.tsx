@@ -1,25 +1,13 @@
 "use client";
 
-import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Select, Switch, Tooltip } from "antd";
-<<<<<<< cursor/development-environment-setup-13a7
-// @ts-ignore - duplicate import removed
-import {
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@tremor/react";
-=======
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
->>>>>>> main
-import { TimeCell } from "./view_logs/time_cell";
-import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import FilterComponent, { FilterOption } from "./molecules/filter";
-import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
+import { fetchToolsList, ToolRow, updateToolPolicy } from "./networking";
+import { TimeCell } from "./view_logs/time_cell";
 
 const POLICY_OPTIONS = [
   { value: "trusted", label: "trusted", color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
@@ -60,21 +48,6 @@ const PolicySelect: React.FC<{
         minWidth: 110,
         fontWeight: 500,
       }}
-<<<<<<< cursor/development-environment-setup-13a7
-      {...{styles: {
-        selector: {
-          backgroundColor: style.bg,
-          borderColor: style.border,
-          color: style.color,
-          borderRadius: 999,
-          fontSize: 11,
-          fontWeight: 600,
-          paddingLeft: 8,
-          paddingRight: 4,
-        },
-      }} as any}
-=======
->>>>>>> main
       popupMatchSelectWidth={false}
       options={POLICY_OPTIONS.map((o) => ({
         value: o.value,
