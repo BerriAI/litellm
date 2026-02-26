@@ -77,6 +77,7 @@ class SupportedGuardrailIntegrations(Enum):
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
+    AKTO = "akto"
 
 
 class Role(Enum):
@@ -491,6 +492,27 @@ class ZscalerAIGuardConfigModel(BaseModel):
     )
 
 
+class AktoConfigModel(BaseModel):
+    """Configuration parameters for the Akto guardrail"""
+
+    sync_mode: Optional[bool] = Field(
+        default=True,
+        description="Sync (blocking): pre-call guardrails + post-call ingest. Async (non-blocking): single post-call with guardrails+ingest. Falls back to AKTO_SYNC_MODE env var.",
+    )
+    akto_account_id: Optional[str] = Field(
+        default=None,
+        description="Akto account ID. Falls back to AKTO_ACCOUNT_ID env var. Defaults to '1000000'.",
+    )
+    akto_vxlan_id: Optional[str] = Field(
+        default=None,
+        description="Akto VXLAN ID for traffic identification. Falls back to AKTO_VXLAN_ID env var.",
+    )
+    unreachable_fallback: Optional[str] = Field(
+        default="fail_closed",
+        description="Behavior when Akto is unreachable: 'fail_open' or 'fail_closed'.",
+    )
+
+
 class JavelinGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
@@ -723,6 +745,7 @@ class LitellmParams(
     NomaGuardrailConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
+    AktoConfigModel,
     JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
