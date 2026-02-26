@@ -4678,6 +4678,14 @@ class BaseLLMHTTPHandler:
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:
+                # Auto-send session setup if the provider requires it
+                # (e.g. Gemini/Vertex AI Live needs a `setup` message before any realtime_input)
+                _session_config: Optional[str] = None
+                if provider_config.requires_session_configuration():
+                    _session_config = provider_config.session_configuration_request(model)
+                    if _session_config:
+                        await backend_ws.send(_session_config)
+
                 realtime_streaming = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
@@ -4685,6 +4693,8 @@ class BaseLLMHTTPHandler:
                     provider_config,
                     model,
                 )
+                if _session_config:
+                    realtime_streaming.session_configuration_request = _session_config
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
