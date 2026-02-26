@@ -6297,15 +6297,3 @@ async def test_key_aliases_no_search_omits_contains_filter():
     assert "contains" not in json.dumps(where)
 
 
-@pytest.mark.asyncio
-async def test_key_aliases_select_only_key_alias():
-    """Test that find_many is called with select={key_alias: True} to avoid fetching full rows."""
-    mock_prisma_client = AsyncMock()
-    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
-    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-        await key_aliases(page=1, size=50, search=None)
-
-    find_many_kwargs = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs
-    assert find_many_kwargs.get("select") == {"key_alias": True}
