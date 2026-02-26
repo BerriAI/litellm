@@ -649,6 +649,21 @@ class BaseLitellmParams(
         description="Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
     )
 
+    ################## Realtime API params ################
+    ########################################################
+    end_session_after_n_fails: Optional[int] = Field(
+        default=None,
+        description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
+    )
+    on_violation: Optional[Literal["warn", "end_session"]] = Field(
+        default=None,
+        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+    )
+    realtime_violation_message: Optional[str] = Field(
+        default=None,
+        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+    )
+
     # Model Armor params
     template_id: Optional[str] = Field(
         default=None, description="The ID of your Model Armor template"
