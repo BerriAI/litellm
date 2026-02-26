@@ -213,6 +213,24 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
     logo: `${ASSET_PREFIX}litellm_logo.jpg`,
     tags: ["Keywords", "Blocklist"],
   },
+  {
+    id: "block_code_execution",
+    name: "Block Code Execution",
+    description: "Detects markdown fenced code blocks in requests and responses. Block or mask executable code (e.g. Python, JavaScript, Bash) by language with configurable confidence.",
+    category: "litellm",
+    subcategory: "Code Safety",
+    logo: `${ASSET_PREFIX}litellm_logo.jpg`,
+    tags: ["Code", "Safety", "Prompt Injection"],
+  },
+  {
+    id: "cf_competitor_intent",
+    name: "Competitor Name Blocking",
+    description: "Block or reframe competitor comparison and ranking intent. Detect when users ask to compare or recommend competitors (airline or generic competitor lists).",
+    category: "litellm",
+    subcategory: "Content Category",
+    logo: `${ASSET_PREFIX}litellm_logo.jpg`,
+    tags: ["Content Category", "Competitor", "Topic Blocker"],
+  },
 ];
 
 export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
