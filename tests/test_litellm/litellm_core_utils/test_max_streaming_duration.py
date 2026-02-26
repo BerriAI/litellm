@@ -1,5 +1,5 @@
 """
-Tests for MAX_STREAMING_DURATION_S — the global cap on streaming response wall-clock time.
+Tests for LITELLM_MAX_STREAMING_DURATION_SECONDS — the global cap on streaming response wall-clock time.
 
 Covers:
   - CustomStreamWrapper (chat/completions) sync + async
@@ -41,20 +41,20 @@ class TestCustomStreamWrapperMaxDuration:
     def test_should_not_raise_when_duration_is_none(self):
         """No limit configured → never raises."""
         wrapper = _make_custom_stream_wrapper()
-        with patch("litellm.constants.MAX_STREAMING_DURATION_S", None):
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", None):
             wrapper._check_max_streaming_duration()  # should not raise
 
     def test_should_not_raise_when_under_limit(self):
         """Stream is under the limit → no error."""
         wrapper = _make_custom_stream_wrapper()
-        with patch("litellm.constants.MAX_STREAMING_DURATION_S", 60.0):
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 60.0):
             wrapper._check_max_streaming_duration()  # should not raise
 
     def test_should_raise_timeout_when_exceeded(self):
         """Stream exceeded the limit → litellm.Timeout."""
         wrapper = _make_custom_stream_wrapper()
         wrapper._stream_created_time = time.time() - 20  # simulate 20s elapsed
-        with patch("litellm.constants.MAX_STREAMING_DURATION_S", 10.0):
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0):
             with pytest.raises(litellm.Timeout, match="max streaming duration"):
                 wrapper._check_max_streaming_duration()
 
@@ -62,7 +62,7 @@ class TestCustomStreamWrapperMaxDuration:
         """__next__ should check the limit before iterating."""
         wrapper = _make_custom_stream_wrapper()
         wrapper._stream_created_time = time.time() - 20
-        with patch("litellm.constants.MAX_STREAMING_DURATION_S", 10.0):
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0):
             with pytest.raises(litellm.Timeout):
                 wrapper.__next__()
 
@@ -71,7 +71,7 @@ class TestCustomStreamWrapperMaxDuration:
         """__anext__ should check the limit before iterating."""
         wrapper = _make_custom_stream_wrapper()
         wrapper._stream_created_time = time.time() - 20
-        with patch("litellm.constants.MAX_STREAMING_DURATION_S", 10.0):
+        with patch("litellm.constants.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0):
             with pytest.raises(litellm.Timeout):
                 await wrapper.__anext__()
 
@@ -105,14 +105,14 @@ class TestResponsesStreamingIteratorMaxDuration:
     def test_should_not_raise_when_duration_is_none(self):
         it = self._make_base_iterator()
         with patch(
-            "litellm.responses.streaming_iterator.MAX_STREAMING_DURATION_S", None
+            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS", None
         ):
             it._check_max_streaming_duration()
 
     def test_should_not_raise_when_under_limit(self):
         it = self._make_base_iterator()
         with patch(
-            "litellm.responses.streaming_iterator.MAX_STREAMING_DURATION_S", 60.0
+            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS", 60.0
         ):
             it._check_max_streaming_duration()
 
@@ -120,7 +120,7 @@ class TestResponsesStreamingIteratorMaxDuration:
         it = self._make_base_iterator()
         it._stream_created_time = time.time() - 20
         with patch(
-            "litellm.responses.streaming_iterator.MAX_STREAMING_DURATION_S", 10.0
+            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0
         ):
             with pytest.raises(litellm.Timeout, match="max streaming duration"):
                 it._check_max_streaming_duration()

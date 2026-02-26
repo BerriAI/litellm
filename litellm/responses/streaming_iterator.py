@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 import litellm
-from litellm.constants import MAX_STREAMING_DURATION_S, STREAM_SSE_DONE_STRING
+from litellm.constants import LITELLM_MAX_STREAMING_DURATION_SECONDS, STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -85,13 +85,13 @@ class BaseResponsesAPIStreamingIterator:
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
 
     def _check_max_streaming_duration(self) -> None:
-        """Raise litellm.Timeout if the stream has exceeded MAX_STREAMING_DURATION_S."""
-        if MAX_STREAMING_DURATION_S is None:
+        """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
+        if LITELLM_MAX_STREAMING_DURATION_SECONDS is None:
             return
         elapsed = time.time() - self._stream_created_time
-        if elapsed > MAX_STREAMING_DURATION_S:
+        if elapsed > LITELLM_MAX_STREAMING_DURATION_SECONDS:
             raise litellm.Timeout(
-                message=f"Stream exceeded max streaming duration of {MAX_STREAMING_DURATION_S}s (elapsed {elapsed:.1f}s)",
+                message=f"Stream exceeded max streaming duration of {LITELLM_MAX_STREAMING_DURATION_SECONDS}s (elapsed {elapsed:.1f}s)",
                 model=self.model or "",
                 llm_provider=self.custom_llm_provider or "",
             )
