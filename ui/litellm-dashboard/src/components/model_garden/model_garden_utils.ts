@@ -1,4 +1,4 @@
-import { providerLogoMap, Providers, provider_map } from "../provider_info_helpers";
+import { Providers, provider_map } from "../provider_info_helpers";
 
 export interface ModelInfo {
   key: string;
@@ -17,7 +17,6 @@ export interface ModelInfo {
   supports_audio_input?: boolean;
   supports_audio_output?: boolean;
   supports_prompt_caching?: boolean;
-  added_date?: string;
   [other: string]: any;
 }
 
@@ -31,24 +30,59 @@ export interface ProviderGroup {
   capabilities: string[];
 }
 
-const PROVIDER_DISPLAY_NAMES: Record<string, string> = {};
+export interface ModelCategory {
+  key: string;
+  label: string;
+  description: string;
+  models: ModelInfo[];
+}
 
+export interface WhatsNewItem {
+  title: string;
+  description: string;
+  models: string[];
+}
+
+const LOGO_PATH = "/assets/logos/";
+
+const PROVIDER_LOGO_FILES: Record<string, string> = {
+  openai: "openai_small.svg",
+  anthropic: "anthropic.svg",
+  gemini: "google.svg",
+  vertex_ai: "google.svg",
+  azure: "microsoft_azure.svg",
+  azure_ai: "microsoft_azure.svg",
+  bedrock: "bedrock.svg",
+  bedrock_converse: "bedrock.svg",
+  sagemaker: "bedrock.svg",
+  groq: "groq.svg",
+  mistral: "mistral.svg",
+  codestral: "mistral.svg",
+  deepseek: "deepseek.svg",
+  fireworks_ai: "fireworks.svg",
+  openrouter: "openrouter.svg",
+  perplexity: "perplexity-ai.svg",
+  cohere: "cohere.svg",
+  cohere_chat: "cohere.svg",
+  together_ai: "togetherai.svg",
+  cerebras: "cerebras.svg",
+  xai: "xai.svg",
+  databricks: "databricks.svg",
+  sambanova: "sambanova.svg",
+  ollama: "ollama.svg",
+  minimax: "minimax.svg",
+  aws: "aws.svg",
+  aiml: "aiml_api.svg",
+  snowflake: "snowflake.svg",
+  oracle: "oracle.svg",
+  oci: "oracle.svg",
+};
+
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {};
 for (const [enumKey, displayName] of Object.entries(Providers)) {
   const providerValue = provider_map[enumKey];
   if (providerValue) {
     PROVIDER_DISPLAY_NAMES[providerValue] = displayName;
-  }
-}
-
-const PROVIDER_LOGO_BY_VALUE: Record<string, string> = {};
-for (const [enumKey, logo] of Object.entries(providerLogoMap)) {
-  const providerValue = provider_map[
-    Object.keys(Providers).find(
-      (k) => (Providers as Record<string, string>)[k] === enumKey
-    ) || ""
-  ];
-  if (providerValue) {
-    PROVIDER_LOGO_BY_VALUE[providerValue] = logo;
   }
 }
 
@@ -57,7 +91,8 @@ export function getProviderDisplayName(providerValue: string): string {
 }
 
 export function getProviderLogo(providerValue: string): string {
-  return PROVIDER_LOGO_BY_VALUE[providerValue] || "";
+  const file = PROVIDER_LOGO_FILES[providerValue];
+  return file ? `${LOGO_PATH}${file}` : "";
 }
 
 function formatProviderName(provider: string): string {
@@ -87,94 +122,69 @@ export function getCapabilities(model: ModelInfo): string[] {
   return caps;
 }
 
-function getModeLabel(mode: string): string {
+export function getModeLabel(mode: string): string {
   const modeMap: Record<string, string> = {
-    chat: "Chat",
+    chat: "Text generation",
     embedding: "Embedding",
-    completion: "Completion",
-    image_generation: "Image Generation",
-    audio_transcription: "Audio Transcription",
-    audio_speech: "Text-to-Speech",
+    completion: "Text generation",
+    image_generation: "Image generation",
+    audio_transcription: "Speech to text",
+    audio_speech: "Text to speech",
     moderation: "Moderation",
-    rerank: "Rerank",
+    rerank: "Reranking",
     search: "Search",
-    responses: "Responses",
-    video_generation: "Video Generation",
-    image_edit: "Image Edit",
+    responses: "Text generation",
+    video_generation: "Video generation",
+    image_edit: "Image editing",
     ocr: "OCR",
   };
   return modeMap[mode] || mode;
 }
 
 const TOP_PROVIDERS = [
-  "openai",
-  "anthropic",
-  "gemini",
-  "azure",
-  "bedrock",
-  "vertex_ai",
-  "mistral",
-  "groq",
-  "deepseek",
-  "fireworks_ai",
-  "openrouter",
-  "perplexity",
-  "cohere",
-  "together_ai",
-  "cerebras",
-  "xai",
-  "databricks",
-  "sambanova",
-  "ollama",
-  "azure_ai",
-  "minimax",
-  "deepinfra",
+  "openai", "anthropic", "gemini", "azure", "bedrock", "vertex_ai",
+  "mistral", "groq", "deepseek", "fireworks_ai", "openrouter",
+  "perplexity", "cohere", "together_ai", "cerebras", "xai",
+  "databricks", "sambanova", "ollama", "azure_ai", "minimax", "deepinfra",
 ];
 
-export function parseModelCostMap(
-  costMap: Record<string, any>
-): ProviderGroup[] {
+function buildModelInfo(key: string, value: Record<string, any>): ModelInfo {
+  return {
+    key,
+    litellm_provider: value.litellm_provider || "unknown",
+    mode: value.mode || "unknown",
+    max_input_tokens: value.max_input_tokens,
+    max_output_tokens: value.max_output_tokens,
+    max_tokens: value.max_tokens,
+    input_cost_per_token: value.input_cost_per_token,
+    output_cost_per_token: value.output_cost_per_token,
+    supports_function_calling: value.supports_function_calling,
+    supports_vision: value.supports_vision,
+    supports_reasoning: value.supports_reasoning,
+    supports_web_search: value.supports_web_search,
+    supports_response_schema: value.supports_response_schema,
+    supports_audio_input: value.supports_audio_input,
+    supports_audio_output: value.supports_audio_output,
+    supports_prompt_caching: value.supports_prompt_caching,
+  };
+}
+
+export function parseModelCostMap(costMap: Record<string, any>): ProviderGroup[] {
   const providerGroups: Record<string, ModelInfo[]> = {};
 
   for (const [key, value] of Object.entries(costMap)) {
     if (key === "sample_spec") continue;
     const provider = value.litellm_provider;
     if (!provider) continue;
-
-    const modelInfo: ModelInfo = {
-      key,
-      litellm_provider: provider,
-      mode: value.mode || "unknown",
-      max_input_tokens: value.max_input_tokens,
-      max_output_tokens: value.max_output_tokens,
-      max_tokens: value.max_tokens,
-      input_cost_per_token: value.input_cost_per_token,
-      output_cost_per_token: value.output_cost_per_token,
-      supports_function_calling: value.supports_function_calling,
-      supports_vision: value.supports_vision,
-      supports_reasoning: value.supports_reasoning,
-      supports_web_search: value.supports_web_search,
-      supports_response_schema: value.supports_response_schema,
-      supports_audio_input: value.supports_audio_input,
-      supports_audio_output: value.supports_audio_output,
-      supports_prompt_caching: value.supports_prompt_caching,
-      added_date: value.added_date,
-    };
-
-    if (!providerGroups[provider]) {
-      providerGroups[provider] = [];
-    }
-    providerGroups[provider].push(modelInfo);
+    if (!providerGroups[provider]) providerGroups[provider] = [];
+    providerGroups[provider].push(buildModelInfo(key, value));
   }
 
   const groups: ProviderGroup[] = Object.entries(providerGroups).map(
     ([provider, models]) => {
-      const modes = [...new Set(models.map((m) => m.mode))].filter(
-        (m) => m !== "unknown"
-      );
+      const modes = [...new Set(models.map((m) => m.mode))].filter((m) => m !== "unknown");
       const allCaps = new Set<string>();
       models.forEach((m) => getCapabilities(m).forEach((c) => allCaps.add(c)));
-
       return {
         provider,
         displayName: getProviderDisplayName(provider),
@@ -199,82 +209,82 @@ export function parseModelCostMap(
   return groups;
 }
 
-export function detectNewModels(
-  costMap: Record<string, any>,
-  knownBaselineKeys?: Set<string>
-): ModelInfo[] {
-  const newModels: ModelInfo[] = [];
-
-  const newPatterns = [
-    /gpt-5/i,
-    /gpt-4\.1/i,
-    /claude-opus-4/i,
-    /claude-sonnet-4/i,
-    /claude-haiku-4/i,
-    /gemini-3/i,
-    /gemini-2\.5/i,
-    /grok-4/i,
-    /deepseek-r2/i,
-    /minimax-m2/i,
-    /kimi-k2/i,
-    /devstral/i,
-    /qwen3/i,
-    /codex/i,
-  ];
-
-  const seen = new Set<string>();
+export function buildModelCategories(costMap: Record<string, any>): ModelCategory[] {
+  const catMap: Record<string, ModelInfo[]> = {};
 
   for (const [key, value] of Object.entries(costMap)) {
     if (key === "sample_spec") continue;
-
-    const baseName = getModelBaseName(key);
-    if (seen.has(baseName)) continue;
-
-    const isNew = newPatterns.some((p) => p.test(key));
-    if (!isNew) continue;
-
-    seen.add(baseName);
-
-    if (value.mode !== "chat" && value.mode !== "responses") continue;
-
-    newModels.push({
-      key,
-      litellm_provider: value.litellm_provider || "unknown",
-      mode: value.mode || "unknown",
-      max_input_tokens: value.max_input_tokens,
-      max_output_tokens: value.max_output_tokens,
-      max_tokens: value.max_tokens,
-      input_cost_per_token: value.input_cost_per_token,
-      output_cost_per_token: value.output_cost_per_token,
-      supports_function_calling: value.supports_function_calling,
-      supports_vision: value.supports_vision,
-      supports_reasoning: value.supports_reasoning,
-      supports_web_search: value.supports_web_search,
-      supports_response_schema: value.supports_response_schema,
-      supports_audio_input: value.supports_audio_input,
-      supports_audio_output: value.supports_audio_output,
-      supports_prompt_caching: value.supports_prompt_caching,
-    });
+    if (!value.litellm_provider) continue;
+    const mode = value.mode || "unknown";
+    if (mode === "unknown") continue;
+    if (!catMap[mode]) catMap[mode] = [];
+    catMap[mode].push(buildModelInfo(key, value));
   }
 
-  const providerPriority: Record<string, number> = {
-    openai: 0,
-    anthropic: 1,
-    gemini: 2,
-    vertex_ai: 3,
-    mistral: 4,
-    deepseek: 5,
-    xai: 6,
-    groq: 7,
+  const categoryOrder: Record<string, { label: string; description: string }> = {
+    chat: { label: "Foundation models", description: "Large language models for text generation, chat, and reasoning." },
+    responses: { label: "Response models", description: "Models optimized for structured response generation." },
+    embedding: { label: "Embedding models", description: "Models that convert text into vector representations." },
+    image_generation: { label: "Image generation", description: "Models that generate images from text prompts." },
+    audio_transcription: { label: "Speech to text", description: "Models that transcribe audio to text." },
+    audio_speech: { label: "Text to speech", description: "Models that convert text to spoken audio." },
+    rerank: { label: "Reranking models", description: "Models that re-rank search results for relevance." },
+    video_generation: { label: "Video generation", description: "Models that generate videos from text or images." },
+    search: { label: "Search models", description: "Models for web and knowledge search." },
+    moderation: { label: "Moderation", description: "Models for content moderation and safety." },
+    completion: { label: "Text completion", description: "Legacy text completion models." },
+    image_edit: { label: "Image editing", description: "Models for editing and transforming images." },
+    ocr: { label: "OCR models", description: "Models for optical character recognition." },
   };
 
-  newModels.sort((a, b) => {
-    const aPri = providerPriority[a.litellm_provider] ?? 99;
-    const bPri = providerPriority[b.litellm_provider] ?? 99;
-    return aPri - bPri;
-  });
+  const categories: ModelCategory[] = [];
+  for (const [mode, meta] of Object.entries(categoryOrder)) {
+    const models = catMap[mode];
+    if (models && models.length > 0) {
+      categories.push({ key: mode, label: meta.label, description: meta.description, models });
+    }
+  }
 
-  return newModels;
+  for (const [mode, models] of Object.entries(catMap)) {
+    if (!categoryOrder[mode] && models.length > 0) {
+      categories.push({
+        key: mode,
+        label: formatProviderName(mode),
+        description: `${models.length} models available.`,
+        models,
+      });
+    }
+  }
+
+  return categories;
+}
+
+export function detectWhatsNew(costMap: Record<string, any>): WhatsNewItem[] {
+  const newPatterns: { pattern: RegExp; title: string; description: string }[] = [
+    { pattern: /gpt-5/i, title: "GPT-5 & GPT-5 Pro", description: "OpenAI's latest GPT-5 family models are now available through LiteLLM." },
+    { pattern: /codex/i, title: "Codex models", description: "OpenAI Codex models for code generation and understanding." },
+    { pattern: /claude-sonnet-4-6|claude-opus-4-6/i, title: "Claude Sonnet 4.6 & Opus 4.6", description: "Anthropic's newest Claude 4.6 models with improved capabilities." },
+    { pattern: /gemini-3\.1/i, title: "Gemini 3.1 Pro Preview", description: "Google's Gemini 3.1 Pro is now available on LiteLLM." },
+    { pattern: /devstral/i, title: "Devstral models", description: "Mistral's Devstral models for development workflows." },
+    { pattern: /minimax-m2/i, title: "MiniMax M2 models", description: "MiniMax M2.1 and M2.5 now available across multiple providers." },
+    { pattern: /kimi-k2/i, title: "Kimi K2.5", description: "Moonshot's Kimi K2.5 model now available on Bedrock and Fireworks." },
+    { pattern: /qwen3-coder/i, title: "Qwen3 Coder", description: "Alibaba's Qwen3 Coder model for code generation." },
+  ];
+
+  const items: WhatsNewItem[] = [];
+
+  for (const { pattern, title, description } of newPatterns) {
+    const matchingModels: string[] = [];
+    for (const [key, value] of Object.entries(costMap)) {
+      if (key === "sample_spec") continue;
+      if (pattern.test(key)) matchingModels.push(key);
+    }
+    if (matchingModels.length > 0) {
+      items.push({ title, description, models: matchingModels.slice(0, 5) });
+    }
+  }
+
+  return items;
 }
 
 export function formatCost(costPerToken: number | undefined): string {
