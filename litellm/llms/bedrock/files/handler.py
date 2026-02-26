@@ -89,6 +89,108 @@ class BedrockFilesHandler(BaseAWSLLM):
         
         return bucket_name, object_key
 
+    def _find_bedrock_batch_output_file(self, s3_client, bucket_name: str, directory_prefix: str) -> str:
+        """
+        Find the actual Bedrock batch output file in the S3 directory structure.
+        
+        Bedrock batch jobs create output files in the format:
+        {output_directory}/{model_invocation_id}/{input_file_name}.out
+        
+        Args:
+            s3_client: Boto3 S3 client
+            bucket_name: S3 bucket name
+            directory_prefix: Directory prefix to search in
+            
+        Returns:
+            Actual S3 object key for the output file
+            
+        Raises:
+            ValueError: If no output file is found or multiple files are found
+        """
+        try:
+            # List objects in the directory
+            response = s3_client.list_objects_v2(
+                Bucket=bucket_name,
+                Prefix=directory_prefix,
+                Delimiter='/'
+            )
+            
+            # First, check if there are subdirectories (model invocation IDs)
+            if 'CommonPrefixes' in response:
+                # There are subdirectories, iterate through them to find output files
+                output_files = []
+                
+                for prefix_info in response['CommonPrefixes']:
+                    sub_prefix = prefix_info['Prefix']
+                    
+                    # List files in the subdirectory
+                    sub_response = s3_client.list_objects_v2(
+                        Bucket=bucket_name,
+                        Prefix=sub_prefix
+                    )
+                    
+                    if 'Contents' in sub_response:
+                        for obj in sub_response['Contents']:
+                            # Look for .out files (Bedrock batch output format)
+                            if obj['Key'].endswith('.out'):
+                                output_files.append(obj['Key'])
+                
+                if not output_files:
+                    raise ValueError(f"No Bedrock batch output files (.out) found in s3://{bucket_name}/{directory_prefix}")
+                
+                if len(output_files) == 1:
+                    return output_files[0]
+                else:
+                    # Multiple output files found - concatenate them into a single JSONL response
+                    # This is common for batch jobs that split input files
+                    return self._concatenate_bedrock_output_files(s3_client, bucket_name, output_files)
+            
+            # If no subdirectories, check for direct files in the directory
+            elif 'Contents' in response:
+                output_files = []
+                for obj in response['Contents']:
+                    # Skip the directory itself
+                    if not obj['Key'].endswith('/'):
+                        output_files.append(obj['Key'])
+                
+                if not output_files:
+                    raise ValueError(f"No files found in s3://{bucket_name}/{directory_prefix}")
+                
+                if len(output_files) == 1:
+                    return output_files[0]
+                else:
+                    # Multiple files found, prefer .out files
+                    out_files = [f for f in output_files if f.endswith('.out')]
+                    if out_files:
+                        return out_files[0]
+                    else:
+                        return output_files[0]
+            
+            else:
+                raise ValueError(f"No files or subdirectories found in s3://{bucket_name}/{directory_prefix}")
+                
+        except Exception as e:
+            if "NoSuchKey" in str(e) or "does not exist" in str(e):
+                raise ValueError(f"Directory s3://{bucket_name}/{directory_prefix} does not exist or is empty. This may indicate that the Bedrock batch job has not completed yet or failed.")
+            else:
+                raise ValueError(f"Error searching for Bedrock batch output files in s3://{bucket_name}/{directory_prefix}. Error: {str(e)}")
+
+    def _concatenate_bedrock_output_files(self, s3_client, bucket_name: str, output_file_keys: list) -> str:
+        """
+        Concatenate multiple Bedrock batch output files into a single JSONL content.
+        
+        Args:
+            s3_client: Boto3 S3 client
+            bucket_name: S3 bucket name
+            output_file_keys: List of S3 object keys for output files
+            
+        Returns:
+            A special object key indicating concatenated content (will be handled differently in download)
+        """
+        # Return a special marker that indicates we need to concatenate files
+        # The actual concatenation will happen in the download logic
+        return f"__CONCATENATE__:{','.join(output_file_keys)}"
+
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
@@ -145,19 +247,65 @@ class BedrockFilesHandler(BaseAWSLLM):
             verify=self._get_ssl_verify(),
         )
         
-        # Download file from S3
+        # Check if the object_key is a directory (ends with '/') or doesn't exist as a direct file
+        # This handles the case where Bedrock batch outputs are stored in subdirectories
+        actual_object_key = object_key
+        
+        if object_key.endswith('/') or not object_key:
+            # This is a directory path, we need to find the actual output file(s)
+            # Bedrock stores batch outputs as: {output_directory}/{model_invocation_id}/{input_file_name}.out
+            actual_object_key = self._find_bedrock_batch_output_file(s3_client, bucket_name, object_key)
+        else:
+            # Try to download the file directly first
+            try:
+                response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+                file_content = response["Body"].read()
+                
+                # Create mock HTTP response
+                mock_response = httpx.Response(
+                    status_code=200,
+                    content=file_content,
+                    headers={"content-type": "application/octet-stream"},
+                    request=httpx.Request(method="GET", url=s3_uri),
+                )
+                
+                return HttpxBinaryResponseContent(response=mock_response)
+            except Exception:
+                # If direct download fails, try to find the file in subdirectories
+                # This handles cases where the S3 URI doesn't end with '/' but still points to a directory
+                actual_object_key = self._find_bedrock_batch_output_file(s3_client, bucket_name, object_key + "/")
+        
+        # Download file from S3 using the actual object key
         try:
-            response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-            file_content = response["Body"].read()
+            # Check if we need to concatenate multiple files
+            if actual_object_key.startswith("__CONCATENATE__:"):
+                file_keys = actual_object_key.split(":", 1)[1].split(",")
+                concatenated_content = []
+                
+                for file_key in file_keys:
+                    response = s3_client.get_object(Bucket=bucket_name, Key=file_key)
+                    content = response["Body"].read().decode('utf-8')
+                    # Add each file's content, ensuring proper JSONL formatting
+                    content = content.strip()
+                    if content:
+                        concatenated_content.append(content)
+                
+                # Join all content with newlines for proper JSONL format
+                file_content = '\n'.join(concatenated_content).encode('utf-8')
+                final_s3_uri = f"s3://{bucket_name}/{object_key}[concatenated-{len(file_keys)}-files]"
+            else:
+                response = s3_client.get_object(Bucket=bucket_name, Key=actual_object_key)
+                file_content = response["Body"].read()
+                final_s3_uri = f"s3://{bucket_name}/{actual_object_key}"
         except Exception as e:
-            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {str(e)}")
+            raise ValueError(f"Failed to download file from S3: s3://{bucket_name}/{actual_object_key}. Error: {str(e)}")
         
         # Create mock HTTP response
         mock_response = httpx.Response(
             status_code=200,
             content=file_content,
             headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(method="GET", url=s3_uri),
+            request=httpx.Request(method="GET", url=final_s3_uri),
         )
         
         return HttpxBinaryResponseContent(response=mock_response)

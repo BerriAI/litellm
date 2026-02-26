@@ -18,8 +18,107 @@ sys.path.insert(
 import pytest
 from typing import Optional
 import litellm
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 import httpx
+
+
+@pytest.mark.asyncio()
+async def test_bedrock_batch_output_file_discovery_fix():
+    """
+    Test for Issue #18734: NoSuchKey error when trying to get Bedrock batch content
+    
+    This test verifies that the BedrockFilesHandler can find and download 
+    Bedrock batch output files from the correct directory structure:
+    s3://bucket/litellm-batch-outputs/job-id/{model_invocation_id}/{input_file}.out
+    """
+    from litellm.llms.bedrock.files.handler import BedrockFilesHandler
+    from litellm.types.llms.openai import FileContentRequest
+    
+    handler = BedrockFilesHandler()
+    
+    # Mock S3 client that simulates Bedrock's actual file structure
+    mock_s3_client = Mock()
+    
+    # Mock the directory structure that Bedrock creates:
+    # s3://my-batch/litellm-batch-outputs/litellm-batch-9737a0f4/
+    #   ├── invocation-123/
+    #   │   └── input.jsonl.out  <- actual output file
+    mock_s3_client.list_objects_v2.side_effect = [
+        # First call: list main directory, finds model invocation subdirectory
+        {
+            'CommonPrefixes': [
+                {'Prefix': 'litellm-batch-outputs/litellm-batch-9737a0f4/invocation-123/'}
+            ]
+        },
+        # Second call: list subdirectory, finds the actual .out file
+        {
+            'Contents': [
+                {'Key': 'litellm-batch-outputs/litellm-batch-9737a0f4/invocation-123/input.jsonl.out'}
+            ]
+        }
+    ]
+    
+    # Test finding the output file
+    actual_file_key = handler._find_bedrock_batch_output_file(
+        mock_s3_client,
+        'my-batch',
+        'litellm-batch-outputs/litellm-batch-9737a0f4/'
+    )
+    
+    expected_key = 'litellm-batch-outputs/litellm-batch-9737a0f4/invocation-123/input.jsonl.out'
+    assert actual_file_key == expected_key, f"Expected {expected_key}, got {actual_file_key}"
+    
+    print("✅ Bedrock batch output file discovery fix works correctly")
+
+
+@pytest.mark.asyncio()
+async def test_bedrock_batch_multiple_output_files_concatenation():
+    """
+    Test handling of multiple Bedrock batch output files (should concatenate them)
+    """
+    from litellm.llms.bedrock.files.handler import BedrockFilesHandler
+    
+    handler = BedrockFilesHandler()
+    mock_s3_client = Mock()
+    
+    # Mock multiple model invocation directories
+    mock_s3_client.list_objects_v2.side_effect = [
+        # Main directory with multiple subdirectories
+        {
+            'CommonPrefixes': [
+                {'Prefix': 'litellm-batch-outputs/job-123/invocation-abc/'},
+                {'Prefix': 'litellm-batch-outputs/job-123/invocation-def/'}
+            ]
+        },
+        # First subdirectory
+        {
+            'Contents': [
+                {'Key': 'litellm-batch-outputs/job-123/invocation-abc/input.jsonl.out'}
+            ]
+        },
+        # Second subdirectory  
+        {
+            'Contents': [
+                {'Key': 'litellm-batch-outputs/job-123/invocation-def/input.jsonl.out'}
+            ]
+        }
+    ]
+    
+    result = handler._find_bedrock_batch_output_file(
+        mock_s3_client,
+        'my-batch',
+        'litellm-batch-outputs/job-123/'
+    )
+    
+    # Should return concatenation marker for multiple files
+    assert result.startswith('__CONCATENATE__:'), f"Expected concatenation marker, got {result}"
+    
+    file_keys = result.split(':', 1)[1].split(',')
+    assert len(file_keys) == 2
+    assert 'litellm-batch-outputs/job-123/invocation-abc/input.jsonl.out' in file_keys
+    assert 'litellm-batch-outputs/job-123/invocation-def/input.jsonl.out' in file_keys
+    
+    print("✅ Multiple Bedrock batch output files concatenation works correctly")
 
 
 @pytest.mark.asyncio()
