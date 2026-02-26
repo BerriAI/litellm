@@ -1,8 +1,9 @@
 from typing import TYPE_CHECKING, Optional
 
 import litellm
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
-    ContentFilterGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+    ContentFilterGuardrail,
+)
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 if TYPE_CHECKING:
@@ -45,6 +46,11 @@ def initialize_guardrail(
         image_model=getattr(litellm_params, "image_model", None),
         competitor_intent_config=getattr(
             litellm_params, "competitor_intent_config", None
+        ),
+        end_session_after_n_fails=getattr(litellm_params, "end_session_after_n_fails", None),
+        on_violation=getattr(litellm_params, "on_violation", None),
+        realtime_violation_message=getattr(
+            litellm_params, "realtime_violation_message", None
         ),
     )
 

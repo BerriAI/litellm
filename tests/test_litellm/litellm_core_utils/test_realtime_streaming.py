@@ -569,3 +569,115 @@ async def test_realtime_session_created_injects_create_response_false():
     )
 
     litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_end_session_after_n_fails_closes_connection():
+    """
+    Test that end_session_after_n_fails=2 closes the backend websocket after
+    the second guardrail violation in a session.
+    """
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class BadWordGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            for text in inputs.get("texts", []):
+                if "blocked" in text.lower():
+                    raise ValueError("Content blocked by guardrail.")
+            return inputs
+
+    guardrail = BadWordGuardrail(
+        guardrail_name="bad_word_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+        end_session_after_n_fails=2,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    def make_transcript_event(text):
+        return json.dumps({
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": text,
+            "item_id": "item_x",
+        }).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            make_transcript_event("this is blocked"),    # violation 1 — warn
+            make_transcript_event("also blocked again"), # violation 2 — end session
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws.send = AsyncMock()
+    backend_ws.close = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    assert backend_ws.close.called, "Expected backend_ws.close() to be called after 2 violations"
+    assert streaming._violation_count == 2
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_on_violation_end_session_closes_on_first_fail():
+    """
+    Test that on_violation='end_session' closes the session immediately on the
+    first violation, regardless of end_session_after_n_fails.
+    """
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class TopicGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            for text in inputs.get("texts", []):
+                if "stock" in text.lower():
+                    raise ValueError("Topic not allowed: financial advice.")
+            return inputs
+
+    guardrail = TopicGuardrail(
+        guardrail_name="topic_guard",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+        on_violation="end_session",
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "What stock should I buy today?",
+                "item_id": "item_y",
+            }).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws.send = AsyncMock()
+    backend_ws.close = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    assert backend_ws.close.called, "Expected session to close immediately with on_violation=end_session"
+    assert streaming._violation_count == 1
+
+    litellm.callbacks = []  # cleanup
