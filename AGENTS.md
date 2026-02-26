@@ -225,3 +225,11 @@ cd litellm && poetry run ruff check .
 ```
 
 Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.
+
+### Running the UI dashboard (dev mode)
+
+```bash
+cd ui/litellm-dashboard && NEXT_PUBLIC_PROXY_BASE_URL=http://localhost:4000 npx next dev -p 3000
+```
+
+The proxy on port 4000 serves a pre-built static UI from `litellm/proxy/_experimental/out/`. For development, use the Next.js dev server on port 3000 which picks up live code changes. The `next lint` script has a pre-existing issue (tries to find a `lint` directory); `npm run build` is the reliable check for TypeScript/compilation errors. Vitest tests: `npx vitest run --pool=forks` (full suite may take several minutes; filter to specific dirs for faster feedback).
