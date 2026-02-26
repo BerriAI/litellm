@@ -263,8 +263,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 return []
             realtime_input_dict["text"] = text
         else:
-            # Pass through any other message types as raw text
-            realtime_input_dict["text"] = message
+            # Unknown/unsupported OpenAI event type — drop silently rather than
+            # forwarding raw JSON as text input to the model.
+            return []
 
         if len(realtime_input_dict) != 1:
             raise ValueError(

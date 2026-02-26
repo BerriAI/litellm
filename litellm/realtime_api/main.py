@@ -310,6 +310,33 @@ async def _realtime_health_check(
         url = xai_realtime._construct_url(
             api_base=api_base or "https://api.x.ai/v1", query_params={"model": model}
         )
+    elif custom_llm_provider == "vertex_ai":
+        vertex_location = litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
+        resolved_location = vertex_llm_base.get_vertex_region(
+            vertex_region=vertex_location, model=model
+        )
+        access_token, resolved_project = await vertex_llm_base._ensure_access_token_async(
+            credentials=None,
+            project_id=litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT"),
+            custom_llm_provider="vertex_ai",
+        )
+        vertex_realtime_config = VertexAIRealtimeConfig(
+            access_token=access_token,
+            project=resolved_project,
+            location=resolved_location,
+        )
+        url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
+        ssl_context = get_shared_realtime_ssl_context()
+        headers = vertex_realtime_config.validate_environment(
+            headers={}, model=model, api_key=None
+        )
+        async with websockets.connect(  # type: ignore
+            url,
+            additional_headers=headers,
+            max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+            ssl=ssl_context,
+        ):
+            return True
     else:
         raise ValueError(f"Unsupported model: {model}")
     ssl_context = get_shared_realtime_ssl_context()
