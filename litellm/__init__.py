@@ -16,7 +16,8 @@ import os
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
 
-_dotenv.load_dotenv()
+if os.getenv("LITELLM_MODE", "DEV") == "DEV":
+    _dotenv.load_dotenv()
 
 from typing import (
     Callable,
