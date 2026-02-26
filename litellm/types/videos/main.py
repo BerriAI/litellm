@@ -1,7 +1,8 @@
 from typing import Any, Dict, List, Literal, Optional
-from typing_extensions import TypedDict
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
+
 from litellm.types.utils import FileTypes
 
 
@@ -72,6 +73,8 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     Params here: https://platform.openai.com/docs/api-reference/videos/create
     """
     input_reference: Optional[FileTypes]  # File reference for input image
+    image: Optional[Any]  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
+    parameters: Optional[Dict[str, Any]]  # Provider-specific parameters block passed directly to the API
     model: Optional[str]
     seconds: Optional[str]
     size: Optional[str]
