@@ -10,7 +10,7 @@ cryptography==46.0.5 #GHSA-r6ph-v2qm-q3c2
 
 anyio==4.8.0 # openai + http req.
 httpx==0.28.1
-openai==2.9.0  # openai req.
+openai==2.24.0  # openai req.
 fastapi==0.120.1 # server dep
 starlette==0.49.1 # starlette fastapi dep
 backoff==2.2.1 # server dep
@@ -57,7 +57,7 @@ grpcio>=1.75.0; python_version >= "3.14"
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.47 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.48 # for proxy extras - e.g. prisma migrations
 llm-sandbox==0.3.31 # for skill execution in sandbox
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
