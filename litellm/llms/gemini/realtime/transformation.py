@@ -226,35 +226,46 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 message_str = str(message)
             raise ValueError(f"Invalid JSON message: {message_str}")
 
-        ## HANDLE SESSION UPDATE ##
         messages: List[str] = []
-        if "type" in json_message and json_message["type"] == "session.update":
+        msg_type = json_message.get("type")
+
+        ## HANDLE SESSION UPDATE — translate to Gemini setup; no realtime_input needed ##
+        if msg_type == "session.update":
             client_session_configuration_request = self.map_openai_params(
                 optional_params={}, non_default_params=json_message["session"]
             )
             client_session_configuration_request["model"] = f"models/{model}"
-
             messages.append(
-                json.dumps(
-                    {
-                        "setup": client_session_configuration_request,
-                    }
-                )
+                json.dumps({"setup": client_session_configuration_request})
             )
-        # elif session_configuration_request is None:
-        #     default_session_configuration_request = self.session_configuration_request(model)
-        #     messages.append(default_session_configuration_request)
+            return messages
+
+        ## HANDLE response.create — Gemini responds automatically; nothing to forward ##
+        if msg_type == "response.create":
+            return []
 
         ## HANDLE INPUT AUDIO BUFFER ##
-        if (
-            "type" in json_message
-            and json_message["type"] == "input_audio_buffer.append"
-        ):
+        if msg_type == "input_audio_buffer.append":
             realtime_input_dict["audio"] = HttpxBlobType(
                 mimeType=self.get_audio_mime_type(), data=json_message["audio"]
             )
+        ## HANDLE conversation.item.create — extract actual user text ##
+        elif msg_type == "conversation.item.create":
+            item = json_message.get("item", {})
+            content_list = item.get("content", [])
+            text_parts = [
+                c.get("text", "")
+                for c in content_list
+                if isinstance(c, dict) and c.get("type") == "input_text"
+            ]
+            text = " ".join(filter(None, text_parts))
+            if not text:
+                return []
+            realtime_input_dict["text"] = text
         else:
-            realtime_input_dict["text"] = message
+            # Unknown/unsupported OpenAI event type — drop silently rather than
+            # forwarding raw JSON as text input to the model.
+            return []
 
         if len(realtime_input_dict) != 1:
             raise ValueError(
@@ -301,9 +312,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if _system_instruction is not None and isinstance(_system_instruction, str):
             session["instructions"] = _system_instruction
         if _model is not None and isinstance(_model, str):
-            session["model"] = _model.strip(
-                "models/"
-            )  # keep it consistent with how openai returns the model name
+            # Normalise to bare model name for OpenAI compatibility.
+            # Vertex AI uses a full resource path:
+            #   projects/{project}/locations/{location}/publishers/google/models/{model}
+            # Google AI Studio uses:
+            #   models/{model}
+            if "/models/" in _model:
+                session["model"] = _model.split("/models/")[-1]
+            elif _model.startswith("models/"):
+                session["model"] = _model[len("models/"):]
+            else:
+                session["model"] = _model
 
         return OpenAIRealtimeStreamSessionEvents(
             type="session.created",
@@ -435,7 +454,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     if "text" in part:
                         delta += part["text"]
                     elif "inlineData" in part:
-                        delta += part["inlineData"]["data"]
+                        delta += part["inlineData"].get("data", "")
         except Exception as e:
             raise ValueError(
                 f"Error transforming content delta events: {e}, got message: {message}"
@@ -466,10 +485,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             delta = "".join([delta_chunk["delta"] for delta_chunk in delta_chunks])
         else:
             delta = ""
-        if current_output_item_id is None or current_response_id is None:
-            raise ValueError(
-                "current_output_item_id and current_response_id cannot be None for a 'done' event."
-            )
+        if current_output_item_id is None:
+            current_output_item_id = "item_{}".format(uuid.uuid4())
+        if current_response_id is None:
+            current_response_id = "resp_{}".format(uuid.uuid4())
         if delta_type == "text":
             return OpenAIRealtimeResponseTextDone(
                 type="response.text.done",
@@ -503,10 +522,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         - return response.content_part.done
         - return response.output_item.done
         """
-        if current_output_item_id is None or current_response_id is None:
-            raise ValueError(
-                "current_output_item_id and current_response_id cannot be None for a 'done' event."
-            )
+        if current_output_item_id is None:
+            current_output_item_id = "item_{}".format(uuid.uuid4())
+        if current_response_id is None:
+            current_response_id = "resp_{}".format(uuid.uuid4())
         returned_items: List[OpenAIRealtimeEvents] = []
 
         delta_done_event_text = cast(Optional[str], delta_done_event.get("text"))
@@ -644,10 +663,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         output_items: Optional[List[OpenAIRealtimeOutputItemDone]],
         session_configuration_request: Optional[str] = None,
     ) -> OpenAIRealtimeDoneEvent:
-        if current_conversation_id is None or current_response_id is None:
-            raise ValueError(
-                f"current_conversation_id and current_response_id must all be set for a 'done' event. Got=current_conversation_id: {current_conversation_id}, current_response_id: {current_response_id}"
-            )
+        if current_conversation_id is None:
+            current_conversation_id = "conv_{}".format(uuid.uuid4())
+        if current_response_id is None:
+            current_response_id = "resp_{}".format(uuid.uuid4())
 
         if session_configuration_request:
             session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
@@ -758,9 +777,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
             returned_message = [transformed_content_done_event]
 
+            # Use IDs from the done event — transform_content_done_event may have
+            # generated UUID fallbacks when the originals were None.
+            resolved_item_id = transformed_content_done_event.get("item_id") or current_output_item_id
+            resolved_response_id = transformed_content_done_event.get("response_id") or current_response_id
+
             additional_items = self.return_additional_content_done_events(
-                current_output_item_id=current_output_item_id,
-                current_response_id=current_response_id,
+                current_output_item_id=resolved_item_id,
+                current_response_id=resolved_response_id,
                 delta_done_event=transformed_content_done_event,
                 delta_type=delta_type,
             )
