@@ -70,9 +70,9 @@ class RealTimeStreaming:
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
         self.request_data: Dict = request_data or {}
-        # Set to True after a text-input guardrail block so we can swallow the client's
-        # subsequent response.create (which would conflict with the block response).
-        self._swallow_next_response_create: bool = False
+        # Counter of pending response.create messages to swallow (incremented on each
+        # text-input block so consecutive blocks are handled correctly).
+        self._swallow_pending_response_creates: int = 0
 
     def _should_store_message(
         self,
@@ -257,6 +257,24 @@ class RealTimeStreaming:
             for cb in litellm.callbacks
         )
 
+    def _has_audio_transcription_guardrails(self) -> bool:
+        """Return True if any callback needs to run on audio transcriptions (VAD path).
+
+        When this returns True, we inject a session.update to disable the LLM's
+        auto-response so the guardrail can gate it first.
+        """
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return any(
+            isinstance(cb, CustomGuardrail)
+            and cb.should_run_guardrail(
+                data=self.request_data,
+                event_type=GuardrailEventHooks.realtime_input_transcription,
+            )
+            for cb in litellm.callbacks
+        )
+
     async def run_realtime_guardrails(
         self,
         transcript: str,
@@ -366,6 +384,23 @@ class RealTimeStreaming:
         )
         for event in events:
             event_str = json.dumps(event)
+            ## For audio/VAD guardrail path: forward session.created first, then inject.
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "session.created"
+                and self._has_audio_transcription_guardrails()
+            ):
+                self.store_message(event_str)
+                await self.websocket.send_text(event_str)
+                await self._send_to_backend(
+                    json.dumps(
+                        {
+                            "type": "session.update",
+                            "session": {"turn_detection": {"create_response": False}},
+                        }
+                    )
+                )
+                continue
             ## GUARDRAIL: run on transcription events in provider_config path too
             if (
                 isinstance(event, dict)
@@ -395,6 +430,27 @@ class RealTimeStreaming:
         """
         try:
             event_obj = json.loads(raw_response)
+
+            # For audio/VAD guardrail path: once the session is ready, tell the backend
+            # not to auto-respond after VAD detects end-of-speech.  We send the
+            # session.created to the client FIRST so the client is always in sync, then
+            # inject the session.update so a potential error from the backend doesn't
+            # arrive before the client sees session.created.
+            if (
+                event_obj.get("type") == "session.created"
+                and self._has_audio_transcription_guardrails()
+            ):
+                self.store_message(raw_response)
+                await self.websocket.send_text(raw_response)
+                await self._send_to_backend(
+                    json.dumps(
+                        {
+                            "type": "session.update",
+                            "session": {"turn_detection": {"create_response": False}},
+                        }
+                    )
+                )
+                return True
 
             if (
                 event_obj.get("type")
@@ -467,9 +523,10 @@ class RealTimeStreaming:
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
 
-                    # Swallow the client's response.create if we just blocked an item.
-                    if msg_type == "response.create" and self._swallow_next_response_create:
-                        self._swallow_next_response_create = False
+                    # Swallow the client's response.create if any items were blocked
+                    # (use a counter so consecutive blocks are handled correctly).
+                    if msg_type == "response.create" and self._swallow_pending_response_creates > 0:
+                        self._swallow_pending_response_creates -= 1
                         continue  # block response already sent by guardrail
 
                     if msg_type == "conversation.item.create":
@@ -488,7 +545,7 @@ class RealTimeStreaming:
                                     combined_text
                                 )
                                 if blocked:
-                                    self._swallow_next_response_create = True
+                                    self._swallow_pending_response_creates += 1
                                     continue  # don't forward to backend
 
                 except (json.JSONDecodeError, AttributeError):

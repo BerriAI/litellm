@@ -32,6 +32,15 @@ vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
+def _build_litellm_metadata(kwargs: dict) -> dict:
+    """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
+    metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
+    guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
+    if guardrails:
+        metadata["guardrails"] = guardrails
+    return metadata
+
+
 @wrapper_client
 async def _arealtime(
     model: str,
@@ -134,6 +143,8 @@ async def _arealtime(
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "openai":
         api_base = (
@@ -150,11 +161,6 @@ async def _arealtime(
             or get_secret_str("OPENAI_API_KEY")
         )
 
-        # Build metadata for guardrail checking.
-        _litellm_metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
-        _guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
-        if _guardrails:
-            _litellm_metadata["guardrails"] = _guardrails
         await openai_realtime.async_realtime(
             model=model,
             websocket=websocket,
@@ -165,7 +171,7 @@ async def _arealtime(
             timeout=timeout,
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
-            litellm_metadata=_litellm_metadata,
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
@@ -223,6 +229,8 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "vertex_ai":
         vertex_credentials = (

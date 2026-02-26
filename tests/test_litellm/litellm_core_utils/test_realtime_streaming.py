@@ -591,6 +591,12 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
         f"Blocked item should not be forwarded to backend, got: {forwarded_items}"
     )
 
+    # ASSERT: counter was incremented and is now back to 0 after we confirmed the block
+    # (the loop stopped before a response.create came in, so it stays at 1)
+    assert streaming._swallow_pending_response_creates == 1, (
+        "Counter should be 1 since no response.create arrived to consume it"
+    )
+
     litellm.callbacks = []  # cleanup
 
 
@@ -623,5 +629,191 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
     assert streaming._has_realtime_guardrails() is True, (
         "pre_call guardrail should be recognized as a realtime guardrail"
     )
+    # pre_call guardrail should NOT trigger the audio/VAD session.update injection
+    assert streaming._has_audio_transcription_guardrails() is False, (
+        "pre_call guardrail should not trigger audio transcription guardrail path"
+    )
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_created_injects_session_update_for_audio_guardrail():
+    """
+    Test that when an audio transcription guardrail is configured, a session.created
+    event from the backend triggers a session.update injection (create_response: false)
+    AFTER forwarding session.created to the client.  This prevents the LLM from
+    auto-responding before the guardrail can run on the transcript.
+    """
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class AudioGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    guardrail = AudioGuardrail(
+        guardrail_name="audio-guardrail",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    session_created_event = json.dumps(
+        {"type": "session.created", "session": {"id": "sess_abc"}}
+    ).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[session_created_event, ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    # session.created must be forwarded to the client
+    sent_to_client = [
+        json.loads(c.args[0]) for c in client_ws.send_text.call_args_list if c.args
+    ]
+    session_created_events = [e for e in sent_to_client if e.get("type") == "session.created"]
+    assert len(session_created_events) == 1, (
+        f"session.created should be forwarded to client, got: {sent_to_client}"
+    )
+
+    # session.update must be sent to the backend AFTER session.created was forwarded
+    sent_to_backend = [
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
+    ]
+    session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
+    assert len(session_updates) == 1, (
+        f"Expected one session.update injected to backend, got: {sent_to_backend}"
+    )
+    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_created_no_injection_for_pre_call_only():
+    """
+    Test that when only a pre_call guardrail is configured (no audio transcription),
+    session.created does NOT trigger the session.update injection.
+    """
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class PreCallGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    guardrail = PreCallGuardrail(
+        guardrail_name="pre-call-only",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    session_created_event = json.dumps(
+        {"type": "session.created", "session": {"id": "sess_xyz"}}
+    ).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[session_created_event, ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    # No session.update should be injected
+    sent_to_backend = [
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
+    ]
+    session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
+    assert len(session_updates) == 0, (
+        f"pre_call guardrail should NOT inject session.update, got: {sent_to_backend}"
+    )
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_swallow_pending_response_creates_counter_consecutive_blocks():
+    """
+    Test that consecutive blocked items correctly increment the counter so that
+    each subsequent response.create is swallowed, not just the first.
+    """
+    from fastapi import HTTPException
+
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class AlwaysBlock(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise HTTPException(status_code=403, detail={"error": "blocked"})
+
+    guardrail = AlwaysBlock(
+        guardrail_name="always-block",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+
+    item_create = json.dumps({
+        "type": "conversation.item.create",
+        "item": {"role": "user", "content": [{"type": "input_text", "text": "bad text"}]},
+    })
+    response_create = json.dumps({"type": "response.create"})
+
+    # Two blocked items, each followed by a response.create
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            item_create,
+            response_create,
+            item_create,
+            response_create,
+            Exception("done"),
+        ]
+    )
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.client_ack_messages()
+
+    # Neither item_create nor response_create should have been forwarded
+    assert backend_ws.send.call_count == 0, (
+        f"No messages should be forwarded to backend when all are blocked, "
+        f"got {backend_ws.send.call_count} sends"
+    )
+    # Counter should be back to 0 (both response.creates consumed the increments)
+    assert streaming._swallow_pending_response_creates == 0
 
     litellm.callbacks = []  # cleanup
