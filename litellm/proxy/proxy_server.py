@@ -8855,6 +8855,99 @@ def _enrich_model_info_with_litellm_data(
     return model
 
 
+async def _get_db_only_models(
+    all_models: List[Dict[str, Any]],
+    prisma_client: Any,
+    proxy_config: Any,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    page: int = 1,
+    size: int = 50,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Fetch models from the database that are NOT already loaded in the router.
+
+    Some DB models may fail to sync into the router (e.g. due to decryption errors
+    or invalid params with ignore_invalid_deployments=True). This function ensures
+    those models still appear in the model list.
+
+    Args:
+        all_models: Models already in the router
+        prisma_client: Prisma client for database queries
+        proxy_config: Proxy config for decrypting models
+        search: Optional search term (case-insensitive)
+        sort_by: Optional sort field
+        page: Current page number
+        size: Page size
+
+    Returns:
+        Tuple of (db_only_models, db_only_count)
+    """
+    # Collect IDs of DB models already in the router
+    db_model_ids_in_router: set = set()
+    for m in all_models:
+        model_info = m.get("model_info", {})
+        if model_info.get("db_model", False):
+            model_id = model_info.get("id")
+            if model_id:
+                db_model_ids_in_router.add(model_id)
+
+    # Build where condition - exclude models already in the router
+    db_where_condition: Dict[str, Any] = {}
+    if db_model_ids_in_router:
+        db_where_condition["model_id"] = {
+            "not": {"in": list(db_model_ids_in_router)}
+        }
+
+    # Add search filter if provided
+    if search and search.strip():
+        db_where_condition["model_name"] = {
+            "contains": search.lower().strip(),
+            "mode": "insensitive",
+        }
+
+    try:
+        db_only_count = await prisma_client.db.litellm_proxymodeltable.count(
+            where=db_where_condition
+        )
+
+        if db_only_count == 0:
+            return [], 0
+
+        # Determine how many to fetch
+        router_models_count = len(all_models)
+        models_needed_for_page = size * page
+
+        if sort_by:
+            # Need all for correct sorting
+            take = db_only_count
+        else:
+            # Only fetch what's needed for the current page
+            take = max(0, models_needed_for_page - router_models_count)
+            take = min(take, db_only_count)
+
+        if take <= 0:
+            return [], db_only_count
+
+        db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
+            where=db_where_condition,
+            take=take,
+        )
+
+        db_models: List[Dict[str, Any]] = []
+        for db_model in db_models_raw:
+            decrypted = proxy_config.decrypt_model_list_from_db([db_model])
+            if decrypted:
+                db_models.extend(decrypted)
+
+        return db_models, db_only_count
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Error querying database for db-only models: {str(e)}"
+        )
+        return [], 0
+
+
 async def _apply_search_filter_to_models(
     all_models: List[Dict[str, Any]],
     search: str,
@@ -8865,7 +8958,8 @@ async def _apply_search_filter_to_models(
     sort_by: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     """
-    Apply search filter to models, querying database for additional matching models.
+    Apply search filter to models, querying database for additional matching models
+    that may not be loaded in the router.
 
     Args:
         all_models: List of models to filter
@@ -8877,122 +8971,43 @@ async def _apply_search_filter_to_models(
         sort_by: Optional sort field - if provided, fetch all matching models instead of paginating at DB level
 
     Returns:
-        Tuple of (filtered_models, total_count). total_count is None if not searching.
+        Tuple of (filtered_models, total_count). total_count is None if no DB-only models exist and not searching.
     """
-    if not search or not search.strip():
+    is_searching = bool(search and search.strip())
+
+    if is_searching:
+        search_lower = search.lower().strip()
+        # Filter router models by search term
+        filtered_router_models = [
+            m for m in all_models if search_lower in m.get("model_name", "").lower()
+        ]
+    else:
+        filtered_router_models = all_models
+
+    # Query database for models not in the router
+    db_only_models: List[Dict[str, Any]] = []
+    db_only_count = 0
+    if prisma_client is not None:
+        db_only_models, db_only_count = await _get_db_only_models(
+            all_models=all_models,
+            prisma_client=prisma_client,
+            proxy_config=proxy_config,
+            search=search if is_searching else None,
+            sort_by=sort_by,
+            page=page,
+            size=size,
+        )
+
+    total_count = len(filtered_router_models) + db_only_count
+
+    # If not searching and no DB-only models, return None for total_count
+    # to preserve the original pagination behavior
+    if not is_searching and db_only_count == 0:
         return all_models, None
 
-    search_lower = search.lower().strip()
-
-    # Filter models in router by search term
-    filtered_router_models = [
-        m for m in all_models if search_lower in m.get("model_name", "").lower()
-    ]
-
-    # Separate filtered models into config vs db models, and track db model IDs
-    filtered_config_models = []
-    db_model_ids_in_router = set()
-
-    for m in filtered_router_models:
-        model_info = m.get("model_info", {})
-        is_db_model = model_info.get("db_model", False)
-        model_id = model_info.get("id")
-
-        if is_db_model and model_id:
-            db_model_ids_in_router.add(model_id)
-        else:
-            filtered_config_models.append(m)
-
-    config_models_count = len(filtered_config_models)
-    db_models_in_router_count = len(db_model_ids_in_router)
-    router_models_count = config_models_count + db_models_in_router_count
-
-    # Query database for additional models with search term
-    db_models = []
-    db_models_total_count = 0
-    models_needed_for_page = size * page
-
-    # Only query database if prisma_client is available
-    if prisma_client is not None:
-        try:
-            # Build where condition for database query
-            db_where_condition: Dict[str, Any] = {
-                "model_name": {
-                    "contains": search_lower,
-                    "mode": "insensitive",
-                }
-            }
-            # Exclude models already in router if we have any
-            if db_model_ids_in_router:
-                db_where_condition["model_id"] = {
-                    "not": {"in": list(db_model_ids_in_router)}
-                }
-
-            # Get total count of matching database models
-            db_models_total_count = (
-                await prisma_client.db.litellm_proxymodeltable.count(
-                    where=db_where_condition
-                )
-            )
-
-            # Calculate total count for search results
-            search_total_count = router_models_count + db_models_total_count
-
-            # If sorting is requested, we need to fetch ALL matching models to sort correctly
-            # Otherwise, we can optimize by only fetching what's needed for the current page
-            if sort_by:
-                # Fetch all matching database models for sorting
-                if db_models_total_count > 0:
-                    db_models_raw = (
-                        await prisma_client.db.litellm_proxymodeltable.find_many(
-                            where=db_where_condition,
-                            take=db_models_total_count,  # Fetch all matching models
-                        )
-                    )
-
-                    # Convert database models to router format
-                    for db_model in db_models_raw:
-                        decrypted_models = proxy_config.decrypt_model_list_from_db(
-                            [db_model]
-                        )
-                        if decrypted_models:
-                            db_models.extend(decrypted_models)
-            else:
-                # Fetch database models if we need more for the current page
-                if router_models_count < models_needed_for_page:
-                    models_to_fetch = min(
-                        models_needed_for_page - router_models_count,
-                        db_models_total_count,
-                    )
-
-                    if models_to_fetch > 0:
-                        db_models_raw = (
-                            await prisma_client.db.litellm_proxymodeltable.find_many(
-                                where=db_where_condition,
-                                take=models_to_fetch,
-                            )
-                        )
-
-                        # Convert database models to router format
-                        for db_model in db_models_raw:
-                            decrypted_models = proxy_config.decrypt_model_list_from_db(
-                                [db_model]
-                            )
-                            if decrypted_models:
-                                db_models.extend(decrypted_models)
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error querying database models with search: {str(e)}"
-            )
-            # If error, use router models count as fallback
-            search_total_count = router_models_count
-    else:
-        # If no prisma_client, only use router models
-        search_total_count = router_models_count
-
-    # Combine all models
-    filtered_models = filtered_router_models + db_models
-    return filtered_models, search_total_count
+    # Combine router models with DB-only models
+    filtered_models = filtered_router_models + db_only_models
+    return filtered_models, total_count
 
 
 def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
