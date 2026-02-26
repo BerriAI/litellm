@@ -33,6 +33,7 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.health_endpoints.backlog_health import BacklogHealth
 from litellm.secret_managers.main import get_secret
 
 #### Health ENDPOINTS ####
@@ -1130,7 +1131,6 @@ async def _db_health_readiness_check():
         PrismaDBExceptionHandler.handle_db_exception(e)
         return db_health_cache
 
-
 @router.get(
     "/settings",
     tags=["health"],
@@ -1298,6 +1298,20 @@ async def health_readiness():
 
 
 @router.get(
+    "/health/backlog",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_backlog(
+    port: Optional[int] = fastapi.Query(
+        None, description="Port to inspect. Defaults to PORT env var or 4000."
+    ),
+):
+    resolved_port = port or int(os.getenv("PORT", "4000"))
+    return BacklogHealth.get_cached_listen_queue_stats(port=resolved_port)
+
+
+@router.get(
     "/health/liveliness",  # Historical LiteLLM name; doesn't match k8s terminology but kept for backwards compatibility
     tags=["health"],
 )
@@ -1320,6 +1334,23 @@ async def health_liveliness():
 async def health_readiness_options():
     """
     Options endpoint for health/readiness check.
+    """
+    response_headers = {
+        "Allow": "GET, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    return Response(headers=response_headers, status_code=200)
+
+
+@router.options(
+    "/health/backlog",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_backlog_options():
+    """
+    Options endpoint for health/backlog check.
     """
     response_headers = {
         "Allow": "GET, OPTIONS",

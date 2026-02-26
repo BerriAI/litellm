@@ -23,6 +23,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.proxy.health_endpoints.backlog_health import BacklogHealth
 
 # Import shared proxy test helpers from conftest
 from tests.test_litellm.proxy.conftest import create_proxy_test_client
@@ -479,6 +480,72 @@ def test_health_readiness(proxy_client):
             f"Unexpected db status: {db_status}"
     
     print("="*60 + "\n")
+
+
+def test_parse_linux_ss_listen_queue():
+    sample_output = """State  Recv-Q Send-Q Local Address:Port  Peer Address:Port
+LISTEN 3      128    0.0.0.0:4000        0.0.0.0:*
+"""
+    result = BacklogHealth.parse_linux_ss_listen_queue(output=sample_output, port=4000)
+    assert result["listen_queue_current"] == 3
+    assert result["listen_queue_max"] == 128
+
+
+def test_parse_macos_netstat_listen_queue():
+    sample_output = """Current listen queue sizes (qlen/incqlen/maxqlen)
+tcp4       2/0/128      *.4000               *.*                    LISTEN
+"""
+    result = BacklogHealth.parse_macos_netstat_listen_queue(
+        output=sample_output, port=4000
+    )
+    assert result["listen_queue_current"] == 2
+    assert result["listen_queue_max"] == 128
+
+
+def test_get_cached_listen_queue_stats_uses_cache():
+    mock_stats = {
+        "status": "healthy",
+        "port": 4000,
+        "listen_queue_current": 1,
+        "listen_queue_max": 128,
+        "listen_queue_utilization": 0.0078,
+        "listen_queue_status": "ok",
+        "sampled_at": "2026-02-26T00:00:00Z",
+    }
+    BacklogHealth.cache = {"last_updated": datetime.min, "port": None, "data": None}
+    with patch(
+        "litellm.proxy.health_endpoints.backlog_health.BacklogHealth.read_listen_queue_stats_for_port",
+        return_value=mock_stats,
+    ) as mock_reader:
+        first = BacklogHealth.get_cached_listen_queue_stats(port=4000, ttl_seconds=30)
+        second = BacklogHealth.get_cached_listen_queue_stats(port=4000, ttl_seconds=30)
+
+    assert first == second
+    assert mock_reader.call_count == 1
+
+
+def test_health_backlog_endpoint(proxy_client):
+    mock_stats = {
+        "status": "healthy",
+        "port": 4000,
+        "source": "ss",
+        "listen_queue_current": 7,
+        "listen_queue_max": 128,
+        "listen_queue_utilization": 0.0547,
+        "listen_queue_status": "ok",
+        "sampled_at": "2026-02-26T00:00:00Z",
+    }
+    with patch(
+        "litellm.proxy.health_endpoints._health_endpoints.BacklogHealth.get_cached_listen_queue_stats",
+        return_value=mock_stats,
+    ):
+        response = proxy_client.get("/health/backlog")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "healthy"
+    assert payload["listen_queue_current"] == 7
+    assert payload["listen_queue_max"] == 128
 
 
 def test_get_callback_identifier_string_and_object_with_callback_name():
