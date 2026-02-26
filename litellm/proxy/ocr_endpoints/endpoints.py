@@ -1,7 +1,7 @@
 #### OCR Endpoints #####
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import orjson
 from fastapi import APIRouter, Depends, Request, Response, UploadFile
@@ -70,6 +70,8 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
         raise ValueError(
             "Multipart OCR request must include a 'file' field with the document to process"
         )
+
+    uploaded_file = cast(UploadFile, uploaded_file)
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
