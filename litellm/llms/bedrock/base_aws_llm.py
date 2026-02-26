@@ -70,7 +70,6 @@ class BaseAWSLLM:
             "aws_role_name",
             "aws_web_identity_token",
             "aws_sts_endpoint",
-            "aws_bedrock_runtime_endpoint",
             "aws_external_id",
         ]
 
