@@ -32,8 +32,17 @@ vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
+def _build_litellm_metadata(kwargs: dict) -> dict:
+    """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
+    metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
+    guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
+    if guardrails:
+        metadata["guardrails"] = guardrails
+    return metadata
+
+
 @wrapper_client
-async def _arealtime(
+async def _arealtime(  # noqa: PLR0915
     model: str,
     websocket: Any,  # fastapi websocket
     api_base: Optional[str] = None,
@@ -134,6 +143,8 @@ async def _arealtime(
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "openai":
         api_base = (
@@ -160,6 +171,7 @@ async def _arealtime(
             timeout=timeout,
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
@@ -217,6 +229,8 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "vertex_ai":
         vertex_credentials = (

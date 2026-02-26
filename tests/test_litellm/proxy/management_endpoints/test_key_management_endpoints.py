@@ -45,6 +45,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     check_team_key_model_specific_limits,
     delete_verification_tokens,
     generate_key_helper_fn,
+    key_aliases,
     list_keys,
     prepare_key_update_data,
     reset_key_spend_fn,
@@ -6194,15 +6195,14 @@ async def test_generate_key_helper_fn_agent_id():
     )
     mock_prisma_client.insert_data = mock_insert
 
-    with patch.object(km, "prisma_client", mock_prisma_client):
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            await generate_key_helper_fn(
-                request_type="key",
-                agent_id="test-agent-456",
-                key_alias="test-agent-key",
-                models=[],
-                table_name="key",
-            )
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await generate_key_helper_fn(
+            request_type="key",
+            agent_id="test-agent-456",
+            key_alias="test-agent-key",
+            models=[],
+            table_name="key",
+        )
 
     assert mock_insert.called, "insert_data was never called"
     # insert_data is called as insert_data(data=key_data, ...)
@@ -6211,3 +6211,97 @@ async def test_generate_key_helper_fn_agent_id():
     assert key_data.get("agent_id") == "test-agent-456", (
         f"Expected agent_id='test-agent-456' in key_data, got: {key_data.get('agent_id')}"
     )
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_response_shape():
+    """Test that key_aliases returns the correct paginated response shape."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 2}],
+            [{"key_alias": "alias-alpha"}, {"key_alias": "alias-beta"}],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(page=1, size=50, search=None)
+
+    assert result["aliases"] == ["alias-alpha", "alias-beta"]
+    assert result["total_count"] == 2
+    assert result["current_page"] == 1
+    assert result["total_pages"] == 1
+    assert result["size"] == 50
+
+    # Both SQL calls must filter out null/empty aliases
+    count_sql = mock_prisma_client.db.query_raw.call_args_list[0].args[0]
+    aliases_sql = mock_prisma_client.db.query_raw.call_args_list[1].args[0]
+    assert "key_alias IS NOT NULL" in count_sql
+    assert "key_alias IS NOT NULL" in aliases_sql
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_pagination_skip_take():
+    """Test that LIMIT and OFFSET are correctly derived from page and size."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 120}],
+            [],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(page=3, size=25, search=None)
+
+    assert result["current_page"] == 3
+    assert result["size"] == 25
+    assert result["total_count"] == 120
+    assert result["total_pages"] == 5  # ceil(120 / 25)
+
+    # aliases query params: [UI_SESSION_TOKEN_TEAM_ID, size=25, offset=50]
+    aliases_call_args = mock_prisma_client.db.query_raw.call_args_list[1].args
+    assert aliases_call_args[-2] == 25   # LIMIT = size
+    assert aliases_call_args[-1] == 50   # OFFSET = (3 - 1) * 25
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_search_filter():
+    """Test that the search param adds a case-insensitive ILIKE condition."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 0}],
+            [],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await key_aliases(page=1, size=50, search="my-key")
+
+    count_call = mock_prisma_client.db.query_raw.call_args_list[0]
+    count_sql = count_call.args[0]
+    count_params = count_call.args[1:]
+
+    assert "ILIKE" in count_sql
+    assert "%my-key%" in count_params
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_no_search_omits_ilike_filter():
+    """Test that without a search term no ILIKE condition is added."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=[
+            [{"count": 0}],
+            [],
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await key_aliases(page=1, size=50, search=None)
+
+    count_sql = mock_prisma_client.db.query_raw.call_args_list[0].args[0]
+    assert "ILIKE" not in count_sql
+
+

@@ -75,6 +75,7 @@ async def test_form_data_parsing():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -123,6 +124,7 @@ async def test_form_data_with_json_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -163,6 +165,7 @@ async def test_form_data_with_invalid_json_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Should raise JSONDecodeError when trying to parse invalid JSON metadata
     with pytest.raises(json.JSONDecodeError):
@@ -189,6 +192,7 @@ async def test_form_data_without_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "application/x-www-form-urlencoded"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -219,6 +223,7 @@ async def test_form_data_with_empty_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -256,6 +261,7 @@ async def test_form_data_with_dict_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)
@@ -286,6 +292,7 @@ async def test_form_data_with_none_metadata():
     mock_request.form = AsyncMock(return_value=test_data)
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.scope = {}
+    mock_request.state._cached_headers = None
 
     # Parse the form data
     result = await _read_request_body(mock_request)

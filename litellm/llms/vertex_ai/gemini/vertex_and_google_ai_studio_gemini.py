@@ -269,6 +269,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "logprobs",
             "top_logprobs",
             "modalities",
+            "audio",
             "parallel_tool_calls",
             "web_search_options",
         ]
