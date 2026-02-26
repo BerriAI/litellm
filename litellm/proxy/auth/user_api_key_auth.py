@@ -208,6 +208,13 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     if not authorization:
         api_key = websocket.headers.get("api-key")
         if not api_key:
+            # Try extracting from WebSocket subprotocol (browser clients)
+            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+                protocol = protocol.strip()
+                if protocol.startswith("openai-insecure-api-key."):
+                    api_key = protocol[len("openai-insecure-api-key."):]
+                    break
+        if not api_key:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
     else:
@@ -395,10 +402,8 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                     endpoint.get("custom_auth_parser") is not None
                     and endpoint.get("custom_auth_parser") == "langfuse"
                 ):
-                    """
-                    - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
-                    - check the langfuse public key if it contains the litellm api key
-                    """
+                    # langfuse returns {'Authorization': 'Basic <base64(username:password)>'}
+                    # check the langfuse public key if it contains the litellm api key
                     import base64
 
                     api_key = api_key.replace("Basic ", "").strip()
@@ -593,9 +598,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         user_id=user_id,
                         team_id=team_id,
                         team_alias=(
-                            team_object.team_alias
-                            if team_object is not None
-                            else None
+                            team_object.team_alias if team_object is not None else None
                         ),
                         team_metadata=team_object.metadata
                         if team_object is not None
@@ -709,12 +712,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
                     api_key=api_key,
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_role=LitellmUserRoles.INTERNAL_USER,
                     parent_otel_span=parent_otel_span,
                 )
             else:
                 return UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_role=LitellmUserRoles.INTERNAL_USER,
                     parent_otel_span=parent_otel_span,
                 )
         elif api_key is None:  # only require api key if master key is set
@@ -846,7 +849,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
             valid_token.parent_otel_span = parent_otel_span
             if _end_user_object is not None:
-                valid_token.end_user_object_permission = _end_user_object.object_permission
+                valid_token.end_user_object_permission = (
+                    _end_user_object.object_permission
+                )
 
             return valid_token
 
@@ -954,7 +959,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(
                 api_key, str
             ):  # if generated token, make sure it starts with sk-.
-                _masked_key = "{}****{}".format(api_key[:4], api_key[-4:]) if len(api_key) > 8 else "****"
+                _masked_key = (
+                    "{}****{}".format(api_key[:4], api_key[-4:])
+                    if len(api_key) > 8
+                    else "****"
+                )
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
@@ -1304,9 +1313,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
-                valid_token_dict["end_user_object_permission"] = (
-                    _end_user_object.object_permission
-                )
+                valid_token_dict[
+                    "end_user_object_permission"
+                ] = _end_user_object.object_permission
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions

@@ -20,6 +20,7 @@ vi.mock("../../../networking", () => ({
   organizationDailyActivityCall: vi.fn(),
   customerDailyActivityCall: vi.fn(),
   agentDailyActivityCall: vi.fn(),
+  userDailyActivityCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
@@ -80,6 +81,7 @@ describe("EntityUsage", () => {
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
   const mockCustomerDailyActivityCall = vi.mocked(networking.customerDailyActivityCall);
   const mockAgentDailyActivityCall = vi.mocked(networking.agentDailyActivityCall);
+  const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
 
   const mockSpendData = {
     results: [
@@ -168,11 +170,13 @@ describe("EntityUsage", () => {
     mockOrganizationDailyActivityCall.mockClear();
     mockCustomerDailyActivityCall.mockClear();
     mockAgentDailyActivityCall.mockClear();
+    mockUserDailyActivityCall.mockClear();
     mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
     mockOrganizationDailyActivityCall.mockResolvedValue(mockSpendData);
     mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
     mockAgentDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockUserDailyActivityCall.mockResolvedValue(mockSpendData);
   });
 
   it("should render with tag entity type and display spend metrics", async () => {
@@ -247,6 +251,21 @@ describe("EntityUsage", () => {
     });
 
     expect(screen.getByText("Agent Spend Overview")).toBeInTheDocument();
+
+    await waitFor(() => {
+      const spendElements = screen.getAllByText("$100.50");
+      expect(spendElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should render with user entity type and call user API", async () => {
+    render(<EntityUsage {...defaultProps} entityType="user" />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("User Spend Overview")).toBeInTheDocument();
 
     await waitFor(() => {
       const spendElements = screen.getAllByText("$100.50");

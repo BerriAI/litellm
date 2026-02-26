@@ -2,6 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
+import concurrent.futures
 import inspect
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 
@@ -11,9 +12,16 @@ from pydantic import BaseModel
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
+    CustomCodeValidationError,
+    validate_custom_code,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
+    get_custom_code_primitives,
+)
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
@@ -243,9 +251,11 @@ class CreateGuardrailRequest(BaseModel):
 @router.post(
     "/guardrails",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def create_guardrail(request: CreateGuardrailRequest):
+async def create_guardrail(
+    request: CreateGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Create a new guardrail
 
@@ -296,6 +306,12 @@ async def create_guardrail(request: CreateGuardrailRequest):
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
+
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
@@ -332,9 +348,12 @@ class UpdateGuardrailRequest(BaseModel):
 @router.put(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
+async def update_guardrail(
+    guardrail_id: str,
+    request: UpdateGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Update an existing guardrail
 
@@ -385,6 +404,12 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
+
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
@@ -429,9 +454,11 @@ async def update_guardrail(guardrail_id: str, request: UpdateGuardrailRequest):
 @router.delete(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_guardrail(guardrail_id: str):
+async def delete_guardrail(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Delete a guardrail
 
@@ -452,6 +479,12 @@ async def delete_guardrail(guardrail_id: str):
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -495,9 +528,12 @@ async def delete_guardrail(guardrail_id: str):
 @router.patch(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
 )
-async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
+async def patch_guardrail(
+    guardrail_id: str,
+    request: PatchGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Partially update an existing guardrail
 
@@ -545,6 +581,12 @@ async def patch_guardrail(guardrail_id: str, request: PatchGuardrailRequest):
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -1302,9 +1344,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields["ui_friendly_name"] = (
-        ToolPermissionGuardrailConfigModel.ui_friendly_name()
-    )
+    tool_permission_fields[
+        "ui_friendly_name"
+    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1364,10 +1406,12 @@ class TestCustomCodeGuardrailResponse(BaseModel):
 @router.post(
     "/guardrails/test_custom_code",
     tags=["Guardrails"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=TestCustomCodeGuardrailResponse,
 )
-async def test_custom_code_guardrail(request: TestCustomCodeGuardrailRequest):
+async def test_custom_code_guardrail(
+    request: TestCustomCodeGuardrailRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Test custom code guardrail logic without creating a guardrail.
 
@@ -1440,63 +1484,26 @@ async def test_custom_code_guardrail(request: TestCustomCodeGuardrailRequest):
     }
     ```
     """
-    import concurrent.futures
-    import re
 
-    from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
-        get_custom_code_primitives,
-    )
-
-    # Security validation patterns
-    FORBIDDEN_PATTERNS = [
-        # Import statements
-        (r"\bimport\s+", "import statements are not allowed"),
-        (r"\bfrom\s+\w+\s+import\b", "from...import statements are not allowed"),
-        (r"__import__\s*\(", "__import__() is not allowed"),
-        # Dangerous builtins
-        (r"\bexec\s*\(", "exec() is not allowed"),
-        (r"\beval\s*\(", "eval() is not allowed"),
-        (r"\bcompile\s*\(", "compile() is not allowed"),
-        (r"\bopen\s*\(", "open() is not allowed"),
-        (r"\bgetattr\s*\(", "getattr() is not allowed"),
-        (r"\bsetattr\s*\(", "setattr() is not allowed"),
-        (r"\bdelattr\s*\(", "delattr() is not allowed"),
-        (r"\bglobals\s*\(", "globals() is not allowed"),
-        (r"\blocals\s*\(", "locals() is not allowed"),
-        (r"\bvars\s*\(", "vars() is not allowed"),
-        (r"\bdir\s*\(", "dir() is not allowed"),
-        (r"\bbreakpoint\s*\(", "breakpoint() is not allowed"),
-        (r"\binput\s*\(", "input() is not allowed"),
-        # Dangerous dunder access
-        (r"__builtins__", "__builtins__ access is not allowed"),
-        (r"__globals__", "__globals__ access is not allowed"),
-        (r"__code__", "__code__ access is not allowed"),
-        (r"__subclasses__", "__subclasses__ access is not allowed"),
-        (r"__bases__", "__bases__ access is not allowed"),
-        (r"__mro__", "__mro__ access is not allowed"),
-        (r"__class__", "__class__ access is not allowed"),
-        (r"__dict__", "__dict__ access is not allowed"),
-        (r"__getattribute__", "__getattribute__ access is not allowed"),
-        (r"__reduce__", "__reduce__ access is not allowed"),
-        (r"__reduce_ex__", "__reduce_ex__ access is not allowed"),
-        # OS/system access
-        (r"\bos\.", "os module access is not allowed"),
-        (r"\bsys\.", "sys module access is not allowed"),
-        (r"\bsubprocess\.", "subprocess module access is not allowed"),
-    ]
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to test custom code guardrails",
+        )
 
     EXECUTION_TIMEOUT_SECONDS = 5
 
     try:
         # Step 0: Security validation - check for forbidden patterns
-        code = request.custom_code
-        for pattern, error_msg in FORBIDDEN_PATTERNS:
-            if re.search(pattern, code):
-                return TestCustomCodeGuardrailResponse(
-                    success=False,
-                    error=f"Security violation: {error_msg}",
-                    error_type="compilation",
-                )
+
+        try:
+            validate_custom_code(request.custom_code)
+        except CustomCodeValidationError as e:
+            return TestCustomCodeGuardrailResponse(
+                success=False,
+                error=str(e),
+                error_type="compilation",
+            )
 
         # Step 1: Compile the custom code with restricted environment
         exec_globals = get_custom_code_primitives().copy()
@@ -1612,10 +1619,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[CustomGuardrail] = (
-            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-                guardrail_name=request.guardrail_name
-            )
+        active_guardrail: Optional[
+            CustomGuardrail
+        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+            guardrail_name=request.guardrail_name
         )
         if active_guardrail is None:
             raise HTTPException(

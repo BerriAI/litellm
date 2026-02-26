@@ -447,6 +447,7 @@ def get_logging_payload(  # noqa: PLR0915
                 kwargs=kwargs,
                 standard_logging_payload=standard_logging_payload,
             ),
+            request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
@@ -494,6 +495,16 @@ def _get_session_id_for_spend_log(
 
     # Ensure we always have a session id, if none is provided
     return str(uuid.uuid4())
+
+
+def _get_request_duration_ms(
+    start_time: datetime, end_time: datetime
+) -> Optional[int]:
+    """Compute request duration in milliseconds from start and end times."""
+    try:
+        return int((end_time - start_time).total_seconds() * 1000)
+    except Exception:
+        return None
 
 
 def _ensure_datetime_utc(timestamp: datetime) -> datetime:
@@ -582,6 +593,16 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
     metadata: Optional[dict] = None,
 ) -> str:
+    if _should_store_prompts_and_responses_in_spend_logs():
+        if standard_logging_payload is not None:
+            call_type = standard_logging_payload.get("call_type", "")
+            if call_type == "_arealtime":
+                messages = standard_logging_payload.get("messages")
+                if messages is not None:
+                    try:
+                        return json.dumps(messages, default=str)
+                    except Exception:
+                        return "{}"
     return "{}"
 
 
@@ -723,7 +744,13 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
-            
+
+            if kwargs is not None:
+                realtime_tools = kwargs.get("realtime_tools")
+                if realtime_tools:
+                    _request_body = dict(_request_body)
+                    _request_body["tools"] = realtime_tools
+
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
@@ -785,7 +812,13 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
-        
+
+        if kwargs is not None:
+            realtime_tool_calls = kwargs.get("realtime_tool_calls")
+            if realtime_tool_calls and isinstance(response_obj, dict):
+                response_obj = dict(response_obj)
+                response_obj["tool_calls"] = realtime_tool_calls
+
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (

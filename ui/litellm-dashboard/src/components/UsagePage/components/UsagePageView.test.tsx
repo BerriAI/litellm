@@ -752,7 +752,7 @@ describe("UsagePage", () => {
       // Admin should see the user selector select element with the placeholder attribute
       const userSelects = screen.getAllByRole("combobox");
       const userSelect = userSelects.find(
-        (el) => el.getAttribute("placeholder") === "All Users (Global View)",
+        (el) => el.getAttribute("placeholder") === "Select user to filter...",
       );
       expect(userSelect).toBeDefined();
     });
@@ -867,7 +867,7 @@ describe("UsagePage", () => {
       // Non-admin should not see the user selector
       const userSelects = screen.getAllByRole("combobox");
       const userSelect = userSelects.find(
-        (el) => el.getAttribute("placeholder") === "All Users (Global View)",
+        (el) => el.getAttribute("placeholder") === "Select user to filter...",
       );
       expect(userSelect).toBeUndefined();
     });

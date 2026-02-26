@@ -6,7 +6,7 @@ This is to prevent deadlocks and improve reliability
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -36,6 +36,7 @@ from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
 )
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -209,47 +210,44 @@ class RedisUpdateBuffer:
             "ALL DAILY SPEND UPDATE TRANSACTIONS: %s", daily_spend_update_transactions
         )
 
-        await self._store_transactions_in_redis(
-            transactions=db_spend_update_transactions,
-            redis_key=REDIS_UPDATE_BUFFER_KEY,
-            service_type=ServiceTypes.REDIS_SPEND_UPDATE_QUEUE,
+        # Build a list of rpush operations, skipping empty/None transaction sets
+        _queue_configs: List[Tuple[Any, str, ServiceTypes]] = [
+            (db_spend_update_transactions, REDIS_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_SPEND_UPDATE_QUEUE),
+            (daily_spend_update_transactions, REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE),
+            (daily_team_spend_update_transactions, REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE),
+            (daily_org_spend_update_transactions, REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_ORG_SPEND_UPDATE_QUEUE),
+            (daily_end_user_spend_update_transactions, REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_END_USER_SPEND_UPDATE_QUEUE),
+            (daily_agent_spend_update_transactions, REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE),
+            (daily_tag_spend_update_transactions, REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY, ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE),
+        ]
+
+        rpush_list: List[RedisPipelineRpushOperation] = []
+        service_types: List[ServiceTypes] = []
+        for transactions, redis_key, service_type in _queue_configs:
+            if transactions is None or len(transactions) == 0:
+                continue
+            rpush_list.append(
+                RedisPipelineRpushOperation(
+                    key=redis_key,
+                    values=[safe_dumps(transactions)],
+                )
+            )
+            service_types.append(service_type)
+
+        if len(rpush_list) == 0:
+            return
+
+        result_lengths = await self.redis_cache.async_rpush_pipeline(
+            rpush_list=rpush_list,
         )
 
-        await self._store_transactions_in_redis(
-            transactions=daily_spend_update_transactions,
-            redis_key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
-            service_type=ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
-        )
-
-        await self._store_transactions_in_redis(
-            transactions=daily_team_spend_update_transactions,
-            redis_key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
-            service_type=ServiceTypes.REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE,
-        )
-
-        await self._store_transactions_in_redis(
-            transactions=daily_org_spend_update_transactions,
-            redis_key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
-            service_type=ServiceTypes.REDIS_DAILY_SPEND_UPDATE_QUEUE,
-        )
-
-        await self._store_transactions_in_redis(
-            transactions=daily_end_user_spend_update_transactions,
-            redis_key=REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
-            service_type=ServiceTypes.REDIS_DAILY_END_USER_SPEND_UPDATE_QUEUE,
-        )
-
-        await self._store_transactions_in_redis(
-            transactions=daily_agent_spend_update_transactions,
-            redis_key=REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
-            service_type=ServiceTypes.REDIS_DAILY_AGENT_SPEND_UPDATE_QUEUE,
-        )
-
-        await self._store_transactions_in_redis(
-            transactions=daily_tag_spend_update_transactions,
-            redis_key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
-            service_type=ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE,
-        )
+        # Emit gauge events for each queue
+        for i, queue_size in enumerate(result_lengths):
+            if i < len(service_types):
+                await self._emit_new_item_added_to_redis_buffer_event(
+                    queue_size=queue_size,
+                    service=service_types[i],
+                )
 
     @staticmethod
     def _number_of_transactions_to_store_in_redis(
@@ -337,6 +335,77 @@ class RedisUpdateBuffer:
         combined_transaction = self._combine_list_of_transactions(parsed_transactions)
 
         return combined_transaction
+
+    async def get_all_transactions_from_redis_buffer_pipeline(
+        self,
+    ) -> Tuple[
+        Optional[DBSpendUpdateTransactions],
+        Optional[Dict[str, DailyUserSpendTransaction]],
+        Optional[Dict[str, DailyTeamSpendTransaction]],
+        Optional[Dict[str, DailyOrganizationSpendTransaction]],
+        Optional[Dict[str, DailyEndUserSpendTransaction]],
+        Optional[Dict[str, DailyAgentSpendTransaction]],
+        Optional[Dict[str, DailyTagSpendTransaction]],
+    ]:
+        """
+        Drains all 7 Redis buffer queues in a single pipeline round-trip.
+
+        Returns a 7-tuple of parsed results in this order:
+            0: DBSpendUpdateTransactions
+            1: daily user spend
+            2: daily team spend
+            3: daily org spend
+            4: daily end-user spend
+            5: daily agent spend
+            6: daily tag spend
+        """
+        if self.redis_cache is None:
+            return None, None, None, None, None, None, None
+
+        lpop_list: List[RedisPipelineLpopOperation] = [
+            RedisPipelineLpopOperation(key=REDIS_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+            RedisPipelineLpopOperation(key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+            RedisPipelineLpopOperation(key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+            RedisPipelineLpopOperation(key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+            RedisPipelineLpopOperation(key=REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+            RedisPipelineLpopOperation(key=REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+            RedisPipelineLpopOperation(key=REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
+        ]
+
+        raw_results = await self.redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
+
+        # Pad with None if pipeline returned fewer results than expected
+        while len(raw_results) < 7:
+            raw_results.append(None)
+
+        # Slot 0: DBSpendUpdateTransactions
+        db_spend: Optional[DBSpendUpdateTransactions] = None
+        if raw_results[0] is not None:
+            parsed = self._parse_list_of_transactions(raw_results[0])
+            if len(parsed) > 0:
+                db_spend = self._combine_list_of_transactions(parsed)
+
+        # Slots 1-6: daily spend categories
+        daily_results: List[Optional[Dict[str, Any]]] = []
+        for slot in range(1, 7):
+            if raw_results[slot] is None:
+                daily_results.append(None)
+            else:
+                list_of_daily = [json.loads(t) for t in raw_results[slot]]  # type: ignore
+                aggregated = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                    list_of_daily
+                )
+                daily_results.append(aggregated)
+
+        return (
+            db_spend,
+            cast(Optional[Dict[str, DailyUserSpendTransaction]], daily_results[0]),
+            cast(Optional[Dict[str, DailyTeamSpendTransaction]], daily_results[1]),
+            cast(Optional[Dict[str, DailyOrganizationSpendTransaction]], daily_results[2]),
+            cast(Optional[Dict[str, DailyEndUserSpendTransaction]], daily_results[3]),
+            cast(Optional[Dict[str, DailyAgentSpendTransaction]], daily_results[4]),
+            cast(Optional[Dict[str, DailyTagSpendTransaction]], daily_results[5]),
+        )
 
     async def get_all_daily_spend_update_transactions_from_redis_buffer(
         self,

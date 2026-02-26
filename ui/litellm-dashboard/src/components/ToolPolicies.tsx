@@ -2,7 +2,8 @@
 
 import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { Select, Switch, Tooltip } from "antd";
-import { Select, Tooltip } from "antd";
+<<<<<<< cursor/development-environment-setup-13a7
+// @ts-ignore - duplicate import removed
 import {
   Table,
   TableHead,
@@ -11,6 +12,9 @@ import {
   TableRow,
   TableCell,
 } from "@tremor/react";
+=======
+import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+>>>>>>> main
 import { TimeCell } from "./view_logs/time_cell";
 import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
@@ -18,14 +22,13 @@ import FilterComponent, { FilterOption } from "./molecules/filter";
 import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
 
 const POLICY_OPTIONS = [
-  { value: "trusted",   label: "trusted",   color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
-  { value: "blocked",   label: "blocked",   color: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
+  { value: "trusted", label: "trusted", color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
+  { value: "blocked", label: "blocked", color: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
 ] as const;
 
 type PolicyValue = "trusted" | "blocked";
 
-const policyStyle = (p: string) =>
-  POLICY_OPTIONS.find((o) => o.value === p) ?? POLICY_OPTIONS[1];
+const policyStyle = (p: string) => POLICY_OPTIONS.find((o) => o.value === p) ?? POLICY_OPTIONS[1];
 
 type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
 
@@ -57,7 +60,8 @@ const PolicySelect: React.FC<{
         minWidth: 110,
         fontWeight: 500,
       }}
-      styles={{
+<<<<<<< cursor/development-environment-setup-13a7
+      {...{styles: {
         selector: {
           backgroundColor: style.bg,
           borderColor: style.border,
@@ -68,7 +72,9 @@ const PolicySelect: React.FC<{
           paddingLeft: 8,
           paddingRight: 4,
         },
-      }}
+      }} as any}
+=======
+>>>>>>> main
       popupMatchSelectWidth={false}
       options={POLICY_OPTIONS.map((o) => ({
         value: o.value,
@@ -134,7 +140,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     }
   }, [accessToken]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   useEffect(() => {
     if (!isLiveTail) return;
@@ -147,9 +155,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     setSaving(toolName);
     try {
       await updateToolPolicy(accessToken, toolName, newPolicy);
-      setTools((prev) =>
-        prev.map((t) => (t.tool_name === toolName ? { ...t, call_policy: newPolicy } : t))
-      );
+      setTools((prev) => prev.map((t) => (t.tool_name === toolName ? { ...t, call_policy: newPolicy } : t)));
     } catch (e: any) {
       alert(`Failed to update policy: ${e.message}`);
     } finally {
@@ -179,12 +185,14 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
   };
 
   // Build unique team/key options from loaded data
-  const teamOptions = Array.from(new Set(tools.map((t) => t.team_id).filter(Boolean))).map(
-    (v) => ({ label: v as string, value: v as string })
-  );
-  const keyAliasOptions = Array.from(new Set(tools.map((t) => t.key_alias).filter(Boolean))).map(
-    (v) => ({ label: v as string, value: v as string })
-  );
+  const teamOptions = Array.from(new Set(tools.map((t) => t.team_id).filter(Boolean))).map((v) => ({
+    label: v as string,
+    value: v as string,
+  }));
+  const keyAliasOptions = Array.from(new Set(tools.map((t) => t.key_alias).filter(Boolean))).map((v) => ({
+    label: v as string,
+    value: v as string,
+  }));
 
   const filterOptions: FilterOption[] = [
     {
@@ -246,7 +254,6 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     <div className="p-6 w-full">
       <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
       <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
-
         {/* Toolbar */}
         <div className="border-b px-6 py-4 w-full max-w-full box-border">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0 w-full max-w-full box-border">
@@ -257,16 +264,29 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                   placeholder="Search by Tool Name"
                   className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   value={searchTerm}
-                  onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                  onChange={(e) => {
+                    setSearchTerm(e.target.value);
+                    setCurrentPage(1);
+                  }}
                 />
-                <svg className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                <svg
+                  className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
                 </svg>
               </div>
 
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-gray-900">Live Tail</span>
-                <Switch color="green" checked={isLiveTail} onChange={setIsLiveTail} />
+                <Switch checked={isLiveTail} onChange={setIsLiveTail} />
               </div>
 
               <button
@@ -274,8 +294,18 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                 disabled={isButtonLoading}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-60"
               >
-                <svg className={`w-4 h-4 ${isButtonLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                <svg
+                  className={`w-4 h-4 ${isButtonLoading ? "animate-spin" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
                 </svg>
                 {isButtonLoading ? "Fetching" : "Fetch"}
               </button>
@@ -283,14 +313,27 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
 
             <div className="flex items-center gap-4 text-sm text-gray-600 whitespace-nowrap">
               <span>
-                Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} results
+                Showing {filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} -{" "}
+                {Math.min(currentPage * pageSize, filtered.length)} of {filtered.length} results
               </span>
-              <span>Page {currentPage} of {totalPages}</span>
+              <span>
+                Page {currentPage} of {totalPages}
+              </span>
               <div className="flex gap-1">
-                <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}
-                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40">Previous</button>
-                <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
-                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40">Next</button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 py-1.5 border rounded-md text-sm hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Next
+                </button>
               </div>
             </div>
           </div>
@@ -310,7 +353,9 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
         {isLiveTail && (
           <div className="bg-green-50 border-b border-green-100 px-6 py-2 flex items-center justify-between">
             <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
-            <button onClick={() => setIsLiveTail(false)} className="text-xs text-green-600 underline">Stop</button>
+            <button onClick={() => setIsLiveTail(false)} className="text-xs text-green-600 underline">
+              Stop
+            </button>
           </div>
         )}
 
@@ -322,20 +367,34 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
         <Table className="[&_td]:py-0.5 [&_th]:py-1 w-full">
           <TableHead>
             <TableRow>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Discovered" field="created_at" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Tool Name" field="tool_name" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Policy" field="call_policy" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="# Calls" field="call_count" /></TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Team Name" field="team_id" /></TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Discovered" field="created_at" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Tool Name" field="tool_name" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Policy" field="call_policy" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="# Calls" field="call_count" />
+              </TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Team Name" field="team_id" />
+              </TableHeaderCell>
               <TableHeaderCell className="py-1 h-8">Key Hash</TableHeaderCell>
-              <TableHeaderCell className="py-1 h-8"><SortHeader label="Key Name" field="key_alias" /></TableHeaderCell>
+              <TableHeaderCell className="py-1 h-8">
+                <SortHeader label="Key Name" field="key_alias" />
+              </TableHeaderCell>
               <TableHeaderCell className="py-1 h-8">Origin</TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-8 text-center text-gray-500">Loading tools…</TableCell>
+                <TableCell colSpan={8} className="h-8 text-center text-gray-500">
+                  Loading tools…
+                </TableCell>
               </TableRow>
             ) : paginated.length === 0 ? (
               <TableRow>
@@ -398,12 +457,25 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
         {/* Bottom pagination (only when > 1 page) */}
         {totalPages > 1 && (
           <div className="border-t px-6 py-3 flex items-center justify-between text-sm text-gray-600">
-            <span>Showing {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, sorted.length)} of {sorted.length}</span>
+            <span>
+              Showing {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, sorted.length)} of{" "}
+              {sorted.length}
+            </span>
             <div className="flex gap-1">
-              <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1}
-                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40">Previous</button>
-              <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
-                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40">Next</button>
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 border rounded-md hover:bg-gray-50 disabled:opacity-40"
+              >
+                Next
+              </button>
             </div>
           </div>
         )}
