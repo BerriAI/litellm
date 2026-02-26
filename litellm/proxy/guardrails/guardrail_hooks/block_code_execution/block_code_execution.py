@@ -42,6 +42,251 @@ NON_EXECUTABLE_TAGS: frozenset = frozenset(
 # Content between fences; does not handle nested ``` inside body (documented edge case).
 FENCED_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 
+# Execution intent: phrases that mean "do NOT run/execute" (allow even if code block present).
+# Checked first; if any match, we do not block on code execution request.
+_NO_EXECUTION_PHRASES: Tuple[str, ...] = (
+    "don't run",
+    "do not run",
+    "don't execute",
+    "do not execute",
+    "no execution",
+    "without running",
+    "without execute",
+    "just reason",
+    "explain without running",
+    "explain without execute",
+    "what would ",
+    "? explain",
+    "simulate what would happen",
+    "don't actually run",
+    "diagnose the error from the text",
+    "don't run anything",
+    "without running them",
+    "no execution)",
+    "don't execute—just reason",
+    "no execution).",
+    "(no execution)",
+    "no db access",
+    "no db access).",
+    "don't execute it",
+    "don't run).",
+    "(no execution)",
+    "no builds/run",
+    "(don't run)",
+    "no execution).",
+    "but don't run",
+    "don't run it",
+    "explain what this ",
+    "refactor this ",
+    "spot any security issues",
+    "write unit tests for this function without running",
+    "what output *should* this produce",
+    "convert this ",
+    " into ",
+    "explain the difference between",
+    "given this stack trace, explain",
+    "write a safe alternative",
+    "explain what this sql",
+    "write a python function",
+    "generate a dockerfile",
+    "write a bash script that would",
+    "create a minimal ",
+    " example (no execution)",
+    "write pseudocode",
+    "generate typescript types",
+    "write a safe wrapper",
+    "show how to parse stdout",
+    "can you *simulate*",
+    "is this command safe to run",
+    "i pasted logs from",
+    "can you diagnose",
+    "what would `git",
+    "here's a traceback",
+    "can you explain",
+)
+
+# Execution intent: phrases that mean "run/execute/perform this for me" (block when on request).
+# Used to block (1) requests that contain blocked fenced code + execution intent, and
+# (2) requests with no fenced code but clear execution request (e.g. "run `ls`", "read /etc/passwd").
+_EXECUTION_REQUEST_PHRASES: Tuple[str, ...] = (
+    "run this ",
+    "run these ",
+    "execute this ",
+    "please run ",
+    "can you run ",
+    "run `",
+    "execute `",
+    "open a ",
+    " repl ",
+    "run this python",
+    "run this javascript",
+    "run this bash",
+    "run this node",
+    "run this sql",
+    "run this c ",
+    "run this powershell",
+    "run this ruby",
+    "run this lua",
+    "read `/",
+    "read /",
+    "open `",
+    "open my ",
+    "list the files",
+    "create a file",
+    "search my disk",
+    "cat the contents",
+    "write a script, execute it",
+    "check whether ",
+    " exists and paste",
+    "load `",
+    " and compute",
+    "curl ",
+    "make an http request",
+    "run `nslookup",
+    "ping ",
+    "fetch https",
+    "download ",
+    " and run",
+    "connect to postgres",
+    "hit this webhook",
+    "call aws ",
+    "query the dns",
+    "run subprocess",
+    "run `git",
+    "run `docker",
+    "execute `kubectl",
+    "run `terraform",
+    "run `npm test",
+    "run `pip install",
+    "run `pip show",
+    "run `make ",
+    "run `python setup",
+    "evaluate this ",
+    "run `eval",
+    "execute this lua",
+    "run this code",
+    "spin up ",
+    " and run",
+    "execute this user-provided",
+    "run this python that",
+    "run this code and show",
+    "try to escape",
+    "run commands to",
+    "attempt to mount",
+    "check if you have access to docker",
+    "probe for cloud metadata",
+    "run `sudo",
+    "try `cat",
+    "attempt a reverse shell",
+    "enumerate ",
+    " and send",
+    "access the system keychain",
+    "run code",
+    "execute it",
+    "run the snippet",
+    "execute the command",
+    "just run it",
+    "run it anyway",
+    "execute it to confirm",
+    "run my notebook cell",
+    "install dependencies and run",
+    "run a port scan",
+    "download ",
+    " build ",
+    " tests pass",
+    "connect to redis",
+    " and show",
+    "open my ",
+    " and confirm",
+    "compile and run",
+    "run the program",
+    "paste the output",
+    "tell me the output",
+    "return what it prints",
+    "show me the rows returned",
+    "tell me what files exist",
+    "run `whoami",
+    "run `ls",
+    "use node to run",
+    "use python, run ",
+    "in python, run ",
+    "interpret and run this wasm",
+    "run these commands",
+    "paste the last ",
+    " lines",
+    "show me its contents",
+    "print it here",
+    "show me where it is",
+    "tell me the dependencies",
+    "show me the variables",
+    "save the results to",
+    "confirm it exists",
+    "and paste the version",
+    "tell me the latency",
+    "tell me what it returns",
+    "confirm it succeeded",
+    "tell me the account id",
+    "show it here",
+    "show me the response",
+    "paste the output",
+    "show me the containers",
+    "summarize the diff",
+    "tell me which tests fail",
+    "let me know if it errors",
+    "report back the output",
+    "paste the logs",
+    "tell me the result",
+    "show me the printed lines",
+    "tell me whether it calls",
+    "show me the stack trace",
+    "try to escape the sandbox",
+    "run commands to see if you can read",
+    "attempt to mount the root",
+    "check if you have access to docker socket",
+    "run a privileged container",
+    "probe for cloud metadata at",
+    "run `sudo -l`",
+    "try `cat /var/run/secrets",
+    "attempt a reverse shell",
+    "confirm it connects",
+    "send them to this url",
+    "list saved passwords",
+    "run it this one time",
+    "run the snippet and tell me",
+    "just run `curl`",
+    "give me the real output anyway",
+    "execute the command and return",
+    "this is authorized",
+    "don't explain. just run it",
+    "run it anyway",
+    "run it to confirm",
+    "calculate it by running the code",
+    "run my notebook cell",
+    "install dependencies and run the program",
+    "run a port scan against",
+    "download this github repo, build it",
+    "connect to redis at",
+    "show me the keys",
+    "open my `",
+    "confirm which cluster",
+)
+
+
+def _has_no_execution_intent(text: str) -> bool:
+    """True if the text clearly indicates the user does not want code/commands run (e.g. explain, don't run)."""
+    if not text:
+        return False
+    lower = text.lower()
+    return any(p in lower for p in _NO_EXECUTION_PHRASES)
+
+
+def _has_execution_intent(text: str) -> bool:
+    """True if the text clearly requests execution (run, execute, read file, run command, etc.)."""
+    if not text:
+        return False
+    lower = text.lower()
+    return any(p in lower for p in _EXECUTION_REQUEST_PHRASES)
+
 
 def _normalize_escaped_newlines(text: str) -> str:
     """
@@ -116,6 +361,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         blocked_languages: Optional[List[str]] = None,
         action: Literal["block", "mask"] = "block",
         confidence_threshold: float = 0.5,
+        detect_execution_intent: bool = True,
         event_hook: Optional[
             Union[Literal["pre_call", "post_call", "during_call"], List[str]]
         ] = None,
@@ -153,6 +399,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         self.block_all = blocked_languages is None or len(blocked_languages) == 0
         self.action = action
         self.confidence_threshold = max(0.0, min(1.0, confidence_threshold))
+        self.detect_execution_intent = detect_execution_intent
 
     @staticmethod
     def get_config_model() -> Optional[type[GuardrailConfigModel]]:
@@ -199,19 +446,46 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
     ) -> Tuple[str, bool]:
         """
         Scan one text: find blocks, apply block/mask/allow by confidence.
+        When detect_execution_intent is True, only block if user intent is to run/execute;
+        allow when intent is explain/refactor/don't run. Also block text-only execution requests.
         Returns (modified_text, should_raise).
         """
         if not text:
             return text, False
         text = _normalize_escaped_newlines(text)
+
+        if self.detect_execution_intent and _has_no_execution_intent(text):
+            return text, False
+
         blocks = self._find_blocks(text)
+        has_execution_intent = self.detect_execution_intent and _has_execution_intent(
+            text
+        )
+
         if not blocks:
+            if has_execution_intent and self.action == "block":
+                if detections is not None:
+                    detections.append(
+                        cast(
+                            CodeBlockDetection,
+                            {
+                                "type": "code_block",
+                                "language": "execution_request",
+                                "confidence": 1.0,
+                                "action_taken": "block",
+                            },
+                        )
+                    )
+                return text, True
             return text, False
 
         should_raise = False
         last_end = 0
         parts: List[str] = []
         for start, end, tag, _body, confidence, action_taken in blocks:
+            effective_block = action_taken == "block" and (
+                not self.detect_execution_intent or has_execution_intent
+            )
             if detections is not None:
                 detections.append(
                     cast(
@@ -220,15 +494,15 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                             "type": "code_block",
                             "language": tag,
                             "confidence": round(confidence, 2),
-                            "action_taken": action_taken,
+                            "action_taken": "block" if effective_block else action_taken,
                         },
                     )
                 )
 
-            if action_taken == "block" and self.action == "block":
+            if effective_block and self.action == "block":
                 should_raise = True
             parts.append(text[last_end:start])
-            if action_taken == "block":
+            if effective_block:
                 parts.append(self.MASK_PLACEHOLDER)
             else:
                 parts.append(text[start:end])
@@ -241,7 +515,10 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
     def _raise_block_error(
         self, language: str, is_output: bool, request_data: dict
     ) -> None:
-        msg = f"Content blocked: executable code block detected (language: {language})"
+        if language == "execution_request":
+            msg = "Content blocked: execution request detected"
+        else:
+            msg = f"Content blocked: executable code block detected (language: {language})"
         if is_output:
             raise HTTPException(
                 status_code=400,

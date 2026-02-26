@@ -76,6 +76,7 @@ class TestBlockCodeExecutionGuardrail:
             blocked_languages=["python"],
             action="block",
             confidence_threshold=0.7,
+            detect_execution_intent=False,
         )
         request_data = {"model": "gpt-4", "metadata": {}}
         inputs = {
@@ -100,6 +101,7 @@ class TestBlockCodeExecutionGuardrail:
             blocked_languages=["python"],
             action="mask",
             confidence_threshold=0.7,
+            detect_execution_intent=False,
         )
         request_data = {"model": "gpt-4", "metadata": {}}
         inputs = {
@@ -123,6 +125,7 @@ class TestBlockCodeExecutionGuardrail:
             blocked_languages=["python"],
             action="block",
             confidence_threshold=0.5,
+            detect_execution_intent=False,
         )
         # Exact user payload; newlines are real so regex ```(\w*)\n(.*?)``` matches
         text = (
@@ -159,6 +162,7 @@ class TestBlockCodeExecutionGuardrail:
             blocked_languages=["python"],
             action="block",
             confidence_threshold=0.7,
+            detect_execution_intent=False,
         )
         request_data = {"model": "gpt-4", "metadata": {}}
         text = '''```python
@@ -284,6 +288,7 @@ print(factorial(5))  # Output: 120
             blocked_languages=["python"],
             action="mask",
             confidence_threshold=0.5,
+            detect_execution_intent=False,
         )
         text_with_escaped = 'execute "```python\\nprint(1)\\n```"'
         new_text, should_raise = guardrail._scan_text(text_with_escaped)

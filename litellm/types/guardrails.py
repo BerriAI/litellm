@@ -5,20 +5,27 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
-from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import \
-    BlockCodeExecutionGuardrailConfigModel
-from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import \
-    EnkryptAIGuardrailConfigs
-from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import \
-    GraySwanGuardrailConfigModel
-from litellm.types.proxy.guardrails.guardrail_hooks.ibm import \
-    IBMGuardrailsBaseConfigModel
-from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import \
-    ContentFilterCategoryConfig
-from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import \
-    QualifireGuardrailConfigModel
-from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import \
-    ToolPermissionGuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
+    BlockCodeExecutionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
+    EnkryptAIGuardrailConfigs,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
+    GraySwanGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
+    IBMGuardrailsBaseConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    ContentFilterCategoryConfig,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
+    QualifireGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
+    ToolPermissionGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -256,6 +263,8 @@ class PiiEntityCategoryMap(TypedDict):
 class GuardrailParamUITypes(str, Enum):
     BOOL = "bool"
     STR = "str"
+    MULTISELECT = "multiselect"
+    PERCENTAGE = "percentage"
 
 
 class PresidioPresidioConfigModelUserInterface(BaseModel):

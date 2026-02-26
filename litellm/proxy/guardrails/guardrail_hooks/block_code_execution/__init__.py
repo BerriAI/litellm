@@ -60,6 +60,9 @@ def initialize_guardrail(
             _get_param(litellm_params, guardrail, "confidence_threshold", 0.5),
         )
     )
+    detect_execution_intent = bool(
+        _get_param(litellm_params, guardrail, "detect_execution_intent", True)
+    )
     mode = _get_param(litellm_params, guardrail, "mode")
     event_hook = cast(
         Optional[Union[Literal["pre_call", "post_call", "during_call"], List[str]]],
@@ -71,6 +74,7 @@ def initialize_guardrail(
         blocked_languages=blocked_languages,
         action=action,
         confidence_threshold=confidence_threshold,
+        detect_execution_intent=detect_execution_intent,
         event_hook=event_hook,
         default_on=bool(_get_param(litellm_params, guardrail, "default_on", False)),
     )
