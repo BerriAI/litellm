@@ -8,6 +8,11 @@ from .in_memory_cache import InMemoryCache
 
 
 class LLMClientCache(InMemoryCache):
+    # Strong references to pending cleanup tasks so they are not
+    # garbage-collected before completion (fixes "coroutine was never
+    # awaited" warnings).  See https://github.com/BerriAI/litellm/issues/22128
+    _cleanup_tasks: set = set()
+
     def _remove_key(self, key: str) -> None:
         """Close async clients before evicting them to prevent connection pool leaks."""
         value = self.cache_dict.get(key)
@@ -18,8 +23,12 @@ class LLMClientCache(InMemoryCache):
             )
             if close_fn and asyncio.iscoroutinefunction(close_fn):
                 try:
-                    asyncio.get_running_loop().create_task(close_fn())
+                    loop = asyncio.get_running_loop()
+                    task = loop.create_task(close_fn())
+                    self._cleanup_tasks.add(task)
+                    task.add_done_callback(self._cleanup_tasks.discard)
                 except RuntimeError:
+                    # No running event loop — skip async cleanup
                     pass
             elif close_fn and callable(close_fn):
                 try:
