@@ -224,6 +224,18 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
+    @staticmethod
+    def _is_claude_4_6_model(model: str) -> bool:
+        """Check if the model is a Claude 4.6 model (Opus 4.6 or Sonnet 4.6)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6",
+                "sonnet-4-6", "sonnet_4_6", "sonnet-4.6", "sonnet_4.6",
+            )
+        )
+
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
@@ -238,17 +250,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return False
 
         # Claude 4.6 models use output_config as a stable API feature — no beta header needed
-        if model:
-            model_lower = model.lower()
-            is_4_6 = any(
-                v in model_lower
-                for v in (
-                    "opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6",
-                    "sonnet-4-6", "sonnet_4_6", "sonnet-4.6", "sonnet_4.6",
-                )
-            )
-            if is_4_6:
-                return False
+        if model and self._is_claude_4_6_model(model):
+            return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):

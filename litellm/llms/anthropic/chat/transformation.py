@@ -169,24 +169,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return tool_call
 
     @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model that uses adaptive thinking."""
-        model_lower = model.lower()
-        return any(
-            model_variant in model_lower
-            for model_variant in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-                "sonnet-4-6",
-                "sonnet_4_6",
-                "sonnet-4.6",
-                "sonnet_4.6",
-            )
-        )
-
-    @staticmethod
     def _is_opus_4_6_model(model: str) -> bool:
         """Check if the model is specifically Claude Opus 4.6."""
         model_lower = model.lower()
@@ -1017,9 +999,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
                 if AnthropicConfig._is_claude_4_6_model(model):
                     # Map reasoning_effort to Anthropic's output_config for 4.6 models
-                    # "minimal" has no Anthropic equivalent → map to "low"
-                    anthropic_effort = value if value != "minimal" else "low"
-                    optional_params["output_config"] = {"effort": anthropic_effort}
+                    effort_map = {"minimal": "low", "low": "low", "medium": "medium", "high": "high", "max": "max"}
+                    anthropic_effort = effort_map.get(value)
+                    if anthropic_effort is not None:
+                        optional_params["output_config"] = {"effort": anthropic_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
