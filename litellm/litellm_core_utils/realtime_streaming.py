@@ -145,7 +145,9 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: dict) -> None:
+    def _collect_user_input_from_backend_event(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type = event_obj.get("type", "")
@@ -162,7 +164,7 @@ class RealTimeStreaming:
             pass
 
     def _collect_tool_calls_from_response_done(
-        self, event_obj: dict
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
     ) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
@@ -210,6 +212,23 @@ class RealTimeStreaming:
             asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
+
+    async def _send_to_backend(self, message: str) -> None:
+        """Send a message to the backend WebSocket.
+
+        If a provider_config is set the message is first passed through
+        transform_realtime_request so that provider-specific translation
+        (e.g. dropping session.update for Vertex AI) is applied even for
+        guardrail-injected messages.
+        """
+        if self.provider_config:
+            transformed = self.provider_config.transform_realtime_request(
+                message, self.model, self.session_configuration_request
+            )
+            for msg in transformed:
+                await self.backend_ws.send(msg)
+        else:
+            await self.backend_ws.send(message)
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime_input_transcription."""
@@ -276,9 +295,9 @@ class RealTimeStreaming:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
                 # Cancel any in-flight response before speaking the warning.
                 # This handles the race where create_response fired before we could intercept.
-                await self.backend_ws.send(json.dumps({"type": "response.cancel"}))
-                # Ask OpenAI to speak the warning — TTS audio plays naturally in the client
-                await self.backend_ws.send(
+                await self._send_to_backend(json.dumps({"type": "response.cancel"}))
+                # Ask the model to speak the warning — TTS audio plays naturally in the client
+                await self._send_to_backend(
                     json.dumps(
                         {
                             "type": "response.create",
@@ -333,7 +352,7 @@ class RealTimeStreaming:
             ## GUARDRAIL: inject create_response=false on session.created
             if isinstance(event, dict) and event.get("type") == "session.created":
                 if self._has_realtime_guardrails():
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps(
                             {
                                 "type": "session.update",
@@ -362,7 +381,7 @@ class RealTimeStreaming:
                     transcript, item_id=event.get("item_id")
                 )
                 if not blocked:
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps({"type": "response.create"})
                     )
                 continue
@@ -383,7 +402,7 @@ class RealTimeStreaming:
                 # set create_response=false so the LLM never auto-responds
                 # before our guardrail has a chance to run.
                 if self._has_realtime_guardrails():
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps(
                             {
                                 "type": "session.update",
@@ -416,7 +435,7 @@ class RealTimeStreaming:
                 )
                 if not blocked:
                     # Clean — trigger LLM response
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps({"type": "response.create"})
                     )
                 return True
@@ -437,7 +456,13 @@ class RealTimeStreaming:
                     raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
 
                 if self.provider_config:
-                    await self._handle_provider_config_message(raw_response)
+                    try:
+                        await self._handle_provider_config_message(raw_response)
+                    except Exception as e:
+                        verbose_logger.exception(
+                            f"Error processing backend message, skipping: {e}"
+                        )
+                        continue
                 else:
                     handled = await self._handle_raw_backend_message(raw_response)
                     if handled:

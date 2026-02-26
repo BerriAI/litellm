@@ -166,12 +166,16 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
     // Set provider
     setSelectedProvider(preset.provider);
-    form.setFieldsValue({
+    const baseValues: Record<string, any> = {
       provider: preset.provider,
       guardrail_name: preset.guardrailNameSuggestion,
       mode: preset.mode,
       default_on: preset.defaultOn,
-    });
+    };
+    if (preset.provider === "BlockCodeExecution") {
+      baseValues.confidence_threshold = 0.5;
+    }
+    form.setFieldsValue(baseValues);
 
     // Pre-select content category if specified
     if (preset.categoryName && guardrailSettings.content_filter_settings?.content_categories) {
@@ -195,11 +199,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
-    form.setFieldsValue({
+    const resetValues: Record<string, any> = {
       config: undefined,
       presidio_analyzer_api_base: undefined,
       presidio_anonymizer_api_base: undefined,
-    });
+    };
+    if (value === "BlockCodeExecution") {
+      resetValues.confidence_threshold = 0.5;
+    }
+    form.setFieldsValue(resetValues);
 
     // Reset PII selections when changing provider
     setSelectedEntities([]);
