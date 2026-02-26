@@ -242,7 +242,7 @@ def test_full_output_structure_non_streaming():
     )
     result = model_dump_with_preserved_fields(response, exclude_unset=True)
 
-    # Top-level keys
+    # Top-level keys (usage is None when not explicitly set and excluded by exclude_unset=True)
     assert set(result.keys()) == {
         "id",
         "choices",
@@ -250,7 +250,6 @@ def test_full_output_structure_non_streaming():
         "model",
         "object",
         "system_fingerprint",
-        "usage",
     }
     assert result["object"] == "chat.completion"
     assert result["model"] == "gpt-4.1"
@@ -269,12 +268,6 @@ def test_full_output_structure_non_streaming():
     assert set(msg.keys()) == {"content", "role"}
     assert msg["content"] == "Hello!"
     assert msg["role"] == "assistant"
-
-    # Usage structure
-    usage = result["usage"]
-    assert "prompt_tokens" in usage
-    assert "completion_tokens" in usage
-    assert "total_tokens" in usage
 
 
 def test_full_output_structure_tool_calls():

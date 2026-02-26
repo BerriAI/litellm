@@ -1479,10 +1479,11 @@ class TestForwardHeaders:
 
         # Create a mock request with custom headers
         mock_request = MagicMock(spec=Request)
+        mock_request.state = None  # Prevent MagicMock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.url = MagicMock()
         mock_request.url.path = "/test/endpoint"
-        
+
         # User headers that should be forwarded
         user_headers = {
             "x-custom-header": "custom-value",
