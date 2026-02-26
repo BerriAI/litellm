@@ -4152,6 +4152,7 @@ async def key_aliases(
         )
         rows = await prisma_client.db.litellm_verificationtoken.find_many(
             where=where,
+            select={"key_alias": True},
             order=[{"key_alias": "asc"}],
             skip=(page - 1) * size,
             take=size,
