@@ -19,6 +19,8 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
 
@@ -26,6 +28,7 @@ azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
 bedrock_realtime = BedrockRealtime()
 xai_realtime = XAIRealtime()
+vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
@@ -214,6 +217,52 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+        )
+    elif _custom_llm_provider == "vertex_ai":
+        vertex_credentials = (
+            kwargs.get("vertex_credentials")
+            or kwargs.get("vertex_ai_credentials")
+            or get_secret_str("VERTEXAI_CREDENTIALS")
+        )
+        vertex_project = (
+            kwargs.get("vertex_project")
+            or kwargs.get("vertex_ai_project")
+            or litellm.vertex_project
+            or get_secret_str("VERTEXAI_PROJECT")
+        )
+        vertex_location = (
+            kwargs.get("vertex_location")
+            or kwargs.get("vertex_ai_location")
+            or litellm.vertex_location
+            or get_secret_str("VERTEXAI_LOCATION")
+        )
+
+        resolved_location = vertex_llm_base.get_vertex_region(
+            vertex_region=vertex_location, model=model
+        )
+
+        access_token, resolved_project = await vertex_llm_base._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
+        )
+
+        vertex_realtime_config = VertexAIRealtimeConfig(
+            access_token=access_token,
+            project=resolved_project,
+            location=resolved_location,
+        )
+
+        await base_llm_http_handler.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            provider_config=vertex_realtime_config,
+            api_base=dynamic_api_base or litellm_params.api_base,
+            api_key=None,
+            client=client,
+            timeout=timeout,
+            headers=headers,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

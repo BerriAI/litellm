@@ -145,7 +145,9 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: dict) -> None:
+    def _collect_user_input_from_backend_event(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type = event_obj.get("type", "")
@@ -162,7 +164,7 @@ class RealTimeStreaming:
             pass
 
     def _collect_tool_calls_from_response_done(
-        self, event_obj: dict
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
     ) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
@@ -437,7 +439,13 @@ class RealTimeStreaming:
                     raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
 
                 if self.provider_config:
-                    await self._handle_provider_config_message(raw_response)
+                    try:
+                        await self._handle_provider_config_message(raw_response)
+                    except Exception as e:
+                        verbose_logger.exception(
+                            f"Error processing backend message, skipping: {e}"
+                        )
+                        continue
                 else:
                     handled = await self._handle_raw_backend_message(raw_response)
                     if handled:
