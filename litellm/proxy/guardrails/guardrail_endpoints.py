@@ -1167,10 +1167,11 @@ def _build_field_dict(
     # Determine the field type from annotation
     field_type = _get_field_type_from_annotation(field_annotation)
 
-    # Check for custom UI type override
-    field_json_schema_extra = getattr(field, "json_schema_extra", {})
+    # Check for custom UI type override (ui_type preferred; "type" leaks into OpenAPI and breaks schema)
+    field_json_schema_extra = getattr(field, "json_schema_extra", {}) or {}
     if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-        field_type = field_json_schema_extra["ui_type"].value
+        ut = field_json_schema_extra["ui_type"]
+        field_type = ut if isinstance(ut, str) else getattr(ut, "value", ut)
     elif field_json_schema_extra and "type" in field_json_schema_extra:
         field_type = field_json_schema_extra["type"]
 

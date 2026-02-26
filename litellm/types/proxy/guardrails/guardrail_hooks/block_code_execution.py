@@ -46,7 +46,7 @@ class BlockCodeExecutionGuardrailConfigModel(GuardrailConfigModel):
         description="Language tags to block (e.g. python, javascript, bash). Empty or None = block all fenced code blocks.",
         json_schema_extra=cast(
             Any,
-            {"type": "multiselect", "options": BLOCKED_LANGUAGES_OPTIONS},
+            {"ui_type": "multiselect", "options": BLOCKED_LANGUAGES_OPTIONS},
         ),
     )
     action: Literal["block", "mask"] = Field(
@@ -61,13 +61,17 @@ class BlockCodeExecutionGuardrailConfigModel(GuardrailConfigModel):
         json_schema_extra=cast(
             Any,
             {
-                "type": "percentage",
+                "ui_type": "percentage",
                 "min": 0.0,
                 "max": 1.0,
                 "step": 0.1,
                 "default_value": 0.5,
             },
         ),
+    )
+    detect_execution_intent: bool = Field(
+        default=True,
+        description="When True, block only when user intent is to run/execute; allow when intent is explain/refactor/don't run. Also block text-only execution requests (e.g. 'run `ls`', 'read /etc/passwd').",
     )
 
     @staticmethod
