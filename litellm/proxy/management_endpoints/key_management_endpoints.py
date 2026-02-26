@@ -4135,29 +4135,41 @@ async def key_aliases(
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
-        conditions: List[Dict[str, Any]] = [{"key_alias": {"not": None}}]
-        try:
-            conditions.append(_get_condition_to_filter_out_ui_session_tokens())
-        except NameError:
-            # Helper may not exist in some builds; ignore if missing
-            pass
+        # Build a parameterized WHERE clause to avoid loading full rows into
+        # memory. Raw SQL is used because the Prisma client wrapper does not
+        # support column-level SELECT projection on find_many.
+        #
+        # $1 is always UI_SESSION_TOKEN_TEAM_ID (filters out UI session tokens).
+        query_params: List[Any] = [UI_SESSION_TOKEN_TEAM_ID]
+        where_parts = [
+            "key_alias IS NOT NULL",
+            "key_alias != ''",
+            "(team_id IS NULL OR team_id != $1)",
+        ]
         if search:
-            conditions.append(
-                {"key_alias": {"contains": search, "mode": "insensitive"}}
-            )
-        where: Dict[str, Any] = {"AND": conditions}
+            query_params.append(f"%{search}%")
+            where_parts.append(f"key_alias ILIKE ${len(query_params)}")
 
-        total_count = await prisma_client.db.litellm_verificationtoken.count(
-            where=where,
-        )
-        rows = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,
-            order=[{"key_alias": "asc"}],
-            skip=(page - 1) * size,
-            take=size,
-        )
+        where_sql = " AND ".join(where_parts)
 
-        aliases: List[str] = [row.key_alias for row in rows if row.key_alias]  # type: ignore[misc]
+        count_sql = (
+            f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
+        )
+        count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
+        total_count = int(count_rows[0]["count"]) if count_rows else 0
+
+        aliases_params = query_params + [size, (page - 1) * size]
+        limit_idx = len(aliases_params) - 1
+        offset_idx = len(aliases_params)
+        aliases_sql = (
+            f"SELECT key_alias"
+            f' FROM "LiteLLM_VerificationToken"'
+            f" WHERE {where_sql}"
+            f" ORDER BY key_alias ASC"
+            f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        )
+        alias_rows = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        aliases: List[str] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
 
         total_pages = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(
