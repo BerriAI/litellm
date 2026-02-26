@@ -769,9 +769,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
             returned_message = [transformed_content_done_event]
 
+            # Use IDs from the done event — transform_content_done_event may have
+            # generated UUID fallbacks when the originals were None.
+            resolved_item_id = transformed_content_done_event.get("item_id") or current_output_item_id
+            resolved_response_id = transformed_content_done_event.get("response_id") or current_response_id
+
             additional_items = self.return_additional_content_done_events(
-                current_output_item_id=current_output_item_id,
-                current_response_id=current_response_id,
+                current_output_item_id=resolved_item_id,
+                current_response_id=resolved_response_id,
                 delta_done_event=transformed_content_done_event,
                 delta_type=delta_type,
             )
