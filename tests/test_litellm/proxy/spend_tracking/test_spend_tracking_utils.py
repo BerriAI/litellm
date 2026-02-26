@@ -19,6 +19,7 @@ import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
     _get_request_duration_ms,
     _get_response_for_spend_logs_payload,
@@ -244,6 +245,75 @@ def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_
     mock_should_store.return_value = False
     result = _get_vector_store_request_for_spend_logs_payload(None)
     assert result is None
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_realtime_returns_messages(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns messages
+    for realtime calls when store_prompts_in_spend_logs is True.
+    """
+    mock_should_store.return_value = True
+    realtime_messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather today?"},
+    ]
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "_arealtime",
+            "messages": realtime_messages,
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    parsed = json.loads(result)
+    assert len(parsed) == 2
+    assert parsed[0]["role"] == "system"
+    assert parsed[0]["content"] == "You are a helpful assistant."
+    assert parsed[1]["role"] == "user"
+    assert parsed[1]["content"] == "What is the weather today?"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns '{}' for realtime calls
+    when store_prompts_in_spend_logs is False.
+    """
+    mock_should_store.return_value = False
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "_arealtime",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert result == "{}"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_messages_for_spend_logs_non_realtime_returns_empty(mock_should_store):
+    """
+    Test that _get_messages_for_spend_logs_payload returns '{}' for non-realtime
+    calls even when store_prompts_in_spend_logs is True.
+    """
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "acompletion",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert result == "{}"
 
 
 @patch(

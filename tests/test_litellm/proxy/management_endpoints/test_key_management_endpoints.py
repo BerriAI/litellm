@@ -6194,15 +6194,14 @@ async def test_generate_key_helper_fn_agent_id():
     )
     mock_prisma_client.insert_data = mock_insert
 
-    with patch.object(km, "prisma_client", mock_prisma_client):
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            await generate_key_helper_fn(
-                request_type="key",
-                agent_id="test-agent-456",
-                key_alias="test-agent-key",
-                models=[],
-                table_name="key",
-            )
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await generate_key_helper_fn(
+            request_type="key",
+            agent_id="test-agent-456",
+            key_alias="test-agent-key",
+            models=[],
+            table_name="key",
+        )
 
     assert mock_insert.called, "insert_data was never called"
     # insert_data is called as insert_data(data=key_data, ...)
