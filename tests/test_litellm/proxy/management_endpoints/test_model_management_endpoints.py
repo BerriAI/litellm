@@ -20,7 +20,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    UpdatePublicModelGroupsRequest,
     clear_cache,
+    update_public_model_groups,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
@@ -653,3 +655,50 @@ class TestModelInfoEndpoint:
             assert result["id"] == "team-model-1"
             assert result["object"] == "model" 
             assert result["owned_by"] == "custom"
+
+
+@pytest.mark.asyncio
+async def test_update_public_model_groups_not_clobbered_by_get_config():
+    """
+    Regression test: update_public_model_groups must set
+    litellm.public_model_groups *after* proxy_config.get_config() so the
+    DB read inside get_config cannot clobber the new value with a stale one.
+    """
+    import litellm
+
+    old_db_value = ["old-model-from-db"]
+    new_value = ["config-yaml-model-1", "config-yaml-model-2"]
+
+    async def mock_get_config():
+        litellm.public_model_groups = old_db_value
+        return {"litellm_settings": {"public_model_groups": old_db_value}}
+
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.get_config = mock_get_config
+    mock_proxy_config.save_config = AsyncMock()
+
+    admin_key = UserAPIKeyAuth(
+        api_key="sk-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+    )
+
+    request = UpdatePublicModelGroupsRequest(model_groups=new_value)
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_config",
+        mock_proxy_config,
+    ), patch(
+        "litellm.proxy.proxy_server.store_model_in_db",
+        True,
+    ):
+        result = await update_public_model_groups(
+            request=request,
+            user_api_key_dict=admin_key,
+        )
+
+    assert result["public_model_groups"] == new_value
+    assert litellm.public_model_groups == new_value, (
+        "litellm.public_model_groups should reflect the newly requested value, "
+        "not the stale DB value read by get_config()"
+    )
