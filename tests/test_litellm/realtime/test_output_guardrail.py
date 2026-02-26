@@ -5,13 +5,14 @@ Tests that response.text.delta events are buffered and checked on
 response.text.done, blocking bad output and forwarding clean output.
 """
 
-import asyncio
 import json
-import unittest
-from typing import Any, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import List
+from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
+
+import litellm
 
 
 class _FakeWebSocket:
@@ -56,8 +57,6 @@ class _BlockingGuardrail(CustomGuardrail):
         texts = inputs.get("texts", [])
         for text in texts:
             if "bomb" in text.lower():
-                from fastapi import HTTPException
-
                 raise HTTPException(
                     status_code=400,
                     detail={"error": "Response blocked by content filter."},
@@ -96,14 +95,7 @@ def _make_streaming(guardrail=None):
     # Patch store_message to be a no-op (avoids JSON parsing complexity)
     streaming.store_message = MagicMock()
 
-    if guardrail is not None:
-        import litellm
-
-        litellm.callbacks = [guardrail]
-    else:
-        import litellm
-
-        litellm.callbacks = []
+    litellm.callbacks = [guardrail] if guardrail is not None else []
 
     return streaming, client_ws, backend_ws
 
