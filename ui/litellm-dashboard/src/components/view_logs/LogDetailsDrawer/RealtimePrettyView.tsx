@@ -88,9 +88,7 @@ export function isRealtimeResponse(response: any): boolean {
     (r: any) =>
       r.type === 'session.created' ||
       r.type === 'session.updated' ||
-      r.type === 'response.done' ||
-      r.type === 'response.audio.done' ||
-      r.type === 'conversation.item.created'
+      r.type === 'response.done'
   );
 }
 
@@ -369,7 +367,7 @@ function ResponseTurn({
   return (
     <div
       style={{
-        marginBottom: index >= 0 ? 12 : 0,
+        marginBottom: 12,
         paddingBottom: 12,
         borderBottom: '1px solid #f5f5f5',
       }}
