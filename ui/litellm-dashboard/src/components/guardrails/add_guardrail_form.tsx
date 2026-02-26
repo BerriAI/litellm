@@ -522,7 +522,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (endSessionAfterNFails !== undefined && endSessionAfterNFails > 0) {
           guardrailData.litellm_params.end_session_after_n_fails = endSessionAfterNFails;
         }
-        if (onViolation) {
+        if (onViolation && selectedEndpointType === "realtime") {
           guardrailData.litellm_params.on_violation = onViolation;
         }
         if (realtimeViolationMessage.trim()) {
