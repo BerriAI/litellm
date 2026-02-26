@@ -155,7 +155,7 @@ class RealTimeStreaming:
                 event_type
                 == "conversation.item.input_audio_transcription.completed"
             ):
-                transcript = event_obj.get("transcript", "")
+                transcript = cast(str, event_obj.get("transcript", ""))
                 if transcript:
                     self.input_messages.append(
                         {"role": "user", "content": transcript}
@@ -170,7 +170,7 @@ class RealTimeStreaming:
         try:
             if event_obj.get("type") != "response.done":
                 return
-            response = event_obj.get("response", {})
+            response = cast(Dict[str, Any], event_obj.get("response", {}))
             for item in response.get("output", []):
                 if item.get("type") == "function_call":
                     self.tool_calls.append(
