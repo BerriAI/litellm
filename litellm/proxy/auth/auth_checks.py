@@ -23,14 +23,12 @@ from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_JWT_TOKEN_NAME,
-    LITELLM_UI_SESSION_DURATION,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
 )
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import (
     RBAC_ROLES,
@@ -1886,9 +1884,8 @@ class ExperimentalUIJWTToken:
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
 
-        # Calculate expiration time from LITELLM_UI_SESSION_DURATION (default 24h)
-        session_duration_seconds = duration_in_seconds(LITELLM_UI_SESSION_DURATION)
-        expiration_time = get_utc_datetime() + timedelta(seconds=session_duration_seconds)
+        # Experimental UI flow uses shorter 10-min expiry for security (experimental = shorter-lived tokens)
+        expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
         expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
