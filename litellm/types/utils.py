@@ -800,6 +800,9 @@ API_ROUTE_TO_CALL_TYPES = {
         CallTypes.allm_passthrough_route,
     ],
     "/v1/messages": [CallTypes.anthropic_messages],
+    # OCR
+    "/ocr": [CallTypes.aocr, CallTypes.ocr],
+    "/v1/ocr": [CallTypes.aocr, CallTypes.ocr],
 }
 
 
