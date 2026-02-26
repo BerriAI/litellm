@@ -1143,6 +1143,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "gigachat",
+    "provider_display_name": "GigaChat",
+    "litellm_provider": "gigachat",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "GigaChat API",
+        "placeholder": "https://gigachat.devices.sberbank.ru/api/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://gigachat.devices.sberbank.ru/api/v1"
+      },
+      {
+        "key": "api_key",
+        "label": "GigaChat API Key",
+        "placeholder": null,
+        "tooltip": "Base64-encoded client_id:client_secret",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "gigachat/GigaChat-2"
+  },
+  {
     "provider": "GITHUB",
     "provider_display_name": "Github",
     "litellm_provider": "github",

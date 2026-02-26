@@ -17,6 +17,7 @@ export enum Providers {
   ElevenLabs = "ElevenLabs",
   FalAI = "Fal AI",
   FireworksAI = "Fireworks AI",
+  GigaChat = "GigaChat",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
   Groq = "Groq",
@@ -92,6 +93,7 @@ export const provider_map: Record<string, string> = {
   Infinity: "infinity",
   SAP: "sap",
   Watsonx: "watsonx",
+  GigaChat: "gigachat",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
