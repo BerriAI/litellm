@@ -4680,12 +4680,16 @@ def embedding(  # noqa: PLR0915
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
+    allowed_openai_params: Optional[List[str]] = kwargs.get(
+        "allowed_openai_params", None
+    )
     optional_params = get_optional_params_embeddings(
         model=model,
         user=user,
         dimensions=dimensions,
         encoding_format=encoding_format,
         custom_llm_provider=custom_llm_provider,
+        allowed_openai_params=allowed_openai_params,
         **non_default_params,
     )
 
