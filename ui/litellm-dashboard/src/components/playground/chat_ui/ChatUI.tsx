@@ -1832,6 +1832,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 accessToken={apiKeySource === "session" ? accessToken || "" : apiKey}
                 selectedModel={selectedModel || ""}
                 customProxyBaseUrl={customProxyBaseUrl || undefined}
+                selectedGuardrails={selectedGuardrails.length > 0 ? selectedGuardrails : undefined}
               />
             ) : (
             <>

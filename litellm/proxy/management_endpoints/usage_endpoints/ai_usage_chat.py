@@ -5,7 +5,9 @@ usage/spend data by querying the aggregated daily activity endpoints.
 
 import json
 from datetime import date
-from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, cast
+
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -13,8 +15,6 @@ from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-
-from typing_extensions import TypedDict
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -492,17 +492,17 @@ async def _process_tool_call(
         "tool_label": handler["label"],
         "arguments": fn_args,
     }
-    yield _sse({**tool_event_base, "status": "running"})
+    yield _sse(cast(SSEToolCallEvent, {**tool_event_base, "status": "running"}))
 
     try:
         tool_result = await _execute_tool_call(
             handler, fn_name, fn_args, user_id, is_admin
         )
-        yield _sse({**tool_event_base, "status": "complete"})
+        yield _sse(cast(SSEToolCallEvent, {**tool_event_base, "status": "complete"}))
     except Exception as e:
         verbose_proxy_logger.error("Tool %s failed: %s", fn_name, e)
         tool_result = f"Error fetching {handler['label']}. Please try again."
-        yield _sse({**tool_event_base, "status": "error"})
+        yield _sse(cast(SSEToolCallEvent, {**tool_event_base, "status": "error"}))
 
     chat_messages.append(
         {"role": "tool", "tool_call_id": tc.id, "content": tool_result}

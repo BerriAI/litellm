@@ -47,6 +47,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Lakera: "lakera_v2",
   LitellmContentFilter: "litellm_content_filter",
   ToolPermission: "tool_permission",
+  BlockCodeExecution: "block_code_execution",
 };
 
 // Function to populate provider map from API response - updates the original map

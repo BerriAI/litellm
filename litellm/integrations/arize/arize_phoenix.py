@@ -136,78 +136,137 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         return None
 
+    def _get_phoenix_context(self, kwargs):
+        """
+        Build a trace context for Phoenix's dedicated TracerProvider.
+
+        The base ``_get_span_context`` returns parent spans from the global
+        TracerProvider (the ``otel`` callback).  Those spans live on a
+        *different* TracerProvider, so they won't appear in Phoenix — using
+        them as parents just creates broken links.
+
+        Instead we:
+        1. Honour an incoming ``traceparent`` HTTP header (distributed tracing).
+        2. In proxy mode, create our *own* parent span on Phoenix's tracer
+           so the hierarchy is visible end-to-end inside Phoenix.
+        3. In SDK (non-proxy) mode, just return (None, None) for a root span.
+        """
+        from opentelemetry import trace
+
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
+        headers = proxy_server_request.get("headers", {}) or {}
+
+        # Propagate distributed trace context if the caller sent a traceparent
+        traceparent_ctx = (
+            self.get_traceparent_from_header(headers=headers)
+            if headers.get("traceparent")
+            else None
+        )
+
+        is_proxy_mode = bool(proxy_server_request)
+
+        if is_proxy_mode:
+            # Create a parent span on Phoenix's own tracer so both parent
+            # and child are exported to Phoenix.
+            start_time_val = kwargs.get("start_time", kwargs.get("api_call_start_time"))
+            parent_span = self.tracer.start_span(
+                name="litellm_proxy_request",
+                start_time=self._to_ns(start_time_val) if start_time_val is not None else None,
+                context=traceparent_ctx,
+                kind=self.span_kind.SERVER,
+            )
+            ctx = trace.set_span_in_context(parent_span)
+            return ctx, parent_span
+
+        # SDK mode — no parent span needed
+        return traceparent_ctx, None
+
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
         """
-        Override to prevent creating duplicate litellm_request spans when a proxy parent span exists.
-        
-        ArizePhoenixLogger should reuse the proxy parent span instead of creating a new litellm_request span,
-        to maintain a shallow span hierarchy as expected by Arize Phoenix.
+        Override to always create spans on ArizePhoenixLogger's dedicated TracerProvider.
+
+        The base class's ``_get_span_context`` would find the parent span created by
+        the ``otel`` callback on the *global* TracerProvider.  That span is invisible
+        in Phoenix (different exporter pipeline), so we ignore it and build our own
+        hierarchy via ``_get_phoenix_context``.
         """
         from opentelemetry.trace import Status, StatusCode
-        from litellm.secret_managers.main import get_secret_bool
-        from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME
-        
+
         verbose_logger.debug(
             "ArizePhoenixLogger: Logging kwargs: %s, OTEL config settings=%s",
             kwargs,
             self.config,
         )
-        ctx, parent_span = self._get_span_context(kwargs)
 
-        # ArizePhoenixLogger NEVER creates a litellm_request span when a proxy parent span exists
-        # This is different from the base OpenTelemetry behavior which respects USE_OTEL_LITELLM_REQUEST_SPAN
-        should_create_primary_span = parent_span is None or (
-            parent_span.name != LITELLM_PROXY_REQUEST_SPAN_NAME
-            and get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
+        ctx, parent_span = self._get_phoenix_context(kwargs)
+
+        # Create litellm_request span (child of our parent when in proxy mode)
+        span = self.tracer.start_span(
+            name=self._get_span_name(kwargs),
+            start_time=self._to_ns(start_time),
+            context=ctx,
         )
+        span.set_status(Status(StatusCode.OK))
+        self.set_attributes(span, kwargs, response_obj)
 
-        if should_create_primary_span:
-            # Create a new litellm_request span
-            span = self._start_primary_span(
-                kwargs, response_obj, start_time, end_time, ctx
-            )
-            # Raw-request sub-span (if enabled) - child of litellm_request span
-            self._maybe_log_raw_request(
-                kwargs, response_obj, start_time, end_time, span
-            )
-            # Ensure proxy-request parent span is annotated with the actual operation kind
-            if (
-                parent_span is not None
-                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
-            ):
-                self.set_attributes(parent_span, kwargs, response_obj)
-        else:
-            # Do not create primary span (keep hierarchy shallow when parent exists)
-            span = None
-            # Only set attributes if the span is still recording (not closed)
-            # Note: parent_span is guaranteed to be not None here
-            if parent_span.is_recording():
-                parent_span.set_status(Status(StatusCode.OK))
-                self.set_attributes(parent_span, kwargs, response_obj)
-            # Raw-request as direct child of parent_span
-            self._maybe_log_raw_request(
-                kwargs, response_obj, start_time, end_time, parent_span
-            )
+        # Raw-request sub-span (if enabled) — must be created before
+        # ending the parent span so the hierarchy is valid.
+        self._maybe_log_raw_request(
+            kwargs, response_obj, start_time, end_time, span
+        )
+        span.end(end_time=self._to_ns(end_time))
 
-        # 3. Guardrail span
+        # Guardrail span
         self._create_guardrail_span(kwargs=kwargs, context=ctx)
 
-        # 4. Metrics & cost recording
+        # Annotate and close our proxy parent span
+        if parent_span is not None:
+            parent_span.set_status(Status(StatusCode.OK))
+            self.set_attributes(parent_span, kwargs, response_obj)
+            parent_span.end(end_time=self._to_ns(end_time))
+
+        # Metrics & cost recording
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        # 5. Semantic logs.
+        # Semantic logs
         if self.config.enable_events:
-            log_span = span if span is not None else parent_span
-            if log_span is not None:
-                self._emit_semantic_logs(kwargs, response_obj, log_span)
+            self._emit_semantic_logs(kwargs, response_obj, span)
 
-        # 6. Do NOT end parent span - it should be managed by its creator
-        # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
-        # However, proxy-created spans should be closed here
-        if (
-            parent_span is not None
-            and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
-        ):
+    def _handle_failure(self, kwargs, response_obj, start_time, end_time):
+        """
+        Override to always create failure spans on ArizePhoenixLogger's dedicated
+        TracerProvider.  Mirrors ``_handle_success`` but sets ERROR status.
+        """
+        from opentelemetry.trace import Status, StatusCode
+
+        verbose_logger.debug(
+            "ArizePhoenixLogger: Failure - Logging kwargs: %s, OTEL config settings=%s",
+            kwargs,
+            self.config,
+        )
+
+        ctx, parent_span = self._get_phoenix_context(kwargs)
+
+        # Create litellm_request span (child of our parent when in proxy mode)
+        span = self.tracer.start_span(
+            name=self._get_span_name(kwargs),
+            start_time=self._to_ns(start_time),
+            context=ctx,
+        )
+        span.set_status(Status(StatusCode.ERROR))
+        self.set_attributes(span, kwargs, response_obj)
+        self._record_exception_on_span(span=span, kwargs=kwargs)
+        span.end(end_time=self._to_ns(end_time))
+
+        # Guardrail span
+        self._create_guardrail_span(kwargs=kwargs, context=ctx)
+
+        # Annotate and close our proxy parent span
+        if parent_span is not None:
+            parent_span.set_status(Status(StatusCode.ERROR))
+            self.set_attributes(parent_span, kwargs, response_obj)
+            self._record_exception_on_span(span=parent_span, kwargs=kwargs)
             parent_span.end(end_time=self._to_ns(end_time))
 
     @staticmethod

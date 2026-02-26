@@ -19,6 +19,8 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
 
@@ -26,11 +28,21 @@ azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
 bedrock_realtime = BedrockRealtime()
 xai_realtime = XAIRealtime()
+vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
+def _build_litellm_metadata(kwargs: dict) -> dict:
+    """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
+    metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
+    guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
+    if guardrails:
+        metadata["guardrails"] = guardrails
+    return metadata
+
+
 @wrapper_client
-async def _arealtime(
+async def _arealtime(  # noqa: PLR0915
     model: str,
     websocket: Any,  # fastapi websocket
     api_base: Optional[str] = None,
@@ -131,6 +143,8 @@ async def _arealtime(
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "openai":
         api_base = (
@@ -157,6 +171,7 @@ async def _arealtime(
             timeout=timeout,
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs
@@ -214,6 +229,54 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
+    elif _custom_llm_provider == "vertex_ai":
+        vertex_credentials = (
+            kwargs.get("vertex_credentials")
+            or kwargs.get("vertex_ai_credentials")
+            or get_secret_str("VERTEXAI_CREDENTIALS")
+        )
+        vertex_project = (
+            kwargs.get("vertex_project")
+            or kwargs.get("vertex_ai_project")
+            or litellm.vertex_project
+            or get_secret_str("VERTEXAI_PROJECT")
+        )
+        vertex_location = (
+            kwargs.get("vertex_location")
+            or kwargs.get("vertex_ai_location")
+            or litellm.vertex_location
+            or get_secret_str("VERTEXAI_LOCATION")
+        )
+
+        resolved_location = vertex_llm_base.get_vertex_region(
+            vertex_region=vertex_location, model=model
+        )
+
+        access_token, resolved_project = await vertex_llm_base._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
+        )
+
+        vertex_realtime_config = VertexAIRealtimeConfig(
+            access_token=access_token,
+            project=resolved_project,
+            location=resolved_location,
+        )
+
+        await base_llm_http_handler.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            provider_config=vertex_realtime_config,
+            api_base=dynamic_api_base or litellm_params.api_base,
+            api_key=None,
+            client=client,
+            timeout=timeout,
+            headers=headers,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
@@ -261,6 +324,33 @@ async def _realtime_health_check(
         url = xai_realtime._construct_url(
             api_base=api_base or "https://api.x.ai/v1", query_params={"model": model}
         )
+    elif custom_llm_provider == "vertex_ai":
+        vertex_location = litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
+        resolved_location = vertex_llm_base.get_vertex_region(
+            vertex_region=vertex_location, model=model
+        )
+        access_token, resolved_project = await vertex_llm_base._ensure_access_token_async(
+            credentials=None,
+            project_id=litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT"),
+            custom_llm_provider="vertex_ai",
+        )
+        vertex_realtime_config = VertexAIRealtimeConfig(
+            access_token=access_token,
+            project=resolved_project,
+            location=resolved_location,
+        )
+        url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
+        ssl_context = get_shared_realtime_ssl_context()
+        headers = vertex_realtime_config.validate_environment(
+            headers={}, model=model, api_key=None
+        )
+        async with websockets.connect(  # type: ignore
+            url,
+            additional_headers=headers,
+            max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+            ssl=ssl_context,
+        ):
+            return True
     else:
         raise ValueError(f"Unsupported model: {model}")
     ssl_context = get_shared_realtime_ssl_context()

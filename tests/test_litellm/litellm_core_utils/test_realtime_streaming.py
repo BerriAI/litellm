@@ -6,15 +6,29 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from websockets.exceptions import ConnectionClosed
 
+import litellm
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
 )
+
+
+def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
+    return json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": text,
+            "item_id": item_id,
+        }
+    ).encode()
 
 
 def test_realtime_streaming_store_message():
@@ -416,32 +430,32 @@ async def test_realtime_guardrail_blocks_prompt_injection():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # ASSERT 1: no bare response.create was sent to backend (injection blocked).
-    # The only response.create allowed is the warning one (has "instructions" field).
+    # ASSERT 1: no response.create was sent to backend (injection blocked).
     sent_to_backend = [
         json.loads(c.args[0])
         for c in backend_ws.send.call_args_list
         if c.args
     ]
-    bare_response_creates = [
+    response_creates = [
         e for e in sent_to_backend
         if e.get("type") == "response.create"
-        and "instructions" not in e.get("response", {})
     ]
-    assert len(bare_response_creates) == 0, (
-        f"Guardrail should prevent bare response.create for injected content, "
-        f"but got: {bare_response_creates}"
+    assert len(response_creates) == 0, (
+        f"Guardrail should prevent response.create for injected content, "
+        f"but got: {response_creates}"
     )
 
-    # ASSERT 2: warning response.create was sent to backend (to speak the block message)
-    warning_creates = [
-        e for e in sent_to_backend
-        if e.get("type") == "response.create"
-        and "instructions" in e.get("response", {})
+    # ASSERT 2: error event was sent directly to the client WebSocket
+    sent_to_client = [
+        json.loads(c.args[0]) for c in client_ws.send_text.call_args_list
+        if c.args
     ]
-    assert len(warning_creates) > 0, (
-        f"Backend should receive a response.create with warning instructions, "
-        f"but got: {sent_to_backend}"
+    error_events = [e for e in sent_to_client if e.get("type") == "error"]
+    assert len(error_events) == 1, (
+        f"Expected one error event sent to client, got: {sent_to_client}"
+    )
+    assert error_events[0]["error"]["type"] == "guardrail_violation", (
+        f"Expected guardrail_violation error type, got: {error_events[0]}"
     )
 
     litellm.callbacks = []  # cleanup
@@ -514,11 +528,91 @@ async def test_realtime_guardrail_allows_clean_transcript():
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_injects_create_response_false():
+async def test_realtime_text_input_guardrail_blocks_and_returns_error():
     """
-    Test that when session.created arrives from the backend and realtime guardrails
-    are registered, the proxy injects a session.update with create_response=False
-    so the LLM never auto-responds before the guardrail runs.
+    Test that when conversation.item.create arrives with text that triggers a guardrail,
+    the proxy blocks it (doesn't forward to backend) and returns an error event directly
+    to the client WebSocket.
+    """
+    from fastapi import HTTPException
+
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            texts = inputs.get("texts", [])
+            for text in texts:
+                if "@" in text:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "email address detected"},
+                    )
+            return inputs
+
+    guardrail = BlockingGuardrail(
+        guardrail_name="email-blocker",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    item_create_msg = json.dumps({
+        "type": "conversation.item.create",
+        "item": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "My email is test@example.com"}],
+        },
+    })
+
+    # Simulate the client sending a conversation.item.create with an email
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            item_create_msg,
+            Exception("connection closed"),  # stop the loop
+        ]
+    )
+
+    await streaming.client_ack_messages()
+
+    # ASSERT: error event was sent to client
+    assert client_ws.send_text.called, "Expected error to be sent to client websocket"
+    sent_texts = [json.loads(c.args[0]) for c in client_ws.send_text.call_args_list]
+    error_events = [e for e in sent_texts if e.get("type") == "error"]
+    assert len(error_events) == 1, f"Expected one error event, got: {sent_texts}"
+    assert error_events[0]["error"]["type"] == "guardrail_violation"
+
+    # ASSERT: blocked item was NOT forwarded to the backend
+    sent_to_backend = [c.args[0] for c in backend_ws.send.call_args_list if c.args]
+    forwarded_items = [
+        json.loads(m) for m in sent_to_backend
+        if isinstance(m, str) and json.loads(m).get("type") == "conversation.item.create"
+    ]
+    assert len(forwarded_items) == 0, (
+        f"Blocked item should not be forwarded to backend, got: {forwarded_items}"
+    )
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_realtime_text_input_guardrail_uses_pre_call_mode():
+    """
+    Test that _has_realtime_guardrails returns True for a guardrail configured with
+    pre_call mode (not just realtime_input_transcription).
     """
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -529,7 +623,46 @@ async def test_realtime_session_created_injects_create_response_false():
             return inputs
 
     guardrail = DummyGuardrail(
-        guardrail_name="dummy",
+        guardrail_name="pre-call-guardrail",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    assert streaming._has_realtime_guardrails() is True, (
+        "pre_call guardrail should be recognized as a realtime guardrail"
+    )
+    # pre_call guardrail should NOT trigger the audio/VAD session.update injection
+    assert streaming._has_audio_transcription_guardrails() is False, (
+        "pre_call guardrail should not trigger audio transcription guardrail path"
+    )
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_created_injects_session_update_for_audio_guardrail():
+    """
+    Test that when an audio transcription guardrail is configured, a session.created
+    event from the backend triggers a session.update injection (create_response: false)
+    AFTER forwarding session.created to the client.  This prevents the LLM from
+    auto-responding before the guardrail can run on the transcript.
+    """
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class AudioGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    guardrail = AudioGuardrail(
+        guardrail_name="audio-guardrail",
         event_hook=GuardrailEventHooks.realtime_input_transcription,
         default_on=True,
     )
@@ -538,16 +671,133 @@ async def test_realtime_session_created_injects_create_response_false():
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
 
-    session_created_event = json.dumps({"type": "session.created"}).encode()
+    session_created_event = json.dumps(
+        {"type": "session.created", "session": {"id": "sess_abc"}}
+    ).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[session_created_event, ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    # session.created must be forwarded to the client
+    sent_to_client = [
+        json.loads(c.args[0]) for c in client_ws.send_text.call_args_list if c.args
+    ]
+    session_created_events = [e for e in sent_to_client if e.get("type") == "session.created"]
+    assert len(session_created_events) == 1, (
+        f"session.created should be forwarded to client, got: {sent_to_client}"
+    )
+
+    # session.update must be sent to the backend AFTER session.created was forwarded
+    sent_to_backend = [
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
+    ]
+    session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
+    assert len(session_updates) == 1, (
+        f"Expected one session.update injected to backend, got: {sent_to_backend}"
+    )
+    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_created_no_injection_for_pre_call_only():
+    """
+    Test that when only a pre_call guardrail is configured (no audio transcription),
+    session.created does NOT trigger the session.update injection.
+    """
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class PreCallGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    guardrail = PreCallGuardrail(
+        guardrail_name="pre-call-only",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    session_created_event = json.dumps(
+        {"type": "session.created", "session": {"id": "sess_xyz"}}
+    ).encode()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[session_created_event, ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    # No session.update should be injected
+    sent_to_backend = [
+        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
+    ]
+    session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
+    assert len(session_updates) == 0, (
+        f"pre_call guardrail should NOT inject session.update, got: {sent_to_backend}"
+    )
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_end_session_after_n_fails_closes_connection():
+    """
+    Test that end_session_after_n_fails=2 closes the backend websocket after
+    the second guardrail violation in a session.
+    """
+
+    class BadWordGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            for text in inputs.get("texts", []):
+                if "blocked" in text.lower():
+                    raise ValueError("Content blocked by guardrail.")
+            return inputs
+
+    guardrail = BadWordGuardrail(
+        guardrail_name="bad_word_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+        end_session_after_n_fails=2,
+    )
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
 
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(
         side_effect=[
-            session_created_event,
+            _make_transcript_event("this is blocked"),    # violation 1 — warn
+            _make_transcript_event("also blocked again"), # violation 2 — end session
             ConnectionClosed(None, None),
         ]
     )
     backend_ws.send = AsyncMock()
+    backend_ws.close = AsyncMock()
 
     logging_obj = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
@@ -555,17 +805,54 @@ async def test_realtime_session_created_injects_create_response_false():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # ASSERT: proxy injected session.update with create_response=False to backend
-    sent_to_backend = [
-        json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
-    ]
-    session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
-    assert len(session_updates) == 1, (
-        f"Expected proxy to inject session.update, got: {sent_to_backend}"
+    assert backend_ws.close.called, "Expected backend_ws.close() to be called after 2 violations"
+    assert streaming._violation_count == 2
+
+    litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_on_violation_end_session_closes_on_first_fail():
+    """
+    Test that on_violation='end_session' closes the session immediately on the
+    first violation, regardless of end_session_after_n_fails.
+    """
+
+    class TopicGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            for text in inputs.get("texts", []):
+                if "stock" in text.lower():
+                    raise ValueError("Topic not allowed: financial advice.")
+            return inputs
+
+    guardrail = TopicGuardrail(
+        guardrail_name="topic_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+        on_violation="end_session",
     )
-    td = session_updates[0]["session"]["turn_detection"]
-    assert td["create_response"] is False, (
-        f"Expected create_response=False, got: {td}"
+    litellm.callbacks = [guardrail]
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            _make_transcript_event("What stock should I buy today?", item_id="item_y"),
+            ConnectionClosed(None, None),
+        ]
     )
+    backend_ws.send = AsyncMock()
+    backend_ws.close = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    await streaming.backend_to_client_send_messages()
+
+    assert backend_ws.close.called, "Expected session to close immediately with on_violation=end_session"
+    assert streaming._violation_count == 1
 
     litellm.callbacks = []  # cleanup

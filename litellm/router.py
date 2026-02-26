@@ -7053,7 +7053,7 @@ class Router:
         user_model_info = deployment.get("model_info") or {}
 
         if model_info is not None:
-            model_info.update(user_model_info)
+            model_info.update(cast(ModelInfo, user_model_info))
 
         return model_info
 
