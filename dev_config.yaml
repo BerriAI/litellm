@@ -1,0 +1,25 @@
+model_list:
+  - model_name: gpt-4o-realtime
+    litellm_params:
+      model: openai/gpt-4o-realtime-preview-2024-12-17
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "block-emails"
+    litellm_params:
+      guardrail: litellm_content_filter
+      mode: pre_call
+      default_on: false
+      patterns:
+        - pattern_type: prebuilt
+          pattern_name: email
+          name: email
+          action: BLOCK
+
+general_settings:
+  master_key: sk-test-master-key
+  store_prompts_in_spend_logs: true
