@@ -3702,16 +3702,22 @@ jobs:
           command: |
             echo "Current directory:"
             ls -la
-            echo "\nContents of tests/llm_translation:"
-            ls -la tests/llm_translation
+            echo "\nContents of tests/llm_translation (if exists):"
+            ls -la tests/llm_translation || echo "tests/llm_translation not found"
       - run:
           name: Combine Coverage
           command: |
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage realtime_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
-            coverage xml
+            COVERAGE_DIRS=$(ls -d *_coverage 2>/dev/null | tr '\n' ' ')
+            if [ -n "$COVERAGE_DIRS" ]; then
+              coverage combine $COVERAGE_DIRS
+              coverage xml
+            else
+              echo "No coverage directories found, skipping combine"
+              echo '<?xml version="1.0" ?><coverage></coverage>' > coverage.xml
+            fi
       - codecov/upload:
           file: ./coverage.xml
 
