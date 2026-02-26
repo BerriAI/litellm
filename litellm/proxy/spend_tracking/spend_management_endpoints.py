@@ -2380,27 +2380,17 @@ async def global_spend_refresh():
     view_exists = await is_materialized_global_spend_view()
 
     if view_exists:
-        # refresh materialized view
         sql_query = """
         REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";    
         """
         try:
-            from litellm.proxy._types import CommonProxyErrors
-            from litellm.proxy.proxy_server import proxy_logging_obj
-            from litellm.proxy.utils import PrismaClient
+            from litellm.proxy.proxy_server import prisma_client
 
-            db_url = os.getenv("DATABASE_URL")
-            if db_url is None:
+            if prisma_client is None:
+                from litellm.proxy._types import CommonProxyErrors
+
                 raise Exception(CommonProxyErrors.db_not_connected_error.value)
-            new_client = PrismaClient(
-                database_url=db_url,
-                proxy_logging_obj=proxy_logging_obj,
-                http_client={
-                    "timeout": 6000,
-                },
-            )
-            await new_client.db.connect()
-            await new_client.db.query_raw(sql_query)
+            await prisma_client.db.query_raw(sql_query)
             verbose_proxy_logger.info("MonthlyGlobalSpend view refreshed")
             return {
                 "message": "MonthlyGlobalSpend view refreshed",

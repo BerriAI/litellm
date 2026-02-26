@@ -2280,6 +2280,28 @@ class PrismaClient:
         self._watching_engine: bool = False
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: Optional[threading.Thread] = None
+
+        self._engine_memory_reclaim_enabled: bool = (
+            str_to_bool(
+                os.getenv("PRISMA_ENGINE_MEMORY_RECLAIM_ENABLED", "true")
+            )
+            is True
+        )
+        self._engine_memory_limit_mb: int = max(
+            256,
+            int(os.getenv("PRISMA_ENGINE_MEMORY_LIMIT_MB", "2048")),
+        )
+        self._engine_max_age_seconds: int = max(
+            300,
+            int(os.getenv("PRISMA_ENGINE_MAX_AGE_SECONDS", "3600")),
+        )
+        self._engine_memory_check_interval_seconds: int = max(
+            10,
+            int(os.getenv("PRISMA_ENGINE_MEMORY_CHECK_INTERVAL_SECONDS", "60")),
+        )
+        self._engine_memory_reclaim_task: Optional[asyncio.Task] = None
+        self._engine_started_at: float = time.time()
+
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -4025,6 +4047,161 @@ class PrismaClient:
             pass
         self._db_health_watchdog_task = None
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
+
+    # ── Prisma engine memory reclamation ──────────────────────────
+
+    async def start_engine_memory_reclaim_task(self) -> None:
+        """Start background task that monitors Prisma engine RSS and restarts
+        the engine process when memory exceeds a threshold or the engine has
+        been running longer than a maximum age.
+
+        Controlled by env vars:
+        - PRISMA_ENGINE_MEMORY_RECLAIM_ENABLED (default true)
+        - PRISMA_ENGINE_MEMORY_LIMIT_MB (default 2048)
+        - PRISMA_ENGINE_MAX_AGE_SECONDS (default 3600)
+        - PRISMA_ENGINE_MEMORY_CHECK_INTERVAL_SECONDS (default 60)
+        """
+        if not self._engine_memory_reclaim_enabled:
+            verbose_proxy_logger.debug(
+                "Prisma engine memory reclamation disabled via "
+                "PRISMA_ENGINE_MEMORY_RECLAIM_ENABLED"
+            )
+            return
+        if self._engine_memory_reclaim_task is not None:
+            return
+        self._engine_started_at = time.time()
+        self._engine_memory_reclaim_task = asyncio.create_task(
+            self._engine_memory_reclaim_loop()
+        )
+        verbose_proxy_logger.info(
+            "Started Prisma engine memory reclamation "
+            "(memory_limit=%sMB, max_age=%ss, check_interval=%ss)",
+            self._engine_memory_limit_mb,
+            self._engine_max_age_seconds,
+            self._engine_memory_check_interval_seconds,
+        )
+
+    async def stop_engine_memory_reclaim_task(self) -> None:
+        """Stop the engine memory reclamation background task."""
+        if self._engine_memory_reclaim_task is None:
+            return
+        self._engine_memory_reclaim_task.cancel()
+        try:
+            await self._engine_memory_reclaim_task
+        except asyncio.CancelledError:
+            pass
+        self._engine_memory_reclaim_task = None
+        verbose_proxy_logger.info("Stopped Prisma engine memory reclamation task")
+
+    @staticmethod
+    def _read_pid_rss_mb(pid: int) -> Optional[float]:
+        """Read RSS of a process in MB from /proc/<pid>/status.
+
+        Returns None when the information is unavailable (non-Linux,
+        process gone, etc.).
+        """
+        try:
+            with open(f"/proc/{pid}/status", "r") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        parts = line.split()
+                        return int(parts[1]) / 1024.0  # kB -> MB
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    async def _engine_memory_reclaim_loop(self) -> None:
+        """Periodically check engine RSS and age, restart when thresholds are exceeded."""
+        while True:
+            try:
+                await asyncio.sleep(self._engine_memory_check_interval_seconds)
+                pid = self._get_engine_pid()
+                if pid <= 0:
+                    continue
+
+                rss_mb = self._read_pid_rss_mb(pid)
+                engine_age = time.time() - self._engine_started_at
+                should_restart = False
+                reason = ""
+
+                if rss_mb is not None and rss_mb > self._engine_memory_limit_mb:
+                    should_restart = True
+                    reason = (
+                        f"engine PID {pid} RSS={rss_mb:.0f}MB "
+                        f"exceeds limit={self._engine_memory_limit_mb}MB"
+                    )
+                elif engine_age > self._engine_max_age_seconds:
+                    rss_str = f"{rss_mb:.0f}MB" if rss_mb is not None else "unknown"
+                    should_restart = True
+                    reason = (
+                        f"engine PID {pid} age={engine_age:.0f}s "
+                        f"exceeds max_age={self._engine_max_age_seconds}s "
+                        f"(RSS={rss_str})"
+                    )
+
+                if should_restart:
+                    verbose_proxy_logger.warning(
+                        "Prisma engine memory reclaim triggered: %s. "
+                        "Performing disconnect/reconnect cycle to reclaim memory.",
+                        reason,
+                    )
+                    await self._perform_engine_memory_reclaim()
+                else:
+                    if rss_mb is not None:
+                        verbose_proxy_logger.debug(
+                            "Prisma engine PID %s healthy: RSS=%.0fMB, age=%.0fs",
+                            pid,
+                            rss_mb,
+                            engine_age,
+                        )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Error in Prisma engine memory reclaim loop: %s", e
+                )
+                try:
+                    await asyncio.sleep(
+                        self._engine_memory_check_interval_seconds
+                    )
+                except asyncio.CancelledError:
+                    break
+
+    async def _perform_engine_memory_reclaim(self) -> None:
+        """Disconnect and reconnect the Prisma client to kill the old engine
+        process and start a fresh one, reclaiming all leaked RSS memory."""
+        old_pid = self._get_engine_pid()
+        try:
+            self._stop_engine_watcher()
+
+            db_url = os.getenv("DATABASE_URL", "")
+            if not db_url:
+                verbose_proxy_logger.error(
+                    "DATABASE_URL not set; cannot reclaim engine memory."
+                )
+                return
+
+            await self.db.recreate_prisma_client(db_url)
+
+            self._engine_started_at = time.time()
+            self._engine_confirmed_dead = False
+
+            await self._start_engine_watcher()
+
+            new_pid = self._get_engine_pid()
+            new_rss = self._read_pid_rss_mb(new_pid) if new_pid > 0 else None
+            verbose_proxy_logger.info(
+                "Prisma engine memory reclaim complete: "
+                "old_pid=%s -> new_pid=%s, new_rss=%sMB",
+                old_pid,
+                new_pid,
+                f"{new_rss:.0f}" if new_rss is not None else "unknown",
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(
+                "Prisma engine memory reclaim failed: %s", e
+            )
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:

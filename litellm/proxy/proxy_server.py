@@ -922,6 +922,17 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping DB health watchdog task: {e}")
 
+    # Shutdown event - stop Prisma engine memory reclamation task
+    if prisma_client is not None and hasattr(
+        prisma_client, "stop_engine_memory_reclaim_task"
+    ):
+        try:
+            await prisma_client.stop_engine_memory_reclaim_task()
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error stopping engine memory reclaim task: {e}"
+            )
+
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
@@ -6070,6 +6081,9 @@ class ProxyStartupEvent:
 
                 if hasattr(prisma_client, "start_db_health_watchdog_task"):
                     await prisma_client.start_db_health_watchdog_task()
+
+                if hasattr(prisma_client, "start_engine_memory_reclaim_task"):
+                    await prisma_client.start_engine_memory_reclaim_task()
             return prisma_client
         except Exception as e:
             PrismaDBExceptionHandler.handle_db_exception(e)
