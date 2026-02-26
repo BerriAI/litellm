@@ -1066,7 +1066,8 @@
         "fine_tuning": true,
         "rag_ingest": true,
         "rag_query": true,
-        "generateContent": true
+        "generateContent": true,
+        "realtime": true
       }
     },
     "gemini": {

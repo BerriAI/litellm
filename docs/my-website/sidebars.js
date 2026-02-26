@@ -758,6 +758,7 @@ const sidebars = {
             "providers/vertex_batch",
             "providers/vertex_ocr",
             "providers/vertex_ai_agent_engine",
+            "providers/vertex_realtime",
           ]
         },
         {

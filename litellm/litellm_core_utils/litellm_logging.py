@@ -3834,6 +3834,12 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 )
             )
             _in_memory_loggers.append(otel_logger)
+
+            # Auto-initialize Arize Phoenix if Phoenix env vars are configured
+            # This allows users to get nested traces in both OTEL and Phoenix
+            # by only specifying "otel" in callbacks
+            _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
+
             return otel_logger  # type: ignore
 
         elif logging_integration == "galileo":
@@ -3887,7 +3893,8 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
             )
             for callback in _in_memory_loggers:
-                if isinstance(callback, OpenTelemetry):
+                # Use exact type check to avoid matching ArizePhoenixLogger (subclass)
+                if type(callback) is OpenTelemetry:
                     return callback  # type: ignore
             _otel_logger = OpenTelemetry(config=otel_config)
             _in_memory_loggers.append(_otel_logger)
@@ -4147,6 +4154,57 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
     return None
 
 
+def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
+    """
+    Auto-initialize ArizePhoenixLogger when Phoenix env vars are detected.
+
+    Called during ``otel`` callback setup so that users get nested traces in
+    both their OTEL collector *and* Arize Phoenix by only listing ``"otel"``
+    in ``callbacks``.  If no Phoenix env vars are set, this is a no-op.
+    """
+    phoenix_env_vars = (
+        "PHOENIX_API_KEY",
+        "PHOENIX_COLLECTOR_HTTP_ENDPOINT",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+    )
+    if not any(os.environ.get(v) for v in phoenix_env_vars):
+        return
+
+    # Already registered — nothing to do
+    if any(
+        isinstance(cb, ArizePhoenixLogger) and cb.callback_name == "arize_phoenix"
+        for cb in _in_memory_loggers
+    ):
+        return
+
+    try:
+        from litellm.integrations.opentelemetry import OpenTelemetryConfig
+
+        arize_phoenix_config = ArizePhoenixLogger.get_arize_phoenix_config()
+        otel_config = OpenTelemetryConfig(
+            exporter=arize_phoenix_config.protocol,
+            endpoint=arize_phoenix_config.endpoint,
+            headers=arize_phoenix_config.otlp_auth_headers,
+        )
+        phoenix_logger = ArizePhoenixLogger(
+            config=otel_config, callback_name="arize_phoenix"
+        )
+        _in_memory_loggers.append(phoenix_logger)
+
+        # Register as a litellm callback so it receives success/failure events
+        litellm.logging_callback_manager.add_litellm_callback(phoenix_logger)
+
+        verbose_logger.info(
+            "Auto-initialized Arize Phoenix logger alongside otel "
+            "(endpoint=%s)",
+            arize_phoenix_config.endpoint,
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            "Failed to auto-initialize Arize Phoenix logger: %s", str(e)
+        )
+
+
 def get_custom_logger_compatible_class(  # noqa: PLR0915
     logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> Optional[CustomLogger]:
@@ -4249,7 +4307,8 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.opentelemetry import OpenTelemetry
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, OpenTelemetry):
+                # Use exact type check to avoid matching ArizePhoenixLogger (subclass)
+                if type(callback) is OpenTelemetry:
                     return callback
         elif logging_integration == "arize":
             if "ARIZE_API_KEY" not in os.environ:
@@ -4266,7 +4325,8 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.opentelemetry import OpenTelemetry
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, OpenTelemetry):
+                # Use exact type check to avoid matching ArizePhoenixLogger (subclass)
+                if type(callback) is OpenTelemetry:
                     return callback  # type: ignore
 
         elif logging_integration == "dynamic_rate_limiter":

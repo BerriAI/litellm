@@ -14,6 +14,7 @@ export const LOGS_SORT_FIELD_MAP = {
   startTime: "startTime",
   spend: "spend",
   total_tokens: "total_tokens",
+  request_duration_ms: "request_duration_ms",
 } as const;
 
 export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
@@ -61,7 +62,7 @@ export type LogEntry = {
   proxy_server_request?: string | any[] | Record<string, any>;
   session_id?: string;
   status?: string;
-  duration?: number;
+  request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
   mcp_tool_call_count?: number;
@@ -231,13 +232,28 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Duration (s)",
-    accessorKey: "duration",
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    header: sortProps
+      ? () => (
+          <SortableHeader
+            label="Duration (s)"
+            field="request_duration_ms"
+            sortBy={sortProps.sortBy}
+            sortOrder={sortProps.sortOrder}
+            onSortChange={sortProps.onSortChange}
+          />
+        )
+      : "Duration (s)",
+    accessorKey: "request_duration_ms",
+    cell: (info: any) => {
+      const ms = info.getValue();
+      if (ms == null) return <span>-</span>;
+      const seconds = (ms / 1000).toFixed(2);
+      return (
+        <Tooltip title={`${ms}ms`}>
+          <span className="max-w-[15ch] truncate block">{seconds}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "Team Name",
