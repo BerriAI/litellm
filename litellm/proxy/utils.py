@@ -2742,12 +2742,14 @@ class PrismaClient:
                         response = await self.db.litellm_spendlogs.find_many(  # type: ignore
                             where={
                                 key_val["key"]: key_val["value"],  # type: ignore
-                            }
+                            },
+                            take=limit if limit is not None else 1000,
                         )
                     return response
                 else:
                     response = await self.db.litellm_spendlogs.find_many(  # type: ignore
                         order={"startTime": "desc"},
+                        take=limit if limit is not None else 1000,
                     )
                     return response
             elif table_name == "budget" and reset_at is not None:
@@ -4246,7 +4248,8 @@ class PrismaClient:
         try:
             # Get all unique model names first
             all_checks = await self.db.litellm_healthchecktable.find_many(
-                order={"checked_at": "desc"}
+                order={"checked_at": "desc"},
+                take=10000,
             )
 
             # Group by model_name and get the latest for each

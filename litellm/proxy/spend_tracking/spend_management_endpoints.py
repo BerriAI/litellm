@@ -2171,6 +2171,7 @@ async def view_spend_logs(  # noqa: PLR0915
                     order={
                         "startTime": "desc",
                     },
+                    take=10000,
                 )
                 return data
 
