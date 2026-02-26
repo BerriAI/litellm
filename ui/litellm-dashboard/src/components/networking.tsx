@@ -362,9 +362,16 @@ export const makeModelGroupPublic = async (accessToken: string, modelGroups: str
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
-  const url = defaultProxyBaseUrl
-    ? `${defaultProxyBaseUrl}/litellm/.well-known/litellm-ui-config`
-    : `/litellm/.well-known/litellm-ui-config`;
+  let url: string;
+  if (defaultProxyBaseUrl) {
+    // Local development — use the explicit dev proxy URL
+    url = `${defaultProxyBaseUrl}/.well-known/litellm-ui-config`;
+  } else {
+    // Production — derive the base path from the current page URL
+    // The UI is served at {serverRootPath}/ui/*, so we go up from /ui/ to the root
+    const basePath = window.location.pathname.replace(/\/ui\/.*$/, "");
+    url = `${basePath}/.well-known/litellm-ui-config`;
+  }
   const response = await fetch(url);
   const jsonData: LiteLLMWellKnownUiConfig = await response.json();
   /**
