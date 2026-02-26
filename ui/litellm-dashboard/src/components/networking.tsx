@@ -3329,13 +3329,33 @@ export const keyListCall = async (
   }
 };
 
-export const keyAliasesCall = async (accessToken: string): Promise<{ aliases: string[] }> => {
+export interface PaginatedKeyAliasResponse {
+  aliases: string[];
+  total_count: number;
+  current_page: number;
+  total_pages: number;
+  size: number;
+}
+
+export const keyAliasesCall = async (
+  accessToken: string,
+  page: number = 1,
+  size: number = 50,
+  search?: string,
+): Promise<PaginatedKeyAliasResponse> => {
   /**
-   * Get all key aliases from proxy
+   * Get key aliases from proxy with pagination and optional search
    */
   try {
+    const params = new URLSearchParams(
+      Object.entries({
+        page: String(page),
+        size: String(size),
+        ...(search ? { search } : {}),
+      }),
+    );
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/aliases` : `/key/aliases`;
-    console.log("in keyAliasesCall");
+    url = `${url}?${params}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -3354,7 +3374,7 @@ export const keyAliasesCall = async (accessToken: string): Promise<{ aliases: st
 
     const data = await response.json();
     console.log("/key/aliases API Response:", data);
-    return data; // { aliases: string[] }
+    return data;
   } catch (error) {
     console.error("Failed to fetch key aliases:", error);
     throw error;
