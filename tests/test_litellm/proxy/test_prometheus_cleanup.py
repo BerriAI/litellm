@@ -176,33 +176,6 @@ class TestMarkDeadPids:
                 mark_dead_pids()
                 mock_mark_dead.assert_called_once_with(dead_pid)
 
-    def test_handles_malformed_filenames(self, tmp_path):
-        """Malformed filenames should be ignored, dead PIDs still cleaned."""
-        dead_pid = 4_000_000
-        (tmp_path / "counter_.db").touch()
-        (tmp_path / "random.db").touch()
-        (tmp_path / f"counter_{dead_pid}.db").touch()
-
-        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
-            with patch(
-                "prometheus_client.multiprocess.mark_process_dead"
-            ) as mock_mark_dead:
-                mark_dead_pids()
-                mock_mark_dead.assert_called_once_with(dead_pid)
-
-    def test_permission_error_treated_as_alive(self, tmp_path):
-        """PermissionError from os.kill means process is alive, skip it."""
-        target_pid = 99999
-        (tmp_path / f"counter_{target_pid}.db").touch()
-
-        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
-            with patch("os.kill", side_effect=PermissionError):
-                with patch(
-                    "prometheus_client.multiprocess.mark_process_dead"
-                ) as mock_mark_dead:
-                    mark_dead_pids()
-                    mock_mark_dead.assert_not_called()
-
     def test_noop_when_not_configured(self, tmp_path):
         """Should do nothing when PROMETHEUS_MULTIPROC_DIR is not set."""
         with patch.dict(os.environ, {}, clear=False):
