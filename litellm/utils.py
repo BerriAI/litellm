@@ -3190,7 +3190,6 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     elif custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
-        verbose_logger.debug(f"allowed_openai_params: {allowed_openai_params}")
         if (
             model is not None
             and "text-embedding-3" not in model
