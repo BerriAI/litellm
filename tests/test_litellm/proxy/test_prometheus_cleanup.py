@@ -1,5 +1,5 @@
 """
-Tests for litellm.proxy.prometheus_cleanup module and
+Tests for litellm.proxy.prometheus_cleanup.wipe_directory and
 ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir.
 """
 
@@ -10,10 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy.prometheus_cleanup import (
-    cleanup_own_pid_files,
-    wipe_directory,
-)
+from litellm.proxy.prometheus_cleanup import wipe_directory
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
@@ -24,30 +21,6 @@ class TestWipeDirectory:
         (tmp_path / "gauge_livesum_9999.db").touch()
         wipe_directory(str(tmp_path))
         assert not list(tmp_path.glob("*.db"))
-
-
-class TestCleanupOwnPidFiles:
-    def test_calls_mark_process_dead_for_own_pid(self, tmp_path):
-        """Should call mark_process_dead with current PID on shutdown."""
-        pid = os.getpid()
-
-        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
-            with patch(
-                "prometheus_client.multiprocess.mark_process_dead"
-            ) as mock_mark_dead:
-                cleanup_own_pid_files()
-                mock_mark_dead.assert_called_once_with(pid)
-
-    def test_noop_when_not_configured(self, tmp_path):
-        """Should not call mark_process_dead when env var is not set."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-            os.environ.pop("prometheus_multiproc_dir", None)
-            with patch(
-                "prometheus_client.multiprocess.mark_process_dead"
-            ) as mock_mark_dead:
-                cleanup_own_pid_files()
-                mock_mark_dead.assert_not_called()
 
 
 class TestMaybeSetupPrometheusMultiprocDir:
