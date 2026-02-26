@@ -1314,6 +1314,11 @@ CLI_JWT_EXPIRATION_HOURS = int(
     or 24
 )
 
+########################### UI SESSION DURATION ###########################
+# Duration for UI login session (username/password, SSO). Format: "30s", "30m", "24h", "7d"
+# Applies to both default and EXPERIMENTAL_UI_LOGIN flows
+LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
+
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
