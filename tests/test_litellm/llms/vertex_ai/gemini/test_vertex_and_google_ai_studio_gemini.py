@@ -608,34 +608,32 @@ def test_check_finish_reason():
 
 def test_finish_reason_unspecified_and_malformed_function_call():
     """
-    Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL 
-    return their lowercase values instead of being mapped to 'stop'
-    since we don't have good mappings for these.
+    Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL
+    are mapped to OpenAI-compatible 'stop' finish reason.
     """
     finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
-    
-    # Test FINISH_REASON_UNSPECIFIED returns lowercase version
-    assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "finish_reason_unspecified"
+
+    # Test FINISH_REASON_UNSPECIFIED maps to "stop"
+    assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "stop"
     assert (
         VertexGeminiConfig._check_finish_reason(
             chat_completion_message=None, finish_reason="FINISH_REASON_UNSPECIFIED"
         )
-        == "finish_reason_unspecified"
+        == "stop"
     )
-    
-    # Test MALFORMED_FUNCTION_CALL returns lowercase version
-    assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "malformed_function_call"
+
+    # Test MALFORMED_FUNCTION_CALL maps to "stop"
+    assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "stop"
     assert (
         VertexGeminiConfig._check_finish_reason(
             chat_completion_message=None, finish_reason="MALFORMED_FUNCTION_CALL"
         )
-        == "malformed_function_call"
+        == "stop"
     )
-    
-    # Ensure these values are in the OpenAI finish reasons constant
-    from litellm import OPENAI_FINISH_REASONS
-    assert "finish_reason_unspecified" in OPENAI_FINISH_REASONS
-    assert "malformed_function_call" in OPENAI_FINISH_REASONS
+
+    # Test new Gemini finish reasons
+    assert finish_reason_mappings["TOO_MANY_TOOL_CALLS"] == "stop"
+    assert finish_reason_mappings["MALFORMED_RESPONSE"] == "stop"
 
 
 def test_vertex_ai_usage_metadata_response_token_count():

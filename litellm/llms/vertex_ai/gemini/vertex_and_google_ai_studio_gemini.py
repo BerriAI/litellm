@@ -1209,7 +1209,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         and what it means
         """
         return {
-            "FINISH_REASON_UNSPECIFIED": "finish_reason_unspecified",
+            "FINISH_REASON_UNSPECIFIED": "stop",
             "STOP": "stop",
             "MAX_TOKENS": "length",
             "SAFETY": "content_filter",
@@ -1219,9 +1219,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "BLOCKLIST": "content_filter",
             "PROHIBITED_CONTENT": "content_filter",
             "SPII": "content_filter",
-            "MALFORMED_FUNCTION_CALL": "malformed_function_call",  # openai doesn't have a way of representing this
+            "MALFORMED_FUNCTION_CALL": "stop",
             "IMAGE_SAFETY": "content_filter",
             "IMAGE_PROHIBITED_CONTENT": "content_filter",
+            "TOO_MANY_TOOL_CALLS": "stop",
+            "MALFORMED_RESPONSE": "stop",
         }
 
     def translate_exception_str(self, exception_string: str):
