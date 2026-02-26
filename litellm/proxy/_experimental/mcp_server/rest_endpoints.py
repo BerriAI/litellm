@@ -49,8 +49,13 @@ if MCP_AVAILABLE:
         server,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
         mcp_auth_header: Optional[str],
+        oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Union[Dict[str, str], str]]:
-        """Helper function to get server-specific auth header with case-insensitive matching."""
+        """Helper function to get server-specific auth header with case-insensitive matching.
+
+        For OAuth2 servers without server-specific headers, falls back to generic oauth2_headers
+        (which contain the Authorization header from the request).
+        """
         if mcp_server_auth_headers and server.alias:
             normalized_server_alias = server.alias.lower()
             normalized_headers = {
@@ -67,6 +72,11 @@ if MCP_AVAILABLE:
             server_auth = normalized_headers.get(normalized_server_name)
             if server_auth is not None:
                 return server_auth
+
+        # For OAuth2 servers, use the generic oauth2_headers as fallback
+        if oauth2_headers and server.auth_type == MCPAuth.oauth2:
+            return oauth2_headers
+
         return mcp_auth_header
 
     def _create_tool_response_objects(tools, server_mcp_info):
@@ -272,6 +282,11 @@ if MCP_AVAILABLE:
                 MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
             )
 
+            # Extract OAuth2 headers for servers that need them
+            oauth2_headers: Optional[Dict[str, str]] = MCPRequestHandler._get_oauth2_headers_from_headers(
+                headers
+            )
+
             auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
             _rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
@@ -309,7 +324,7 @@ if MCP_AVAILABLE:
                     }
 
                 server_auth_header = _get_server_auth_header(
-                    server, mcp_server_auth_headers, mcp_auth_header
+                    server, mcp_server_auth_headers, mcp_auth_header, oauth2_headers
                 )
 
                 try:
@@ -348,7 +363,7 @@ if MCP_AVAILABLE:
                         continue
 
                     server_auth_header = _get_server_auth_header(
-                        server, mcp_server_auth_headers, mcp_auth_header
+                        server, mcp_server_auth_headers, mcp_auth_header, oauth2_headers
                     )
 
                     try:

@@ -745,6 +745,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
         client_ip: Optional[str] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPServer]:
         """Return allowed MCP servers for a request after applying filters.
 
@@ -753,6 +754,8 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names to filter to.
             client_ip: Client IP for IP-based access control. If None, falls back to
                       auth context. Pass explicitly from request handlers for safety.
+            oauth2_headers: Optional OAuth2 headers. When present, servers with
+                           auth_type=oauth2 are granted access.
         Note: If client_ip is None and auth context is not set, IP filtering is skipped.
               This is intentional for internal callers but may indicate a bug if called
               from a request handler without proper context setup.
@@ -788,12 +791,31 @@ if MCP_AVAILABLE:
             if mcp_server is not None:
                 allowed_mcp_servers.append(mcp_server)
 
+        # OAuth2 bypass: grant access to oauth2-type servers when client presents oauth2_headers
+        if oauth2_headers and mcp_servers:
+            allowed_server_ids = {s.server_id for s in allowed_mcp_servers}
+            for server_name in mcp_servers:
+                server = global_mcp_server_manager.get_mcp_server_by_name(
+                    server_name, client_ip=None
+                )
+                if (
+                    server is not None
+                    and server.auth_type == MCPAuth.oauth2
+                    and server.server_id not in allowed_server_ids
+                ):
+                    allowed_mcp_servers.append(server)
+                    allowed_server_ids.add(server.server_id)
+                    verbose_logger.debug(
+                        "MCP OAuth2 bypass: granting access to oauth2 server '%s' "
+                        "because client presented an OAuth2 Bearer token",
+                        server_name,
+                    )
+
         if mcp_servers is not None:
             allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
-        
 
         return allowed_mcp_servers
 
@@ -935,6 +957,7 @@ if MCP_AVAILABLE:
             allowed_mcp_servers = await _get_allowed_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_servers=mcp_servers,
+                oauth2_headers=oauth2_headers,
             )
 
             async def _fetch_and_filter_server_tools(
@@ -1073,8 +1096,8 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            oauth2_headers=oauth2_headers,
         )
-
 
         # Get prompts from each allowed server
         all_prompts = []
@@ -1132,8 +1155,8 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            oauth2_headers=oauth2_headers,
         )
-
 
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
@@ -1188,8 +1211,8 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            oauth2_headers=oauth2_headers,
         )
-
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1660,6 +1683,7 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            oauth2_headers=oauth2_headers,
         )
 
         if not allowed_mcp_servers:
@@ -1710,6 +1734,7 @@ if MCP_AVAILABLE:
         allowed_mcp_servers = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
+            oauth2_headers=oauth2_headers,
         )
 
         if not allowed_mcp_servers:
