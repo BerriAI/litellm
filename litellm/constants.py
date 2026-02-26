@@ -53,7 +53,7 @@ DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 # Streams exceeding this duration are terminated with a Timeout error.
 # None (default) = no limit.  Set env var to a number of seconds to enable globally.
 _max_stream_duration_env = os.getenv("LITELLM_MAX_STREAMING_DURATION_SECONDS", None)
-MAX_STREAMING_CHUNK_DURATION_S = (
+MAX_STREAMING_DURATION_S = (
     float(_max_stream_duration_env) if _max_stream_duration_env is not None else None
 )
 

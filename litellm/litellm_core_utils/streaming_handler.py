@@ -163,15 +163,15 @@ class CustomStreamWrapper:
         self.created: Optional[int] = None
 
     def _check_max_streaming_duration(self) -> None:
-        """Raise litellm.Timeout if the stream has exceeded MAX_STREAMING_CHUNK_DURATION_S."""
-        from litellm.constants import MAX_STREAMING_CHUNK_DURATION_S
+        """Raise litellm.Timeout if the stream has exceeded MAX_STREAMING_DURATION_S."""
+        from litellm.constants import MAX_STREAMING_DURATION_S
 
-        if MAX_STREAMING_CHUNK_DURATION_S is None:
+        if MAX_STREAMING_DURATION_S is None:
             return
         elapsed = time.time() - self._stream_created_time
-        if elapsed > MAX_STREAMING_CHUNK_DURATION_S:
+        if elapsed > MAX_STREAMING_DURATION_S:
             raise litellm.Timeout(
-                message=f"Stream exceeded max streaming duration of {MAX_STREAMING_CHUNK_DURATION_S}s (elapsed {elapsed:.1f}s)",
+                message=f"Stream exceeded max streaming duration of {MAX_STREAMING_DURATION_S}s (elapsed {elapsed:.1f}s)",
                 model=self.model or "",
                 llm_provider=self.custom_llm_provider or "",
             )
@@ -1251,27 +1251,27 @@ class CustomStreamWrapper:
                 else:
                     completion_obj["content"] = str(chunk)
             elif self.custom_llm_provider == "petals":
-                if len(self.completion_stream) == 0:
+                if self.completion_stream is None or len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
                         raise StopIteration
                     else:
                         self.received_finish_reason = "stop"
                 chunk_size = 30
-                new_chunk = self.completion_stream[:chunk_size]
+                new_chunk = self.completion_stream[:chunk_size]  # type: ignore[index]
                 completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[chunk_size:]
+                self.completion_stream = self.completion_stream[chunk_size:]  # type: ignore[index]
             elif self.custom_llm_provider == "palm":
                 # fake streaming
                 response_obj = {}
-                if len(self.completion_stream) == 0:
+                if self.completion_stream is None or len(self.completion_stream) == 0:
                     if self.received_finish_reason is not None:
                         raise StopIteration
                     else:
                         self.received_finish_reason = "stop"
                 chunk_size = 30
-                new_chunk = self.completion_stream[:chunk_size]
+                new_chunk = self.completion_stream[:chunk_size]  # type: ignore[index]
                 completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[chunk_size:]
+                self.completion_stream = self.completion_stream[chunk_size:]  # type: ignore[index]
             elif self.custom_llm_provider == "triton":
                 response_obj = self.handle_triton_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -1771,7 +1771,7 @@ class CustomStreamWrapper:
                 ):
                     chunk = self.completion_stream
                 else:
-                    chunk = next(self.completion_stream)
+                    chunk = next(self.completion_stream)  # type: ignore[arg-type]
                 if chunk is not None and chunk != b"":
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk.decode('utf-8', errors='replace') if isinstance(chunk, bytes) else chunk}; custom_llm_provider: {self.custom_llm_provider}"
@@ -1939,7 +1939,7 @@ class CustomStreamWrapper:
                 await self.fetch_stream()
 
             if is_async_iterable(self.completion_stream):
-                async for chunk in self.completion_stream:
+                async for chunk in self.completion_stream:  # type: ignore[union-attr]
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 
@@ -2021,7 +2021,7 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = next(self.completion_stream)
+                        chunk = next(self.completion_stream)  # type: ignore[arg-type]
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
