@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -92,7 +92,7 @@ class RealTimeStreaming:
             message_obj = message
         else:
             message_obj = json.loads(message)
-        self._collect_tool_calls_from_response_done(message_obj)
+        self._collect_tool_calls_from_response_done(cast(dict, message_obj))
         try:
             if (
                 not isinstance(message, dict)
@@ -428,11 +428,11 @@ class RealTimeStreaming:
                 == "conversation.item.input_audio_transcription.completed"
             ):
                 transcript = event.get("transcript", "")
-                self._collect_user_input_from_backend_event(event)
+                self._collect_user_input_from_backend_event(cast(dict, event))
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
                 blocked = await self.run_realtime_guardrails(
-                    transcript, item_id=event.get("item_id")
+                    cast(str, transcript), item_id=cast(Optional[str], event.get("item_id"))
                 )
                 if not blocked:
                     await self._send_to_backend(

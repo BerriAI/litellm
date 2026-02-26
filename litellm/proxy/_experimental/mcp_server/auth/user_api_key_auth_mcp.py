@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, cast
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers
@@ -539,7 +539,7 @@ class MCPRequestHandler:
                     allowed_tools = team_tools
             else:
                 # No team restrictions → use key restrictions
-                allowed_tools = key_tools
+                allowed_tools = cast(List[str], key_tools)
 
             # Intersect with agent's tool permissions if agent_id is set
             if user_api_key_auth.agent_id:

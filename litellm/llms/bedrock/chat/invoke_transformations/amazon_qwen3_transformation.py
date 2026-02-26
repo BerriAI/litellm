@@ -10,14 +10,13 @@ from typing import Any, List, Optional
 
 import httpx
 
-from litellm.types.utils import Usage
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 
 
 class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
@@ -202,10 +201,14 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             # Set usage information if available in response
             if "usage" in response_data:
                 usage_data = response_data["usage"]
-                model_response.usage = Usage(
-                    prompt_tokens=usage_data.get("prompt_tokens", 0),
-                    completion_tokens=usage_data.get("completion_tokens", 0),
-                    total_tokens=usage_data.get("total_tokens", 0),
+                setattr(
+                    model_response,
+                    "usage",
+                    Usage(
+                        prompt_tokens=usage_data.get("prompt_tokens", 0),
+                        completion_tokens=usage_data.get("completion_tokens", 0),
+                        total_tokens=usage_data.get("total_tokens", 0),
+                    ),
                 )
             
             return model_response
