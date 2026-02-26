@@ -771,8 +771,8 @@ if MCP_AVAILABLE:
                 user_api_key_auth
             )
         )
-        allowed_mcp_server_ids = (
-            global_mcp_server_manager.filter_server_ids_by_ip(
+        allowed_mcp_server_ids, _ip_blocked = (
+            global_mcp_server_manager.filter_server_ids_by_ip_with_info(
                 allowed_mcp_server_ids, client_ip
             )
         )
@@ -780,6 +780,16 @@ if MCP_AVAILABLE:
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
             client_ip, allowed_mcp_server_ids,
         )
+        if _ip_blocked > 0:
+            verbose_logger.debug(
+                "MCP IP filtering: %d server(s) are not accessible from client IP %s "
+                "because they are restricted to internal networks. "
+                "No tools from those servers will be returned. "
+                "To expose a server externally, set 'available_on_public_internet: true' "
+                "in its configuration.",
+                _ip_blocked,
+                client_ip,
+            )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             mcp_server = global_mcp_server_manager.get_mcp_server_by_id(

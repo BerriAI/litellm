@@ -13,6 +13,7 @@ sys.path.insert(
 
 from fastapi import HTTPException
 
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     PatchGuardrailRequest,
@@ -25,6 +26,8 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     patch_guardrail,
     update_guardrail,
 )
+
+MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
     IN_MEMORY_GUARDRAIL_HANDLER,
     InMemoryGuardrailHandler,
@@ -700,15 +703,15 @@ async def test_create_guardrail_endpoint(
     # Run the test
     if expected_exception:
         with pytest.raises(expected_exception) as exc_info:
-            await create_guardrail(MOCK_CREATE_REQUEST)
-            
+            await create_guardrail(MOCK_CREATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
+
         if scenario == "database_failure":
             assert "Database error" in str(exc_info.value.detail)
         elif scenario == "no_prisma_client":
             assert "Prisma client not initialized" in str(exc_info.value.detail)
-            
+
     else:
-        result = await create_guardrail(MOCK_CREATE_REQUEST)
+        result = await create_guardrail(MOCK_CREATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
         
         assert result["guardrail_id"] == expected_result
         assert result["guardrail_name"] == "Test DB Guardrail"
@@ -789,15 +792,15 @@ async def test_update_guardrail_endpoint(
     # Run the test
     if expected_exception:
         with pytest.raises(expected_exception) as exc_info:
-            await update_guardrail("test-guardrail-id", MOCK_UPDATE_REQUEST)
-            
+            await update_guardrail("test-guardrail-id", MOCK_UPDATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
+
         if scenario == "database_failure":
             assert "Database error" in str(exc_info.value.detail)
         elif scenario == "no_prisma_client":
             assert "Prisma client not initialized" in str(exc_info.value.detail)
-            
+
     else:
-        result = await update_guardrail("test-guardrail-id", MOCK_UPDATE_REQUEST)
+        result = await update_guardrail("test-guardrail-id", MOCK_UPDATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
         
         assert result["guardrail_id"] == expected_result
         assert result["guardrail_name"] == "Test DB Guardrail"
@@ -883,15 +886,15 @@ async def test_patch_guardrail_endpoint(
     # Run the test
     if expected_exception:
         with pytest.raises(expected_exception) as exc_info:
-            await patch_guardrail("test-guardrail-id", MOCK_PATCH_REQUEST)
-            
+            await patch_guardrail("test-guardrail-id", MOCK_PATCH_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
+
         if scenario == "database_failure":
             assert "Database error" in str(exc_info.value.detail)
         elif scenario == "no_prisma_client":
             assert "Prisma client not initialized" in str(exc_info.value.detail)
-            
+
     else:
-        result = await patch_guardrail("test-guardrail-id", MOCK_PATCH_REQUEST)
+        result = await patch_guardrail("test-guardrail-id", MOCK_PATCH_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
         
         assert result["guardrail_id"] == expected_result
         assert result["guardrail_name"] == "Test DB Guardrail"
@@ -947,9 +950,9 @@ async def test_delete_guardrail_endpoint(
     
     if expected_exception:
         with pytest.raises(expected_exception):
-            await delete_guardrail(guardrail_id=expected_result)
+            await delete_guardrail(guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER)
     else:
-        result = await delete_guardrail(guardrail_id=expected_result)
+        result = await delete_guardrail(guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER)
         
         assert result == MOCK_DB_GUARDRAIL
         

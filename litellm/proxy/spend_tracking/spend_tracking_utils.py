@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import secrets
 from datetime import datetime
 from datetime import datetime as dt
@@ -10,7 +11,10 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
@@ -28,6 +32,20 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+
+def _get_max_string_length_prompt_in_db() -> int:
+    """
+    Resolve prompt truncation threshold at runtime so values loaded later via
+    proxy config environment_variables are honored.
+    """
+    max_length_str = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
+    if max_length_str is None:
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+    try:
+        return int(max_length_str)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -609,6 +627,7 @@ def _get_messages_for_spend_logs_payload(
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
     visited: Optional[set] = None,
+    max_string_length_prompt_in_db: Optional[int] = None,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -618,6 +637,8 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     if visited is None:
         visited = set()
+    if max_string_length_prompt_in_db is None:
+        max_string_length_prompt_in_db = _get_max_string_length_prompt_in_db()
 
     # Get the object's memory address to track visited objects
     obj_id = id(request_body)
@@ -627,27 +648,29 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     def _sanitize_value(value: Any) -> Any:
         if isinstance(value, dict):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited)
+            return _sanitize_request_body_for_spend_logs_payload(
+                value, visited, max_string_length_prompt_in_db
+            )
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+            if len(value) > max_string_length_prompt_in_db:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
                 # This split ensures we keep more context from the end of conversations
                 start_ratio = 0.35
                 end_ratio = 0.65
 
                 # Calculate character distribution
-                start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
-                end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
+                start_chars = int(max_string_length_prompt_in_db * start_ratio)
+                end_chars = int(max_string_length_prompt_in_db * end_ratio)
 
                 # Ensure we don't exceed the total limit
                 total_keep = start_chars + end_chars
-                if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
-                    end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+                if total_keep > max_string_length_prompt_in_db:
+                    end_chars = max_string_length_prompt_in_db - start_chars
 
                 # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
+                if len(value) <= max_string_length_prompt_in_db:
                     return value
 
                 # Calculate how many characters are being skipped

@@ -1,40 +1,59 @@
 import enum
 import json
 from datetime import datetime
-from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Literal,
-                    Optional, Union)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
-from pydantic import (BaseModel, ConfigDict, Field, Json, field_validator,
-                      model_validator)
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Json,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import (AllMessageValues, OpenAIFileObject,
-                                       ResponsesAPIResponse)
-from litellm.types.mcp import (MCPAuth, MCPAuthType, MCPCredentials,
-                               MCPTransport, MCPTransportType)
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIFileObject,
+    ResponsesAPIResponse,
+)
+from litellm.types.mcp import (
+    MCPAuthType,
+    MCPCredentials,
+    MCPTransport,
+    MCPTransportType,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
-from litellm.types.utils import (CallTypes, CostBreakdown, EmbeddingResponse,
-                                 GenericBudgetConfigType, ImageResponse,
-                                 LiteLLMBatch, LiteLLMFineTuningJob,
-                                 LiteLLMPydanticObjectBase, ModelResponse,
-                                 ProviderField, StandardCallbackDynamicParams,
-                                 StandardLoggingGuardrailInformation,
-                                 StandardLoggingMCPToolCall,
-                                 StandardLoggingModelInformation,
-                                 StandardLoggingPayloadErrorInformation,
-                                 StandardLoggingPayloadStatus,
-                                 StandardLoggingVectorStoreRequest,
-                                 StandardPassThroughResponseObject,
-                                 TextCompletionResponse)
+from litellm.types.utils import (
+    CallTypes,
+    CostBreakdown,
+    EmbeddingResponse,
+    GenericBudgetConfigType,
+    ImageResponse,
+    LiteLLMBatch,
+    LiteLLMFineTuningJob,
+    LiteLLMPydanticObjectBase,
+    ModelResponse,
+    ProviderField,
+    StandardCallbackDynamicParams,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingMCPToolCall,
+    StandardLoggingModelInformation,
+    StandardLoggingPayloadErrorInformation,
+    StandardLoggingPayloadStatus,
+    StandardLoggingVectorStoreRequest,
+    StandardPassThroughResponseObject,
+    TextCompletionResponse,
+)
 from litellm.types.videos.main import VideoObject
 
-from .types_utils.utils import (get_instance_fn,
-                                validate_custom_validate_return_type)
+from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1087,7 +1106,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+                    raise ValueError(
+                        "url or spec_path is required for HTTP/SSE transport"
+                    )
         return values
 
     @model_validator(mode="before")
@@ -1139,7 +1160,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+                    raise ValueError(
+                        "url or spec_path is required for HTTP/SSE transport"
+                    )
         return values
 
 
@@ -1390,12 +1413,12 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[AllowedModelRegion] = (
-        None  # require all user requests to use models in this specific region
-    )
-    default_model: Optional[str] = (
-        None  # if no equivalent model in allowed region - default all requests to this model
-    )
+    allowed_model_region: Optional[
+        AllowedModelRegion
+    ] = None  # require all user requests to use models in this specific region
+    default_model: Optional[
+        str
+    ] = None  # if no equivalent model in allowed region - default all requests to this model
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     @model_validator(mode="before")
@@ -1418,12 +1441,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[AllowedModelRegion] = (
-        None  # require all user requests to use models in this specific region
-    )
-    default_model: Optional[str] = (
-        None  # if no equivalent model in allowed region - default all requests to this model
-    )
+    allowed_model_region: Optional[
+        AllowedModelRegion
+    ] = None  # require all user requests to use models in this specific region
+    default_model: Optional[
+        str
+    ] = None  # if no equivalent model in allowed region - default all requests to this model
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
@@ -2249,6 +2272,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpm_limit: Optional[int] = None
     end_user_rpm_limit: Optional[int] = None
     end_user_max_budget: Optional[float] = None
+    end_user_model_max_budget: Optional[dict] = None
 
     # Organization Params
     organization_max_budget: Optional[float] = None
@@ -2349,8 +2373,7 @@ class UserAPIKeyAuth(
 
         This is used to track number of requests/spend for health check calls.
         """
-        from litellm.constants import \
-            LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+        from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 
         return cls(
             api_key=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
@@ -2382,8 +2405,7 @@ class UserAPIKeyAuth(
 
         This is used to track actions performed by automated system jobs.
         """
-        from litellm.constants import \
-            LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
+        from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 
         return cls(
             api_key=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
@@ -2774,8 +2796,7 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import \
-            SensitiveDataMasker
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
         masker = SensitiveDataMasker(sensitive_patterns={"key"})
 
@@ -3040,7 +3061,9 @@ class SpendLogsMetadata(TypedDict):
         str
     ]  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: Optional[float]  # LiteLLM overhead time in milliseconds
-    attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
+    attempted_retries: Optional[
+        int
+    ]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[
         CostBreakdown
@@ -4101,10 +4124,10 @@ class SpendUpdateQueueItem(TypedDict, total=False):
 
 class ToolDiscoveryQueueItem(TypedDict, total=False):
     tool_name: str
-    origin: Optional[str]   # MCP server name or "user_defined"
+    origin: Optional[str]  # MCP server name or "user_defined"
     created_by: Optional[str]
-    key_hash: Optional[str]   # hash of virtual key that triggered discovery
-    team_id: Optional[str]    # team that triggered discovery
+    key_hash: Optional[str]  # hash of virtual key that triggered discovery
+    team_id: Optional[str]  # team that triggered discovery
     key_alias: Optional[str]  # human-readable key alias
 
 
@@ -4128,6 +4151,7 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     """Table for managing vector stores with target_model_names support."""
+
     unified_resource_id: str
     resource_object: Optional[Any] = None  # VectorStoreCreateResponse
     model_mappings: Dict[str, str]
