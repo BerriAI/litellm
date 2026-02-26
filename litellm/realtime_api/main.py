@@ -42,7 +42,7 @@ def _build_litellm_metadata(kwargs: dict) -> dict:
 
 
 @wrapper_client
-async def _arealtime(
+async def _arealtime(  # noqa: PLR0915
     model: str,
     websocket: Any,  # fastapi websocket
     api_base: Optional[str] = None,
