@@ -97,7 +97,7 @@ jobs:
         pytest tests/litellm/test_no_hardcoded_secrets.py -v
 
     - name: Run ggshield secret scan
-      if: env.GITGUARDIAN_API_KEY != ''
+      if: ${{ secrets.GITGUARDIAN_API_KEY != '' }}
       env:
         GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
       run: |
