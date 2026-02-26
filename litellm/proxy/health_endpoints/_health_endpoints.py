@@ -285,8 +285,17 @@ async def health_services_endpoint(  # noqa: PLR0915
             from litellm.integrations.datadog.datadog_metrics import (
                 DatadogMetricsLogger,
             )
+            from litellm.litellm_core_utils.litellm_logging import (
+                get_custom_logger_compatible_class,
+            )
 
-            datadog_metrics_logger = DatadogMetricsLogger(start_periodic_flush=False)
+            datadog_metrics_logger = get_custom_logger_compatible_class(
+                "datadog_metrics"
+            )
+            if datadog_metrics_logger is None:
+                datadog_metrics_logger = DatadogMetricsLogger(
+                    start_periodic_flush=False
+                )
             response = await datadog_metrics_logger.async_health_check()
             return {
                 "status": response["status"],

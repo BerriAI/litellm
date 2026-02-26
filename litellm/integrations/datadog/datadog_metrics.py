@@ -150,6 +150,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
             "type": 1,  # count
             "points": [{"timestamp": timestamp, "value": 1.0}],
             "tags": tags,
+            "interval": self.flush_interval,
         }
         self.log_queue.append(series_count)
 
