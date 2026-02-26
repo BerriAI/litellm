@@ -150,6 +150,11 @@ async def _arealtime(
             or get_secret_str("OPENAI_API_KEY")
         )
 
+        # Build metadata for guardrail checking.
+        _litellm_metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
+        _guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
+        if _guardrails:
+            _litellm_metadata["guardrails"] = _guardrails
         await openai_realtime.async_realtime(
             model=model,
             websocket=websocket,
@@ -160,6 +165,7 @@ async def _arealtime(
             timeout=timeout,
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_litellm_metadata,
         )
     elif _custom_llm_provider == "bedrock":
         # Extract AWS parameters from kwargs

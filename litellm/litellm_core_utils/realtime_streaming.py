@@ -43,6 +43,7 @@ class RealTimeStreaming:
         provider_config: Optional[BaseRealtimeConfig] = None,
         model: str = "",
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[Dict] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -68,6 +69,10 @@ class RealTimeStreaming:
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
+        self.request_data: Dict = request_data or {}
+        # Set to True after a text-input guardrail block so we can swallow the client's
+        # subsequent response.create (which would conflict with the block response).
+        self._swallow_next_response_create: bool = False
 
     def _should_store_message(
         self,
@@ -231,15 +236,23 @@ class RealTimeStreaming:
             await self.backend_ws.send(message)
 
     def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime_input_transcription."""
+        """Return True if any callback is registered for realtime guardrail event types."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
+        _realtime_event_types = [
+            GuardrailEventHooks.realtime_input_transcription,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
         return any(
             isinstance(cb, CustomGuardrail)
-            and cb.should_run_guardrail(
-                data={},
-                event_type=GuardrailEventHooks.realtime_input_transcription,
+            and any(
+                cb.should_run_guardrail(
+                    data=self.request_data,
+                    event_type=et,
+                )
+                for et in _realtime_event_types
             )
             for cb in litellm.callbacks
         )
@@ -258,17 +271,25 @@ class RealTimeStreaming:
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
+        _realtime_event_types = [
+            GuardrailEventHooks.realtime_input_transcription,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+        _check_data = {**self.request_data, "transcript": transcript}
+        _already_run: set = set()
+
         for callback in litellm.callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
-            if (
-                callback.should_run_guardrail(
-                    data={"transcript": transcript},
-                    event_type=GuardrailEventHooks.realtime_input_transcription,
-                )
-                is not True
+            if id(callback) in _already_run:
+                continue
+            if not any(
+                callback.should_run_guardrail(data=_check_data, event_type=et)
+                for et in _realtime_event_types
             ):
                 continue
+            _already_run.add(id(callback))
             try:
                 await callback.apply_guardrail(
                     inputs={"texts": [transcript], "images": []},
@@ -293,20 +314,15 @@ class RealTimeStreaming:
                     safe_msg = str(detail)
                 else:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
-                # Cancel any in-flight response before speaking the warning.
-                # This handles the race where create_response fired before we could intercept.
-                await self._send_to_backend(json.dumps({"type": "response.cancel"}))
-                # Ask the model to speak the warning — TTS audio plays naturally in the client
-                await self._send_to_backend(
+                # Return the error directly to the WebSocket consumer.
+                await self.websocket.send_text(
                     json.dumps(
                         {
-                            "type": "response.create",
-                            "response": {
-                                "modalities": ["text", "audio"],
-                                "instructions": (
-                                    f"Say exactly and only: \"{safe_msg}\". "
-                                    "Do not add anything else."
-                                ),
+                            "type": "error",
+                            "error": {
+                                "type": "guardrail_violation",
+                                "message": safe_msg,
+                                "code": "content_policy_violation",
                             },
                         }
                     )
@@ -349,23 +365,6 @@ class RealTimeStreaming:
             else [transformed_response]
         )
         for event in events:
-            ## GUARDRAIL: inject create_response=false on session.created
-            if isinstance(event, dict) and event.get("type") == "session.created":
-                if self._has_realtime_guardrails():
-                    await self._send_to_backend(
-                        json.dumps(
-                            {
-                                "type": "session.update",
-                                "session": {
-                                    "turn_detection": {
-                                        "type": "server_vad",
-                                        "create_response": False,
-                                    }
-                                },
-                            }
-                        )
-                    )
-        for event in events:
             event_str = json.dumps(event)
             ## GUARDRAIL: run on transcription events in provider_config path too
             if (
@@ -396,28 +395,6 @@ class RealTimeStreaming:
         """
         try:
             event_obj = json.loads(raw_response)
-
-            if event_obj.get("type") == "session.created":
-                # If any realtime guardrails are registered, proactively
-                # set create_response=false so the LLM never auto-responds
-                # before our guardrail has a chance to run.
-                if self._has_realtime_guardrails():
-                    await self._send_to_backend(
-                        json.dumps(
-                            {
-                                "type": "session.update",
-                                "session": {
-                                    "turn_detection": {
-                                        "type": "server_vad",
-                                        "create_response": False,
-                                    }
-                                },
-                            }
-                        )
-                    )
-                    verbose_logger.debug(
-                        "[realtime guardrail] injected create_response=false into session"
-                    )
 
             if (
                 event_obj.get("type")
@@ -490,6 +467,11 @@ class RealTimeStreaming:
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
 
+                    # Swallow the client's response.create if we just blocked an item.
+                    if msg_type == "response.create" and self._swallow_next_response_create:
+                        self._swallow_next_response_create = False
+                        continue  # block response already sent by guardrail
+
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
                         item = msg_obj.get("item", {})
@@ -506,6 +488,7 @@ class RealTimeStreaming:
                                     combined_text
                                 )
                                 if blocked:
+                                    self._swallow_next_response_create = True
                                     continue  # don't forward to backend
 
                 except (json.JSONDecodeError, AttributeError):
