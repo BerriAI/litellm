@@ -58,45 +58,55 @@ def safe_divide(
     return numerator / denominator
 
 
-def map_finish_reason(
-    finish_reason: str,
-):  # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
-    # anthropic mapping
-    if finish_reason == "stop_sequence":
+_FINISH_REASON_MAP = {
+    # Anthropic
+    "stop_sequence": "stop",
+    "end_turn": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_calls",
+    "compaction": "length",
+    # Cohere
+    "COMPLETE": "stop",
+    "ERROR_TOXIC": "content_filter",
+    "ERROR": "stop",
+    # HuggingFace / Together AI
+    "eos_token": "stop",
+    "eos": "stop",
+    # Gemini / Vertex AI
+    "STOP": "stop",
+    "MAX_TOKENS": "length",
+    "SAFETY": "content_filter",
+    "RECITATION": "content_filter",
+    "FINISH_REASON_UNSPECIFIED": "stop",
+    "MALFORMED_FUNCTION_CALL": "stop",
+    "LANGUAGE": "content_filter",
+    "OTHER": "content_filter",
+    "BLOCKLIST": "content_filter",
+    "PROHIBITED_CONTENT": "content_filter",
+    "SPII": "content_filter",
+    "IMAGE_SAFETY": "content_filter",
+    "IMAGE_PROHIBITED_CONTENT": "content_filter",
+    "TOO_MANY_TOOL_CALLS": "stop",
+    "MALFORMED_RESPONSE": "stop",
+    # Bedrock
+    "guardrail_intervened": "content_filter",
+    # OpenAI passthrough
+    "stop": "stop",
+    "length": "length",
+    "tool_calls": "tool_calls",
+    "function_call": "function_call",
+    "content_filter": "content_filter",
+}
+
+
+def map_finish_reason(finish_reason: str) -> str:
+    mapped = _FINISH_REASON_MAP.get(finish_reason)
+    if mapped is None:
+        verbose_logger.warning(
+            "Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason
+        )
         return "stop"
-    # cohere mapping - https://docs.cohere.com/reference/generate
-    elif finish_reason == "COMPLETE":
-        return "stop"
-    elif finish_reason == "MAX_TOKENS":  # cohere + vertex ai
-        return "length"
-    elif finish_reason == "ERROR_TOXIC":
-        return "content_filter"
-    elif (
-        finish_reason == "ERROR"
-    ):  # openai currently doesn't support an 'error' finish reason
-        return "stop"
-    # huggingface mapping https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/generate_stream
-    elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
-        return "stop"
-    elif (
-        finish_reason == "FINISH_REASON_UNSPECIFIED"
-    ):  # vertex ai - got from running `print(dir(response_obj.candidates[0].finish_reason))`: ['FINISH_REASON_UNSPECIFIED', 'MAX_TOKENS', 'OTHER', 'RECITATION', 'SAFETY', 'STOP',]
-        return "finish_reason_unspecified"
-    elif finish_reason == "MALFORMED_FUNCTION_CALL":
-        return "malformed_function_call"
-    elif finish_reason == "SAFETY" or finish_reason == "RECITATION":  # vertex ai
-        return "content_filter"
-    elif finish_reason == "STOP":  # vertex ai
-        return "stop"
-    elif finish_reason == "end_turn" or finish_reason == "stop_sequence":  # anthropic
-        return "stop"
-    elif finish_reason == "max_tokens":  # anthropic
-        return "length"
-    elif finish_reason == "tool_use":  # anthropic
-        return "tool_calls"
-    elif finish_reason == "compaction":
-        return "length"
-    return finish_reason
+    return mapped
 
 
 def remove_index_from_tool_calls(
