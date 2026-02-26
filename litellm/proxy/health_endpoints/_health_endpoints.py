@@ -286,7 +286,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 DatadogMetricsLogger,
             )
 
-            datadog_metrics_logger = DatadogMetricsLogger()
+            datadog_metrics_logger = DatadogMetricsLogger(start_periodic_flush=False)
             response = await datadog_metrics_logger.async_health_check()
             return {
                 "status": response["status"],
