@@ -8,13 +8,13 @@ from .base import GuardrailConfigModel
 
 CodeBlockActionTaken = Literal["block", "allow", "log_only"]
 
-# Supported language tags for the blocked_languages multiselect dropdown
+# Supported language tags for the blocked_languages multiselect dropdown.
+# Only canonical names are listed; LANGUAGE_ALIASES in the guardrail normalizes
+# aliases (e.g. js→javascript, sh→bash) when matching.
 BLOCKED_LANGUAGES_OPTIONS = [
     "python",
     "javascript",
-    "js",
     "bash",
-    "sh",
     "ruby",
     "go",
     "java",

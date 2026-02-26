@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 LANGUAGE_ALIASES: Dict[str, str] = {
     "js": "javascript",
     "py": "python",
+    "sh": "bash",
+    "ts": "typescript",
 }
 
 # Tags that indicate non-executable / plain text (lower confidence when block-all)
@@ -415,9 +417,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         Find all fenced code blocks in text. Returns list of
         (start, end, language_tag, block_content, confidence, action_taken).
         """
-        results: List[
-            Tuple[int, int, str, str, float, CodeBlockActionTaken]
-        ] = []
+        results: List[Tuple[int, int, str, str, float, CodeBlockActionTaken]] = []
         for m in FENCED_BLOCK_RE.finditer(text):
             tag = (m.group(1) or "").strip()
             body = m.group(2)
@@ -494,7 +494,9 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                             "type": "code_block",
                             "language": tag,
                             "confidence": round(confidence, 2),
-                            "action_taken": "block" if effective_block else action_taken,
+                            "action_taken": (
+                                "block" if effective_block else action_taken
+                            ),
                         },
                     )
                 )
@@ -609,32 +611,3 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
                 event_type=event_type,
                 tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
             )
-
-    async def async_post_call_streaming_iterator_hook(
-        self,
-        user_api_key_dict: Any,
-        response: Any,
-        request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
-        """Accumulate streamed content and block as soon as a complete fenced code block is detected (before yielding that chunk)."""
-        accumulated = ""
-        async for item in response:
-            if isinstance(item, ModelResponseStream) and item.choices:
-                delta_content = ""
-                for choice in item.choices:
-                    if hasattr(choice, "delta") and choice.delta:
-                        content = getattr(choice.delta, "content", None)
-                        if content and isinstance(content, str):
-                            delta_content += content
-                accumulated += delta_content
-                # Check after every chunk so we block before yielding the chunk that completes a blocked block
-                normalized = _normalize_escaped_newlines(accumulated)
-                blocks = self._find_blocks(normalized)
-                for _start, _end, _tag, _body, confidence, action_taken in blocks:
-                    if (
-                        action_taken == "block"
-                        and confidence >= self.confidence_threshold
-                    ):
-                        lang = _tag or "unknown"
-                        self._raise_block_error(lang, True, request_data)
-            yield item
