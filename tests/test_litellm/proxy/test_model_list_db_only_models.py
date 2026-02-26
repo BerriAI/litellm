@@ -258,3 +258,46 @@ class TestApplySearchFilterIncludesDbOnlyModels:
 
         assert result == router_models
         assert total_count is None
+
+    @pytest.mark.asyncio
+    async def test_search_pagination_uses_filtered_count(self):
+        """When searching, pagination should use the filtered router count, not the full count.
+
+        Regression test: if the router has 50 models but only 1 matches search,
+        DB-only models should still be fetched (take should be based on 1, not 50).
+        """
+        # 50 router models, but only "gpt-5" matches the search "gpt-5"
+        router_models = [_make_router_model(f"model-{i}", f"id-{i}", db_model=True) for i in range(49)]
+        router_models.append(_make_router_model("gpt-5", "id-49", db_model=True))
+
+        db_record = _make_db_record("gpt-5.1", "id-missing")
+
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=1)
+        prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[db_record]
+        )
+
+        decrypted_model = _make_router_model("gpt-5.1", "id-missing", db_model=True)
+        proxy_config = MagicMock()
+        proxy_config.decrypt_model_list_from_db = MagicMock(
+            return_value=[decrypted_model]
+        )
+
+        result, total_count = await _apply_search_filter_to_models(
+            all_models=router_models,
+            search="gpt-5",
+            page=1,
+            size=50,
+            prisma_client=prisma_client,
+            proxy_config=proxy_config,
+        )
+
+        model_names = [m["model_name"] for m in result]
+        # Only gpt-5 matches search from router, gpt-5.1 from DB
+        assert "gpt-5" in model_names
+        assert "gpt-5.1" in model_names
+        assert len(result) == 2
+        assert total_count == 2
+        # Verify find_many was actually called (not skipped due to bad take calculation)
+        prisma_client.db.litellm_proxymodeltable.find_many.assert_called_once()

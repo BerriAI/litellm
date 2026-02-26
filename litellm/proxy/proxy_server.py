@@ -8885,6 +8885,7 @@ async def _get_db_only_models(
     sort_by: Optional[str] = None,
     page: int = 1,
     size: int = 50,
+    filtered_router_count: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     """
     Fetch models from the database that are NOT already loaded in the router.
@@ -8894,13 +8895,16 @@ async def _get_db_only_models(
     those models still appear in the model list.
 
     Args:
-        all_models: Models already in the router
+        all_models: Models already in the router (used to collect DB model IDs to exclude)
         prisma_client: Prisma client for database queries
         proxy_config: Proxy config for decrypting models
         search: Optional search term (case-insensitive)
         sort_by: Optional sort field
         page: Current page number
         size: Page size
+        filtered_router_count: Number of router models after search filtering.
+            When provided, used for pagination instead of len(all_models).
+            This ensures correct pagination when search reduces the visible router models.
 
     Returns:
         Tuple of (db_only_models, db_only_count)
@@ -8936,8 +8940,8 @@ async def _get_db_only_models(
         if db_only_count == 0:
             return [], 0
 
-        # Determine how many to fetch
-        router_models_count = len(all_models)
+        # Use filtered count for pagination when searching, full count otherwise
+        router_models_count = filtered_router_count if filtered_router_count is not None else len(all_models)
         models_needed_for_page = size * page
 
         if sort_by:
@@ -9018,6 +9022,7 @@ async def _apply_search_filter_to_models(
             sort_by=sort_by,
             page=page,
             size=size,
+            filtered_router_count=len(filtered_router_models),
         )
 
     total_count = len(filtered_router_models) + db_only_count
