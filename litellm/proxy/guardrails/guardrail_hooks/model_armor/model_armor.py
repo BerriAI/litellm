@@ -184,33 +184,23 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if self.async_handler is None:
             raise ValueError("Async handler not initialized")
 
-        response = await self.async_handler.post(
-            url=url,
-            json=body,
-            headers=headers,
-        )
-
-        verbose_proxy_logger.debug(
-            "Model Armor response - Status: %s, Body: %s",
-            response.status_code,
-            response.text,
-        )
-
-        if response.status_code != 200:
-            verbose_proxy_logger.error(
-                "Model Armor API error - Status: %s, Response: %s",
+        async def _do_request():
+            response = await self.async_handler.post(
+                url=url,
+                json=body,
+                headers=headers,
+            )
+            verbose_proxy_logger.debug(
+                "Model Armor response - Status: %s, Body: %s",
                 response.status_code,
                 response.text,
             )
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Model Armor API error: {response.text}",
-            )
+            json_response = response.json()
+            if hasattr(json_response, "__await__"):
+                return await json_response
+            return json_response
 
-        json_response = response.json()
-        if hasattr(json_response, "__await__"):
-            return await json_response
-        return json_response
+        return await self._call_guardrail_with_retries(_do_request)
 
     def sanitize_file_prompt(
         self, file_bytes: bytes, file_type: str, source: str = "user_prompt"

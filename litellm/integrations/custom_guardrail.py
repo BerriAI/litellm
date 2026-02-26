@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
@@ -10,6 +11,8 @@ from typing import (
     Union,
     get_args,
 )
+
+import httpx
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -31,6 +34,10 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
+DEFAULT_RETRY_AFTER_SECONDS = 1.0
+DEFAULT_NUM_RETRIES = 0
 try:
     from fastapi.exceptions import HTTPException
 except ImportError:
@@ -92,6 +99,8 @@ class CustomGuardrail(CustomLogger):
         mask_request_content: bool = False,
         mask_response_content: bool = False,
         violation_message_template: Optional[str] = None,
+        num_retries: Optional[int] = None,
+        retry_after_seconds: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -104,6 +113,8 @@ class CustomGuardrail(CustomLogger):
             default_on: If True, the guardrail will be run by default on all requests
             mask_request_content: If True, the guardrail will mask the request content
             mask_response_content: If True, the guardrail will mask the response content
+            num_retries: Number of retries for transient guardrail API failures (e.g. 502/504). Defaults to 0.
+            retry_after_seconds: Base delay in seconds between retries with exponential backoff. Defaults to 1.0.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -114,11 +125,74 @@ class CustomGuardrail(CustomLogger):
         self.mask_request_content: bool = mask_request_content
         self.mask_response_content: bool = mask_response_content
         self.violation_message_template: Optional[str] = violation_message_template
+        self.num_retries: int = (
+            num_retries if num_retries is not None else DEFAULT_NUM_RETRIES
+        )
+        self.retry_after_seconds: float = (
+            retry_after_seconds
+            if retry_after_seconds is not None
+            else DEFAULT_RETRY_AFTER_SECONDS
+        )
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
             self._validate_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _is_retryable_error(exc: Exception) -> bool:
+        """
+        Determine if an exception is a transient error eligible for retry.
+
+        Returns True for httpx.HTTPStatusError with status codes 408, 429, 500, 502, 503, 504.
+        """
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in RETRYABLE_STATUS_CODES
+        return False
+
+    async def _call_guardrail_with_retries(self, func, *args, **kwargs):
+        """
+        Call an async guardrail function with retry logic for transient failures.
+
+        flow:
+	if retry attempts not reached num_retries param;
+	add a delay = retry_after_seconds * (2 ** attempt)
+
+        Args:
+            func: The async function to call
+            *args: Positional arguments to pass to the function
+            **kwargs: Keyword arguments to pass to the function
+
+        Returns:
+            The return value of the function
+
+        Raises:
+            The last exception if all retries are exhausted
+        """
+        last_exception: Optional[Exception] = None
+
+        for attempt in range(1 + self.num_retries):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+
+                if attempt < self.num_retries and self._is_retryable_error(e):
+                    delay = self.retry_after_seconds * (2**attempt)
+                    verbose_logger.warning(
+                        "Guardrail %s: transient error (attempt %d/%d), retrying in %.2fs - %s",
+                        self.guardrail_name,
+                        attempt + 1,
+                        1 + self.num_retries,
+                        delay,
+                        str(e),
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+
+        # Should not reach here, but raise last exception just in case
+        raise last_exception  # type: ignore[misc]
 
     def render_violation_message(
         self, default: str, context: Optional[Dict[str, Any]] = None
