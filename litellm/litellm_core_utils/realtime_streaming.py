@@ -147,7 +147,7 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: dict) -> None:
+    def _collect_user_input_from_backend_event(self, event_obj: Any) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type = event_obj.get("type", "")
@@ -164,7 +164,7 @@ class RealTimeStreaming:
             pass
 
     def _collect_tool_calls_from_response_done(
-        self, event_obj: dict
+        self, event_obj: Any
     ) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
