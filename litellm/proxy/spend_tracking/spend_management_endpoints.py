@@ -2,7 +2,7 @@
 import collections
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
@@ -2074,6 +2074,16 @@ async def view_spend_logs(  # noqa: PLR0915
         default=True,
         description="When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs",
     ),
+    limit: Optional[int] = fastapi.Query(
+        default=None,
+        ge=1,
+        description="Deprecated endpoint safety cap for number of rows returned. Capped by SPEND_LOGS_DEPRECATED_MAX_ROWS (default: 1000).",
+    ),
+    offset: int = fastapi.Query(
+        default=0,
+        ge=0,
+        description="Deprecated endpoint row offset for basic pagination.",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -2124,6 +2134,20 @@ async def view_spend_logs(  # noqa: PLR0915
     ):
         user_id = user_api_key_dict.user_id
 
+    max_deprecated_rows = max(
+        1, int(os.getenv("SPEND_LOGS_DEPRECATED_MAX_ROWS", "1000"))
+    )
+    requested_limit = limit if limit is not None else max_deprecated_rows
+    safe_limit = min(requested_limit, max_deprecated_rows)
+    if requested_limit > max_deprecated_rows:
+        verbose_proxy_logger.warning(
+            "/spend/logs requested limit=%s exceeds SPEND_LOGS_DEPRECATED_MAX_ROWS=%s. "
+            "Clamping to %s.",
+            requested_limit,
+            max_deprecated_rows,
+            safe_limit,
+        )
+
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
         if prisma_client is None:
@@ -2156,8 +2180,16 @@ async def view_spend_logs(  # noqa: PLR0915
                 }
             }
 
-            if api_key is not None and isinstance(api_key, str):
-                filter_query["api_key"] = api_key  # type: ignore
+            effective_api_key = api_key
+            if (
+                effective_api_key is not None
+                and isinstance(effective_api_key, str)
+                and effective_api_key.startswith("sk-")
+            ):
+                effective_api_key = prisma_client.hash_token(token=effective_api_key)
+
+            if effective_api_key is not None and isinstance(effective_api_key, str):
+                filter_query["api_key"] = effective_api_key  # type: ignore
             elif request_id is not None and isinstance(request_id, str):
                 filter_query["request_id"] = request_id  # type: ignore
             elif user_id is not None and isinstance(user_id, str):
@@ -2171,18 +2203,48 @@ async def view_spend_logs(  # noqa: PLR0915
                     order={
                         "startTime": "desc",
                     },
+                    take=safe_limit,
+                    skip=offset,
                 )
+                if len(data) >= safe_limit:
+                    verbose_proxy_logger.warning(
+                        "/spend/logs summarize=false returned %s rows (safety cap reached). "
+                        "Use /spend/logs/v2 for full pagination.",
+                        safe_limit,
+                    )
                 return data
 
             # Legacy behavior: return summarized data (when summarize=true)
-            # SQL query
-            response = await prisma_client.db.litellm_spendlogs.group_by(
-                by=["api_key", "user", "model", "startTime"],
-                where=filter_query,  # type: ignore
-                sum={
-                    "spend": True,
-                },
-            )
+            # Aggregate in SQL by DATE(startTime) to avoid near row-level group cardinality.
+            sql_conditions: List[str] = ['"startTime" >= $1', '"startTime" <= $2']
+            sql_params: List[Any] = [start_date_obj, end_date_obj]
+            param_idx = 3
+            if effective_api_key is not None and isinstance(effective_api_key, str):
+                sql_conditions.append(f"api_key = ${param_idx}")
+                sql_params.append(effective_api_key)
+                param_idx += 1
+            elif request_id is not None and isinstance(request_id, str):
+                sql_conditions.append(f"request_id = ${param_idx}")
+                sql_params.append(request_id)
+                param_idx += 1
+            elif user_id is not None and isinstance(user_id, str):
+                sql_conditions.append(f'"user" = ${param_idx}')
+                sql_params.append(user_id)
+                param_idx += 1
+
+            sql_query = f"""
+                SELECT
+                    DATE("startTime") AS spend_date,
+                    api_key,
+                    "user",
+                    model,
+                    SUM(spend)::double precision AS spend
+                FROM "LiteLLM_SpendLogs"
+                WHERE {' AND '.join(sql_conditions)}
+                GROUP BY DATE("startTime"), api_key, "user", model
+                ORDER BY DATE("startTime")
+            """
+            response = await prisma_client.db.query_raw(sql_query, *sql_params)
 
             if (
                 isinstance(response, list)
@@ -2191,25 +2253,37 @@ async def view_spend_logs(  # noqa: PLR0915
             ):
                 result: dict = {}
                 for record in response:
-                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")  # type: ignore
-                    date = dt_object.date()
-                    if date not in result:
-                        result[date] = {"users": {}, "models": {}}
-                    api_key = record["api_key"]  # type: ignore
-                    user_id = record["user"]  # type: ignore
-                    model = record["model"]  # type: ignore
-                    result[date]["spend"] = result[date].get("spend", 0) + record.get(
-                        "_sum", {}
-                    ).get("spend", 0)
-                    result[date][api_key] = result[date].get(api_key, 0) + record.get(
-                        "_sum", {}
-                    ).get("spend", 0)
-                    result[date]["users"][user_id] = result[date]["users"].get(
-                        user_id, 0
-                    ) + record.get("_sum", {}).get("spend", 0)
-                    result[date]["models"][model] = result[date]["models"].get(
-                        model, 0
-                    ) + record.get("_sum", {}).get("spend", 0)
+                    spend_date_value = record.get("spend_date")
+                    date_key: Optional[date] = None
+                    if isinstance(spend_date_value, datetime):
+                        date_key = spend_date_value.date()
+                    elif isinstance(spend_date_value, date):
+                        date_key = spend_date_value
+                    elif isinstance(spend_date_value, str):
+                        try:
+                            date_key = datetime.fromisoformat(spend_date_value).date()
+                        except ValueError:
+                            date_key = datetime.strptime(
+                                spend_date_value, "%Y-%m-%d"
+                            ).date()
+
+                    if date_key is None:
+                        continue
+
+                    if date_key not in result:
+                        result[date_key] = {"users": {}, "models": {}}
+                    _api_key = record.get("api_key") or ""
+                    _user_id = record.get("user") or ""
+                    _model = record.get("model") or ""
+                    spend = float(record.get("spend") or 0)
+                    result[date_key]["spend"] = result[date_key].get("spend", 0) + spend
+                    result[date_key][_api_key] = result[date_key].get(_api_key, 0) + spend
+                    result[date_key]["users"][_user_id] = result[date_key]["users"].get(
+                        _user_id, 0
+                    ) + spend
+                    result[date_key]["models"][_model] = result[date_key]["models"].get(
+                        _model, 0
+                    ) + spend
                 return_list = []
                 final_date = None
                 for k, v in sorted(result.items()):
@@ -2244,10 +2318,18 @@ async def view_spend_logs(  # noqa: PLR0915
                 table_name="spend",
                 query_type="find_all",
                 key_val={"key": "api_key", "value": hashed_token},
+                limit=safe_limit,
+                offset=offset,
             )
             if spend_log is None:
                 return []
             if isinstance(spend_log, list):
+                if len(spend_log) >= safe_limit:
+                    verbose_proxy_logger.warning(
+                        "/spend/logs api_key filter returned %s rows (safety cap reached). "
+                        "Use /spend/logs/v2 for full pagination.",
+                        safe_limit,
+                    )
                 return spend_log
             else:
                 return [spend_log]
@@ -2265,17 +2347,34 @@ async def view_spend_logs(  # noqa: PLR0915
                 table_name="spend",
                 query_type="find_all",
                 key_val={"key": "user", "value": user_id},
+                limit=safe_limit,
+                offset=offset,
             )
             if spend_log is None:
                 return []
             if isinstance(spend_log, list):
+                if len(spend_log) >= safe_limit:
+                    verbose_proxy_logger.warning(
+                        "/spend/logs user_id filter returned %s rows (safety cap reached). "
+                        "Use /spend/logs/v2 for full pagination.",
+                        safe_limit,
+                    )
                 return spend_log
             else:
                 return [spend_log]
         else:
             spend_logs = await prisma_client.get_data(
-                table_name="spend", query_type="find_all"
+                table_name="spend",
+                query_type="find_all",
+                limit=safe_limit,
+                offset=offset,
             )
+            if isinstance(spend_logs, list) and len(spend_logs) >= safe_limit:
+                verbose_proxy_logger.warning(
+                    "/spend/logs returned %s rows (safety cap reached). "
+                    "Use /spend/logs/v2 for full pagination.",
+                    safe_limit,
+                )
 
             return spend_logs
 

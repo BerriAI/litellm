@@ -1753,24 +1753,27 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
             # Return individual log entries when summarize=false
             return mock_spend_logs
 
-        async def group_by(self, *args, **kwargs):
+        async def query_raw(self, sql_query, *params):
             # Return grouped data when summarize=true
-            # Simplified mock response for grouped data
+            # Simplified mock response for aggregated SQL query
+            assert 'DATE("startTime") AS spend_date' in sql_query
+            assert 'GROUP BY DATE("startTime"), api_key, "user", model' in sql_query
+            assert len(params) == 2  # start_date, end_date
             yesterday = datetime.datetime.now(timezone.utc) - timedelta(days=1)
             return [
                 {
+                    "spend_date": yesterday.strftime("%Y-%m-%d"),
                     "api_key": "sk-test-key",
                     "user": "test_user_1",
                     "model": "gpt-3.5-turbo",
-                    "startTime": yesterday.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "_sum": {"spend": 0.05},
+                    "spend": 0.05,
                 },
                 {
+                    "spend_date": yesterday.strftime("%Y-%m-%d"),
                     "api_key": "sk-test-key",
                     "user": "test_user_1",
                     "model": "gpt-4",
-                    "startTime": yesterday.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                    "_sum": {"spend": 0.10},
+                    "spend": 0.10,
                 },
             ]
 
@@ -1855,6 +1858,52 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
         assert "spend" in data[0]
         assert "users" in data[0]
         assert "models" in data[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_summarize_false_applies_safety_limit(client, monkeypatch):
+    """Deprecated /spend/logs should clamp limit to SPEND_LOGS_DEPRECATED_MAX_ROWS."""
+    captured_kwargs = {}
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+
+        async def find_many(self, *args, **kwargs):
+            captured_kwargs.clear()
+            captured_kwargs.update(kwargs)
+            return [{"request_id": "req-1"}]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+        def hash_token(self, token: str) -> str:
+            return token
+
+    monkeypatch.setenv("SPEND_LOGS_DEPRECATED_MAX_ROWS", "5")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2025-01-01",
+                "end_date": "2025-01-02",
+                "summarize": "false",
+                "limit": 100,
+                "offset": 2,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert captured_kwargs.get("take") == 5
+        assert captured_kwargs.get("skip") == 2
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -2006,20 +2055,20 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     """
     Tests the /spend/logs endpoint with both start_date and end_date,
     ensuring it returns summarized data and not an empty list.
-    This test specifically validates the fix for dates being passed as ISO strings.
+    This test validates SQL date aggregation for summarize=true.
     """
     from datetime import datetime, timedelta, timezone
 
-    # This simulates the summarized data that Prisma's `group_by` would return.
+    # This simulates the summarized rows returned by query_raw.
     mock_summarized_response = [
         {
+            "spend_date": (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+                "%Y-%m-%d"
+            ),
             "api_key": "sk-test-key",
             "user": "test_user_1",
             "model": "gpt-4",
-            "startTime": (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
-                "%Y-%m-%dT%H:%M:%S.%fZ"
-            ),
-            "_sum": {"spend": 0.15},
+            "spend": 0.15,
         }
     ]
 
@@ -2028,17 +2077,12 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
         def __init__(self):
             self.litellm_spendlogs = self
 
-        async def group_by(self, *args, **kwargs):
-            # We assert that the `gte` and `lte` values are strings in ISO format.
-            # If they were datetime objects, this test would fail.
-            where_clause = kwargs.get("where", {})
-            start_time_filter = where_clause.get("startTime", {})
-
-            assert "gte" in start_time_filter
-            assert "lte" in start_time_filter
-            assert isinstance(start_time_filter["gte"], str)
-            assert isinstance(start_time_filter["lte"], str)
-            assert "T" in start_time_filter["gte"]  # Check for ISO format 'T' separator
+        async def query_raw(self, sql_query, *params):
+            assert 'DATE("startTime") AS spend_date' in sql_query
+            assert 'GROUP BY DATE("startTime"), api_key, "user", model' in sql_query
+            assert len(params) == 2
+            assert isinstance(params[0], datetime)
+            assert isinstance(params[1], datetime)
 
             # If the assertions pass, return the mock response.
             return mock_summarized_response

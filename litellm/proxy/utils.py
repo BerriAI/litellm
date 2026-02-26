@@ -2731,6 +2731,11 @@ class PrismaClient:
                 verbose_proxy_logger.debug(
                     "PrismaClient: get_data: table_name == 'spend'"
                 )
+                spend_find_many_kwargs: Dict[str, Any] = {"order": {"startTime": "desc"}}
+                if isinstance(limit, int):
+                    spend_find_many_kwargs["take"] = limit
+                if isinstance(offset, int) and offset >= 0:
+                    spend_find_many_kwargs["skip"] = offset
                 if key_val is not None:
                     if query_type == "find_unique":
                         response = await self.db.litellm_spendlogs.find_unique(  # type: ignore
@@ -2742,12 +2747,13 @@ class PrismaClient:
                         response = await self.db.litellm_spendlogs.find_many(  # type: ignore
                             where={
                                 key_val["key"]: key_val["value"],  # type: ignore
-                            }
+                            },
+                            **spend_find_many_kwargs,
                         )
                     return response
                 else:
                     response = await self.db.litellm_spendlogs.find_many(  # type: ignore
-                        order={"startTime": "desc"},
+                        **spend_find_many_kwargs,
                     )
                     return response
             elif table_name == "budget" and reset_at is not None:
