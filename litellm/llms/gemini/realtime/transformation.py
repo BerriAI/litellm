@@ -312,9 +312,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if _system_instruction is not None and isinstance(_system_instruction, str):
             session["instructions"] = _system_instruction
         if _model is not None and isinstance(_model, str):
-            session["model"] = _model.strip(
-                "models/"
-            )  # keep it consistent with how openai returns the model name
+            # Strip "models/" prefix if present to match OpenAI model name format.
+            # Use removeprefix (not strip) — strip removes individual chars, not a substring.
+            session["model"] = (
+                _model[len("models/"):]
+                if _model.startswith("models/")
+                else _model
+            )
 
         return OpenAIRealtimeStreamSessionEvents(
             type="session.created",

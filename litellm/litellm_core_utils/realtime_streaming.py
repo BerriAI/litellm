@@ -213,6 +213,23 @@ class RealTimeStreaming:
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
+    async def _send_to_backend(self, message: str) -> None:
+        """Send a message to the backend WebSocket.
+
+        If a provider_config is set the message is first passed through
+        transform_realtime_request so that provider-specific translation
+        (e.g. dropping session.update for Vertex AI) is applied even for
+        guardrail-injected messages.
+        """
+        if self.provider_config:
+            transformed = self.provider_config.transform_realtime_request(
+                message, self.model, self.session_configuration_request
+            )
+            for msg in transformed:
+                await self.backend_ws.send(msg)
+        else:
+            await self.backend_ws.send(message)
+
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime_input_transcription."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -335,7 +352,7 @@ class RealTimeStreaming:
             ## GUARDRAIL: inject create_response=false on session.created
             if isinstance(event, dict) and event.get("type") == "session.created":
                 if self._has_realtime_guardrails():
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps(
                             {
                                 "type": "session.update",
@@ -364,7 +381,7 @@ class RealTimeStreaming:
                     transcript, item_id=event.get("item_id")
                 )
                 if not blocked:
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps({"type": "response.create"})
                     )
                 continue
@@ -385,7 +402,7 @@ class RealTimeStreaming:
                 # set create_response=false so the LLM never auto-responds
                 # before our guardrail has a chance to run.
                 if self._has_realtime_guardrails():
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps(
                             {
                                 "type": "session.update",
@@ -418,7 +435,7 @@ class RealTimeStreaming:
                 )
                 if not blocked:
                     # Clean — trigger LLM response
-                    await self.backend_ws.send(
+                    await self._send_to_backend(
                         json.dumps({"type": "response.create"})
                     )
                 return True
