@@ -25,6 +25,7 @@ from fastapi import HTTPException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -536,6 +537,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             detection_info={"language": language},
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
