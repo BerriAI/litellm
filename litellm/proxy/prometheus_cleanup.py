@@ -9,13 +9,9 @@ from __future__ import annotations
 
 import glob
 import os
-import re
-from typing import Optional, Set
+from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
-
-_PID_PATTERN = re.compile(r"_(\d+)\.db$")
-
 
 def _get_multiproc_dir() -> Optional[str]:
     """Return the PROMETHEUS_MULTIPROC_DIR env var value, or None."""
@@ -23,31 +19,6 @@ def _get_multiproc_dir() -> Optional[str]:
         "prometheus_multiproc_dir"
     )
 
-
-def _is_pid_alive(pid: int) -> bool:
-    """Check if a process is alive using signal 0 (conservative: unknown = alive)."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OSError):
-        return True
-
-
-def _extract_pids_from_dir(directory: str) -> Set[int]:
-    """Scan .db filenames in a directory and extract PIDs (e.g. counter_1234.db -> 1234)."""
-    pids: Set[int] = set()
-    try:
-        for filename in os.listdir(directory):
-            if not filename.endswith(".db"):
-                continue
-            match = _PID_PATTERN.search(filename)
-            if match:
-                pids.add(int(match.group(1)))
-    except FileNotFoundError:
-        pass
-    return pids
 
 
 def wipe_directory(directory: str) -> None:
@@ -83,36 +54,4 @@ def cleanup_own_pid_files() -> None:
     except Exception as e:
         verbose_proxy_logger.warning(
             f"Failed to mark worker PID {pid} as dead: {e}"
-        )
-
-
-def mark_dead_pids(skip_pid: Optional[int] = None) -> None:
-    """Scan for dead PIDs and call mark_process_dead() for each. Skips current process by default."""
-    directory = _get_multiproc_dir()
-    if not directory or not os.path.isdir(directory):
-        return
-
-    if skip_pid is None:
-        skip_pid = os.getpid()
-
-    pids = _extract_pids_from_dir(directory)
-
-    from prometheus_client import multiprocess
-
-    dead_pids = []
-    for pid in pids:
-        if pid == skip_pid:
-            continue
-        if not _is_pid_alive(pid):
-            try:
-                multiprocess.mark_process_dead(pid)
-                dead_pids.append(pid)
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Failed to mark PID {pid} as dead: {e}"
-                )
-
-    if dead_pids:
-        verbose_proxy_logger.info(
-            f"Prometheus cleanup: marked {len(dead_pids)} dead PIDs: {dead_pids}"
         )
