@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import os
 import time
 import traceback
@@ -10,8 +11,9 @@ import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -32,7 +34,6 @@ from litellm.proxy.health_check import (
     run_with_timeout,
 )
 from litellm.secret_managers.main import get_secret
-from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
 #### Health ENDPOINTS ####
 
@@ -1025,10 +1026,7 @@ async def shared_health_check_status_endpoint(
 
 
 def _read_license_data() -> Optional[Dict[str, Any]]:
-    from litellm.proxy.proxy_server import (
-        _license_check,
-        premium_user_data,
-    )
+    from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: Optional[EnterpriseLicenseData] = (
         premium_user_data or _license_check.airgapped_license_data
@@ -1072,10 +1070,7 @@ async def health_license_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Return metadata about the configured LiteLLM license without exposing the key."""
-    from litellm.proxy.proxy_server import (
-        _license_check,
-        premium_user,
-    )
+    from litellm.proxy.proxy_server import _license_check, premium_user
 
     license_data = _read_license_data()
     has_license = bool(getattr(_license_check, "license_str", None))
@@ -1269,6 +1264,10 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
+        # check log level
+        log_level_name = logging.getLevelName(verbose_logger.getEffectiveLevel())
+        is_detailed_debug = verbose_logger.isEnabledFor(logging.DEBUG)
+
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
@@ -1279,6 +1278,8 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "log_level": log_level_name,
+                "is_detailed_debug": is_detailed_debug,
                 **db_health_status,
             }
         else:
@@ -1289,6 +1290,8 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "log_level": log_level_name,
+                "is_detailed_debug": is_detailed_debug,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
