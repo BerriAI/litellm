@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import Any, Dict, List, Optional, Union, Protocol
+from typing import Any, Dict, List, Optional, Union, Protocol, cast  # noqa: F401
 
 import litellm
 from litellm._logging import verbose_logger

@@ -1,5 +1,9 @@
 import asyncio
-from exceptiongroup import BaseExceptionGroup
+import sys
+if sys.version_info >= (3, 11):
+    BaseExceptionGroup = ExceptionGroup
+else:
+    from exceptiongroup import BaseExceptionGroup
 import os
 import socket
 import subprocess
