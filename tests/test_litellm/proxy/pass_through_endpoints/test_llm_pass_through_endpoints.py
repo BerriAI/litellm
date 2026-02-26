@@ -224,6 +224,7 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -323,6 +324,7 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -905,6 +907,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-key",
