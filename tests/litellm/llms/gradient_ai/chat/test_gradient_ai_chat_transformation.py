@@ -7,7 +7,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.gradient_ai.chat.transformation import GradientAIConfig, GRADIENT_AI_SERVERLESS_ENDPOINT
-from litellm.utils import UnsupportedParamsError
 
 DO_ENDPOINT_PATH = "/api/v1/chat/completions"
 DO_BASE_URL = "https://api.gradient_ai.com"
@@ -95,8 +94,7 @@ def test_get_openai_compatible_provider_info_default(monkeypatch, config):
 
 def test_map_openai_params_allows_tools_explicitly(config):
     """
-    Verifies that 'tools', 'tool_choice', and 'parallel_tool_calls' are included
-    in optional_params even if not present in the base supported_openai_params list.
+    Verifies that 'tools', 'tool_choice', and 'parallel_tool_calls' are included and accepted
     """
     non_default_params = {
         "temperature": 0.7,
