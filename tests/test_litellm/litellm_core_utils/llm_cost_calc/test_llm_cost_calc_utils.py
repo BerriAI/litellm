@@ -766,7 +766,14 @@ def test_service_tier_fallback_pricing():
     assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"
 
 
-def test_gemini_image_generation_cost_with_zero_text_tokens():
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3-pro-image-preview",
+        "gemini-3.1-flash-image-preview",
+    ],
+)
+def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
     """
     Test that image_tokens are correctly costed when text_tokens=0.
 
@@ -779,7 +786,6 @@ def test_gemini_image_generation_cost_with_zero_text_tokens():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    model = "gemini-3-pro-image-preview"
     custom_llm_provider = "vertex_ai"
 
     # Usage from the issue: text_tokens=0, image_tokens=1120, reasoning_tokens=225
@@ -809,9 +815,9 @@ def test_gemini_image_generation_cost_with_zero_text_tokens():
 
     # Expected costs:
     # - text_tokens: 0 * output_cost_per_token = 0
-    # - image_tokens: 1120 * output_cost_per_image_token = 1120 * 1.2e-04 = 0.1344
-    # - reasoning_tokens: 225 * output_cost_per_token = 225 * 1.2e-05 = 0.0027
-    # Total completion: ~0.1371
+    # - image_tokens: 1120 * output_cost_per_image_token
+    # - reasoning_tokens: 225 * output_cost_per_token
+    # Total completion should include both image + reasoning costs.
 
     output_cost_per_image_token = model_cost_map.get("output_cost_per_image_token", 0)
     output_cost_per_token = model_cost_map.get("output_cost_per_token", 0)
@@ -820,12 +826,11 @@ def test_gemini_image_generation_cost_with_zero_text_tokens():
     expected_reasoning_cost = 225 * output_cost_per_token  # reasoning uses base token cost
     expected_completion_cost = expected_image_cost + expected_reasoning_cost
 
-    # The bug was: all 1345 tokens were treated as text = 1345 * 1.2e-05 = 0.01614
-    # Fixed: image_tokens use image pricing = ~0.137
-
-    assert completion_cost > 0.10, (
-        f"Completion cost should be > $0.10 (image tokens are expensive), got ${completion_cost:.6f}. "
-        f"Bug: tokens may be incorrectly treated as text tokens."
+    # The bug was: all completion tokens were treated as text tokens only.
+    bugged_text_only_cost = 1345 * output_cost_per_token
+    assert completion_cost > bugged_text_only_cost * 2, (
+        f"Completion cost should be significantly larger than text-only bugged path. "
+        f"Expected > {bugged_text_only_cost * 2:.6f}, got {completion_cost:.6f}"
     )
     assert round(completion_cost, 4) == round(expected_completion_cost, 4), (
         f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
