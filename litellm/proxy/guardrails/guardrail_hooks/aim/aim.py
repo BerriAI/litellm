@@ -58,6 +58,7 @@ class AimGuardrail(CustomGuardrail):
         self.api_base = (
             api_base or os.environ.get("AIM_API_BASE") or "https://api.aim.security"
         )
+        self.api_base = self.api_base.rstrip("/")
         self.ws_api_base = self.api_base.replace("http://", "ws://").replace(
             "https://", "wss://"
         )
