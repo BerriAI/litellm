@@ -23,32 +23,70 @@ or both pre and post call:
         mode: during_call  # runs before LLM and on response
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import TOOL_POLICY_CACHE_TTL_SECONDS
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
+from litellm.integrations.custom_guardrail import (CustomGuardrail,
+                                                   log_guardrail_information)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import \
+        Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "tool_policy"
 
 
+def _get_request_team_and_key(request_data: dict) -> Tuple[Optional[str], Optional[str]]:
+    """Extract team_id and key hash from request_data (litellm_metadata or metadata)."""
+    if not request_data:
+        return None, None
+    for key in ("litellm_metadata", "metadata"):
+        meta = request_data.get(key)
+        if not isinstance(meta, dict):
+            continue
+        team_id = meta.get("user_api_key_team_id")
+        key_hash = meta.get("user_api_key_api_key") or meta.get("user_api_key")
+        if team_id is not None or key_hash is not None:
+            return (
+                str(team_id).strip() if team_id else None,
+                str(key_hash).strip() if key_hash else None,
+            )
+    return None, None
+
+
+def _get_request_route_from_data(request_data: dict) -> Optional[str]:
+    """Get request route from request_data (metadata or top-level)."""
+    route = request_data.get("user_api_key_request_route")
+    if route:
+        return route
+    meta = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    return meta.get("user_api_key_request_route")
+
+
+def _get_effective_allowed_tools_from_request(request_data: dict) -> Optional[List[str]]:
+    """Key allowed_tools overrides team; empty/missing means no restriction."""
+    meta = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    key_meta = meta.get("user_api_key_metadata") or {}
+    team_meta = meta.get("user_api_key_team_metadata") or {}
+    key_allowed = key_meta.get("allowed_tools") if isinstance(key_meta, dict) else None
+    team_allowed = team_meta.get("allowed_tools") if isinstance(team_meta, dict) else None
+    if isinstance(key_allowed, list) and len(key_allowed) > 0:
+        return key_allowed
+    if isinstance(team_allowed, list) and len(team_allowed) > 0:
+        return team_allowed
+    return None
+
+
 class ToolPolicyGuardrail(CustomGuardrail):
     """
-    Guardrail that enforces per-tool call policies stored in LiteLLM_ToolTable.
-
-    Tools with call_policy="blocked" are rejected before/after the LLM call.
-    Tools with call_policy="trusted" or "untrusted" pass through unchanged.
+    Guardrail that enforces per-tool call policies stored in LiteLLM_ToolTable
+    and key/team allowed_tools (allowlist). No DB in hot path for policy lookup —
+    uses shared cache (user_api_key_cache).
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -70,12 +108,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """
-        Enforce tool policies on both request tools and response tool_calls.
-
-        - input_type="request":  check inputs["tools"] (tool definitions in the LLM request)
-        - input_type="response": check inputs["tool_calls"] (tool_calls in the LLM response)
-
-        Raises HTTPException (400) if any tool is "blocked".
+        Enforce key/team allowlist then DB call_policy on request tools / response tool_calls.
         """
         if input_type == "request":
             tools = inputs.get("tools") or []
@@ -86,6 +119,12 @@ class ToolPolicyGuardrail(CustomGuardrail):
                 and isinstance(t.get("function"), dict)
                 and t["function"].get("name")
             ]
+            if not tool_names:
+                route = _get_request_route_from_data(request_data)
+                if route:
+                    from litellm.proxy.guardrails.tool_name_extraction import \
+                        extract_request_tool_names
+                    tool_names = extract_request_tool_names(route, request_data)
         else:  # response
             tool_calls = inputs.get("tool_calls") or []
             tool_names = []
@@ -101,8 +140,26 @@ class ToolPolicyGuardrail(CustomGuardrail):
         if not tool_names:
             return inputs
 
-        policy_map = await self._get_policies_cached(tool_names)
+        allowed_tools = _get_effective_allowed_tools_from_request(request_data)
+        if isinstance(allowed_tools, list) and len(allowed_tools) > 0:
+            allowed_set = {str(t) for t in allowed_tools}
+            disallowed = [n for n in tool_names if n not in allowed_set]
+            if disallowed:
+                verbose_proxy_logger.warning(
+                    "ToolPolicyGuardrail: tool(s) %s not in key/team allowed_tools",
+                    disallowed,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Violated tool allowlist",
+                        "disallowed_tools": disallowed,
+                        "message": f"Tool(s) {disallowed} are not in the allowed tools list for this key/team.",
+                    },
+                )
 
+        team_id, key_hash = _get_request_team_and_key(request_data)
+        policy_map = await self._get_policies_cached(tool_names, team_id, key_hash)
         blocked = [name for name in tool_names if policy_map.get(name) == "blocked"]
         if blocked:
             verbose_proxy_logger.warning(
@@ -119,45 +176,27 @@ class ToolPolicyGuardrail(CustomGuardrail):
 
         return inputs
 
-    async def _get_policies_cached(self, tool_names: List[str]) -> Dict[str, str]:
+    async def _get_policies_cached(
+        self,
+        tool_names: List[str],
+        team_id: Optional[str] = None,
+        key_hash: Optional[str] = None,
+    ) -> Dict[str, str]:
         """
-        Batch-fetch call_policy for the given tool names.
-
-        Caches per individual tool name (not per combination) so that adding
-        a new tool to a request doesn't invalidate the cached policies for all
-        the other tools already in the cache.
+        Fetch effective call_policy (override for team/key if present, else global)
+        via shared cache to avoid DB in hot path.
         """
-        from litellm.proxy.db.tool_registry_writer import get_tools_by_names
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.db.tool_registry_writer import \
+            get_tool_policies_cached
+        from litellm.proxy.proxy_server import (prisma_client,
+                                                user_api_key_cache)
 
-        if not tool_names or prisma_client is None:
+        if not tool_names:
             return {}
-
-        result: Dict[str, str] = {}
-        cache_misses: List[str] = []
-
-        for name in tool_names:
-            cached = await self._policy_cache.async_get_cache(f"tool_policy:{name}")
-            if cached is not None and isinstance(cached, str):
-                result[name] = cached
-            else:
-                cache_misses.append(name)
-
-        if cache_misses:
-            fetched = await get_tools_by_names(
-                prisma_client=prisma_client, tool_names=cache_misses
-            )
-            for name, policy in fetched.items():
-                result[name] = policy
-                await self._policy_cache.async_set_cache(
-                    key=f"tool_policy:{name}",
-                    value=policy,
-                    ttl=TOOL_POLICY_CACHE_TTL_SECONDS,
-                )
-            verbose_proxy_logger.debug(
-                "ToolPolicyGuardrail: fetched %d policies from DB (cache hits: %d)",
-                len(cache_misses),
-                len(tool_names) - len(cache_misses),
-            )
-
-        return result
+        return await get_tool_policies_cached(
+            tool_names=tool_names,
+            cache=user_api_key_cache,
+            prisma_client=prisma_client,
+            team_id=team_id,
+            key_hash=key_hash,
+        )

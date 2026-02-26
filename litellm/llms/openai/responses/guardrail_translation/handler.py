@@ -30,27 +30,22 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
-from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_function_tool_call import \
+    ResponseFunctionToolCall
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
-    OpenAiResponsesToChatCompletionStreamIterator,
-)
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.responses.litellm_completion_transformation.transformation import (
-    LiteLLMCompletionResponsesConfig,
-)
-from litellm.types.llms.openai import (
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolParam,
-)
-from litellm.types.responses.main import (
-    GenericResponseOutputItem,
-    OutputFunctionToolCall,
-    OutputText,
-)
+    OpenAiResponsesToChatCompletionStreamIterator)
+from litellm.llms.base_llm.guardrail_translation.base_translation import \
+    BaseTranslation
+from litellm.responses.litellm_completion_transformation.transformation import \
+    LiteLLMCompletionResponsesConfig
+from litellm.types.llms.openai import (ChatCompletionToolCallChunk,
+                                       ChatCompletionToolParam)
+from litellm.types.responses.main import (GenericResponseOutputItem,
+                                          OutputFunctionToolCall, OutputText)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -187,6 +182,18 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
 
         return data
+
+    def extract_request_tool_names(self, data: dict) -> List[str]:
+        """Extract tool names from Responses API request (tools[].name for function, tools[].server_label for mcp)."""
+        names: List[str] = []
+        for tool in data.get("tools") or []:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("type") == "function" and tool.get("name"):
+                names.append(str(tool["name"]))
+            elif tool.get("type") == "mcp" and tool.get("server_label"):
+                names.append(str(tool["server_label"]))
+        return names
 
     def _extract_and_transform_tools(
         self,

@@ -5,7 +5,7 @@ Pydantic models for Tool Policy management endpoints.
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ToolCallPolicy = Literal["trusted", "untrusted", "dual_llm", "blocked"]
 
@@ -34,9 +34,30 @@ class ToolListResponse(BaseModel):
 class ToolPolicyUpdateRequest(BaseModel):
     tool_name: str
     call_policy: ToolCallPolicy
+    team_id: Optional[str] = None  # if set, create/update override for this team
+    key_hash: Optional[str] = None  # if set, create/update override for this key
+    key_alias: Optional[str] = None  # human-readable key alias for UI
 
 
 class ToolPolicyUpdateResponse(BaseModel):
     tool_name: str
     call_policy: ToolCallPolicy
     updated: bool
+    team_id: Optional[str] = None
+    key_hash: Optional[str] = None
+
+
+class ToolPolicyOverrideRow(BaseModel):
+    override_id: str
+    tool_name: str
+    team_id: Optional[str] = None
+    key_hash: Optional[str] = None
+    call_policy: ToolCallPolicy
+    key_alias: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class ToolDetailResponse(BaseModel):
+    tool: LiteLLM_ToolTableRow
+    overrides: List[ToolPolicyOverrideRow] = Field(default_factory=list)

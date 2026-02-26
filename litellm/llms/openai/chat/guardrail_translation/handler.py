@@ -135,6 +135,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         return data
 
+    def extract_request_tool_names(self, data: dict) -> List[str]:
+        """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
+        names: List[str] = []
+        for tool in data.get("tools") or []:
+            if isinstance(tool, dict) and tool.get("type") == "function":
+                fn = tool.get("function")
+                if isinstance(fn, dict) and fn.get("name"):
+                    names.append(str(fn["name"]))
+        for fn in data.get("functions") or []:
+            if isinstance(fn, dict) and fn.get("name"):
+                names.append(str(fn["name"]))
+        return names
+
     def _extract_inputs(
         self,
         message: Dict[str, Any],

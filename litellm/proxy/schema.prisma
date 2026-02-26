@@ -1076,6 +1076,25 @@ model LiteLLM_ToolTable {
   @@index([team_id])
 }
 
+// Per-(tool, team/key) policy overrides. When present, override replaces global tool policy for that scope.
+model LiteLLM_ToolPolicyOverrideTable {
+  override_id String   @id @default(uuid())
+  tool_name   String
+  team_id     String   @default("")  // "" = not scoped to team; non-empty = override for this team only
+  key_hash    String   @default("")  // "" = not scoped to key; non-empty = override for this key only
+  call_policy String   @default("blocked")
+  key_alias   String?  // human-readable key alias for UI
+  created_at  DateTime @default(now())
+  created_by  String?
+  updated_at  DateTime @default(now()) @updatedAt
+  updated_by  String?
+
+  @@unique([tool_name, team_id, key_hash])
+  @@index([tool_name])
+  @@index([team_id])
+  @@index([key_hash])
+}
+
 //Unified Access Groups table for storing unified access groups
 model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())
