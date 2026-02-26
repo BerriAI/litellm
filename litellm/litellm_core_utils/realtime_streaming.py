@@ -18,13 +18,21 @@ from litellm.types.realtime import ALL_DELTA_TYPES
 from .litellm_logging import Logging as LiteLLMLogging
 
 if TYPE_CHECKING:
+    from typing import Protocol
     from websockets.asyncio.client import ClientConnection
+
+    class WSProtocol(Protocol):
+        async def send(self, data: str) -> None: ...
+        async def recv(self, **kwargs: Any) -> Any: ...
+        async def close(self) -> None: ...
+
 
     CLIENT_CONNECTION_CLASS = ClientConnection
 else:
     CLIENT_CONNECTION_CLASS = Any
 
 # Create a thread pool with a maximum of 10 threads
+
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
 
 DefaultLoggedRealTimeEventTypes = [
@@ -594,3 +602,4 @@ class RealTimeStreaming:
                     await forward_task
                 except asyncio.CancelledError:
                     pass
+
