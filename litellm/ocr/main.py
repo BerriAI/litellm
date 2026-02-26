@@ -6,6 +6,7 @@ import base64
 import contextvars
 import mimetypes
 import os
+import re
 from functools import partial
 from io import IOBase
 from pathlib import Path
@@ -338,6 +339,8 @@ def ocr(
 # Public utilities — used by the SDK and the proxy
 #################################################
 
+_MIME_PATTERN = re.compile(r"^[\w.+-]+/[\w.+-]+$")
+
 _MIME_TYPE_MAP = {
     ".pdf": "application/pdf",
     ".png": "image/png",
@@ -420,6 +423,9 @@ def convert_file_document_to_url_document(document: Dict[str, Any]) -> Dict[str,
 
     if "mime_type" in document:
         mime_type = document["mime_type"]
+
+    if not _MIME_PATTERN.match(mime_type):
+        raise ValueError(f"Invalid MIME type: {mime_type}")
 
     base64_data = base64.b64encode(file_bytes).decode("utf-8")
     data_uri = f"data:{mime_type};base64,{base64_data}"

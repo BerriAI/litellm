@@ -213,6 +213,14 @@ class TestConvertFileDocumentToUrlDocument:
         with pytest.raises(ValueError, match="Unsupported file input type"):
             convert_file_document_to_url_document({"type": "file", "file": 12345})
 
+    def test_should_raise_error_for_invalid_mime_type(self):
+        """MIME types with special characters should be rejected."""
+        content = b"some content"
+        with pytest.raises(ValueError, match="Invalid MIME type"):
+            convert_file_document_to_url_document(
+                {"type": "file", "file": content, "mime_type": "text/html; charset=utf-8\nX-Injected: true"}
+            )
+
     def test_should_override_mime_type_for_file_path(self):
         """Explicit mime_type should override auto-detection from extension."""
         content = b"some content"
