@@ -119,6 +119,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Map input_reference to image (will be processed in transform_video_create_request)
         if "input_reference" in video_create_optional_params:
             mapped_params["image"] = video_create_optional_params["input_reference"]
+        elif "image" in video_create_optional_params:
+            mapped_params["image"] = video_create_optional_params["image"]
+
+        # Pass through a provider-specific parameters block if provided directly
+        if "parameters" in video_create_optional_params:
+            mapped_params["parameters"] = video_create_optional_params["parameters"]
 
         # Map size to aspectRatio
         if "size" in video_create_optional_params:
@@ -270,7 +276,17 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             instance_dict.update(params_copy["instances"])
             params_copy.pop("instances")
         elif "image" in params_copy and params_copy["image"] is not None:
-            image_data = _convert_image_to_vertex_format(params_copy["image"])
+            image = params_copy["image"]
+            if isinstance(image, dict):
+                # Already in Vertex format e.g. {"gcsUri": "gs://..."} or
+                # {"bytesBase64Encoded": "...", "mimeType": "..."}
+                image_data = image
+            elif isinstance(image, str) and image.startswith("gs://"):
+                # Bare GCS URI — Vertex AI accepts gcsUri natively, no download needed
+                image_data = {"gcsUri": image}
+            else:
+                # File-like object — encode to base64
+                image_data = _convert_image_to_vertex_format(image)
             instance_dict["image"] = image_data
             params_copy.pop("image")
 
