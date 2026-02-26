@@ -2257,6 +2257,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
     team_object_permission_id: Optional[str] = None
+    project_metadata: Optional[Dict] = None
 
     # Team Member Specific Params
     team_member_spend: Optional[float] = None
@@ -2581,11 +2582,15 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     model_tpm_limit: Optional[dict] = None
     blocked: bool = False
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    tags: Optional[List[str]] = None
 
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        for field in (
+            LiteLLM_ManagementEndpoint_MetadataFields
+            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})
@@ -2608,11 +2613,15 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     blocked: Optional[bool] = None
     budget_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    tags: Optional[List[str]] = None
 
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        for field in (
+            LiteLLM_ManagementEndpoint_MetadataFields
+            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})

@@ -692,6 +692,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     project_object=_jwt_project_obj,
                 )
 
+                # Add project metadata for tag-based routing when key belongs to a project
+                if _jwt_project_obj is not None:
+                    valid_token.project_metadata = _jwt_project_obj.metadata
+
                 # return UserAPIKeyAuth object
                 return cast(UserAPIKeyAuth, valid_token)
 
@@ -1310,6 +1314,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             valid_token_dict = valid_token.model_dump(exclude_none=True)
             valid_token_dict.pop("token", None)
+
+            # Add project metadata when key belongs to a project (for tag-based routing)
+            if _project_obj is not None:
+                valid_token_dict["project_metadata"] = _project_obj.metadata
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)

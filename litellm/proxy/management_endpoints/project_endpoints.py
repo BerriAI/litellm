@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.proxy._types import *
+from litellm.proxy._types import *  # noqa: F403
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_helpers.utils import (
@@ -284,6 +284,7 @@ async def new_project(
     - model_tpm_limit: *Optional[dict]* - TPM limits per model. Example: {"gpt-4": 50000, "gpt-3.5-turbo": 100000}
     - budget_duration: *Optional[str]* - Frequency of reseting project budget
     - metadata: *Optional[dict]* - Metadata for project, store information for project. Example metadata - {"use_case_id": "SNOW-12345", "responsible_ai_id": "RAI-67890"}
+    - tags: *Optional[List[str]]* - Tags for tracking spend and/or tag-based routing. Keys belonging to this project inherit these tags.
     - blocked: *bool* - Flag indicating if the project is blocked or not - will stop all calls from keys with this project_id.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - project-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
 
@@ -421,6 +422,13 @@ async def new_project(
             updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         )
 
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=project_row,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if getattr(data, field, None) is not None:
                 _set_object_metadata_field(
@@ -478,6 +486,7 @@ async def update_project(
     - team_id: *Optional[str]* - Updated team_id for the project
     - metadata: *Optional[dict]* - Updated metadata for project
     - models: *Optional[list]* - Updated list of models for the project
+    - tags: *Optional[List[str]]* - Tags for tracking spend and/or tag-based routing
     - blocked: *Optional[bool]* - Updated blocked status
     - max_budget: *Optional[float]* - Updated max budget
     - tpm_limit: *Optional[int]* - Updated tpm limit
@@ -626,12 +635,23 @@ async def update_project(
                         "object_permission_id"
                     ] = created_permission.object_permission_id
 
-        # Handle metadata fields
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        # Handle metadata fields (Premium + standard)
+        for field in (
+            LiteLLM_ManagementEndpoint_MetadataFields_Premium
+            + LiteLLM_ManagementEndpoint_MetadataFields
+        ):
             if field in update_data:
                 if update_data.get("metadata") is None:
                     update_data["metadata"] = {}
                 update_data["metadata"][field] = update_data.pop(field)
+
+        # Merge metadata with existing (avoid wiping metadata on partial updates like tags)
+        if "metadata" in update_data:
+            existing_metadata = (existing_project.metadata or {}) if isinstance(
+                existing_project.metadata, dict
+            ) else {}
+            new_metadata = update_data.get("metadata") or {}
+            update_data["metadata"] = {**existing_metadata, **new_metadata}
 
         # Remove budget fields (following organization_endpoints.py pattern)
         update_data = _remove_budget_fields_from_project_data(update_data)

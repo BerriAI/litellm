@@ -990,6 +990,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data=data,
         _metadata_variable_name=_metadata_variable_name,
     )
+    ## PROJECT-LEVEL TAGS (project sits between key and team in hierarchy)
+    project_metadata = getattr(
+        user_api_key_dict, "project_metadata", None
+    ) or {}
+    if "tags" in project_metadata and project_metadata["tags"] is not None:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=project_metadata["tags"],
+        )
     ## TEAM-LEVEL SPEND LOGS/TAGS
     team_metadata = user_api_key_dict.team_metadata or {}
     if "tags" in team_metadata and team_metadata["tags"] is not None:
