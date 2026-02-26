@@ -23,7 +23,7 @@ const createLogEntry = (overrides: Partial<LogEntry> = {}): LogEntry =>
     startTime: "2025-11-14T00:00:00Z",
     endTime: "2025-11-14T00:00:01Z",
     cache_hit: "miss",
-    duration: 1,
+    request_duration_ms: 1000,
     messages: [{ role: "user", content: "hello" }],
     response: { choices: [{ message: { content: "hi" } }] },
     metadata: { status: "success" },
