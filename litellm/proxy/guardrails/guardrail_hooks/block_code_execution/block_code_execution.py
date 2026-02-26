@@ -8,24 +8,40 @@ confidence scoring and a tunable threshold (only block when confidence >= thresh
 
 import re
 from datetime import datetime
-from typing import (TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal,
-                    Optional, Tuple, Union, cast)
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 from fastapi import HTTPException
 
-from litellm.integrations.custom_guardrail import (CustomGuardrail,
-                                                   ModifyResponseException)
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    ModifyResponseException,
+)
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.base import \
-    GuardrailConfigModel
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
-    CodeBlockActionTaken, CodeBlockDetection)
-from litellm.types.utils import (GenericGuardrailAPIInputs, GuardrailStatus,
-                                 GuardrailTracingDetail, ModelResponseStream)
+    CodeBlockActionTaken,
+    CodeBlockDetection,
+)
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+    ModelResponseStream,
+)
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Language tag aliases (normalize to canonical for comparison)
 LANGUAGE_ALIASES: Dict[str, str] = {
@@ -57,7 +73,9 @@ _NO_EXECUTION_PHRASES: Tuple[str, ...] = (
     "just reason",
     "explain without running",
     "explain without execute",
-    "what would ",
+    "what would happen if",
+    "what would this output",
+    "what would the result be",
     "? explain",
     "simulate what would happen",
     "don't actually run",
@@ -78,7 +96,10 @@ _NO_EXECUTION_PHRASES: Tuple[str, ...] = (
     "no execution).",
     "but don't run",
     "don't run it",
-    "explain what this ",
+    "explain what this code",
+    "explain what this script",
+    "explain what this function",
+    "explain what this sql",
     "refactor this ",
     "spot any security issues",
     "write unit tests for this function without running",
@@ -87,7 +108,6 @@ _NO_EXECUTION_PHRASES: Tuple[str, ...] = (
     "explain the difference between",
     "given this stack trace, explain",
     "write a safe alternative",
-    "explain what this sql",
     "write a python function",
     "generate a dockerfile",
     "write a bash script that would",
@@ -103,7 +123,9 @@ _NO_EXECUTION_PHRASES: Tuple[str, ...] = (
     "can you diagnose",
     "what would `git",
     "here's a traceback",
-    "can you explain",
+    "can you explain this code",
+    "can you explain what this",
+    "can you explain how this works",
 )
 
 # Execution intent: phrases that mean "run/execute/perform this for me" (block when on request).
@@ -211,6 +233,7 @@ _EXECUTION_REQUEST_PHRASES: Tuple[str, ...] = (
     "and paste the version",
     "tell me the latency",
     "tell me what it returns",
+    "show me what it returns",
     "confirm it succeeded",
     "tell me the account id",
     "show it here",
@@ -388,8 +411,9 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
 
     @staticmethod
     def get_config_model() -> Optional[type[GuardrailConfigModel]]:
-        from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import \
-            BlockCodeExecutionGuardrailConfigModel
+        from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
+            BlockCodeExecutionGuardrailConfigModel,
+        )
 
         return BlockCodeExecutionGuardrailConfigModel
 
@@ -426,23 +450,35 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         self,
         text: str,
         detections: Optional[List[CodeBlockDetection]] = None,
+        input_type: Literal["request", "response"] = "request",
     ) -> Tuple[str, bool]:
         """
         Scan one text: find blocks, apply block/mask/allow by confidence.
-        When detect_execution_intent is True, only block if user intent is to run/execute;
-        allow when intent is explain/refactor/don't run. Also block text-only execution requests.
+        When detect_execution_intent is True and input_type is "request", only block if
+        user intent is to run/execute; allow when intent is explain/refactor/don't run.
+        When input_type is "response", always enforce blocking on detected code blocks
+        (execution-intent heuristics only apply to user requests, not LLM output).
         Returns (modified_text, should_raise).
         """
         if not text:
             return text, False
         text = _normalize_escaped_newlines(text)
 
-        if self.detect_execution_intent and _has_no_execution_intent(text):
+        is_response = input_type == "response"
+
+        # Execution-intent heuristics only apply to requests, not LLM responses.
+        # For responses, skip entirely — the LLM's output text won't contain user
+        # intent phrases, so checking would silently disable response-side blocking.
+        if not is_response and self.detect_execution_intent and _has_no_execution_intent(text):
             return text, False
 
         blocks = self._find_blocks(text)
-        has_execution_intent = self.detect_execution_intent and _has_execution_intent(
-            text
+
+        # For requests, check execution intent; for responses, skip this check
+        has_execution_intent = (
+            not is_response
+            and self.detect_execution_intent
+            and _has_execution_intent(text)
         )
 
         if not blocks:
@@ -466,8 +502,12 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         last_end = 0
         parts: List[str] = []
         for start, end, tag, _body, confidence, action_taken in blocks:
+            # For responses, always enforce the block action (no intent check needed).
+            # For requests with detect_execution_intent, require execution intent.
             effective_block = action_taken == "block" and (
-                not self.detect_execution_intent or has_execution_intent
+                is_response
+                or not self.detect_execution_intent
+                or has_execution_intent
             )
             if detections is not None:
                 detections.append(
@@ -539,7 +579,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             is_output = input_type == "response"
             processed: List[str] = []
             for text in texts:
-                new_text, should_raise = self._scan_text(text, detections)
+                new_text, should_raise = self._scan_text(text, detections, input_type)
                 processed.append(new_text)
                 if should_raise:
                     # Determine language from first blocking detection
