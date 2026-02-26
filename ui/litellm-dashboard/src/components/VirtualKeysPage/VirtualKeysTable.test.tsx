@@ -194,6 +194,7 @@ beforeEach(() => {
       "Sort Order": "desc",
     },
     filteredKeys: [mockKey],
+    filteredTotalCount: null,
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -690,5 +691,107 @@ it("should display 'Unknown' for last_active when value is null", async () => {
 
   await waitFor(() => {
     expect(screen.getByText("Unknown")).toBeInTheDocument();
+  });
+});
+
+const defaultMockProps = {
+  teams: [mockTeam],
+  organizations: [mockOrganization],
+  onSortChange: vi.fn(),
+  currentSort: { sortBy: "created_at", sortOrder: "desc" as const },
+};
+
+describe("pagination display – total count and page count", () => {
+  it("should show total_count from useKeys when no filter is active (filteredTotalCount is null)", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: null,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 - 50 of 509 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 11")).toBeInTheDocument();
+    });
+  });
+
+  it("should show filteredTotalCount in pagination text when a filter search returns results", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: 1,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 1")).toBeInTheDocument();
+    });
+  });
+
+  it("should not show stale unfiltered totals when filteredTotalCount is set", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [mockKey],
+        total_count: 509,
+        current_page: 1,
+        total_pages: 11,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filteredKeys: [mockKey],
+      filteredTotalCount: 1,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/509 results/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/of 11/)).not.toBeInTheDocument();
+    });
   });
 });
