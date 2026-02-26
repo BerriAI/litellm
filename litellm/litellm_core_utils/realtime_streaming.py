@@ -502,11 +502,11 @@ class RealTimeStreaming:
         try:
             while True:
                 try:
-                    raw_response = await self.backend_ws.recv(
+                    raw_response = await self.backend_ws.recv(  # type: ignore[union-attr]
                         decode=False
                     )  # improves performance
                 except TypeError:
-                    raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
+                    raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
 
                 if self.provider_config:
                     try:
@@ -573,9 +573,9 @@ class RealTimeStreaming:
                     )
 
                     for msg in message:
-                        await self.backend_ws.send(msg)
+                        await self.backend_ws.send(msg)  # type: ignore[union-attr]
                 else:
-                    await self.backend_ws.send(message)
+                    await self.backend_ws.send(message)  # type: ignore[union-attr]
 
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")
