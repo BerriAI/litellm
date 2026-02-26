@@ -1,13 +1,13 @@
 "use client";
 
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import { Select, Switch, Tooltip } from "antd";
 import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
-import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
-import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
-import FilterComponent, { FilterOption } from "./molecules/filter";
-import { fetchToolsList, ToolRow, updateToolPolicy } from "./networking";
+import { Select, Switch, Tooltip } from "antd";
+import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import { TimeCell } from "./view_logs/time_cell";
+import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import FilterComponent, { FilterOption } from "./molecules/filter";
+import { fetchToolsList, updateToolPolicy, ToolRow } from "./networking";
 
 const POLICY_OPTIONS = [
   { value: "trusted", label: "trusted", color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
