@@ -423,10 +423,21 @@ class AsyncHTTPHandler:
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
 
-        response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
-        )
-        return response
+        try:
+            response = await self.client.get(
+                url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            )
+            return response
+        except RuntimeError as e:
+            if "client has been closed" not in str(e):
+                raise
+            self.client = self.create_client(
+                timeout=self.timeout, event_hooks=self.event_hooks
+            )
+            response = await self.client.get(
+                url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            )
+            return response
 
     @track_llm_api_timing()
     async def post(
@@ -483,6 +494,21 @@ class AsyncHTTPHandler:
                 )
             finally:
                 await new_client.aclose()
+        except RuntimeError as e:
+            if "client has been closed" not in str(e):
+                raise
+            self.client = self.create_client(
+                timeout=timeout, event_hooks=self.event_hooks
+            )
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.client,
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.TimeoutException as e:
             end_time = time.time()
             time_delta = round(end_time - start_time, 3)
@@ -555,6 +581,21 @@ class AsyncHTTPHandler:
                 )
             finally:
                 await new_client.aclose()
+        except RuntimeError as e:
+            if "client has been closed" not in str(e):
+                raise
+            self.client = self.create_client(
+                timeout=timeout, event_hooks=self.event_hooks
+            )
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.client,
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -621,6 +662,21 @@ class AsyncHTTPHandler:
                 )
             finally:
                 await new_client.aclose()
+        except RuntimeError as e:
+            if "client has been closed" not in str(e):
+                raise
+            self.client = self.create_client(
+                timeout=timeout, event_hooks=self.event_hooks
+            )
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.client,
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.TimeoutException as e:
             headers = {}
             error_response = getattr(e, "response", None)
@@ -687,6 +743,21 @@ class AsyncHTTPHandler:
                 )
             finally:
                 await new_client.aclose()
+        except RuntimeError as e:
+            if "client has been closed" not in str(e):
+                raise
+            self.client = self.create_client(
+                timeout=timeout, event_hooks=self.event_hooks
+            )
+            return await self.single_connection_post_request(
+                url=url,
+                client=self.client,
+                data=data,
+                json=json,
+                params=params,
+                headers=headers,
+                stream=stream,
+            )
         except httpx.HTTPStatusError as e:
             setattr(e, "status_code", e.response.status_code)
             if stream is True:
@@ -1231,10 +1302,10 @@ def get_async_httpx_client(
 
     _cached_client = cache.get_cache(_cache_key_name)
     if _cached_client:
-        return _cached_client
+        if not _is_async_client_closed(_cached_client):
+            return _cached_client
 
     if params is not None:
-        # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
         handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
         handler_params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**handler_params)
@@ -1280,10 +1351,10 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     _cached_client = cache.get_cache(_cache_key_name)
     if _cached_client:
-        return _cached_client
+        if not _is_sync_client_closed(_cached_client):
+            return _cached_client
 
     if params is not None:
-        # Filter out params that are only used for cache key, not for HTTPHandler.__init__
         handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
         _new_client = HTTPHandler(**handler_params)
     else:
@@ -1295,3 +1366,19 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     )
     return _new_client
+
+
+def _is_async_client_closed(handler: AsyncHTTPHandler) -> bool:
+    """Check if an AsyncHTTPHandler's underlying httpx client is closed."""
+    try:
+        return handler.client.is_closed
+    except Exception:
+        return True
+
+
+def _is_sync_client_closed(handler: HTTPHandler) -> bool:
+    """Check if an HTTPHandler's underlying httpx client is closed."""
+    try:
+        return handler.client.is_closed
+    except Exception:
+        return True

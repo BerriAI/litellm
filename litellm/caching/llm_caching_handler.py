@@ -9,23 +9,23 @@ from .in_memory_cache import InMemoryCache
 
 class LLMClientCache(InMemoryCache):
     def _remove_key(self, key: str) -> None:
-        """Close async clients before evicting them to prevent connection pool leaks."""
-        value = self.cache_dict.get(key)
+        """
+        Remove the key from cache WITHOUT closing the client.
+
+        Closing clients on eviction is unsafe because other parts of the code
+        may still hold references to the evicted client (e.g.,
+        litellm.module_level_aclient stored in the module __dict__, or
+        in-flight requests that obtained the client before eviction).
+
+        Closing such clients causes RuntimeError("Cannot send a request, as
+        the client has been closed.") for all subsequent or in-flight users
+        of that client reference.
+
+        Client cleanup is handled by:
+        - AsyncHTTPHandler.__del__ / HTTPHandler.__del__ (GC-triggered)
+        - atexit handler registered by register_async_client_cleanup()
+        """
         super()._remove_key(key)
-        if value is not None:
-            close_fn = getattr(value, "aclose", None) or getattr(
-                value, "close", None
-            )
-            if close_fn and asyncio.iscoroutinefunction(close_fn):
-                try:
-                    asyncio.get_running_loop().create_task(close_fn())
-                except RuntimeError:
-                    pass
-            elif close_fn and callable(close_fn):
-                try:
-                    close_fn()
-                except Exception:
-                    pass
 
     def update_cache_key_with_event_loop(self, key):
         """
