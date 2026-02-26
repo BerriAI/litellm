@@ -47,8 +47,8 @@ class _BlockingGuardrail(CustomGuardrail):
     def __init__(self):
         super().__init__(
             guardrail_name="test-content-filter",
-            supported_event_hooks=[GuardrailEventHooks.realtime_output_text],
-            event_hook=GuardrailEventHooks.realtime_output_text,
+            supported_event_hooks=[GuardrailEventHooks.post_call],
+            event_hook=GuardrailEventHooks.post_call,
             default_on=True,
         )
 
@@ -71,8 +71,8 @@ class _PassthroughGuardrail(CustomGuardrail):
     def __init__(self):
         super().__init__(
             guardrail_name="test-passthrough",
-            supported_event_hooks=[GuardrailEventHooks.realtime_output_text],
-            event_hook=GuardrailEventHooks.realtime_output_text,
+            supported_event_hooks=[GuardrailEventHooks.post_call],
+            event_hook=GuardrailEventHooks.post_call,
             default_on=True,
         )
 
@@ -287,11 +287,11 @@ class TestOutputGuardrailNoGuardrail:
 
 
 class TestGuardrailEventHook:
-    """realtime_output_text is a valid GuardrailEventHooks enum value."""
+    """post_call runs across all modalities including realtime output."""
 
     def test_hook_exists(self):
         from litellm.types.guardrails import GuardrailEventHooks
 
-        assert hasattr(GuardrailEventHooks, "realtime_output_text")
-        assert GuardrailEventHooks.realtime_output_text == "realtime_output_text"
-        print(f"\n✅ PASS: GuardrailEventHooks.realtime_output_text = {GuardrailEventHooks.realtime_output_text!r}")
+        assert hasattr(GuardrailEventHooks, "post_call")
+        assert GuardrailEventHooks.post_call == "post_call"
+        print(f"\n✅ PASS: GuardrailEventHooks.post_call = {GuardrailEventHooks.post_call!r}")

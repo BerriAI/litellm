@@ -214,7 +214,7 @@ class RealTimeStreaming:
             executor.submit(self.logging_obj.success_handler(self.messages))
 
     def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime_input_transcription."""
+        """Return True if any callback is registered for pre_call (runs across all modalities)."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
@@ -222,7 +222,7 @@ class RealTimeStreaming:
             isinstance(cb, CustomGuardrail)
             and cb.should_run_guardrail(
                 data={},
-                event_type=GuardrailEventHooks.realtime_input_transcription,
+                event_type=GuardrailEventHooks.pre_call,
             )
             for cb in litellm.callbacks
         )
@@ -247,7 +247,7 @@ class RealTimeStreaming:
             if (
                 callback.should_run_guardrail(
                     data={"transcript": transcript},
-                    event_type=GuardrailEventHooks.realtime_input_transcription,
+                    event_type=GuardrailEventHooks.pre_call,
                 )
                 is not True
             ):
@@ -302,7 +302,7 @@ class RealTimeStreaming:
         return False
 
     def _has_realtime_output_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime_output_text."""
+        """Return True if any callback is registered for post_call (runs across all modalities)."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
@@ -310,7 +310,7 @@ class RealTimeStreaming:
             isinstance(cb, CustomGuardrail)
             and cb.should_run_guardrail(
                 data={},
-                event_type=GuardrailEventHooks.realtime_output_text,
+                event_type=GuardrailEventHooks.post_call,
             )
             for cb in litellm.callbacks
         )
@@ -332,7 +332,7 @@ class RealTimeStreaming:
             if (
                 callback.should_run_guardrail(
                     data={"text": text},
-                    event_type=GuardrailEventHooks.realtime_output_text,
+                    event_type=GuardrailEventHooks.post_call,
                 )
                 is not True
             ):
