@@ -383,7 +383,7 @@ async def test_realtime_guardrail_blocks_prompt_injection():
 
     guardrail = PromptInjectionGuardrail(
         guardrail_name="test_injection_guard",
-        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
     litellm.callbacks = [guardrail]
@@ -466,7 +466,7 @@ async def test_realtime_guardrail_allows_clean_transcript():
 
     guardrail = PromptInjectionGuardrail(
         guardrail_name="test_injection_guard",
-        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
     litellm.callbacks = [guardrail]
@@ -530,7 +530,7 @@ async def test_realtime_session_created_injects_create_response_false():
 
     guardrail = DummyGuardrail(
         guardrail_name="dummy",
-        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
     litellm.callbacks = [guardrail]

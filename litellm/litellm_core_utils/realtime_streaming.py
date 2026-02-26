@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -68,6 +68,8 @@ class RealTimeStreaming:
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
+        # Buffer for response.text.delta events pending output-guardrail check
+        self._pending_output_text_events: List[str] = []
 
     def _should_store_message(
         self,
@@ -145,7 +147,7 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: dict) -> None:
+    def _collect_user_input_from_backend_event(self, event_obj: Any) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type = event_obj.get("type", "")
@@ -162,7 +164,7 @@ class RealTimeStreaming:
             pass
 
     def _collect_tool_calls_from_response_done(
-        self, event_obj: dict
+        self, event_obj: Any
     ) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
@@ -212,7 +214,7 @@ class RealTimeStreaming:
             executor.submit(self.logging_obj.success_handler(self.messages))
 
     def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime_input_transcription."""
+        """Return True if any callback is registered for pre_call (runs across all modalities)."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
@@ -220,7 +222,7 @@ class RealTimeStreaming:
             isinstance(cb, CustomGuardrail)
             and cb.should_run_guardrail(
                 data={},
-                event_type=GuardrailEventHooks.realtime_input_transcription,
+                event_type=GuardrailEventHooks.pre_call,
             )
             for cb in litellm.callbacks
         )
@@ -245,7 +247,7 @@ class RealTimeStreaming:
             if (
                 callback.should_run_guardrail(
                     data={"transcript": transcript},
-                    event_type=GuardrailEventHooks.realtime_input_transcription,
+                    event_type=GuardrailEventHooks.pre_call,
                 )
                 is not True
             ):
@@ -298,6 +300,110 @@ class RealTimeStreaming:
                 )
                 return True
         return False
+
+    def _has_realtime_output_guardrails(self) -> bool:
+        """Return True if any callback is registered for post_call (runs across all modalities)."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return any(
+            isinstance(cb, CustomGuardrail)
+            and cb.should_run_guardrail(
+                data={},
+                event_type=GuardrailEventHooks.post_call,
+            )
+            for cb in litellm.callbacks
+        )
+
+    async def run_realtime_output_guardrails(
+        self, text: str
+    ) -> Tuple[bool, str]:
+        """
+        Run registered guardrails on completed response text.
+
+        Returns (True, error_msg) if blocked, (False, "") if clean.
+        """
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        for callback in litellm.callbacks:
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            if (
+                callback.should_run_guardrail(
+                    data={"text": text},
+                    event_type=GuardrailEventHooks.post_call,
+                )
+                is not True
+            ):
+                continue
+            try:
+                await callback.apply_guardrail(
+                    inputs={"texts": [text], "images": []},
+                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    input_type="response",
+                )
+            except Exception as e:
+                is_guardrail_block = hasattr(e, "status_code") or isinstance(
+                    e, ValueError
+                )
+                if not is_guardrail_block:
+                    verbose_logger.exception(
+                        "[realtime output guardrail] unexpected error: %s", e
+                    )
+                    raise
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, dict):
+                    safe_msg = detail.get("error") or str(e)
+                elif detail is not None:
+                    safe_msg = str(detail)
+                else:
+                    safe_msg = (
+                        str(e) or "Response blocked by content filter."
+                    )
+                verbose_logger.warning(
+                    "[realtime output guardrail] BLOCKED output text: %r",
+                    text[:80],
+                )
+                return True, safe_msg
+        return False, ""
+
+    async def _send_output_text_done(
+        self, event: Any, event_str: str
+    ) -> None:
+        """
+        Handle a response.text.done event through the output guardrail.
+
+        If blocked: discards buffered deltas, sends replacement error delta+done.
+        If clean: flushes buffered deltas then forwards the done event.
+        """
+        full_text = event.get("text", "")
+        blocked_out, error_msg = await self.run_realtime_output_guardrails(full_text)
+        if blocked_out:
+            self._pending_output_text_events.clear()
+            error_delta_str = json.dumps(
+                {
+                    "type": "response.text.delta",
+                    "delta": error_msg,
+                    "content_index": event.get("content_index", 0),
+                    "item_id": event.get("item_id", ""),
+                    "output_index": event.get("output_index", 0),
+                    "response_id": event.get("response_id", ""),
+                }
+            )
+            error_done = dict(event)
+            error_done["text"] = error_msg
+            error_done_str = json.dumps(error_done)
+            self.store_message(error_done_str)
+            await self.websocket.send_text(error_delta_str)
+            await self.websocket.send_text(error_done_str)
+        else:
+            for pending in self._pending_output_text_events:
+                self.store_message(pending)
+                await self.websocket.send_text(pending)
+            self._pending_output_text_events.clear()
+            self.store_message(event_str)
+            await self.websocket.send_text(event_str)
 
     async def _handle_provider_config_message(self, raw_response) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
@@ -366,6 +472,17 @@ class RealTimeStreaming:
                         json.dumps({"type": "response.create"})
                     )
                 continue
+            ## OUTPUT GUARDRAIL: buffer text deltas; check on text done
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.text.delta"
+                and self._has_realtime_output_guardrails()
+            ):
+                self._pending_output_text_events.append(event_str)
+                continue
+            if isinstance(event, dict) and event.get("type") == "response.text.done":
+                await self._send_output_text_done(event, event_str)
+                continue
             ## LOGGING
             self.store_message(event_str)
             await self.websocket.send_text(event_str)
@@ -420,8 +537,18 @@ class RealTimeStreaming:
                         json.dumps({"type": "response.create"})
                     )
                 return True
+
+            if event_obj.get("type") == "response.text.delta":
+                if self._has_realtime_output_guardrails():
+                    self._pending_output_text_events.append(raw_response)
+                    return True
+
+            if event_obj.get("type") == "response.text.done":
+                await self._send_output_text_done(event_obj, raw_response)
+                return True
+
         except (json.JSONDecodeError, AttributeError):
-            pass
+            verbose_logger.debug("[realtime] skipped malformed backend message")
         return False
 
     async def backend_to_client_send_messages(self):
