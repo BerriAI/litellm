@@ -94,6 +94,9 @@ class CustomGuardrail(CustomLogger):
         mask_response_content: bool = False,
         violation_message_template: Optional[str] = None,
         experimental_use_latest_role_message_only: bool = False,
+        end_session_after_n_fails: Optional[int] = None,
+        on_violation: Optional[str] = None,
+        realtime_violation_message: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -106,6 +109,9 @@ class CustomGuardrail(CustomLogger):
             default_on: If True, the guardrail will be run by default on all requests
             mask_request_content: If True, the guardrail will mask the request content
             mask_response_content: If True, the guardrail will mask the response content
+            end_session_after_n_fails: For /v1/realtime sessions, end the session after this many violations
+            on_violation: For /v1/realtime sessions, 'warn' or 'end_session'
+            realtime_violation_message: Message the bot speaks aloud when a /v1/realtime guardrail fires
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -119,6 +125,9 @@ class CustomGuardrail(CustomLogger):
         self.experimental_use_latest_role_message_only: bool = (
             experimental_use_latest_role_message_only
         )
+        self.end_session_after_n_fails: Optional[int] = end_session_after_n_fails
+        self.on_violation: Optional[str] = on_violation
+        self.realtime_violation_message: Optional[str] = realtime_violation_message
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks

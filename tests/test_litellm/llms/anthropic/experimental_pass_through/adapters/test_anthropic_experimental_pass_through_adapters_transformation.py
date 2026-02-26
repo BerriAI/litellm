@@ -1813,6 +1813,51 @@ def test_translate_openai_response_to_anthropic_input_tokens_no_cache():
     assert anthropic_response["usage"]["output_tokens"] == 50
 
 
+def test_translate_openai_response_to_anthropic_cache_tokens_from_prompt_tokens_details():
+    """
+    OpenAI/Azure providers set prompt_tokens_details.cached_tokens but not
+    _cache_read_input_tokens.  The adapter should populate cache_read_input_tokens
+    from prompt_tokens_details.cached_tokens directly.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    # OpenAI-style usage: only prompt_tokens_details, no cache_read_input_tokens kwarg
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="Test response",
+                ),
+            )
+        ],
+        model="gpt-4o-2024-08-06",
+        usage=usage,
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=response,
+        tool_name_mapping=None,
+    )
+
+    assert anthropic_response["usage"]["input_tokens"] == 70
+    assert anthropic_response["usage"]["output_tokens"] == 50
+    assert anthropic_response["usage"]["cache_read_input_tokens"] == 30
+
+
 # =====================================================================
 # Web Search Tool Transformation Tests
 # =====================================================================

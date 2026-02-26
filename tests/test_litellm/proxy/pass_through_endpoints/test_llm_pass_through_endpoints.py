@@ -224,6 +224,7 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -323,6 +324,7 @@ class TestVertexAIPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-creds",
@@ -905,6 +907,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
 
         # Mock request
         mock_request = Mock()
+        mock_request.state = None  # Prevent Mock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.headers = {
             "Authorization": "Bearer test-key",
@@ -1479,10 +1482,11 @@ class TestForwardHeaders:
 
         # Create a mock request with custom headers
         mock_request = MagicMock(spec=Request)
+        mock_request.state = None  # Prevent MagicMock from returning a truthy _cached_headers
         mock_request.method = "POST"
         mock_request.url = MagicMock()
         mock_request.url.path = "/test/endpoint"
-        
+
         # User headers that should be forwarded
         user_headers = {
             "x-custom-header": "custom-value",

@@ -15,7 +15,7 @@ import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
-import { allEndUsersCall, keyInfoV1Call, keyListCall, uiSpendLogsCall } from "../networking";
+import { allEndUsersCall, keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
@@ -341,7 +341,7 @@ export default function SpendLogsTable({
         const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
         return {
           ...log,
-          duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
+          request_duration_ms: log.request_duration_ms,
           session_llm_count: sessionComposition?.llm ?? undefined,
           session_mcp_count: sessionComposition?.mcp ?? undefined,
           onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
@@ -943,7 +943,7 @@ export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onO
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Duration:</span>
-              <span>{row.original.duration} s.</span>
+              <span>{row.original.request_duration_ms != null ? (row.original.request_duration_ms / 1000).toFixed(3) : "-"} s.</span>
             </div>
             {row.original.metadata?.litellm_overhead_time_ms !== undefined && (
               <div className="flex">

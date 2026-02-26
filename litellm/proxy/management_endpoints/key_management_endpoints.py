@@ -1070,6 +1070,7 @@ async def generate_key_fn(
     - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
     - user_id: Optional[str] - The user id of the key
+    - agent_id: Optional[str] - The agent id associated with the key.
     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
@@ -1749,6 +1750,7 @@ async def update_key_fn(
     - key_alias: Optional[str] - User-friendly key alias
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
+    - agent_id: Optional[str] - The agent id associated with the key.
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
@@ -2535,6 +2537,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     user_id: Optional[str] = None,
     user_alias: Optional[str] = None,
     team_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     user_email: Optional[str] = None,
     user_role: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
@@ -2668,6 +2671,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "max_budget": key_max_budget,
             "user_id": user_id,
             "team_id": team_id,
+            "agent_id": agent_id,
             "project_id": project_id,
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
