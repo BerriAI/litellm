@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import List
 
 import litellm
@@ -23,10 +24,15 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
     AgentCreateInfo,
     ProviderCreateInfo,
     PublicModelHubInfo,
+    SupportedEndpointInfo,
+    SupportedEndpointsResponse,
+    SupportedProviderInfo,
 )
 from litellm.types.utils import LlmProviders
 
 router = APIRouter()
+
+_supported_endpoints_cache: SupportedEndpointsResponse | None = None
 
 
 @router.get(
@@ -223,6 +229,68 @@ async def get_litellm_blog_posts():
 
     posts = [BlogPost(**p) for p in posts_data[:5]]
     return BlogPostsResponse(posts=posts)
+
+
+@router.get(
+    "/public/supported_endpoints",
+    tags=["public", "providers"],
+    response_model=SupportedEndpointsResponse,
+)
+async def get_provider_supported_endpoints() -> SupportedEndpointsResponse:
+    """
+    Return all supported endpoints and which providers support them.
+
+    Reads from provider_endpoints_support.json at the repo root.
+    Result is cached for the lifetime of the process.
+    """
+    global _supported_endpoints_cache
+    if _supported_endpoints_cache is not None:
+        return _supported_endpoints_cache
+
+    provider_endpoints_support_path = os.path.join(
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        ),
+        "provider_endpoints_support.json",
+    )
+
+    with open(provider_endpoints_support_path, "r") as f:
+        data = json.load(f)
+
+    schema_endpoints = data["_schema"]["provider_slug"]["endpoints"]
+
+    endpoints = []
+    for key, description in schema_endpoints.items():
+        path_match = re.search(r"(/[\w/{}.()*-]+)", description)
+        endpoint_path = path_match.group(1) if path_match else f"/{key}"
+        display_name = key.replace("_", " ").title()
+        endpoints.append(
+            SupportedEndpointInfo(
+                key=key,
+                display_name=display_name,
+                endpoint=endpoint_path,
+            )
+        )
+
+    providers = []
+    for slug, provider_data in data["providers"].items():
+        supported = [
+            endpoint_key
+            for endpoint_key, supported in provider_data["endpoints"].items()
+            if supported
+        ]
+        providers.append(
+            SupportedProviderInfo(
+                slug=slug,
+                display_name=provider_data["display_name"],
+                supported=supported,
+            )
+        )
+
+    _supported_endpoints_cache = SupportedEndpointsResponse(
+        endpoints=endpoints, providers=providers
+    )
+    return _supported_endpoints_cache
 
 
 @router.get(
