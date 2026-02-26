@@ -3548,39 +3548,61 @@ class ProxyConfig:
             return 0
 
         added_models = 0
+        failed_models = 0
         ## ADD MODEL LOGIC
         for m in db_models:
-            _litellm_params = m.litellm_params
-            if isinstance(_litellm_params, dict):
-                # decrypt values
-                for k, v in _litellm_params.items():
-                    if isinstance(v, str):
-                        # decrypt value - returns original value if decryption fails or no key is set
-                        _value = decrypt_value_helper(
-                            value=v, key=k, return_original_value=True
-                        )
-                        _litellm_params[k] = _value
-                _litellm_params = LiteLLM_Params(**_litellm_params)
+            try:
+                _litellm_params = m.litellm_params
+                if isinstance(_litellm_params, dict):
+                    # decrypt values
+                    for k, v in _litellm_params.items():
+                        if isinstance(v, str):
+                            # decrypt value - returns original value if decryption fails or no key is set
+                            _value = decrypt_value_helper(
+                                value=v, key=k, return_original_value=True
+                            )
+                            _litellm_params[k] = _value
+                    _litellm_params = LiteLLM_Params(**_litellm_params)
 
-            else:
-                verbose_proxy_logger.error(
-                    f"Invalid model added to proxy db. Invalid litellm params. litellm_params={_litellm_params}"
-                )
-                continue  # skip to next model
-            _model_info = self.get_model_info_with_id(
-                model=m, db_model=True
-            )  ## 👈 FLAG = True for db_models
+                else:
+                    verbose_proxy_logger.warning(
+                        "Skipping model_name=%s, model_id=%s: litellm_params is not a dict (type=%s)",
+                        getattr(m, "model_name", "unknown"),
+                        getattr(m, "model_id", "unknown"),
+                        type(_litellm_params).__name__,
+                    )
+                    failed_models += 1
+                    continue  # skip to next model
+                _model_info = self.get_model_info_with_id(
+                    model=m, db_model=True
+                )  ## 👈 FLAG = True for db_models
 
-            added = llm_router.upsert_deployment(
-                deployment=Deployment(
-                    model_name=m.model_name,
-                    litellm_params=_litellm_params,
-                    model_info=_model_info,
+                added = llm_router.upsert_deployment(
+                    deployment=Deployment(
+                        model_name=m.model_name,
+                        litellm_params=_litellm_params,
+                        model_info=_model_info,
+                    )
                 )
+
+                if added is not None:
+                    added_models += 1
+            except Exception as e:
+                failed_models += 1
+                verbose_proxy_logger.warning(
+                    "Failed to add deployment model_name=%s, model_id=%s to router: %s",
+                    getattr(m, "model_name", "unknown"),
+                    getattr(m, "model_id", "unknown"),
+                    str(e),
+                )
+
+        if failed_models > 0:
+            verbose_proxy_logger.warning(
+                "%d out of %d DB models failed to load into the router. "
+                "Check warnings above for details.",
+                failed_models,
+                len(db_models),
             )
-
-            if added is not None:
-                added_models += 1
         return added_models
 
     def decrypt_model_list_from_db(self, new_models: list) -> list:
