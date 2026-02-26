@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Dict,
     List,
     Literal,
@@ -26,6 +25,7 @@ from fastapi import HTTPException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -37,7 +37,6 @@ from litellm.types.utils import (
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
-    ModelResponseStream,
 )
 
 if TYPE_CHECKING:
@@ -538,6 +537,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
             detection_info={"language": language},
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

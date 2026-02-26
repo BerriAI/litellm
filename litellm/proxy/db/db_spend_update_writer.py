@@ -312,7 +312,7 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient],
         user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
-        payload_copy: dict,
+        payload_copy: SpendLogsPayload,
         request_tags: Optional[Any],
     ):
         """
