@@ -1662,7 +1662,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1671,6 +1671,61 @@ def test_max_effort_rejected_for_opus_45():
             litellm_params={},
             headers={}
         )
+
+
+def test_max_effort_rejected_for_sonnet_46():
+    """Test that effort='max' is rejected for Sonnet 4.6 -- max is Opus 4.6 only.
+
+    Fixes https://github.com/BerriAI/litellm/issues/22214
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    sonnet_variants = [
+        "claude-sonnet-4-6-20260205",
+        "claude-sonnet-4.6",
+        "claude-sonnet_4_6",
+    ]
+    for model in sonnet_variants:
+        with pytest.raises(
+            ValueError,
+            match="effort='max' is only supported by Claude Opus 4.6",
+        ):
+            optional_params = {"output_config": {"effort": "max"}}
+            config.transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+
+
+def test_max_effort_accepted_for_opus_46():
+    """Test that effort='max' is accepted for all Opus 4.6 name variants.
+
+    Fixes https://github.com/BerriAI/litellm/issues/22214
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    opus_variants = [
+        "claude-opus-4-6-20260205",
+        "claude-opus-4.6",
+        "claude-opus_4_6",
+    ]
+    for model in opus_variants:
+        optional_params = {"output_config": {"effort": "max"}}
+        result = config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert result["output_config"]["effort"] == "max"
 
 
 def test_effort_with_other_features():
