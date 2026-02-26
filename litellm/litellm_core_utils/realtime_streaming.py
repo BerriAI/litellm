@@ -68,6 +68,8 @@ class RealTimeStreaming:
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
+        # Violation counter for end_session_after_n_fails support
+        self._violation_count: int = 0
 
     def _should_store_message(
         self,
@@ -293,10 +295,13 @@ class RealTimeStreaming:
                     safe_msg = str(detail)
                 else:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+
+                # Use realtime_violation_message if configured; fall back to guardrail error text.
+                spoken_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
+
                 # Cancel any in-flight response before speaking the warning.
-                # This handles the race where create_response fired before we could intercept.
                 await self._send_to_backend(json.dumps({"type": "response.cancel"}))
-                # Ask the model to speak the warning — TTS audio plays naturally in the client
+                # Ask the model to speak the violation message — TTS plays naturally in the client.
                 await self._send_to_backend(
                     json.dumps(
                         {
@@ -304,15 +309,32 @@ class RealTimeStreaming:
                             "response": {
                                 "modalities": ["text", "audio"],
                                 "instructions": (
-                                    f"Say exactly and only: \"{safe_msg}\". "
+                                    f"Say exactly and only: \"{spoken_msg}\". "
                                     "Do not add anything else."
                                 ),
                             },
                         }
                     )
                 )
+
+                self._violation_count += 1
+                end_session_after: Optional[int] = getattr(
+                    callback, "end_session_after_n_fails", None
+                )
+                should_end = getattr(callback, "on_violation", None) == "end_session" or (
+                    end_session_after is not None
+                    and self._violation_count >= end_session_after
+                )
+                if should_end:
+                    verbose_logger.warning(
+                        "[realtime guardrail] ending session after violation %d",
+                        self._violation_count,
+                    )
+                    await self.backend_ws.close()
+
                 verbose_logger.warning(
-                    "[realtime guardrail] BLOCKED transcript: %r",
+                    "[realtime guardrail] BLOCKED transcript (violation %d): %r",
+                    self._violation_count,
                     transcript[:80],
                 )
                 return True
