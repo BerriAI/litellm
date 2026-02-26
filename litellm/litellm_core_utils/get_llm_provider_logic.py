@@ -526,6 +526,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.PerplexityChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "zaps":
+        api_base = (
+            api_base
+            or get_secret("ZAPS_API_BASE")
+            or "https://api.zaps.ai/v1"
+        )
+        dynamic_api_key = api_key or get_secret_str("ZAPS_API_KEY")
     elif custom_llm_provider == "aiohttp_openai":
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
