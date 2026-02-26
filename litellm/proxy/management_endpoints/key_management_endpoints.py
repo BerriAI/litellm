@@ -2302,7 +2302,9 @@ async def delete_key_fn(
                 param="keys",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        verbose_proxy_logger.debug(f"/key/delete - deletion_response={deletion_response}")
+        verbose_proxy_logger.debug(
+            f"/key/delete - deletion_response={deletion_response}"
+        )
 
         actually_deleted = deletion_response.get("deleted_keys", [])
         failed_tokens = deletion_response.get("failed_tokens", [])
@@ -3035,7 +3037,10 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
-    return {"deleted_keys": deleted_tokens, "failed_tokens": failed_tokens}, _keys_being_deleted
+    return {
+        "deleted_keys": deleted_tokens,
+        "failed_tokens": failed_tokens,
+    }, _keys_being_deleted
 
 
 def _transform_verification_tokens_to_deleted_records(
@@ -3050,7 +3055,14 @@ def _transform_verification_tokens_to_deleted_records(
     deleted_at = datetime.now(timezone.utc)
     records = []
     for key in keys:
-        key_payload = key.model_dump()
+        # Convert to dict (Prisma models may not have model_dump; support Pydantic v1/v2)
+        try:
+            key_payload = key.model_dump()
+        except Exception:
+            try:
+                key_payload = key.dict()
+            except Exception:
+                key_payload = dict(key)
         deleted_record = LiteLLM_DeletedVerificationToken(
             **key_payload,
             deleted_at=deleted_at,
@@ -3138,7 +3150,7 @@ async def delete_key_aliases(
     )
 
 
-async def _rotate_master_key( # noqa: PLR0915
+async def _rotate_master_key(  # noqa: PLR0915
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     current_master_key: str,
@@ -3353,6 +3365,8 @@ async def _insert_deprecated_key(
             "Failed to insert deprecated key for grace period: %s",
             deprecated_err,
         )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -3915,8 +3929,7 @@ def _get_member_team_ids_from_objects(
         team.team_id
         for team in team_objects
         if any(
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
+            member.user_id is not None and member.user_id == user_api_key_dict.user_id
             for member in team.members_with_roles
         )
     ]
