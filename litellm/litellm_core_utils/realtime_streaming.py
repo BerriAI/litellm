@@ -43,6 +43,7 @@ class RealTimeStreaming:
         provider_config: Optional[BaseRealtimeConfig] = None,
         model: str = "",
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[Dict] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -68,6 +69,7 @@ class RealTimeStreaming:
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
+        self.request_data: Dict = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
 
@@ -233,14 +235,40 @@ class RealTimeStreaming:
             await self.backend_ws.send(message)
 
     def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime_input_transcription."""
+        """Return True if any callback is registered for realtime guardrail event types."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        _realtime_event_types = [
+            GuardrailEventHooks.realtime_input_transcription,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+        return any(
+            isinstance(cb, CustomGuardrail)
+            and any(
+                cb.should_run_guardrail(
+                    data=self.request_data,
+                    event_type=et,
+                )
+                for et in _realtime_event_types
+            )
+            for cb in litellm.callbacks
+        )
+
+    def _has_audio_transcription_guardrails(self) -> bool:
+        """Return True if any callback needs to run on audio transcriptions (VAD path).
+
+        When this returns True, we inject a session.update to disable the LLM's
+        auto-response so the guardrail can gate it first.
+        """
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
         return any(
             isinstance(cb, CustomGuardrail)
             and cb.should_run_guardrail(
-                data={},
+                data=self.request_data,
                 event_type=GuardrailEventHooks.realtime_input_transcription,
             )
             for cb in litellm.callbacks
@@ -260,17 +288,25 @@ class RealTimeStreaming:
         from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.types.guardrails import GuardrailEventHooks
 
+        _realtime_event_types = [
+            GuardrailEventHooks.realtime_input_transcription,
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+        _check_data = {**self.request_data, "transcript": transcript}
+        _already_run: set = set()
+
         for callback in litellm.callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
-            if (
-                callback.should_run_guardrail(
-                    data={"transcript": transcript},
-                    event_type=GuardrailEventHooks.realtime_input_transcription,
-                )
-                is not True
+            if id(callback) in _already_run:
+                continue
+            if not any(
+                callback.should_run_guardrail(data=_check_data, event_type=et)
+                for et in _realtime_event_types
             ):
                 continue
+            _already_run.add(id(callback))
             try:
                 await callback.apply_guardrail(
                     inputs={"texts": [transcript], "images": []},
@@ -297,21 +333,17 @@ class RealTimeStreaming:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
 
                 # Use realtime_violation_message if configured; fall back to guardrail error text.
-                spoken_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
+                error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
 
-                # Cancel any in-flight response before speaking the warning.
-                await self._send_to_backend(json.dumps({"type": "response.cancel"}))
-                # Ask the model to speak the violation message — TTS plays naturally in the client.
-                await self._send_to_backend(
+                # Return the error directly to the WebSocket consumer.
+                await self.websocket.send_text(
                     json.dumps(
                         {
-                            "type": "response.create",
-                            "response": {
-                                "modalities": ["text", "audio"],
-                                "instructions": (
-                                    f"Say exactly and only: \"{spoken_msg}\". "
-                                    "Do not add anything else."
-                                ),
+                            "type": "error",
+                            "error": {
+                                "type": "guardrail_violation",
+                                "message": error_msg,
+                                "code": "content_policy_violation",
                             },
                         }
                     )
@@ -371,24 +403,24 @@ class RealTimeStreaming:
             else [transformed_response]
         )
         for event in events:
-            ## GUARDRAIL: inject create_response=false on session.created
-            if isinstance(event, dict) and event.get("type") == "session.created":
-                if self._has_realtime_guardrails():
-                    await self._send_to_backend(
-                        json.dumps(
-                            {
-                                "type": "session.update",
-                                "session": {
-                                    "turn_detection": {
-                                        "type": "server_vad",
-                                        "create_response": False,
-                                    }
-                                },
-                            }
-                        )
-                    )
-        for event in events:
             event_str = json.dumps(event)
+            ## For audio/VAD guardrail path: forward session.created first, then inject.
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "session.created"
+                and self._has_audio_transcription_guardrails()
+            ):
+                self.store_message(event_str)
+                await self.websocket.send_text(event_str)
+                await self._send_to_backend(
+                    json.dumps(
+                        {
+                            "type": "session.update",
+                            "session": {"turn_detection": {"create_response": False}},
+                        }
+                    )
+                )
+                continue
             ## GUARDRAIL: run on transcription events in provider_config path too
             if (
                 isinstance(event, dict)
@@ -419,27 +451,26 @@ class RealTimeStreaming:
         try:
             event_obj = json.loads(raw_response)
 
-            if event_obj.get("type") == "session.created":
-                # If any realtime guardrails are registered, proactively
-                # set create_response=false so the LLM never auto-responds
-                # before our guardrail has a chance to run.
-                if self._has_realtime_guardrails():
-                    await self._send_to_backend(
-                        json.dumps(
-                            {
-                                "type": "session.update",
-                                "session": {
-                                    "turn_detection": {
-                                        "type": "server_vad",
-                                        "create_response": False,
-                                    }
-                                },
-                            }
-                        )
+            # For audio/VAD guardrail path: once the session is ready, tell the backend
+            # not to auto-respond after VAD detects end-of-speech.  We send the
+            # session.created to the client FIRST so the client is always in sync, then
+            # inject the session.update so a potential error from the backend doesn't
+            # arrive before the client sees session.created.
+            if (
+                event_obj.get("type") == "session.created"
+                and self._has_audio_transcription_guardrails()
+            ):
+                self.store_message(raw_response)
+                await self.websocket.send_text(raw_response)
+                await self._send_to_backend(
+                    json.dumps(
+                        {
+                            "type": "session.update",
+                            "session": {"turn_detection": {"create_response": False}},
+                        }
                     )
-                    verbose_logger.debug(
-                        "[realtime guardrail] injected create_response=false into session"
-                    )
+                )
+                return True
 
             if (
                 event_obj.get("type")
