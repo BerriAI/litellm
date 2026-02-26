@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAllKeyAliases, fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
+import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
@@ -131,16 +131,6 @@ export function useLogFilterLogic({
   useEffect(() => {
     return () => debouncedSearch.cancel();
   }, [debouncedSearch]);
-
-  const queryAllKeysQuery = useQuery({
-    queryKey: ["allKeys"],
-    queryFn: async () => {
-      if (!accessToken) throw new Error("Access token required");
-      return await fetchAllKeyAliases(accessToken);
-    },
-    enabled: !!accessToken,
-  });
-  const allKeyAliases = queryAllKeysQuery.data || [];
 
   // Determine when backend filters are active (server-side filtering)
   const hasBackendFilters = useMemo(
@@ -310,7 +300,6 @@ export function useLogFilterLogic({
     filters,
     filteredLogs,
     hasBackendFilters,
-    allKeyAliases,
     allTeams,
     handleFilterChange,
     handleFilterReset,
