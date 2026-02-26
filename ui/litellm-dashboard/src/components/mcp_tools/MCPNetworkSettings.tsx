@@ -131,7 +131,8 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           allowClear
         />
         <p className="text-xs text-gray-400 mt-2">
-          Enter CIDR ranges (e.g., 10.0.0.0/8). When empty, standard private IP ranges are used.
+          Enter CIDR ranges (e.g., <code>10.0.0.0/8</code>). When empty, standard private IP ranges are used.
+          Use <code>0.0.0.0/0</code> to allow all IPv4 addresses.
         </p>
       </Card>
 

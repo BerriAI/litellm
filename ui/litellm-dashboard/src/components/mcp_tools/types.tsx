@@ -138,6 +138,7 @@ export interface MCPToolsViewerProps {
   userID: string | null;
   serverAlias?: string | null;
   extraHeaders?: string[] | null;
+  availableOnPublicInternet?: boolean;
 }
 
 export interface MCPServer {

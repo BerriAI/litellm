@@ -1,12 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
-import { listMCPTools, callMCPTool } from "../networking";
+import { listMCPTools, callMCPTool, fetchMCPClientIp } from "../networking";
 
 import { Card, Title, Text } from "@tremor/react";
-import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined } from "@ant-design/icons";
-import { Input, Button as AntdButton } from "antd";
+import { RobotOutlined, ToolOutlined, SearchOutlined, KeyOutlined, GlobalOutlined } from "@ant-design/icons";
+import { Input, Button as AntdButton, Alert } from "antd";
 
 const MCPToolsViewer = ({
   serverId,
@@ -16,11 +16,19 @@ const MCPToolsViewer = ({
   userID,
   serverAlias,
   extraHeaders,
+  availableOnPublicInternet,
 }: MCPToolsViewerProps) => {
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
+  const [clientIp, setClientIp] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (accessToken) {
+      fetchMCPClientIp(accessToken).then(setClientIp).catch(() => setClientIp(null));
+    }
+  }, [accessToken]);
   
   // State for passthrough headers
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
@@ -223,8 +231,57 @@ const MCPToolsViewer = ({
                   </div>
                 )}
 
+                {/* IP Access Denied State */}
+                {mcpToolsResponse?.error === "ip_access_denied" && !isLoadingTools && (
+                  <Alert
+                    message="Not Available on Public Internet"
+                    description={
+                      <div className="text-xs space-y-2">
+                        <p>This MCP server is restricted to internal/private networks only.</p>
+                        <p>
+                          <GlobalOutlined className="mr-1" />
+                          Your current IP: <strong>{mcpToolsResponse.client_ip || clientIp || "unknown"}</strong>
+                        </p>
+                        <p className="text-gray-500">
+                          This IP is detected as a public address. To access this server,
+                          connect from an internal network or ask an admin to update the
+                          Network Settings.
+                        </p>
+                      </div>
+                    }
+                    type="warning"
+                    showIcon
+                    icon={<GlobalOutlined />}
+                    className="mb-3"
+                  />
+                )}
+
+                {/* Internal-only server info (shown when tools loaded OK but server is not public) */}
+                {availableOnPublicInternet === false && mcpToolsResponse?.error !== "ip_access_denied" && !isLoadingTools && (
+                  <Alert
+                    message="Internal Network Only"
+                    description={
+                      <div className="text-xs space-y-1">
+                        <p>
+                          This MCP server is not available on the public internet.
+                          {clientIp && (
+                            <span> Your current IP: <strong>{clientIp}</strong>.</span>
+                          )}
+                        </p>
+                        <p className="text-gray-500">
+                          Users connecting from public IPs will not be able to access this server&apos;s tools.
+                        </p>
+                      </div>
+                    }
+                    type="info"
+                    showIcon
+                    icon={<GlobalOutlined />}
+                    className="mb-3"
+                  />
+                )}
+
                 {/* Error State */}
-                {mcpToolsResponse?.error && !isLoadingTools && !toolsData.length && (
+                {mcpToolsResponse?.error && mcpToolsResponse.error !== "ip_access_denied" && !isLoadingTools && !toolsData.length && (
                   <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
                     <p className="font-medium">Error: {mcpToolsResponse.message}</p>
                   </div>

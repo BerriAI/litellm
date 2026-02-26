@@ -293,6 +293,19 @@ if MCP_AVAILABLE:
             # If server_id is specified, only query that specific server
             if server_id:
                 if server_id not in allowed_server_ids:
+                    if server_id in allowed_server_ids_set:
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "ip_access_denied",
+                                "message": (
+                                    f"This MCP server is not available on the public internet. "
+                                    f"Your current IP ({_rest_client_ip}) is detected as a public IP address. "
+                                    f"This server can only be accessed from internal/private networks."
+                                ),
+                                "client_ip": _rest_client_ip,
+                            },
+                        )
                     raise HTTPException(
                         status_code=403,
                         detail={
@@ -330,6 +343,21 @@ if MCP_AVAILABLE:
                     }
             else:
                 if not allowed_server_ids:
+                    if allowed_server_ids_set:
+                        filtered_count = len(allowed_server_ids_set)
+                        raise HTTPException(
+                            status_code=403,
+                            detail={
+                                "error": "ip_access_denied",
+                                "message": (
+                                    f"Filtered out {filtered_count} MCP server(s) because your IP address "
+                                    f"({_rest_client_ip}) is detected as a public IP. "
+                                    f"These servers can only be accessed from internal/private networks."
+                                ),
+                                "client_ip": _rest_client_ip,
+                                "filtered_count": filtered_count,
+                            },
+                        )
                     raise HTTPException(
                         status_code=403,
                         detail={

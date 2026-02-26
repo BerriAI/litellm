@@ -7282,6 +7282,21 @@ export const listMCPTools = async (
     console.log("Fetched MCP tools response:", data);
 
     if (!response.ok) {
+      // Check for structured error detail (e.g. IP-based access denial)
+      const detail = data.detail || data;
+      if (detail.error === "ip_access_denied") {
+        return {
+          tools: [],
+          error: "ip_access_denied",
+          message: detail.message || "Access denied due to IP restrictions",
+          client_ip: detail.client_ip || null,
+          filtered_count: detail.filtered_count || null,
+          stack_trace: null,
+        };
+      }
+      if (detail.error && detail.message) {
+        throw new Error(detail.message);
+      }
       // If the server returned an error response, use it
       if (data.error && data.message) {
         throw new Error(data.message);

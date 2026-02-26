@@ -26,17 +26,31 @@ class IPAddressUtils:
         ipaddress.ip_network("fc00::/7"),
     ]
 
+    _BARE_IP_WILDCARD_MAP = {
+        "0.0.0.0": "0.0.0.0/0",
+        "::": "::/0",
+    }
+
     @staticmethod
     def parse_internal_networks(
         configured_ranges: Optional[List[str]],
     ) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
-        """Parse configured CIDR ranges into network objects, falling back to defaults."""
+        """Parse configured CIDR ranges into network objects, falling back to defaults.
+
+        Bare wildcard addresses (``0.0.0.0``, ``::``) are automatically expanded
+        to match all addresses (``0.0.0.0/0``, ``::/0``) since users entering
+        these values intend to allow all traffic.
+        """
         if not configured_ranges:
             return IPAddressUtils._DEFAULT_INTERNAL_NETWORKS
         networks: List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]] = []
         for cidr in configured_ranges:
+            normalized = cidr.strip()
+            normalized = IPAddressUtils._BARE_IP_WILDCARD_MAP.get(
+                normalized, normalized
+            )
             try:
-                networks.append(ipaddress.ip_network(cidr, strict=False))
+                networks.append(ipaddress.ip_network(normalized, strict=False))
             except ValueError:
                 verbose_proxy_logger.warning(
                     "Invalid CIDR in mcp_internal_ip_ranges: %s, skipping", cidr
