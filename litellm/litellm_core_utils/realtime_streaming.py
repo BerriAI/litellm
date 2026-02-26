@@ -1,7 +1,7 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -68,6 +68,8 @@ class RealTimeStreaming:
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
+        # Buffer for response.text.delta events pending output-guardrail check
+        self._pending_output_text_events: List[str] = []
 
     def _should_store_message(
         self,
@@ -299,6 +301,73 @@ class RealTimeStreaming:
                 return True
         return False
 
+    def _has_realtime_output_guardrails(self) -> bool:
+        """Return True if any callback is registered for realtime_output_text."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return any(
+            isinstance(cb, CustomGuardrail)
+            and cb.should_run_guardrail(
+                data={},
+                event_type=GuardrailEventHooks.realtime_output_text,
+            )
+            for cb in litellm.callbacks
+        )
+
+    async def run_realtime_output_guardrails(
+        self, text: str
+    ) -> Tuple[bool, str]:
+        """
+        Run registered guardrails on completed response text.
+
+        Returns (True, error_msg) if blocked, (False, "") if clean.
+        """
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        for callback in litellm.callbacks:
+            if not isinstance(callback, CustomGuardrail):
+                continue
+            if (
+                callback.should_run_guardrail(
+                    data={"text": text},
+                    event_type=GuardrailEventHooks.realtime_output_text,
+                )
+                is not True
+            ):
+                continue
+            try:
+                await callback.apply_guardrail(
+                    inputs={"texts": [text], "images": []},
+                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    input_type="response",
+                )
+            except Exception as e:
+                is_guardrail_block = hasattr(e, "status_code") or isinstance(
+                    e, ValueError
+                )
+                if not is_guardrail_block:
+                    verbose_logger.exception(
+                        "[realtime output guardrail] unexpected error: %s", e
+                    )
+                    raise
+                detail = getattr(e, "detail", None)
+                if isinstance(detail, dict):
+                    safe_msg = detail.get("error") or str(e)
+                elif detail is not None:
+                    safe_msg = str(detail)
+                else:
+                    safe_msg = (
+                        str(e) or "Response blocked by content filter."
+                    )
+                verbose_logger.warning(
+                    "[realtime output guardrail] BLOCKED output text: %r",
+                    text[:80],
+                )
+                return True, safe_msg
+        return False, ""
+
     async def _handle_provider_config_message(self, raw_response) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
         returned_object = self.provider_config.transform_realtime_response(  # type: ignore[union-attr]
@@ -366,6 +435,45 @@ class RealTimeStreaming:
                         json.dumps({"type": "response.create"})
                     )
                 continue
+            ## OUTPUT GUARDRAIL: buffer text deltas; check on text done
+            if (
+                isinstance(event, dict)
+                and event.get("type") == "response.text.delta"
+                and self._has_realtime_output_guardrails()
+            ):
+                self._pending_output_text_events.append(event_str)
+                continue
+            if isinstance(event, dict) and event.get("type") == "response.text.done":
+                full_text = event.get("text", "")
+                blocked_out, error_msg = await self.run_realtime_output_guardrails(
+                    full_text
+                )
+                if blocked_out:
+                    self._pending_output_text_events.clear()
+                    error_delta_str = json.dumps(
+                        {
+                            "type": "response.text.delta",
+                            "delta": error_msg,
+                            "content_index": event.get("content_index", 0),
+                            "item_id": event.get("item_id", ""),
+                            "output_index": event.get("output_index", 0),
+                            "response_id": event.get("response_id", ""),
+                        }
+                    )
+                    error_done = dict(event)
+                    error_done["text"] = error_msg
+                    error_done_str = json.dumps(error_done)
+                    self.store_message(error_done_str)
+                    await self.websocket.send_text(error_delta_str)
+                    await self.websocket.send_text(error_done_str)
+                else:
+                    for pending in self._pending_output_text_events:
+                        self.store_message(pending)
+                        await self.websocket.send_text(pending)
+                    self._pending_output_text_events.clear()
+                    self.store_message(event_str)
+                    await self.websocket.send_text(event_str)
+                continue
             ## LOGGING
             self.store_message(event_str)
             await self.websocket.send_text(event_str)
@@ -420,6 +528,44 @@ class RealTimeStreaming:
                         json.dumps({"type": "response.create"})
                     )
                 return True
+
+            if event_obj.get("type") == "response.text.delta":
+                if self._has_realtime_output_guardrails():
+                    self._pending_output_text_events.append(raw_response)
+                    return True
+
+            if event_obj.get("type") == "response.text.done":
+                full_text = event_obj.get("text", "")
+                blocked_out, error_msg = await self.run_realtime_output_guardrails(
+                    full_text
+                )
+                if blocked_out:
+                    self._pending_output_text_events.clear()
+                    error_delta_str = json.dumps(
+                        {
+                            "type": "response.text.delta",
+                            "delta": error_msg,
+                            "content_index": event_obj.get("content_index", 0),
+                            "item_id": event_obj.get("item_id", ""),
+                            "output_index": event_obj.get("output_index", 0),
+                            "response_id": event_obj.get("response_id", ""),
+                        }
+                    )
+                    error_done = dict(event_obj)
+                    error_done["text"] = error_msg
+                    error_done_str = json.dumps(error_done)
+                    self.store_message(error_done_str)
+                    await self.websocket.send_text(error_delta_str)
+                    await self.websocket.send_text(error_done_str)
+                else:
+                    for pending in self._pending_output_text_events:
+                        self.store_message(pending)
+                        await self.websocket.send_text(pending)
+                    self._pending_output_text_events.clear()
+                    self.store_message(raw_response)
+                    await self.websocket.send_text(raw_response)
+                return True
+
         except (json.JSONDecodeError, AttributeError):
             pass
         return False
