@@ -1315,8 +1315,8 @@ CLI_JWT_EXPIRATION_HOURS = int(
 )
 
 ########################### UI SESSION DURATION ###########################
-# Duration for UI login session (username/password, SSO). Format: "30s", "30m", "24h", "7d"
-# Applies to default login flows (not EXPERIMENTAL_UI_LOGIN which uses its own 10-minute expiry)
+# Duration for UI login session (username/password, SSO, invitation links). Format: "30s", "30m", "24h", "7d"
+# Does NOT apply to EXPERIMENTAL_UI_LOGIN flow, which intentionally uses a fixed 10-minute expiry for security.
 LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
 
 ########################### DB CRON JOB NAMES ###########################
