@@ -249,44 +249,22 @@ class TestMaybeSetupPrometheusMultiprocDir:
             remaining = glob.glob(os.path.join(custom_dir, "*.db"))
             assert remaining == []
 
-    def test_noop_for_single_worker(self):
-        """Single worker doesn't need multiproc dir."""
-        litellm_settings = {"callbacks": ["prometheus"]}
-
+    @pytest.mark.parametrize(
+        "num_workers, litellm_settings",
+        [
+            (1, {"callbacks": ["prometheus"]}),
+            (4, {"callbacks": ["langfuse"]}),
+            (4, None),
+        ],
+    )
+    def test_noop_when_setup_not_needed(self, num_workers, litellm_settings):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
             os.environ.pop("prometheus_multiproc_dir", None)
 
             ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
-                num_workers=1,
+                num_workers=num_workers,
                 litellm_settings=litellm_settings,
-            )
-
-            assert os.environ.get("PROMETHEUS_MULTIPROC_DIR") is None
-
-    def test_noop_without_prometheus_callback(self):
-        """No prometheus callback = no setup needed."""
-        litellm_settings = {"callbacks": ["langfuse"]}
-
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-            os.environ.pop("prometheus_multiproc_dir", None)
-
-            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
-                num_workers=4,
-                litellm_settings=litellm_settings,
-            )
-
-            assert os.environ.get("PROMETHEUS_MULTIPROC_DIR") is None
-
-    def test_noop_with_none_litellm_settings(self):
-        """None litellm_settings = no setup needed."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
-
-            ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
-                num_workers=4,
-                litellm_settings=None,
             )
 
             assert os.environ.get("PROMETHEUS_MULTIPROC_DIR") is None
