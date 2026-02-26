@@ -248,9 +248,9 @@ async def get_provider_supported_endpoints() -> SupportedEndpointsResponse:
         return _supported_endpoints_cache
 
     provider_endpoints_support_path = os.path.join(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        ),
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "proxy",
+        "public_endpoints",
         "provider_endpoints_support.json",
     )
 
