@@ -955,7 +955,14 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         generated_content: str = "",
         is_pre_first_chunk: bool = False,
     ):
-        self.status_code = 503  # Service Unavailable
+        # Preserve original status code for client errors (4xx), default to 503 for server errors
+        self.status_code = 503  # Default: Service Unavailable
+        if original_exception and hasattr(original_exception, 'status_code'):
+            original_status = getattr(original_exception, 'status_code')
+            # Preserve client error codes (400-499) to maintain proper error semantics
+            if 400 <= original_status <= 499:
+                self.status_code = original_status
+        
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
