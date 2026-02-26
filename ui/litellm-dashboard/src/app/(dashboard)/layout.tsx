@@ -6,6 +6,9 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const queryClient = new QueryClient();
 
 /** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
@@ -45,30 +48,32 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const toggleSidebar = () => setSidebarCollapsed((v) => !v);
 
   return (
-    <ThemeProvider accessToken={""}>
-      <div className="flex flex-col min-h-screen">
-        <Navbar
-          isPublicPage={false}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
-          userID={userId}
-          userEmail={userEmail}
-          userRole={userRole}
-          premiumUser={premiumUser}
-          proxySettings={undefined}
-          setProxySettings={() => { }}
-          accessToken={accessToken}
-          isDarkMode={false}
-          toggleDarkMode={() => { }}
-        />
-        <div className="flex flex-1 overflow-auto">
-          <div className="mt-2">
-            <Sidebar2 defaultSelectedKey={page} accessToken={accessToken} userRole={userRole} />
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider accessToken={""}>
+        <div className="flex flex-col min-h-screen">
+          <Navbar
+            isPublicPage={false}
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={toggleSidebar}
+            userID={userId}
+            userEmail={userEmail}
+            userRole={userRole}
+            premiumUser={premiumUser}
+            proxySettings={undefined}
+            setProxySettings={() => { }}
+            accessToken={accessToken}
+            isDarkMode={false}
+            toggleDarkMode={() => { }}
+          />
+          <div className="flex flex-1 overflow-auto">
+            <div className="mt-2">
+              <Sidebar2 defaultSelectedKey={page} accessToken={accessToken} userRole={userRole} />
+            </div>
+            <main className="flex-1">{children}</main>
           </div>
-          <main className="flex-1">{children}</main>
         </div>
-      </div>
-    </ThemeProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }
 
