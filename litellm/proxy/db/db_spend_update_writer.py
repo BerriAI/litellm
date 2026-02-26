@@ -13,49 +13,36 @@ import random
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Union,
-    cast,
-    overload,
-)
+from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union,
+                    cast, overload)
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
-    BaseDailySpendTransaction,
-    DailyAgentSpendTransaction,
-    DailyEndUserSpendTransaction,
-    DailyOrganizationSpendTransaction,
-    DailyTagSpendTransaction,
-    DailyTeamSpendTransaction,
-    DailyUserSpendTransaction,
-    DBSpendUpdateTransactions,
-    Litellm_EntityType,
-    LiteLLM_UserTable,
-    SpendLogsMetadata,
-    SpendLogsPayload,
-    SpendUpdateQueueItem,
-    ToolDiscoveryQueueItem,
-)
-from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
-    DailySpendUpdateQueue,
-)
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
-from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
-from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
-    ToolDiscoveryQueue,
-)
+from litellm.proxy._types import (DB_CONNECTION_ERROR_TYPES,
+                                  BaseDailySpendTransaction,
+                                  DailyAgentSpendTransaction,
+                                  DailyEndUserSpendTransaction,
+                                  DailyOrganizationSpendTransaction,
+                                  DailyTagSpendTransaction,
+                                  DailyTeamSpendTransaction,
+                                  DailyUserSpendTransaction,
+                                  DBSpendUpdateTransactions,
+                                  Litellm_EntityType, LiteLLM_UserTable,
+                                  SpendLogsMetadata, SpendLogsPayload,
+                                  SpendUpdateQueueItem, ToolDiscoveryQueueItem)
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import \
+    DailySpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import \
+    PodLockManager
+from litellm.proxy.db.db_transaction_queue.redis_update_buffer import \
+    RedisUpdateBuffer
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import \
+    SpendUpdateQueue
+from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import \
+    ToolDiscoveryQueue
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 
 if TYPE_CHECKING:
@@ -104,12 +91,10 @@ class DBSpendUpdateWriter:
         end_time: Optional[datetime],
         response_cost: Optional[float],
     ):
-        from litellm.proxy.proxy_server import (
-            disable_spend_logs,
-            litellm_proxy_budget_name,
-            prisma_client,
-            user_api_key_cache,
-        )
+        from litellm.proxy.proxy_server import (disable_spend_logs,
+                                                litellm_proxy_budget_name,
+                                                prisma_client,
+                                                user_api_key_cache)
         from litellm.proxy.utils import ProxyUpdateSpend, hash_token
 
         try:
@@ -124,9 +109,8 @@ class DBSpendUpdateWriter:
                 hashed_token = token
 
             ## CREATE SPEND LOG PAYLOAD ##
-            from litellm.proxy.spend_tracking.spend_tracking_utils import (
-                get_logging_payload,
-            )
+            from litellm.proxy.spend_tracking.spend_tracking_utils import \
+                get_logging_payload
 
             payload = get_logging_payload(
                 kwargs=kwargs,
@@ -245,11 +229,13 @@ class DBSpendUpdateWriter:
             # --- MCP tool calls ---
             sl_object = kwargs.get("standard_logging_object")
             if sl_object is not None:
-                mcp_metadata = (
-                    sl_object.get("metadata", {}) or {}
-                ).get("mcp_tool_call_metadata")
+                mcp_metadata = (sl_object.get("metadata", {}) or {}).get(
+                    "mcp_tool_call_metadata"
+                )
                 if mcp_metadata and isinstance(mcp_metadata, dict):
-                    tool_name = mcp_metadata.get("namespaced_tool_name") or mcp_metadata.get("name")
+                    tool_name = mcp_metadata.get(
+                        "namespaced_tool_name"
+                    ) or mcp_metadata.get("name")
                     mcp_server_name = mcp_metadata.get("mcp_server_name")
                     if tool_name:
                         _enqueue(tool_name, origin=mcp_server_name or "user_defined")
@@ -280,7 +266,9 @@ class DBSpendUpdateWriter:
                     _enqueue(name)
 
             # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
-            if completion_response is not None and hasattr(completion_response, "choices"):
+            if completion_response is not None and hasattr(
+                completion_response, "choices"
+            ):
                 for choice in completion_response.choices or []:
                     message = getattr(choice, "message", None)
                     if message is None:
@@ -312,7 +300,7 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient],
         user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
-        payload_copy: dict,
+        payload_copy: SpendLogsPayload,
         request_tags: Optional[Any],
     ):
         """
@@ -768,19 +756,46 @@ class DBSpendUpdateWriter:
                     daily_end_user_spend_update_transactions,
                     daily_agent_spend_update_transactions,
                     daily_tag_spend_update_transactions,
-                ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+                ) = (
+                    await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+                )
 
                 if db_spend_update_transactions is not None:
                     verbose_proxy_logger.info(
                         "Spend tracking - committing spend updates from Redis to DB: "
                         "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, tags=%d",
-                        len(db_spend_update_transactions.get("key_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("user_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("team_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("org_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("end_user_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("team_member_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("tag_list_transactions") or {}),
+                        len(
+                            db_spend_update_transactions.get("key_list_transactions")
+                            or {}
+                        ),
+                        len(
+                            db_spend_update_transactions.get("user_list_transactions")
+                            or {}
+                        ),
+                        len(
+                            db_spend_update_transactions.get("team_list_transactions")
+                            or {}
+                        ),
+                        len(
+                            db_spend_update_transactions.get("org_list_transactions")
+                            or {}
+                        ),
+                        len(
+                            db_spend_update_transactions.get(
+                                "end_user_list_transactions"
+                            )
+                            or {}
+                        ),
+                        len(
+                            db_spend_update_transactions.get(
+                                "team_member_list_transactions"
+                            )
+                            or {}
+                        ),
+                        len(
+                            db_spend_update_transactions.get("tag_list_transactions")
+                            or {}
+                        ),
                     )
                     await self._commit_spend_updates_to_db(
                         prisma_client=prisma_client,
@@ -985,10 +1000,8 @@ class DBSpendUpdateWriter:
         Commits all the spend `UPDATE` transactions to the Database
 
         """
-        from litellm.proxy.utils import (
-            ProxyUpdateSpend,
-            _raise_failed_update_spend_exception,
-        )
+        from litellm.proxy.utils import (ProxyUpdateSpend,
+                                         _raise_failed_update_spend_exception)
 
         ### UPDATE USER TABLE ###
         user_list_transactions = db_spend_update_transactions["user_list_transactions"]
@@ -1523,14 +1536,14 @@ class DBSpendUpdateWriter:
 
                                 # Add cache-related fields if they exist
                                 if "cache_read_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_read_input_tokens"
-                                    ] = transaction.get("cache_read_input_tokens", 0)
+                                    common_data["cache_read_input_tokens"] = (
+                                        transaction.get("cache_read_input_tokens", 0)
+                                    )
                                 if "cache_creation_input_tokens" in transaction:
-                                    common_data[
-                                        "cache_creation_input_tokens"
-                                    ] = transaction.get(
-                                        "cache_creation_input_tokens", 0
+                                    common_data["cache_creation_input_tokens"] = (
+                                        transaction.get(
+                                            "cache_creation_input_tokens", 0
+                                        )
                                     )
 
                                 if entity_type == "tag" and "request_id" in transaction:

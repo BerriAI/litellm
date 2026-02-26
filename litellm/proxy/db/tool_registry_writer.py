@@ -66,10 +66,10 @@ async def batch_upsert_tools(
             await prisma_client.db.execute_raw(
                 'INSERT INTO "LiteLLM_ToolTable" '
                 "(tool_id, tool_name, origin, call_policy, call_count, created_by, updated_by, key_hash, team_id, key_alias, created_at, updated_at) "
-                "VALUES ($7, $1, $2, 'untrusted', 1, $3, $3, $4, $5, $6, $8, $8) "
+                "VALUES ($7, $1, $2, 'untrusted', 1, $3, $3, $4, $5, $6, $8::timestamp, $8::timestamp) "
                 "ON CONFLICT (tool_name) DO UPDATE SET "
-                "call_count = \"LiteLLM_ToolTable\".call_count + 1, "
-                "updated_at = $8",
+                'call_count = "LiteLLM_ToolTable".call_count + 1, '
+                "updated_at = $8::timestamp",
                 tool_name,
                 origin,
                 created_by,
@@ -83,7 +83,9 @@ async def batch_upsert_tools(
             "tool_registry_writer: upserted %d tool(s)", len(data)
         )
     except Exception as e:
-        verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
+        verbose_proxy_logger.error(
+            "tool_registry_writer batch_upsert_tools error: %s", e
+        )
 
 
 async def list_tools(
@@ -94,15 +96,15 @@ async def list_tools(
     try:
         if call_policy is not None:
             rows = await prisma_client.db.query_raw(
-                'SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, '
-                'key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by '
+                "SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, "
+                "key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by "
                 'FROM "LiteLLM_ToolTable" WHERE call_policy = $1 ORDER BY created_at DESC',
                 call_policy,
             )
         else:
             rows = await prisma_client.db.query_raw(
-                'SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, '
-                'key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by '
+                "SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, "
+                "key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by "
                 'FROM "LiteLLM_ToolTable" ORDER BY created_at DESC',
             )
         return [_row_to_model(row) for row in rows]
@@ -118,8 +120,8 @@ async def get_tool(
     """Return a single tool row by tool_name."""
     try:
         rows = await prisma_client.db.query_raw(
-            'SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, '
-            'key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by '
+            "SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, "
+            "key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by "
             'FROM "LiteLLM_ToolTable" WHERE tool_name = $1',
             tool_name,
         )
@@ -143,8 +145,8 @@ async def update_tool_policy(
         now = datetime.now(timezone.utc).isoformat()
         await prisma_client.db.execute_raw(
             'INSERT INTO "LiteLLM_ToolTable" (tool_id, tool_name, call_policy, created_by, updated_by, created_at, updated_at) '
-            "VALUES ($4, $1, $2, $3, $3, $5, $5) "
-            "ON CONFLICT (tool_name) DO UPDATE SET call_policy = $2, updated_by = $3, updated_at = $5",
+            "VALUES ($4, $1, $2, $3, $3, $5::timestamp, $5::timestamp) "
+            "ON CONFLICT (tool_name) DO UPDATE SET call_policy = $2, updated_by = $3, updated_at = $5::timestamp",
             tool_name,
             call_policy,
             _updated_by,
@@ -153,7 +155,9 @@ async def update_tool_policy(
         )
         return await get_tool(prisma_client, tool_name)
     except Exception as e:
-        verbose_proxy_logger.error("tool_registry_writer update_tool_policy error: %s", e)
+        verbose_proxy_logger.error(
+            "tool_registry_writer update_tool_policy error: %s", e
+        )
         return None
 
 
@@ -175,5 +179,7 @@ async def get_tools_by_names(
         )
         return {row["tool_name"]: row["call_policy"] for row in rows}
     except Exception as e:
-        verbose_proxy_logger.error("tool_registry_writer get_tools_by_names error: %s", e)
+        verbose_proxy_logger.error(
+            "tool_registry_writer get_tools_by_names error: %s", e
+        )
         return {}
