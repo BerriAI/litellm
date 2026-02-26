@@ -25,6 +25,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
 from litellm.constants import (
+    LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
     MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE,
     MICROSOFT_USER_EMAIL_ATTRIBUTE,
@@ -2237,7 +2238,7 @@ class SSOAuthenticationHandler:
         # User might not be already created on first generation of key
         # But if it is, we want their models preferences
         default_ui_key_values: Dict[str, Any] = {
-            "duration": "24hr",
+            "duration": LITELLM_UI_SESSION_DURATION,
             "key_max_budget": litellm.max_ui_session_budget,
             "aliases": {},
             "config": {},

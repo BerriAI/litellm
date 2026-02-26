@@ -12,6 +12,12 @@ warnings.filterwarnings(
 ### INIT VARIABLES #########################
 import threading
 import os
+
+# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
+import dotenv as _dotenv
+
+_dotenv.load_dotenv()
+
 from typing import (
     Callable,
     List,
@@ -74,12 +80,9 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
-import dotenv
 # register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
-    dotenv.load_dotenv()
 
 
 ####################################################
