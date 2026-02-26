@@ -2280,6 +2280,9 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_rpm_limit: Optional[int] = None
     organization_metadata: Optional[dict] = None
 
+    # Project Params
+    project_metadata: Optional[dict] = None
+
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
 
@@ -2581,6 +2584,7 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     team_id: str
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    tags: Optional[List[str]] = None
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2590,7 +2594,15 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if "tags" in values and values["tags"] is not None:
+            if not isinstance(values["tags"], list):
+                raise ValueError(
+                    f"tags must be a list of strings, got {type(values['tags']).__name__}"
+                )
+        for field in (
+            LiteLLM_ManagementEndpoint_MetadataFields
+            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})
@@ -2607,6 +2619,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     description: Optional[str] = None
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
+    tags: Optional[List[str]] = None
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2617,7 +2630,15 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if "tags" in values and values["tags"] is not None:
+            if not isinstance(values["tags"], list):
+                raise ValueError(
+                    f"tags must be a list of strings, got {type(values['tags']).__name__}"
+                )
+        for field in (
+            LiteLLM_ManagementEndpoint_MetadataFields
+            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})
