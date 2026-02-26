@@ -206,8 +206,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const POLL_FAST_MS = 3_000;
   const POLL_SLOW_MS = 30_000;
   const UNCHANGED_POLLS_BEFORE_SLOW = 3;
+  const ACTIVE_UPDATE_WINDOW_MS = 60_000;
+  const STABLE_POLLS_TO_EXIT_ACTIVE_WINDOW = 8;
   const prevDataRef = useRef<string | null>(null);
   const unchangedPollsRef = useRef(0);
+  const activeWindowUntilRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -225,23 +228,38 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         const newData = await fetchSpendData({ trackInFlight: false, applyData: false });
         if (cancelled) return;
         const dataSignature = newData
-          ? `${newData.metadata?.total_spend ?? 0}-${newData.metadata?.total_api_requests ?? 0}-${newData.results?.length ?? 0}`
+          ? `${newData.metadata?.total_spend ?? 0}-${newData.metadata?.total_api_requests ?? 0}-${newData.metadata?.total_successful_requests ?? 0}-${newData.metadata?.total_failed_requests ?? 0}-${newData.metadata?.total_tokens ?? 0}-${newData.results?.length ?? 0}`
           : null;
         const hasPrevious = prevDataRef.current !== null;
         const changed = hasPrevious && dataSignature !== prevDataRef.current;
         prevDataRef.current = dataSignature;
+        const inActiveUpdateWindow =
+          activeWindowUntilRef.current !== null && Date.now() < activeWindowUntilRef.current;
+        if (!hasPrevious) {
+          unchangedPollsRef.current = 0;
+          schedulePoll(POLL_FAST_MS);
+          return;
+        }
         if (changed) {
+          activeWindowUntilRef.current = Date.now() + ACTIVE_UPDATE_WINDOW_MS;
           unchangedPollsRef.current = 0;
           await fetchSpendData();
           if (cancelled) return;
           schedulePoll(POLL_FAST_MS);
           return;
         }
-        if (!hasPrevious) {
-          unchangedPollsRef.current = 0;
+        if (inActiveUpdateWindow) {
+          unchangedPollsRef.current += 1;
+          if (unchangedPollsRef.current >= STABLE_POLLS_TO_EXIT_ACTIVE_WINDOW) {
+            activeWindowUntilRef.current = null;
+            unchangedPollsRef.current = 0;
+            schedulePoll(POLL_SLOW_MS);
+            return;
+          }
           schedulePoll(POLL_FAST_MS);
           return;
         }
+        activeWindowUntilRef.current = null;
         unchangedPollsRef.current += 1;
         const nextIntervalMs =
           unchangedPollsRef.current >= UNCHANGED_POLLS_BEFORE_SLOW ? POLL_SLOW_MS : POLL_FAST_MS;
@@ -254,6 +272,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       cancelled = true;
       clearTimeout(timeoutId);
       unchangedPollsRef.current = 0;
+      activeWindowUntilRef.current = null;
     };
   }, [accessToken, dateValue.from, dateValue.to, fetchSpendData]);
 
