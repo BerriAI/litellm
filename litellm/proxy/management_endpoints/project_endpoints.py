@@ -647,11 +647,25 @@ async def update_project(
 
         # Merge metadata with existing (avoid wiping metadata on partial updates like tags)
         if "metadata" in update_data:
-            existing_metadata = (existing_project.metadata or {}) if isinstance(
-                existing_project.metadata, dict
-            ) else {}
+            existing_metadata = existing_project.metadata
+            if isinstance(existing_metadata, dict):
+                existing_metadata = existing_metadata or {}
+            elif isinstance(existing_metadata, str):
+                existing_metadata = (
+                    json.loads(existing_metadata) if existing_metadata.strip() else {}
+                )
+            else:
+                existing_metadata = {}
+
             new_metadata = update_data.get("metadata") or {}
-            update_data["metadata"] = {**existing_metadata, **new_metadata}
+            if isinstance(new_metadata, str):
+                new_metadata = (
+                    json.loads(new_metadata) if new_metadata.strip() else {}
+                )
+
+            update_data["metadata"] = json.dumps(
+                {**existing_metadata, **new_metadata}
+            )
 
         # Remove budget fields (following organization_endpoints.py pattern)
         update_data = _remove_budget_fields_from_project_data(update_data)
