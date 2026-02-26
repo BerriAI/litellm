@@ -1405,3 +1405,44 @@ def test_transform_anthropic_request_to_openai_format():
         "type": "object",
         "properties": {"location": {"type": "string"}}
     }
+
+
+def test_transform_anthropic_request_to_openai_format_with_computer_tool():
+    """Test Anthropic to OpenAI format transformation with tools lacking description and input_schema.
+
+    Tools like computer_20241022 don't have description and input_schema fields.
+    These tools should be skipped during transformation since they're Anthropic-specific.
+    """
+    request_body = {
+        "model": "claude-3-7-sonnet-20250219",
+        "messages": [{"role": "user", "content": "Use the computer to help me."}],
+        "tools": [
+            {
+                "type": "computer_20241022",
+                "name": "computer"
+                # No description or input_schema
+            },
+            {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    }
+                }
+            }
+        ]
+    }
+
+    result = _transform_anthropic_request_to_openai_format(request_body)
+
+    # Should only include tools with input_schema (skip computer_20241022)
+    assert len(result["tools"]) == 1
+    assert result["tools"][0]["type"] == "function"
+    assert result["tools"][0]["function"]["name"] == "get_weather"
+    assert result["tools"][0]["function"]["description"] == "Get weather information"
+    assert result["tools"][0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"location": {"type": "string"}}
+    }

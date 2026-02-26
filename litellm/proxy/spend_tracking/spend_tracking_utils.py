@@ -766,6 +766,7 @@ def _transform_anthropic_request_to_openai_format(request_body: dict) -> dict:
         Transformed request body in OpenAI-compatible format
     """
     # Transform system message if present
+    request_body = dict(request_body)
     system_content = request_body.pop("system", None)
     if system_content:
         request_body["messages"] = [
@@ -779,11 +780,12 @@ def _transform_anthropic_request_to_openai_format(request_body: dict) -> dict:
                 "type": "function",
                 "function": {
                     "name": t["name"],
-                    "description": t["description"],
-                    "parameters": t["input_schema"]
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema", {})
                 }
             }
             for t in request_body["tools"]
+            if "input_schema" in t  # Skip non-standard tools (computer_use, bash, etc.)
         ]
 
     return request_body
