@@ -3502,15 +3502,7 @@ class ProxyConfig:
                 combined_id_list.append(model_info.id)
 
         ## CONFIG MODELS ##
-        try:
-            config = await self.get_config(config_file_path=user_config_file_path)
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Failed to load config in _delete_deployment: %s. "
-                "Skipping deployment cleanup to avoid removing valid models.",
-                str(e),
-            )
-            return 0
+        config = await self.get_config(config_file_path=user_config_file_path)
         model_list = config.get("model_list", None)
         if model_list:
             for model in model_list:
@@ -3650,20 +3642,8 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
     ):
         global llm_router, llm_model_list, master_key, general_settings
-
-        # Load config separately so a timeout here doesn't block model loading
-        config_data: dict = {}
-        search_tools = None
-        try:
-            config_data = await proxy_config.get_config()
-            search_tools = self.parse_search_tools(config_data)
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Failed to load config in _update_llm_router: %s. "
-                "Proceeding with model loading using cached/empty config.",
-                str(e),
-            )
-
+        config_data = await proxy_config.get_config()
+        search_tools = self.parse_search_tools(config_data)
         try:
             models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
