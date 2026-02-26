@@ -10,8 +10,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pytest
-from fastapi import HTTPException
-
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
@@ -112,7 +110,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
     )
 
     # Fourth request should fail (counter would be 4, limit is 3, so 4 > 3)
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(litellm.RateLimitError) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -120,7 +118,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
             call_type="",
         )
     assert exc_info.value.status_code == 429
-    assert "Rate limit exceeded" in str(exc_info.value.detail)
+    assert "Rate limit exceeded" in str(exc_info.value.message)
 
     # Wait for window to expire (2 seconds)
     time_controller.advance(3)
@@ -401,7 +399,7 @@ async def test_normal_router_call_tpm_v3(
     )  # Use up most of our 10 token limit
 
     # Make another request to test rate limiting - this should fail as we've consumed tokens
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(litellm.RateLimitError) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -807,7 +805,7 @@ async def test_tpm_api_key_rate_limits_v3():
     async def mock_should_rate_limit(descriptors, **kwargs):
         nonlocal captured_descriptors
         captured_descriptors = descriptors
-        # Return Error response to ensure HTTPException
+        # Return Error response to ensure litellm.RateLimitError
         return {
             "overall_code": "OVER_LIMIT",
             "statuses": [
@@ -839,12 +837,12 @@ async def test_tpm_api_key_rate_limits_v3():
             data={"model": model},
             call_type="",
         )
-    except HTTPException as e:
+    except litellm.RateLimitError as e:
         error = e
         assert e.status_code == 429
-        assert "rate_limit_type" in e.headers
-        assert e.headers.get("rate_limit_type") == "tokens"
-        assert "retry-after" in e.headers
+        assert "rate_limit_type" in e.response.headers
+        assert e.response.headers.get("rate_limit_type") == "tokens"
+        assert "retry-after" in e.response.headers
 
     assert error is not None, "An Exception must be thrown"
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
@@ -902,7 +900,7 @@ async def test_rpm_api_key_rate_limits_v3():
     async def mock_should_rate_limit(descriptors, **kwargs):
         nonlocal captured_descriptors
         captured_descriptors = descriptors
-        # Return Error response to ensure HTTPException
+        # Return Error response to ensure litellm.RateLimitError
         return {
             "overall_code": "OVER_LIMIT",
             "statuses": [
@@ -934,12 +932,12 @@ async def test_rpm_api_key_rate_limits_v3():
             data={"model": model},
             call_type="",
         )
-    except HTTPException as e:
+    except litellm.RateLimitError as e:
         error = e
         assert e.status_code == 429
-        assert "rate_limit_type" in e.headers
-        assert e.headers.get("rate_limit_type") == "requests"
-        assert "retry-after" in e.headers
+        assert "rate_limit_type" in e.response.headers
+        assert e.response.headers.get("rate_limit_type") == "requests"
+        assert "retry-after" in e.response.headers
 
     assert error is not None, "An Exception must be thrown"
     assert captured_descriptors is not None, "Rate limit descriptors should be captured"
@@ -1596,8 +1594,8 @@ async def test_multiple_rate_limits_per_descriptor():
 
     parallel_request_handler.should_rate_limit = mock_should_rate_limit
 
-    # Test the pre-call hook - this should raise HTTPException but NOT IndexError
-    with pytest.raises(HTTPException) as exc_info:
+    # Test the pre-call hook - this should raise litellm.RateLimitError but NOT IndexError
+    with pytest.raises(litellm.RateLimitError) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -1607,15 +1605,15 @@ async def test_multiple_rate_limits_per_descriptor():
 
     # Verify the exception details are correct and use the descriptor_key approach
     assert exc_info.value.status_code == 429
-    assert "Rate limit exceeded for api_key:" in exc_info.value.detail
-    assert "max_parallel_requests" in exc_info.value.detail
-    assert "Current limit: 1" in exc_info.value.detail
-    assert "Remaining: 0" in exc_info.value.detail  # max(0, -1) = 0
+    assert "Rate limit exceeded for api_key:" in exc_info.value.message
+    assert "max_parallel_requests" in exc_info.value.message
+    assert "Current limit: 1" in exc_info.value.message
+    assert "Remaining: 0" in exc_info.value.message  # max(0, -1) = 0
 
     # Verify headers are set correctly
-    assert exc_info.value.headers.get("rate_limit_type") == "max_parallel_requests"
-    assert "retry-after" in exc_info.value.headers
-    assert "reset_at" in exc_info.value.headers
+    assert exc_info.value.response.headers.get("rate_limit_type") == "max_parallel_requests"
+    assert "retry-after" in exc_info.value.response.headers
+    assert "reset_at" in exc_info.value.response.headers
 
 
 @pytest.mark.asyncio
@@ -1658,7 +1656,7 @@ async def test_missing_descriptor_fallback():
     parallel_request_handler.should_rate_limit = mock_should_rate_limit
 
     # Test the pre-call hook - should handle missing descriptor gracefully
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(litellm.RateLimitError) as exc_info:
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
@@ -1668,9 +1666,79 @@ async def test_missing_descriptor_fallback():
 
     # Verify the exception uses fallback values
     assert exc_info.value.status_code == 429
-    assert "Rate limit exceeded for nonexistent_key: unknown" in exc_info.value.detail
-    assert "requests" in exc_info.value.detail
-    assert "Current limit: 2" in exc_info.value.detail
+    assert "Rate limit exceeded for nonexistent_key: unknown" in exc_info.value.message
+    assert "requests" in exc_info.value.message
+    assert "Current limit: 2" in exc_info.value.message
+
+
+
+
+@pytest.mark.asyncio
+async def test_handle_rate_limit_error_raises_litellm_rate_limit_error():
+    """
+    Test that _handle_rate_limit_error raises litellm.RateLimitError (not a plain
+    HTTPException), ensuring the error message carries the normalized
+    'litellm.RateLimitError:' prefix.
+
+    Fixes https://github.com/BerriAI/litellm/issues/22007
+    """
+    _api_key = "sk-test-ratelimit-prefix"
+    _api_key_hash = hash_token(_api_key)
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key_hash,
+        rpm_limit=5,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to return an OVER_LIMIT response
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 5,
+                    "limit_remaining": -1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "api_key",
+                }
+            ],
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-4"},
+            call_type="",
+        )
+
+    error = exc_info.value
+
+    # Verify the error is a litellm.RateLimitError, not a plain HTTPException
+    assert isinstance(error, litellm.RateLimitError)
+
+    # Verify the message carries the normalized prefix
+    assert error.message.startswith("litellm.RateLimitError:")
+
+    # Verify the core details are still present
+    assert error.status_code == 429
+    assert "Rate limit exceeded for api_key:" in error.message
+    assert "Limit type: requests" in error.message
+    assert "Current limit: 5" in error.message
+    assert "Remaining: 0" in error.message  # max(0, -1) = 0
+
+    # Verify the response headers are preserved
+    assert "retry-after" in error.response.headers
+    assert "rate_limit_type" in error.response.headers
+    assert "reset_at" in error.response.headers
 
 
 @pytest.mark.asyncio
