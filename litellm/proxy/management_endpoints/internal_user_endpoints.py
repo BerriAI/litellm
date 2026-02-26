@@ -614,7 +614,10 @@ async def user_info(
             user_id is None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
-            return await _get_user_info_for_proxy_admin()
+            return await _get_user_info_for_proxy_admin(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+            )
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
@@ -714,7 +717,10 @@ async def user_info(
         raise handle_exception_on_proxy(e)
 
 
-async def _get_user_info_for_proxy_admin():
+async def _get_user_info_for_proxy_admin(
+    user_id: Optional[str] = None,
+    prisma_client: Optional[Any] = None,
+):
     """
     Admin UI Endpoint - Returns All Teams and Keys when Proxy Admin is querying
 
@@ -725,10 +731,11 @@ async def _get_user_info_for_proxy_admin():
         - To get Faster UI load times, get all teams and virtual keys in 1 query
     """
 
-    from litellm.proxy.proxy_server import prisma_client
+    if prisma_client is None:
+        from litellm.proxy.proxy_server import prisma_client
 
     sql_query = """
-        SELECT 
+        SELECT
             (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
             (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard' OR k.team_id IS NULL) as keys
     """
@@ -754,9 +761,22 @@ async def _get_user_info_for_proxy_admin():
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
     _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
+
+    # Fetch the admin's own user info so /user/info returns their identity
+    # even when no explicit user_id param is provided (fixes #22179)
+    _user_info: Optional[Union[dict, BaseModel]] = None
+    if user_id is not None:
+        _user_info_row = await prisma_client.get_data(user_id=user_id)
+        if _user_info_row is not None:
+            _user_info = (
+                _user_info_row.model_dump()
+                if isinstance(_user_info_row, BaseModel)
+                else _user_info_row
+            )
+
     return UserInfoResponse(
-        user_id=None,
-        user_info=None,
+        user_id=user_id,
+        user_info=_user_info,
         keys=returned_keys,
         teams=_teams_in_db,
     )
