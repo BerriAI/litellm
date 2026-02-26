@@ -33,7 +33,7 @@ Pydantic object defining how to set guardrails on litellm proxy
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "zscaler_ai_guard"
+      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
