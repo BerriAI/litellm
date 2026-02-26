@@ -322,9 +322,6 @@ class ProxyInitializationHelpers:
         """
         Auto-create PROMETHEUS_MULTIPROC_DIR when running with multiple workers
         and prometheus is configured as a callback.
-
-        If the env var is already set by the user, just ensure the directory exists.
-        Otherwise, create a temp directory and set the env var.
         """
         import tempfile
 
@@ -341,25 +338,25 @@ class ProxyInitializationHelpers:
 
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
-        existing_dir = os.environ.get(
-            "PROMETHEUS_MULTIPROC_DIR"
-        ) or os.environ.get("prometheus_multiproc_dir")
-        if existing_dir:
-            os.makedirs(existing_dir, exist_ok=True)
-            wipe_directory(existing_dir)
-            print(  # noqa
-                f"LiteLLM: Using existing PROMETHEUS_MULTIPROC_DIR={existing_dir}"
-            )
-            return
+        multiproc_dir = (
+            os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+            or os.environ.get("prometheus_multiproc_dir")
+        )
 
+        auto_created = not multiproc_dir
+        
+        if not multiproc_dir:
+            multiproc_dir = os.path.join(
+                tempfile.gettempdir(), "litellm_prometheus_multiproc"
+            )
         multiproc_dir = os.path.join(
             tempfile.gettempdir(), "litellm_prometheus_multiproc"
         )
         os.makedirs(multiproc_dir, exist_ok=True)
         wipe_directory(multiproc_dir)
-        os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
+        action = "Auto-created" if auto_created else "Use existing"
         print(  # noqa
-            f"LiteLLM: Auto-created PROMETHEUS_MULTIPROC_DIR={multiproc_dir}"
+            f"LiteLLM {action}: Auto-created PROMETHEUS_MULTIPROC_DIR={multiproc_dir}"
         )
 
 
