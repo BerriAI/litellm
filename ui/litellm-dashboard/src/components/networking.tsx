@@ -10011,6 +10011,51 @@ export interface ToolDetailResponse {
   overrides: ToolPolicyOverrideRow[];
 }
 
+export interface ToolUsageLogEntry {
+  id: string;
+  timestamp: string;
+  model?: string | null;
+  spend?: number | null;
+  total_tokens?: number | null;
+  input_snippet?: string | null;
+}
+
+export interface ToolUsageLogsResponse {
+  logs: ToolUsageLogEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export const getToolUsageLogs = async (
+  accessToken: string,
+  toolName: string,
+  options: { page?: number; pageSize?: number; startDate?: string; endDate?: string }
+): Promise<ToolUsageLogsResponse> => {
+  const encoded = encodeURIComponent(toolName);
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/tool/${encoded}/logs`
+    : `/v1/tool/${encoded}/logs`;
+  const params = new URLSearchParams();
+  if (options.page != null) params.append("page", String(options.page));
+  if (options.pageSize != null) params.append("page_size", String(options.pageSize));
+  if (options.startDate) params.append("start_date", options.startDate);
+  if (options.endDate) params.append("end_date", options.endDate);
+  const fullUrl = params.toString() ? `${url}?${params.toString()}` : url;
+  const response = await fetch(fullUrl, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(deriveErrorMessage(errorData));
+  }
+  return response.json();
+};
+
 export const fetchToolDetail = async (
   accessToken: string,
   toolName: string

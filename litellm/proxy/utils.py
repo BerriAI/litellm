@@ -10,17 +10,8 @@ import traceback
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Union,
-    cast,
-    overload,
-)
+from typing import (TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union,
+                    cast, overload)
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (DEFAULT_MODEL_CREATED_AT_TIME,
@@ -3550,8 +3541,9 @@ class PrismaClient:
     def _get_engine_pid(self) -> int:
         try:
             engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
-            if engine is not None and engine.process is not None:
-                return engine.process.pid
+            process = getattr(engine, "process", None) if engine is not None else None
+            if process is not None:
+                return process.pid
         except (AttributeError, TypeError):
             pass
         return 0
@@ -4636,6 +4628,20 @@ async def update_spend_logs_job(
         verbose_proxy_logger.warning(
             "Spend tracking - guardrail usage tracking failed (non-fatal): %s",
             guardrail_tracking_err,
+        )
+
+    # Tool usage tracking (same batch): SpendLogToolIndex for "last N requests for tool X"
+    try:
+        from litellm.proxy.db.spend_log_tool_index import \
+            process_spend_logs_tool_usage
+        await process_spend_logs_tool_usage(
+            prisma_client=prisma_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception as tool_tracking_err:
+        verbose_proxy_logger.warning(
+            "Spend tracking - tool usage tracking failed (non-fatal): %s",
+            tool_tracking_err,
         )
 
 

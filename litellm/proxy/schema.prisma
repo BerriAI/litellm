@@ -260,6 +260,7 @@ model LiteLLM_ObjectPermissionTable {
   vector_stores         String[]       @default([])
   agents                String[]       @default([])
   agent_access_groups   String[]       @default([])
+  blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -920,6 +921,16 @@ model LiteLLM_SpendLogGuardrailIndex {
   @@index([policy_id, start_time])
 }
 
+// Index for fast "last N logs for tool" from SpendLogs – see how a tool is called in production
+model LiteLLM_SpendLogToolIndex {
+  request_id String
+  tool_name  String   // matches LiteLLM_ToolTable.tool_name; join for call_policy etc.
+  start_time DateTime
+
+  @@id([request_id, tool_name])
+  @@index([tool_name, start_time])
+}
+
 // Prompt table for storing prompt configurations
 model LiteLLM_PromptTable {
   id String @id @default(uuid())
@@ -1075,25 +1086,6 @@ model LiteLLM_ToolTable {
 
   @@index([call_policy])
   @@index([team_id])
-}
-
-// Per-(tool, team/key) policy overrides. When present, override replaces global tool policy for that scope.
-model LiteLLM_ToolPolicyOverrideTable {
-  override_id String   @id @default(uuid())
-  tool_name   String
-  team_id     String   @default("")  // "" = not scoped to team; non-empty = override for this team only
-  key_hash    String   @default("")  // "" = not scoped to key; non-empty = override for this key only
-  call_policy String   @default("blocked")
-  key_alias   String?  // human-readable key alias for UI
-  created_at  DateTime @default(now())
-  created_by  String?
-  updated_at  DateTime @default(now()) @updatedAt
-  updated_by  String?
-
-  @@unique([tool_name, team_id, key_hash])
-  @@index([tool_name])
-  @@index([team_id])
-  @@index([key_hash])
 }
 
 //Unified Access Groups table for storing unified access groups

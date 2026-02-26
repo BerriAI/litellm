@@ -20,9 +20,6 @@ from litellm.types.tool_management import (LiteLLM_ToolTableRow,
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
-# Sentinel for "not scoped" in override table (DB unique constraint needs non-null)
-_TOOL_OVERRIDE_ANY = ""
-
 TOOL_POLICY_CACHE_KEY_PREFIX = "tool_policy:"
 
 
@@ -215,54 +212,54 @@ async def get_tools_by_names(
         return {}
 
 
-def _override_row_to_model(row: Any) -> ToolPolicyOverrideRow:
-    """Convert a Prisma override row to ToolPolicyOverrideRow."""
-    model_dump = getattr(row, "model_dump", None)
-    if callable(model_dump):
-        row = model_dump()
-    elif not isinstance(row, dict):
-        row = {
-            k: getattr(row, k, None)
-            for k in (
-                "override_id",
-                "tool_name",
-                "team_id",
-                "key_hash",
-                "call_policy",
-                "key_alias",
-                "created_at",
-                "updated_at",
-            )
-        }
-
-    def _norm(s: Optional[str]) -> Optional[str]:
-        if s is None or s == _TOOL_OVERRIDE_ANY:
-            return None
-        return s or None
-
-    return ToolPolicyOverrideRow(
-        override_id=row.get("override_id", ""),
-        tool_name=row.get("tool_name", ""),
-        team_id=_norm(row.get("team_id")),
-        key_hash=_norm(row.get("key_hash")),
-        call_policy=row.get("call_policy", "blocked"),
-        key_alias=row.get("key_alias"),
-        created_at=row.get("created_at"),
-        updated_at=row.get("updated_at"),
-    )
-
-
 async def list_overrides_for_tool(
     prisma_client: "PrismaClient",
     tool_name: str,
 ) -> List[ToolPolicyOverrideRow]:
-    """Return all policy overrides for a tool."""
+    """
+    Return override-like rows for a tool by finding object permissions that have
+    this tool in blocked_tools, then resolving each permission to key/team scope for display.
+    """
+    out: List[ToolPolicyOverrideRow] = []
     try:
-        rows = await prisma_client.db.litellm_toolpolicyoverridetable.find_many(
-            where={"tool_name": tool_name},
-            order={"created_at": "desc"},
+        perms = await prisma_client.db.litellm_objectpermissiontable.find_many(
+            where={"blocked_tools": {"has": tool_name}},
+            include={
+                "verification_tokens": True,
+                "teams": True,
+            },
         )
-        return [_override_row_to_model(row) for row in rows]
+        for perm in perms:
+            op_id = getattr(perm, "object_permission_id", None) or ""
+            tokens = getattr(perm, "verification_tokens", []) or []
+            teams = getattr(perm, "teams", []) or []
+            for t in tokens:
+                out.append(
+                    ToolPolicyOverrideRow(
+                        override_id=op_id,
+                        tool_name=tool_name,
+                        team_id=None,
+                        key_hash=getattr(t, "token", None),
+                        call_policy="blocked",
+                        key_alias=getattr(t, "key_alias", None),
+                        created_at=None,
+                        updated_at=None,
+                    )
+                )
+            for team in teams:
+                out.append(
+                    ToolPolicyOverrideRow(
+                        override_id=op_id,
+                        tool_name=tool_name,
+                        team_id=getattr(team, "team_id", None),
+                        key_hash=None,
+                        call_policy="blocked",
+                        key_alias=getattr(team, "team_alias", None),
+                        created_at=None,
+                        updated_at=None,
+                    )
+                )
+        return out
     except Exception as e:
         verbose_proxy_logger.error(
             "tool_registry_writer list_overrides_for_tool error: %s", e
@@ -270,128 +267,61 @@ async def list_overrides_for_tool(
         return []
 
 
-async def upsert_tool_policy_override(
+async def _get_merged_blocked_tools(
     prisma_client: "PrismaClient",
-    tool_name: str,
-    call_policy: ToolCallPolicy,
-    team_id: Optional[str] = None,
-    key_hash: Optional[str] = None,
-    key_alias: Optional[str] = None,
-    updated_by: Optional[str] = None,
-) -> Optional[ToolPolicyOverrideRow]:
-    """Create or update a per-(tool, team, key) policy override."""
-    try:
-        _team = (team_id or "").strip() or _TOOL_OVERRIDE_ANY
-        _key = (key_hash or "").strip() or _TOOL_OVERRIDE_ANY
-        _updated_by = updated_by or "system"
-        now = datetime.now(timezone.utc)
-        table = prisma_client.db.litellm_toolpolicyoverridetable
-        await table.upsert(
-            where={
-                "tool_name_team_id_key_hash": {
-                    "tool_name": tool_name,
-                    "team_id": _team,
-                    "key_hash": _key,
-                }
-            },
-            data={
-                "create": {
-                    "override_id": str(uuid.uuid4()),
-                    "tool_name": tool_name,
-                    "team_id": _team,
-                    "key_hash": _key,
-                    "call_policy": call_policy,
-                    "key_alias": key_alias,
-                    "created_by": _updated_by,
-                    "updated_by": _updated_by,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-                "update": {
-                    "call_policy": call_policy,
-                    "key_alias": key_alias,
-                    "updated_by": _updated_by,
-                    "updated_at": now,
-                },
-            },
-        )
-        row = await table.find_unique(
-            where={
-                "tool_name_team_id_key_hash": {
-                    "tool_name": tool_name,
-                    "team_id": _team,
-                    "key_hash": _key,
-                }
-            }
-        )
-        if row is None:
-            return None
-        return _override_row_to_model(row)
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer upsert_tool_policy_override error: %s", e
-        )
-        return None
-
-
-async def delete_tool_policy_override(
-    prisma_client: "PrismaClient",
-    tool_name: str,
-    team_id: Optional[str] = None,
-    key_hash: Optional[str] = None,
-) -> bool:
-    """Remove a policy override. Exactly one of team_id or key_hash should be set for a specific override."""
-    try:
-        _team = (team_id or "").strip() or _TOOL_OVERRIDE_ANY
-        _key = (key_hash or "").strip() or _TOOL_OVERRIDE_ANY
-        result = await prisma_client.db.litellm_toolpolicyoverridetable.delete_many(
-            where={
-                "tool_name": tool_name,
-                "team_id": _team,
-                "key_hash": _key,
-            }
-        )
-        return (result or 0) > 0
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer delete_tool_policy_override error: %s", e
-        )
-        return False
+    object_permission_id: Optional[str],
+    team_object_permission_id: Optional[str],
+) -> set:
+    """Return union of blocked_tools from key and team object permissions."""
+    blocked: set = set()
+    for op_id in (object_permission_id, team_object_permission_id):
+        if not op_id or not op_id.strip():
+            continue
+        try:
+            row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": op_id.strip()},
+                select={"blocked_tools": True},
+            )
+            if row is not None and getattr(row, "blocked_tools", None):
+                blocked.update(row.blocked_tools)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "tool_registry_writer _get_merged_blocked_tools error for %s: %s",
+                op_id,
+                e,
+            )
+    return blocked
 
 
 async def get_effective_policies(
     prisma_client: "PrismaClient",
     tool_names: List[str],
-    team_id: Optional[str],
-    key_hash: Optional[str],
+    object_permission_id: Optional[str] = None,
+    team_object_permission_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """
-    Return effective call_policy per tool: override for (tool, team_id, key_hash) if present,
-    otherwise global policy from LiteLLM_ToolTable.
+    Return effective call_policy per tool: if tool is in key/team object permission
+    blocked_tools then "blocked", otherwise global policy from LiteLLM_ToolTable.
     """
     if not tool_names:
         return {}
-    _team = (team_id or "").strip() or _TOOL_OVERRIDE_ANY
-    _key = (key_hash or "").strip() or _TOOL_OVERRIDE_ANY
     try:
-        # Fetch overrides for (tool_name, team_id, key_hash) - exact match
-        overrides = await prisma_client.db.litellm_toolpolicyoverridetable.find_many(
-            where={
-                "tool_name": {"in": tool_names},
-                "team_id": _team,
-                "key_hash": _key,
-            }
+        blocked = await _get_merged_blocked_tools(
+            prisma_client=prisma_client,
+            object_permission_id=object_permission_id,
+            team_object_permission_id=team_object_permission_id,
         )
-        override_map = {row.tool_name: row.call_policy for row in overrides}
-        # Global policies for tools that have no override
-        missing = [n for n in tool_names if n not in override_map]
-        if not missing:
-            return override_map
-        global_map = await get_tools_by_names(
-            prisma_client=prisma_client, tool_names=missing
-        )
-        override_map.update(global_map)
-        return override_map
+        result: Dict[str, str] = {}
+        for name in tool_names:
+            if name in blocked:
+                result[name] = "blocked"
+        missing = [n for n in tool_names if n not in result]
+        if missing:
+            global_map = await get_tools_by_names(
+                prisma_client=prisma_client, tool_names=missing
+            )
+            result.update(global_map)
+        return result
     except Exception as e:
         verbose_proxy_logger.error(
             "tool_registry_writer get_effective_policies error: %s", e
@@ -399,25 +329,28 @@ async def get_effective_policies(
         return {}
 
 
-def _effective_cache_suffix(team_id: Optional[str], key_hash: Optional[str]) -> str:
-    """Cache key suffix so different request contexts (team/key) get correct policies."""
-    return f":{team_id or ''}:{key_hash or ''}"
+def _effective_cache_suffix(
+    object_permission_id: Optional[str],
+    team_object_permission_id: Optional[str],
+) -> str:
+    """Cache key suffix so different request contexts get correct policies."""
+    return f":{object_permission_id or ''}:{team_object_permission_id or ''}"
 
 
 async def get_tool_policies_cached(
     tool_names: List[str],
     cache: DualCache,
     prisma_client: Optional["PrismaClient"],
-    team_id: Optional[str] = None,
-    key_hash: Optional[str] = None,
+    object_permission_id: Optional[str] = None,
+    team_object_permission_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """
-    Return effective call_policy per tool (override for team/key if present, else global).
-    Cache-first; cache key includes team_id and key_hash when provided.
+    Return effective call_policy per tool (blocked if in object permission blocked_tools,
+    else global). Cache-first; cache key includes object_permission_id(s).
     """
     if not tool_names:
         return {}
-    suffix = _effective_cache_suffix(team_id, key_hash)
+    suffix = _effective_cache_suffix(object_permission_id, team_object_permission_id)
     result: Dict[str, str] = {}
     cache_misses: List[str] = []
     for name in tool_names:
@@ -429,12 +362,12 @@ async def get_tool_policies_cached(
             cache_misses.append(name)
     if cache_misses and prisma_client is not None:
         try:
-            if team_id is not None or key_hash is not None:
+            if object_permission_id or team_object_permission_id:
                 fetched = await get_effective_policies(
                     prisma_client=prisma_client,
                     tool_names=cache_misses,
-                    team_id=team_id,
-                    key_hash=key_hash,
+                    object_permission_id=object_permission_id,
+                    team_object_permission_id=team_object_permission_id,
                 )
             else:
                 fetched = await get_tools_by_names(
@@ -457,3 +390,66 @@ async def get_tool_policies_cached(
                 "tool_registry_writer get_tool_policies_cached error: %s", e
             )
     return result
+
+
+async def add_tool_to_object_permission_blocked(
+    prisma_client: "PrismaClient",
+    object_permission_id: str,
+    tool_name: str,
+) -> bool:
+    """Add tool_name to the permission's blocked_tools if not already present."""
+    if not object_permission_id or not tool_name:
+        return False
+    try:
+        row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": object_permission_id},
+            select={"blocked_tools": True},
+        )
+        if row is None:
+            return False
+        current = list(getattr(row, "blocked_tools", []) or [])
+        if tool_name in current:
+            return True
+        current.append(tool_name)
+        await prisma_client.db.litellm_objectpermissiontable.update(
+            where={"object_permission_id": object_permission_id},
+            data={"blocked_tools": current},
+        )
+        return True
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "tool_registry_writer add_tool_to_object_permission_blocked error: %s", e
+        )
+        return False
+
+
+async def remove_tool_from_object_permission_blocked(
+    prisma_client: "PrismaClient",
+    object_permission_id: str,
+    tool_name: str,
+) -> bool:
+    """Remove tool_name from the permission's blocked_tools. Returns False if tool was not in list."""
+    if not object_permission_id or not tool_name:
+        return False
+    try:
+        row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": object_permission_id},
+            select={"blocked_tools": True},
+        )
+        if row is None:
+            return False
+        current = list(getattr(row, "blocked_tools", []) or [])
+        if tool_name not in current:
+            return False
+        current = [t for t in current if t != tool_name]
+        await prisma_client.db.litellm_objectpermissiontable.update(
+            where={"object_permission_id": object_permission_id},
+            data={"blocked_tools": current},
+        )
+        return True
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "tool_registry_writer remove_tool_from_object_permission_blocked error: %s",
+            e,
+        )
+        return False

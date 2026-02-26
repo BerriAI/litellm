@@ -61,3 +61,21 @@ class ToolPolicyOverrideRow(BaseModel):
 class ToolDetailResponse(BaseModel):
     tool: LiteLLM_ToolTableRow
     overrides: List[ToolPolicyOverrideRow] = Field(default_factory=list)
+
+
+class ToolUsageLogEntry(BaseModel):
+    """One spend log row for a tool call (for UI "recent logs" table)."""
+
+    id: str  # request_id
+    timestamp: str
+    model: Optional[str] = None
+    spend: Optional[float] = None
+    total_tokens: Optional[int] = None
+    input_snippet: Optional[str] = None
+
+
+class ToolUsageLogsResponse(BaseModel):
+    logs: List[ToolUsageLogEntry]
+    total: int
+    page: int
+    page_size: int

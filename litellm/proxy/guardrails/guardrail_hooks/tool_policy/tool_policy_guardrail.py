@@ -43,22 +43,31 @@ if TYPE_CHECKING:
 GUARDRAIL_NAME = "tool_policy"
 
 
-def _get_request_team_and_key(
+def _get_request_object_permission_ids(
     request_data: dict,
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Extract team_id and key hash from request_data (litellm_metadata or metadata)."""
+    """Extract object_permission_id and team_object_permission_id from request_data."""
     if not request_data:
         return None, None
     for key in ("litellm_metadata", "metadata"):
         meta = request_data.get(key)
         if not isinstance(meta, dict):
             continue
-        team_id = meta.get("user_api_key_team_id")
-        key_hash = meta.get("user_api_key_api_key") or meta.get("user_api_key")
-        if team_id is not None or key_hash is not None:
+        auth = meta.get("user_api_key_auth")
+        if auth is not None and hasattr(auth, "object_permission_id"):
+            key_op = getattr(auth, "object_permission_id", None)
+            team_op = getattr(auth, "team_object_permission_id", None)
+            if key_op is not None or team_op is not None:
+                return (
+                    str(key_op).strip() if key_op else None,
+                    str(team_op).strip() if team_op else None,
+                )
+        key_op = meta.get("user_api_key_object_permission_id")
+        team_op = meta.get("user_api_key_team_object_permission_id")
+        if key_op is not None or team_op is not None:
             return (
-                str(team_id).strip() if team_id else None,
-                str(key_hash).strip() if key_hash else None,
+                str(key_op).strip() if key_op else None,
+                str(team_op).strip() if team_op else None,
             )
     return None, None
 
@@ -165,8 +174,14 @@ class ToolPolicyGuardrail(CustomGuardrail):
                     },
                 )
 
-        team_id, key_hash = _get_request_team_and_key(request_data)
-        policy_map = await self._get_policies_cached(tool_names, team_id, key_hash)
+        object_permission_id, team_object_permission_id = (
+            _get_request_object_permission_ids(request_data)
+        )
+        policy_map = await self._get_policies_cached(
+            tool_names,
+            object_permission_id=object_permission_id,
+            team_object_permission_id=team_object_permission_id,
+        )
         blocked = [name for name in tool_names if policy_map.get(name) == "blocked"]
         if blocked:
             verbose_proxy_logger.warning(
@@ -186,12 +201,12 @@ class ToolPolicyGuardrail(CustomGuardrail):
     async def _get_policies_cached(
         self,
         tool_names: List[str],
-        team_id: Optional[str] = None,
-        key_hash: Optional[str] = None,
+        object_permission_id: Optional[str] = None,
+        team_object_permission_id: Optional[str] = None,
     ) -> Dict[str, str]:
         """
-        Fetch effective call_policy (override for team/key if present, else global)
-        via shared cache to avoid DB in hot path.
+        Fetch effective call_policy (blocked if in object permission blocked_tools,
+        else global) via shared cache to avoid DB in hot path.
         """
         from litellm.proxy.db.tool_registry_writer import \
             get_tool_policies_cached
@@ -204,6 +219,6 @@ class ToolPolicyGuardrail(CustomGuardrail):
             tool_names=tool_names,
             cache=user_api_key_cache,
             prisma_client=prisma_client,
-            team_id=team_id,
-            key_hash=key_hash,
+            object_permission_id=object_permission_id,
+            team_object_permission_id=team_object_permission_id,
         )
