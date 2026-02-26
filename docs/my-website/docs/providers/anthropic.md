@@ -4,6 +4,8 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-opus-4-6` (`claude-opus-4-6-20260205`)
+- `claude-sonnet-4-6`
 - `claude-sonnet-4-5-20250929`
 - `claude-opus-4-5-20251101`
 - `claude-opus-4-1-20250805`
@@ -50,7 +52,7 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 **Notes:**
 - Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
 - `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
-- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude 4.6 and Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
 
 :::
 

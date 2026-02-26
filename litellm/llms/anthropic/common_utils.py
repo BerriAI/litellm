@@ -224,15 +224,33 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
+    @staticmethod
+    def _is_claude_4_6_model(model: str) -> bool:
+        """Check if the model is a Claude 4.6 model (Opus 4.6 or Sonnet 4.6)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6",
+                "sonnet-4-6", "sonnet_4_6", "sonnet-4.6", "sonnet_4.6",
+            )
+        )
+
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
         """
-        Check if effort parameter is being used.
+        Check if effort parameter is being used and requires a beta header.
 
-        Returns True if effort-related parameters are present.
+        Returns True if effort-related parameters are present and
+        the model requires the effort beta header. Claude 4.6 models
+        use output_config as a stable API feature — no beta header needed.
         """
         if not optional_params:
+            return False
+
+        # Claude 4.6 models use output_config as a stable API feature — no beta header needed
+        if model and self._is_claude_4_6_model(model):
             return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
@@ -241,7 +259,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True
 
-        # Check if output_config is directly provided
+        # Check if output_config is directly provided (for non-4.6 models)
         output_config = optional_params.get("output_config")
         if output_config and isinstance(output_config, dict):
             effort = output_config.get("effort")

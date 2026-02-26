@@ -1662,7 +1662,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -2117,6 +2117,139 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         assert result["thinking"]["budget_tokens"] == expected_budget
         # reasoning_effort should not be in the result (it's transformed to thinking)
         assert "reasoning_effort" not in result
+
+
+def test_reasoning_effort_sets_output_config_for_46_models():
+    """
+    Test that reasoning_effort generates output_config for Claude 4.6 models.
+
+    For Claude 4.6 models, reasoning_effort should produce both adaptive
+    thinking AND output_config with the mapped effort level.
+    """
+    config = AnthropicConfig()
+
+    for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
+        for effort in ["low", "medium", "high"]:
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+
+            assert "output_config" in result, (
+                f"output_config missing for {model} with effort={effort}"
+            )
+            assert result["output_config"]["effort"] == effort
+
+
+def test_reasoning_effort_minimal_maps_to_low_output_config_for_46():
+    """
+    Test that reasoning_effort='minimal' maps to output_config effort='low'
+    for 4.6 models, since 'minimal' has no Anthropic equivalent.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="claude-opus-4-6-20250514",
+        drop_params=False,
+    )
+
+    assert result["output_config"]["effort"] == "low"
+
+
+def test_reasoning_effort_does_not_set_output_config_for_older_models():
+    """
+    Test that reasoning_effort does NOT generate output_config for pre-4.6 models.
+    """
+    config = AnthropicConfig()
+
+    for model in [
+        "claude-sonnet-4-5-20250929",
+        "claude-3-7-sonnet-20250219",
+        "claude-opus-4-5-20251101",
+    ]:
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+        assert "output_config" not in result, (
+            f"output_config should not be set for {model}"
+        )
+
+
+def test_max_effort_rejected_for_sonnet_46():
+    """Test that effort='max' is rejected for Sonnet 4.6 (only Opus 4.6 supports max)."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+        config.transform_request(
+            model="claude-sonnet-4-6-20260219",
+            messages=messages,
+            optional_params={"output_config": {"effort": "max"}},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_max_effort_accepted_for_opus_46():
+    """Test that effort='max' works for Opus 4.6."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    result = config.transform_request(
+        model="claude-opus-4-6-20250514",
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_effort_beta_header_not_injected_for_46_models():
+    """
+    Test that is_effort_used returns False for Claude 4.6 models.
+
+    Claude 4.6 models use output_config as a stable API feature —
+    no beta header should be injected.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
+        # Even with output_config present, should return False for 4.6 models
+        result = model_info.is_effort_used(
+            optional_params={"output_config": {"effort": "high"}},
+            model=model,
+        )
+        assert result is False, (
+            f"is_effort_used should return False for {model}"
+        )
+
+
+def test_effort_beta_header_still_injected_for_older_models():
+    """
+    Test that is_effort_used still returns True for pre-4.6 models
+    when output_config is present.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    result = model_info.is_effort_used(
+        optional_params={"output_config": {"effort": "low"}},
+        model="claude-opus-4-5-20251101",
+    )
+    assert result is True
 
 
 def test_code_execution_tool_results_extraction():
