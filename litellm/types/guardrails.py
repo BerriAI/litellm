@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
+    BlockCodeExecutionGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
@@ -73,6 +76,7 @@ class SupportedGuardrailIntegrations(Enum):
     CUSTOM_CODE = "custom_code"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
+    BLOCK_CODE_EXECUTION = "block_code_execution"
 
 
 class Role(Enum):
@@ -259,6 +263,8 @@ class PiiEntityCategoryMap(TypedDict):
 class GuardrailParamUITypes(str, Enum):
     BOOL = "bool"
     STR = "str"
+    MULTISELECT = "multiselect"
+    PERCENTAGE = "percentage"
 
 
 class PresidioPresidioConfigModelUserInterface(BaseModel):
@@ -643,6 +649,21 @@ class BaseLitellmParams(
         description="Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
     )
 
+    ################## Realtime API params ################
+    ########################################################
+    end_session_after_n_fails: Optional[int] = Field(
+        default=None,
+        description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
+    )
+    on_violation: Optional[Literal["warn", "end_session"]] = Field(
+        default=None,
+        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+    )
+    realtime_violation_message: Optional[str] = Field(
+        default=None,
+        description="The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
+    )
+
     # Model Armor params
     template_id: Optional[str] = Field(
         default=None, description="The ID of your Model Armor template"
@@ -707,6 +728,7 @@ class LitellmParams(
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
+    BlockCodeExecutionGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

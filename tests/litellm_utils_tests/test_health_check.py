@@ -497,7 +497,7 @@ async def test_perform_health_check_filters_by_model_id():
 
     captured_list = []
 
-    async def mock_perform_health_check(m_list, details=True):
+    async def mock_perform_health_check(m_list, details=True, **kwargs):
         captured_list.append(m_list)
         return [{"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}], []
 
