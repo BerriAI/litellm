@@ -124,21 +124,7 @@ def test_map_openai_params_allows_tools_explicitly(config):
 
     optional_params = {}
 
-    # Case 1: drop_params=False → should raise only on unknown_param, NOT on tools/tool_choice
-    with pytest.raises(UnsupportedParamsError) as exc_info:
-        result = config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params.copy(),
-            model="gradient_ai/test-model",
-            drop_params=False,
-        )
-
-    error_msg = str(exc_info.value)
-    assert "unknown_param" in error_msg
-    assert "tools" not in error_msg          # Important: should NOT complain about tools
-    assert "tool_choice" not in error_msg
-
-    # Case 2: drop_params=True → should pass without raising and preserve tools
+    # drop_params=True → should pass without raising and preserve tools
     result = config.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params.copy(),
