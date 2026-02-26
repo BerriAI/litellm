@@ -207,7 +207,20 @@ Start the proxy with a config file:
 poetry run litellm --config dev_config.yaml --port 4000
 ```
 
-The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health/liveliness` to return `200` before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+
+**Important**: `prisma generate --schema=./litellm/proxy/schema.prisma` must have been run before starting the proxy (the update script handles this). If you see `RuntimeError: The Client hasn't been generated yet`, re-run it.
+
+If `dev_config.yaml` does not exist, create a minimal one with a fake model for testing:
+
+```yaml
+model_list:
+  - model_name: fake-model
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app
+```
 
 ### Running tests
 
