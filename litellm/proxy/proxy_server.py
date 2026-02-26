@@ -709,14 +709,6 @@ async def proxy_shutdown_event():
             # [DO NOT BLOCK shutdown events for this]
             pass
 
-    # Clean up this worker's prometheus multiproc .db files
-    try:
-        from litellm.proxy.prometheus_cleanup import cleanup_own_pid_files
-
-        cleanup_own_pid_files()
-    except Exception as e:
-        verbose_proxy_logger.warning(f"Error cleaning up prometheus files: {e}")
-
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
 
