@@ -15,9 +15,6 @@ import json
 from typing import List, Optional
 
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-
-vertex_llm_base = VertexBase()
 
 
 class VertexAIRealtimeConfig(GeminiRealtimeConfig):

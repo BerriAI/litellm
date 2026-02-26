@@ -522,10 +522,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         - return response.content_part.done
         - return response.output_item.done
         """
-        if current_output_item_id is None or current_response_id is None:
-            raise ValueError(
-                "current_output_item_id and current_response_id cannot be None for a 'done' event."
-            )
+        if current_output_item_id is None:
+            current_output_item_id = "item_{}".format(uuid.uuid4())
+        if current_response_id is None:
+            current_response_id = "resp_{}".format(uuid.uuid4())
         returned_items: List[OpenAIRealtimeEvents] = []
 
         delta_done_event_text = cast(Optional[str], delta_done_event.get("text"))
