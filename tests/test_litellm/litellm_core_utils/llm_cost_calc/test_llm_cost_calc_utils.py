@@ -9,9 +9,19 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
+from litellm.llms.gemini.image_generation.cost_calculator import (
+    cost_calculator as gemini_image_generation_cost_calculator,
+)
+from litellm.llms.vertex_ai.image_generation.cost_calculator import (
+    cost_calculator as vertex_image_generation_cost_calculator,
+)
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -835,6 +845,140 @@ def test_gemini_image_generation_cost_with_zero_text_tokens(model: str):
     assert round(completion_cost, 4) == round(expected_completion_cost, 4), (
         f"Expected completion cost ${expected_completion_cost:.6f}, got ${completion_cost:.6f}"
     )
+
+
+def test_vertex_image_generation_cost_prefers_token_usage_metadata():
+    """
+    When usage metadata exists on image responses, Vertex image generation cost
+    should be calculated from token pricing, not flat output_cost_per_image.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini-3.1-flash-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+
+    input_text_tokens = 50
+    input_image_tokens = 1120
+    output_image_tokens = 1120
+    prompt_tokens = input_text_tokens + input_image_tokens
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")],
+        usage=ImageUsage(
+            input_tokens=prompt_tokens,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=input_text_tokens,
+                image_tokens=input_image_tokens,
+            ),
+            output_tokens=output_image_tokens,
+            total_tokens=prompt_tokens + output_image_tokens,
+        ),
+    )
+
+    cost = vertex_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
+    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_total_cost = expected_prompt_cost + expected_completion_cost
+
+    assert round(cost, 10) == round(expected_total_cost, 10)
+    # Ensure this is not falling back to flat per-image pricing.
+    assert cost != len(image_response.data) * model_info["output_cost_per_image"]
+
+
+def test_vertex_image_generation_cost_falls_back_to_flat_image_pricing():
+    """
+    Without usage metadata, Vertex image generation cost should fall back to
+    output_cost_per_image * number_of_images.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini-3.1-flash-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
+    )
+
+    cost = vertex_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_cost = len(image_response.data) * model_info["output_cost_per_image"]
+    assert round(cost, 10) == round(expected_cost, 10)
+
+
+def test_gemini_image_generation_cost_prefers_token_usage_metadata():
+    """
+    When usage metadata exists on image responses, Gemini image generation cost
+    should be calculated from token pricing, not flat output_cost_per_image.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini/gemini-3-pro-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    input_text_tokens = 20
+    input_image_tokens = 1120
+    output_image_tokens = 1120
+    prompt_tokens = input_text_tokens + input_image_tokens
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")],
+        usage=ImageUsage(
+            input_tokens=prompt_tokens,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=input_text_tokens,
+                image_tokens=input_image_tokens,
+            ),
+            output_tokens=output_image_tokens,
+            total_tokens=prompt_tokens + output_image_tokens,
+        ),
+    )
+
+    cost = gemini_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
+    expected_completion_cost = output_image_tokens * model_info["output_cost_per_image_token"]
+    expected_total_cost = expected_prompt_cost + expected_completion_cost
+
+    assert round(cost, 10) == round(expected_total_cost, 10)
+    # Ensure this is not falling back to flat per-image pricing.
+    assert cost != len(image_response.data) * model_info["output_cost_per_image"]
+
+
+def test_gemini_image_generation_cost_falls_back_to_flat_image_pricing():
+    """
+    Without usage metadata, Gemini image generation cost should fall back to
+    output_cost_per_image * number_of_images.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "gemini/gemini-3-pro-image-preview"
+    model_info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+
+    image_response = ImageResponse(
+        data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
+    )
+
+    cost = gemini_image_generation_cost_calculator(
+        model=model,
+        image_response=image_response,
+    )
+
+    expected_cost = len(image_response.data) * model_info["output_cost_per_image"]
+    assert round(cost, 10) == round(expected_cost, 10)
 
 
 def test_bedrock_anthropic_prompt_caching():
