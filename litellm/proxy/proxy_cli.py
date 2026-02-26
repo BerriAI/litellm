@@ -344,20 +344,16 @@ class ProxyInitializationHelpers:
         )
 
         auto_created = not multiproc_dir
-        
         if not multiproc_dir:
             multiproc_dir = os.path.join(
                 tempfile.gettempdir(), "litellm_prometheus_multiproc"
             )
-        multiproc_dir = os.path.join(
-            tempfile.gettempdir(), "litellm_prometheus_multiproc"
-        )
+            os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
+
         os.makedirs(multiproc_dir, exist_ok=True)
         wipe_directory(multiproc_dir)
-        action = "Auto-created" if auto_created else "Use existing"
-        print(  # noqa
-            f"LiteLLM {action}: Auto-created PROMETHEUS_MULTIPROC_DIR={multiproc_dir}"
-        )
+        action = "Auto-created" if auto_created else "Using existing"
+        print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")  # noqa
 
 
 @click.command()
