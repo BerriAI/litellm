@@ -429,6 +429,14 @@ async def new_project(
                     value=getattr(data, field),
                 )
 
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=project_row,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+
         new_project_row = prisma_client.jsonify_object(
             project_row.json(exclude_none=True)
         )
@@ -628,6 +636,12 @@ async def update_project(
 
         # Handle metadata fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if field in update_data:
+                if update_data.get("metadata") is None:
+                    update_data["metadata"] = {}
+                update_data["metadata"][field] = update_data.pop(field)
+
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
             if field in update_data:
                 if update_data.get("metadata") is None:
                     update_data["metadata"] = {}

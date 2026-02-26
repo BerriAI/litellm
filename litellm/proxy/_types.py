@@ -1106,7 +1106,9 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+                    raise ValueError(
+                        "url or spec_path is required for HTTP/SSE transport"
+                    )
         return values
 
     @model_validator(mode="before")
@@ -1158,7 +1160,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+                    raise ValueError(
+                        "url or spec_path is required for HTTP/SSE transport"
+                    )
         return values
 
 
@@ -1409,12 +1413,12 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[AllowedModelRegion] = (
-        None  # require all user requests to use models in this specific region
-    )
-    default_model: Optional[str] = (
-        None  # if no equivalent model in allowed region - default all requests to this model
-    )
+    allowed_model_region: Optional[
+        AllowedModelRegion
+    ] = None  # require all user requests to use models in this specific region
+    default_model: Optional[
+        str
+    ] = None  # if no equivalent model in allowed region - default all requests to this model
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     @model_validator(mode="before")
@@ -1437,12 +1441,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[AllowedModelRegion] = (
-        None  # require all user requests to use models in this specific region
-    )
-    default_model: Optional[str] = (
-        None  # if no equivalent model in allowed region - default all requests to this model
-    )
+    allowed_model_region: Optional[
+        AllowedModelRegion
+    ] = None  # require all user requests to use models in this specific region
+    default_model: Optional[
+        str
+    ] = None  # if no equivalent model in allowed region - default all requests to this model
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
@@ -2274,6 +2278,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     organization_tpm_limit: Optional[int] = None
     organization_rpm_limit: Optional[int] = None
     organization_metadata: Optional[dict] = None
+    project_metadata: Optional[dict] = None
 
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
@@ -2581,16 +2586,20 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     model_tpm_limit: Optional[dict] = None
     blocked: bool = False
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    tags: Optional[list] = None
 
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        for field in (
+            LiteLLM_ManagementEndpoint_MetadataFields
+            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})
                 values["metadata"][field] = values.get(field)
-                values.pop(field)
+                values.pop(field, None)
         return values
 
 
@@ -2608,16 +2617,20 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     blocked: Optional[bool] = None
     budget_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+    tags: Optional[list] = None
 
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        for field in (
+            LiteLLM_ManagementEndpoint_MetadataFields
+            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})
                 values["metadata"][field] = values.get(field)
-                values.pop(field)
+                values.pop(field, None)
         return values
 
 
@@ -2636,6 +2649,7 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     team_id: Optional[str] = None
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    tags: Optional[list] = None
     models: List[str] = []
     spend: float = 0.0
     model_spend: Optional[dict] = None
@@ -2645,6 +2659,17 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     object_permission_id: Optional[str] = None
     created_by: str
     updated_by: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def surface_tags(cls, values):
+        """Surfaces tags from metadata to the top level for responses"""
+        if isinstance(values, dict):
+            metadata = values.get("metadata")
+            if isinstance(metadata, dict) and "tags" in metadata:
+                values["tags"] = metadata["tags"]
+        return values
+
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
@@ -3056,7 +3081,9 @@ class SpendLogsMetadata(TypedDict):
         str
     ]  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: Optional[float]  # LiteLLM overhead time in milliseconds
-    attempted_retries: Optional[int]  # Number of retries attempted (0 = first attempt succeeded)
+    attempted_retries: Optional[
+        int
+    ]  # Number of retries attempted (0 = first attempt succeeded)
     max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[
         CostBreakdown
@@ -4117,10 +4144,10 @@ class SpendUpdateQueueItem(TypedDict, total=False):
 
 class ToolDiscoveryQueueItem(TypedDict, total=False):
     tool_name: str
-    origin: Optional[str]   # MCP server name or "user_defined"
+    origin: Optional[str]  # MCP server name or "user_defined"
     created_by: Optional[str]
-    key_hash: Optional[str]   # hash of virtual key that triggered discovery
-    team_id: Optional[str]    # team that triggered discovery
+    key_hash: Optional[str]  # hash of virtual key that triggered discovery
+    team_id: Optional[str]  # team that triggered discovery
     key_alias: Optional[str]  # human-readable key alias
 
 
@@ -4144,6 +4171,7 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     """Table for managing vector stores with target_model_names support."""
+
     unified_resource_id: str
     resource_object: Optional[Any] = None  # VectorStoreCreateResponse
     model_mappings: Dict[str, str]
