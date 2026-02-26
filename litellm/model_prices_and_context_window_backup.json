@@ -143,7 +143,7 @@
             "notes": "DALL-E 2 via AI/ML API - Reliable text-to-image generation"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.021,
+        "output_cost_per_image": 0.026,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -155,7 +155,7 @@
             "notes": "DALL-E 3 via AI/ML API - High-quality text-to-image generation"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.042,
+        "output_cost_per_image": 0.052,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -167,7 +167,7 @@
             "notes": "Flux Dev - Development version optimized for experimentation"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.053,
+        "output_cost_per_image": 0.065,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -176,7 +176,7 @@
     "aiml/flux-pro/v1.1": {
         "litellm_provider": "aiml",
         "mode": "image_generation",
-        "output_cost_per_image": 0.042,
+        "output_cost_per_image": 0.052,
         "supported_endpoints": [
             "/v1/images/generations"
         ]
@@ -195,7 +195,7 @@
             "notes": "Flux Pro - Professional-grade image generation model"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.037,
+        "output_cost_per_image": 0.046,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -207,7 +207,7 @@
             "notes": "Flux Dev - Development version optimized for experimentation"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.026,
+        "output_cost_per_image": 0.033,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -219,7 +219,7 @@
             "notes": "Flux Pro v1.1 - Enhanced version with improved capabilities and 6x faster inference speed"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.084,
+        "output_cost_per_image": 0.104,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -231,7 +231,7 @@
             "notes": "Flux Pro v1.1 - Enhanced version with improved capabilities and 6x faster inference speed"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.042,
+        "output_cost_per_image": 0.052,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -243,7 +243,7 @@
             "notes": "Flux Schnell - Fast generation model optimized for speed"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.003,
+        "output_cost_per_image": 0.004,
         "source": "https://docs.aimlapi.com/",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -255,7 +255,7 @@
             "notes": "Imagen 4.0 Ultra Generate API - Photorealistic image generation with precise text rendering"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.063,
+        "output_cost_per_image": 0.078,
         "source": "https://docs.aimlapi.com/api-references/image-models/google/imagen-4-ultra-generate",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -267,7 +267,7 @@
             "notes": "Gemini 3 Pro Image (Nano Banana Pro) - Advanced text-to-image generation with reasoning and 4K resolution support"
         },
         "mode": "image_generation",
-        "output_cost_per_image": 0.1575,
+        "output_cost_per_image": 0.195,
         "source": "https://docs.aimlapi.com/api-references/image-models/google/gemini-3-pro-image-preview",
         "supported_endpoints": [
             "/v1/images/generations"

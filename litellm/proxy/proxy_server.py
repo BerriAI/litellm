@@ -32,6 +32,8 @@ from typing import (
 )
 
 import anyio
+import websockets
+import websockets.exceptions
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
@@ -392,7 +394,6 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
 from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
-from litellm.proxy.management_endpoints.usage_endpoints import router as usage_ai_router
 from litellm.proxy.management_endpoints.project_endpoints import (
     router as project_router,
 )
@@ -418,6 +419,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
+from litellm.proxy.management_endpoints.usage_endpoints import router as usage_ai_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
@@ -7358,6 +7360,10 @@ async def realtime_websocket_endpoint(
     intent: str = fastapi.Query(
         None, description="The intent of the websocket connection."
     ),
+    guardrails: Optional[str] = fastapi.Query(
+        None,
+        description="Comma-separated list of guardrail names to apply to this request.",
+    ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     requested_protocols = [
@@ -7375,11 +7381,15 @@ async def realtime_websocket_endpoint(
         RealtimeQueryParams, dict(_realtime_query_params_template(model, intent))
     )
 
-    data = {
+    data: Dict[str, Any] = {
         "model": model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
     }
+
+    # Pass guardrails into data so pre-call guardrail processing picks them up
+    if guardrails:
+        data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list = list(websocket.scope.get("headers") or [])
@@ -7398,6 +7408,10 @@ async def realtime_websocket_endpoint(
 
     ### ROUTE THE REQUEST ###
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+
+    # Phase 1: pre-call processing (auth, guardrails, rate limits).
+    # Errors here (e.g. guardrail block) are sent back to the client as an
+    # error event before closing, so the caller knows what happened.
     try:
         (
             data,
@@ -7417,6 +7431,27 @@ async def realtime_websocket_endpoint(
             model=model,
             route_type="_arealtime",
         )
+    except Exception as e:
+        verbose_proxy_logger.exception("Realtime pre-call error")
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "guardrail_error",
+                            "message": str(e),
+                        },
+                    }
+                )
+            )
+        except Exception:
+            pass
+        await websocket.close(code=1011, reason="Pre-call error")
+        return
+
+    # Phase 2: route to upstream LLM.
+    try:
         data["user_api_key_dict"] = user_api_key_dict
         llm_call = await route_request(
             data=data,
@@ -7424,7 +7459,6 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
             user_model=user_model,
         )
-
         await llm_call
     except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
         verbose_proxy_logger.exception("Invalid status code")
