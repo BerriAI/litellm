@@ -4107,13 +4107,23 @@ async def list_keys(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def key_aliases() -> Dict[str, List[str]]:
+async def key_aliases(
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(50, ge=1, le=100, description="Page size"),
+    search: Optional[str] = Query(
+        None, description="Search key aliases (case-insensitive partial match)"
+    ),
+) -> Dict[str, Any]:
     """
-    Lists all key aliases
+    Lists key aliases with pagination and optional search.
 
     Returns:
         {
-            "aliases": List[str]
+            "aliases": List[str],
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+            "size": int,
         }
     """
     try:
@@ -4125,36 +4135,43 @@ async def key_aliases() -> Dict[str, List[str]]:
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
-        where: Dict[str, Any] = {}
+        conditions: List[Dict[str, Any]] = [{"key_alias": {"not": None}}]
         try:
-            where.update(_get_condition_to_filter_out_ui_session_tokens())
+            conditions.append(_get_condition_to_filter_out_ui_session_tokens())
         except NameError:
             # Helper may not exist in some builds; ignore if missing
             pass
+        if search:
+            conditions.append(
+                {"key_alias": {"contains": search, "mode": "insensitive"}}
+            )
+        where: Dict[str, Any] = {"AND": conditions}
 
+        total_count = await prisma_client.db.litellm_verificationtoken.count(
+            where=where,
+        )
         rows = await prisma_client.db.litellm_verificationtoken.find_many(
             where=where,
             order=[{"key_alias": "asc"}],
+            skip=(page - 1) * size,
+            take=size,
         )
 
-        seen = set()
-        aliases: List[str] = []
-        for row in rows:
-            alias = getattr(row, "key_alias", None)
-            if alias is None and isinstance(row, dict):
-                alias = row.get("key_alias")
+        aliases: List[str] = [row.key_alias for row in rows if row.key_alias]  # type: ignore[misc]
 
-            if not alias:
-                continue
+        total_pages = -(-total_count // size) if total_count > 0 else 0
+        verbose_proxy_logger.debug(
+            f"key_aliases: page={page}, size={size}, search={search!r}, "
+            f"total_count={total_count}, total_pages={total_pages}"
+        )
 
-            alias_str = str(alias).strip()
-            if alias_str and alias_str not in seen:
-                seen.add(alias_str)
-                aliases.append(alias_str)
-
-        verbose_proxy_logger.debug(f"Returning {len(aliases)} key aliases")
-
-        return {"aliases": aliases}
+        return {
+            "aliases": aliases,
+            "total_count": total_count,
+            "current_page": page,
+            "total_pages": total_pages,
+            "size": size,
+        }
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
