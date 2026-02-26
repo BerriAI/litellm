@@ -3117,6 +3117,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     custom_llm_provider="",
     drop_params: Optional[bool] = None,
     additional_drop_params: Optional[List[str]] = None,
+    allowed_openai_params: Optional[List[str]] = None,
     **kwargs,
 ):
     # Lazy load get_supported_openai_params
@@ -3131,6 +3132,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
 
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
+    allowed_openai_params = passed_params.pop("allowed_openai_params", None) or []
     # Remove function objects from passed_params to avoid JSON serialization errors
     passed_params.pop("get_supported_openai_params", None)
 
@@ -3188,11 +3190,11 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     elif custom_llm_provider == "openai":
         # 'dimensions` is only supported in `text-embedding-3` and later models
-
         if (
             model is not None
             and "text-embedding-3" not in model
             and "dimensions" in non_default_params.keys()
+            and "dimensions" not in (allowed_openai_params or [])
         ):
             raise UnsupportedParamsError(
                 status_code=500,
@@ -4644,11 +4646,12 @@ def add_provider_specific_params_to_optional_params(
             )
             is False
         ):
-            extra_body = passed_params.pop("extra_body", {})
+            extra_body = passed_params.pop("extra_body", None) or {}
             for k in passed_params.keys():
                 if k not in openai_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
-            optional_params.setdefault("extra_body", {})
+            if not isinstance(optional_params.get("extra_body"), dict):
+                optional_params["extra_body"] = {}
             initial_extra_body = {
                 **optional_params["extra_body"],
                 **extra_body,

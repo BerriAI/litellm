@@ -32,6 +32,8 @@ from typing import (
 )
 
 import anyio
+import websockets
+import websockets.exceptions
 from pydantic import BaseModel, Json
 
 from litellm._uuid import uuid
@@ -294,6 +296,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
+    _safe_get_request_headers,
     check_file_size_under_limit,
     get_form_data,
 )
@@ -409,10 +412,14 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team,
     validate_membership,
 )
+from litellm.proxy.management_endpoints.tool_management_endpoints import (
+    router as tool_management_router,
+)
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
+from litellm.proxy.management_endpoints.usage_endpoints import router as usage_ai_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
@@ -1211,9 +1218,7 @@ try:
 
         # Case 2: Runtime UI exists and is ready
         if has_content and is_pre_restructured:
-            verbose_proxy_logger.info(
-                f"Using pre-restructured UI at {runtime_ui_path}"
-            )
+            verbose_proxy_logger.info(f"Using pre-restructured UI at {runtime_ui_path}")
             ui_path = runtime_ui_path
 
         # Case 3: Runtime UI exists but needs restructuring
@@ -1768,8 +1773,14 @@ async def update_cache(  # noqa: PLR0915
                     ("{}:spend".format(litellm_proxy_admin_name), increment)
                 )
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"An error occurred updating user cache: {str(e)}\n\n{traceback.format_exc()}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update user spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "user_id=%s, response_cost=%s - %s\n%s",
+                user_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE END-USER SPEND ###
@@ -1806,8 +1817,14 @@ async def update_cache(  # noqa: PLR0915
                 existing_spend_obj.spend = new_spend
                 values_to_update_in_cache.append((_id, existing_spend_obj.json()))
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"An error occurred updating end user cache: {str(e)}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update end user spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "end_user_id=%s, response_cost=%s - %s\n%s",
+                end_user_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE TEAM SPEND ###
@@ -1848,8 +1865,14 @@ async def update_cache(  # noqa: PLR0915
                 existing_spend_obj.spend = new_spend
                 values_to_update_in_cache.append((_id, existing_spend_obj))
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"An error occurred updating end user cache: {str(e)}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update team spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "team_id=%s, response_cost=%s - %s\n%s",
+                team_id,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     ### UPDATE TAG SPEND ###
@@ -1894,8 +1917,14 @@ async def update_cache(  # noqa: PLR0915
                     existing_tag_obj.spend = new_spend
                     values_to_update_in_cache.append((cache_key, existing_tag_obj))
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"An error occurred updating tag cache: {str(e)}"
+            verbose_proxy_logger.warning(
+                "Spend tracking - failed to update tag spend in cache. "
+                "Budget enforcement may use stale spend values. "
+                "tags=%s, response_cost=%s - %s\n%s",
+                tags,
+                response_cost,
+                str(e),
+                traceback.format_exc(),
             )
 
     if token is not None and response_cost is not None:
@@ -2968,6 +2997,10 @@ class ProxyConfig:
 
             if master_key is not None and isinstance(master_key, str):
                 litellm_master_key_hash = hash_token(master_key)
+            else:
+                verbose_proxy_logger.critical(
+                    "LITELLM_MASTER_KEY is not set! All requests will be treated as INTERNAL_USER with no admin access. Set LITELLM_MASTER_KEY for production use."
+                )
             ### USER API KEY CACHE IN-MEMORY TTL ###
             user_api_key_cache_ttl = general_settings.get(
                 "user_api_key_cache_ttl", None
@@ -3770,6 +3803,7 @@ class ProxyConfig:
             parsed = value
         elif isinstance(value, str):
             import json
+
             try:
                 parsed = yaml.safe_load(value)
             except (yaml.YAMLError, json.JSONDecodeError):
@@ -4355,10 +4389,12 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
-        
+
         if self._should_load_db_object(object_type="anthropic_beta_headers"):
-            await self._check_and_reload_anthropic_beta_headers(prisma_client=prisma_client)
-        
+            await self._check_and_reload_anthropic_beta_headers(
+                prisma_client=prisma_client
+            )
+
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
         if self._should_load_db_object(object_type="cache_settings"):
@@ -4588,7 +4624,9 @@ class ProxyConfig:
                 f"Error in _check_and_reload_model_cost_map: {str(e)}"
             )
 
-    async def _check_and_reload_anthropic_beta_headers(self, prisma_client: PrismaClient):
+    async def _check_and_reload_anthropic_beta_headers(
+        self, prisma_client: PrismaClient
+    ):
         """
         Check if anthropic beta headers config needs to be reloaded based on database configuration.
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
@@ -4679,7 +4717,11 @@ class ProxyConfig:
                 )
 
                 # Count providers in config
-                provider_count = sum(1 for k in new_config.keys() if k != "provider_aliases" and k != "description")
+                provider_count = sum(
+                    1
+                    for k in new_config.keys()
+                    if k != "provider_aliases" and k != "description"
+                )
                 verbose_proxy_logger.info(
                     f"Anthropic beta headers config reloaded successfully. Providers: {provider_count}"
                 )
@@ -5661,8 +5703,7 @@ class ProxyStartupEvent:
                 ):
                     _db_val = _db_gs_record.param_value.get("store_model_in_db")
                     if _db_val is True or (
-                        isinstance(_db_val, str)
-                        and _db_val.lower() == "true"
+                        isinstance(_db_val, str) and _db_val.lower() == "true"
                     ):
                         store_model_in_db = True
                         verbose_proxy_logger.info(
@@ -6128,6 +6169,7 @@ class ProxyStartupEvent:
                 "LiteLLM: LITELLM_ENABLE_PYROSCOPE is set but the 'pyroscope-io' package is not installed. "
                 "Pyroscope profiling will not run. Install with: pip install pyroscope-io"
             )
+
 
 #### API ENDPOINTS ####
 @router.get(
@@ -7321,20 +7363,36 @@ async def realtime_websocket_endpoint(
     intent: str = fastapi.Query(
         None, description="The intent of the websocket connection."
     ),
+    guardrails: Optional[str] = fastapi.Query(
+        None,
+        description="Comma-separated list of guardrail names to apply to this request.",
+    ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
-    await websocket.accept()
+    requested_protocols = [
+        p.strip()
+        for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if p.strip()
+    ]
+    accept_kwargs: dict = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
     query_params = cast(
         RealtimeQueryParams, dict(_realtime_query_params_template(model, intent))
     )
 
-    data = {
+    data: Dict[str, Any] = {
         "model": model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
     }
+
+    # Pass guardrails into data so pre-call guardrail processing picks them up
+    if guardrails:
+        data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list = list(websocket.scope.get("headers") or [])
@@ -7353,6 +7411,10 @@ async def realtime_websocket_endpoint(
 
     ### ROUTE THE REQUEST ###
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+
+    # Phase 1: pre-call processing (auth, guardrails, rate limits).
+    # Errors here (e.g. guardrail block) are sent back to the client as an
+    # error event before closing, so the caller knows what happened.
     try:
         (
             data,
@@ -7372,6 +7434,27 @@ async def realtime_websocket_endpoint(
             model=model,
             route_type="_arealtime",
         )
+    except Exception as e:
+        verbose_proxy_logger.exception("Realtime pre-call error")
+        try:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "guardrail_error",
+                            "message": str(e),
+                        },
+                    }
+                )
+            )
+        except Exception:
+            pass
+        await websocket.close(code=1011, reason="Pre-call error")
+        return
+
+    # Phase 2: route to upstream LLM.
+    try:
         data["user_api_key_dict"] = user_api_key_dict
         llm_call = await route_request(
             data=data,
@@ -7379,7 +7462,6 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
             user_model=user_model,
         )
-
         await llm_call
     except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
         verbose_proxy_logger.exception("Invalid status code")
@@ -10427,7 +10509,7 @@ async def async_queue_request(
         data["proxy_server_request"] = {
             "url": str(request.url),
             "method": request.method,
-            "headers": dict(request.headers),
+            "headers": _safe_get_request_headers(request).copy(),
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
@@ -10448,7 +10530,7 @@ async def async_queue_request(
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
-        _headers = dict(request.headers)
+        _headers = _safe_get_request_headers(request).copy()
         _headers.pop(
             "authorization", None
         )  # do not store the original `sk-..` api key in the db
@@ -10967,18 +11049,14 @@ async def get_favicon():
     from fastapi.responses import Response
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    default_favicon = os.path.join(
-        current_dir, "_experimental", "out", "favicon.ico"
-    )
+    default_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
 
     favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
 
     if not favicon_url:
         if os.path.exists(default_favicon):
             return FileResponse(default_favicon, media_type="image/x-icon")
-        raise HTTPException(
-            status_code=404, detail="Default favicon not found"
-        )
+        raise HTTPException(status_code=404, detail="Default favicon not found")
 
     if favicon_url.startswith(("http://", "https://")):
         try:
@@ -10993,9 +11071,7 @@ async def get_favicon():
             )
             response = await async_client.get(favicon_url)
             if response.status_code == 200:
-                content_type = response.headers.get(
-                    "content-type", "image/x-icon"
-                )
+                content_type = response.headers.get("content-type", "image/x-icon")
                 return Response(
                     content=response.content,
                     media_type=content_type,
@@ -11007,12 +11083,8 @@ async def get_favicon():
                     response.status_code,
                 )
                 if os.path.exists(default_favicon):
-                    return FileResponse(
-                        default_favicon, media_type="image/x-icon"
-                    )
-                raise HTTPException(
-                    status_code=404, detail="Favicon not found"
-                )
+                    return FileResponse(default_favicon, media_type="image/x-icon")
+                raise HTTPException(status_code=404, detail="Favicon not found")
         except HTTPException:
             raise
         except Exception as e:
@@ -11020,20 +11092,14 @@ async def get_favicon():
                 "Error downloading favicon from %s: %s", favicon_url, e
             )
             if os.path.exists(default_favicon):
-                return FileResponse(
-                    default_favicon, media_type="image/x-icon"
-                )
-            raise HTTPException(
-                status_code=404, detail="Favicon not found"
-            )
+                return FileResponse(default_favicon, media_type="image/x-icon")
+            raise HTTPException(status_code=404, detail="Favicon not found")
     else:
         if os.path.exists(favicon_url):
             return FileResponse(favicon_url, media_type="image/x-icon")
         if os.path.exists(default_favicon):
             return FileResponse(default_favicon, media_type="image/x-icon")
-        raise HTTPException(
-            status_code=404, detail="Favicon not found"
-        )
+        raise HTTPException(status_code=404, detail="Favicon not found")
 
 
 #### INVITATION MANAGEMENT ####
@@ -12519,7 +12585,9 @@ async def reload_anthropic_beta_headers(
             },
         )
 
-        provider_count = sum(1 for k in new_config.keys() if k not in ["provider_aliases", "description"])
+        provider_count = sum(
+            1 for k in new_config.keys() if k not in ["provider_aliases", "description"]
+        )
         verbose_proxy_logger.info(
             f"Anthropic beta headers config reloaded successfully in current pod. Providers: {provider_count}"
         )
@@ -12531,7 +12599,9 @@ async def reload_anthropic_beta_headers(
             "timestamp": current_time.isoformat(),
         }
     except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to reload anthropic beta headers: {str(e)}")
+        verbose_proxy_logger.exception(
+            f"Failed to reload anthropic beta headers: {str(e)}"
+        )
         raise HTTPException(
             status_code=500, detail=f"Failed to reload anthropic beta headers: {str(e)}"
         )
@@ -12653,7 +12723,8 @@ async def cancel_anthropic_beta_headers_reload(
             f"Failed to cancel anthropic beta headers reload: {str(e)}"
         )
         raise HTTPException(
-            status_code=500, detail=f"Failed to cancel anthropic beta headers reload: {str(e)}"
+            status_code=500,
+            detail=f"Failed to cancel anthropic beta headers reload: {str(e)}",
         )
 
 
@@ -12700,7 +12771,9 @@ async def get_anthropic_beta_headers_reload_status(
         )
 
         if config_record is None or config_record.param_value is None:
-            verbose_proxy_logger.info("No anthropic beta headers reload configuration found")
+            verbose_proxy_logger.info(
+                "No anthropic beta headers reload configuration found"
+            )
             return {
                 "scheduled": False,
                 "interval_hours": None,
@@ -12726,7 +12799,9 @@ async def get_anthropic_beta_headers_reload_status(
         # Use pod's in-memory last reload time
         if last_anthropic_beta_headers_reload is not None:
             try:
-                last_reload_time = datetime.fromisoformat(last_anthropic_beta_headers_reload)
+                last_reload_time = datetime.fromisoformat(
+                    last_anthropic_beta_headers_reload
+                )
                 time_since_last_reload = current_time - last_reload_time
                 hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
 
@@ -12847,6 +12922,7 @@ app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
 app.include_router(policy_router)
+app.include_router(usage_ai_router)
 app.include_router(policy_crud_router)
 app.include_router(policy_resolve_router)
 app.include_router(search_tool_management_router)
@@ -12860,6 +12936,7 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
+app.include_router(tool_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)

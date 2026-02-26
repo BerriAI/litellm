@@ -1,10 +1,13 @@
 import asyncio
 import json
-import pytest
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+import pytest
+
+from litellm.proxy.health_check_utils.shared_health_check_manager import (
+    SharedHealthCheckManager,
+)
 
 
 class TestSharedHealthCheckManager:

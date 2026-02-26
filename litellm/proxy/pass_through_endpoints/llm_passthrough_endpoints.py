@@ -28,6 +28,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
+    _safe_get_request_headers,
     _safe_set_request_parsed_body,
     get_form_data,
     get_request_body,
@@ -60,7 +61,7 @@ def create_request_copy(request: Request):
     return {
         "method": request.method,
         "url": str(request.url),
-        "headers": dict(request.headers),
+        "headers": _safe_get_request_headers(request).copy(),
         "cookies": request.cookies,
         "query_params": dict(request.query_params),
     }
@@ -329,7 +330,7 @@ async def vllm_proxy_route(
                 method=request.method,
                 endpoint=endpoint,
                 request_query_params=request.query_params,
-                request_headers=dict(request.headers),
+                request_headers=_safe_get_request_headers(request),
                 stream=request_body.get("stream", False),
                 content=None,
                 data=None,
@@ -1307,7 +1308,7 @@ async def azure_proxy_route(
                     method=request.method,
                     endpoint=endpoint,
                     request_query_params=request.query_params,
-                    request_headers=dict(request.headers),
+                    request_headers=_safe_get_request_headers(request),
                     stream=request_body.get("stream", False),
                     content=None,
                     data=None,
@@ -1505,7 +1506,7 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
     Returns:
         dict: Headers dictionary with only allowed headers
     """
-    incoming_headers = dict(request.headers) or {}
+    incoming_headers = _safe_get_request_headers(request)
     headers = {}
     for header_name in ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS:
         if header_name in incoming_headers:
@@ -1621,7 +1622,7 @@ async def _prepare_vertex_auth_headers(
     if (
         vertex_credentials is None or vertex_credentials.vertex_project is None
     ) and router_credentials is None:
-        headers = dict(request.headers) or {}
+        headers = _safe_get_request_headers(request).copy()
         headers_passed_through = True
         verbose_proxy_logger.debug(
             "default_vertex_config  not set, incoming request headers %s", headers
