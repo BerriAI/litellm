@@ -2,19 +2,7 @@
 
 import React, { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { Select, Switch, Tooltip } from "antd";
-<<<<<<< cursor/development-environment-setup-13a7
-// @ts-ignore - duplicate import removed
-import {
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@tremor/react";
-=======
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
->>>>>>> main
 import { TimeCell } from "./view_logs/time_cell";
 import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
@@ -60,8 +48,7 @@ const PolicySelect: React.FC<{
         minWidth: 110,
         fontWeight: 500,
       }}
-<<<<<<< cursor/development-environment-setup-13a7
-      {...{styles: {
+      styles={{
         selector: {
           backgroundColor: style.bg,
           borderColor: style.border,
@@ -72,9 +59,7 @@ const PolicySelect: React.FC<{
           paddingLeft: 8,
           paddingRight: 4,
         },
-      }} as any}
-=======
->>>>>>> main
+      }}
       popupMatchSelectWidth={false}
       options={POLICY_OPTIONS.map((o) => ({
         value: o.value,
