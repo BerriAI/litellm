@@ -1202,7 +1202,6 @@ OPENAI_FINISH_REASONS = [
     "function_call",
     "tool_calls",
     "content_filter",
-    "null",
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
