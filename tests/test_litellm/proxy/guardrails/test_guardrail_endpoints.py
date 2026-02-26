@@ -1119,14 +1119,25 @@ class TestValidatePatternsFile:
 
     @pytest.mark.asyncio
     async def test_validate_patterns_valid_named(self):
-        """Valid file with named name|regex patterns."""
-        file_content = "ssn|\\d{3}-\\d{2}-\\d{4}\nemployee_id|EMP-\\d{5}"
+        """Valid file with named name::regex patterns."""
+        file_content = "ssn::\\d{3}-\\d{2}-\\d{4}\nemployee_id::EMP-\\d{5}"
         result = await validate_patterns_file({"file_content": file_content})
         assert result["valid"] is True
         assert len(result["patterns"]) == 2
         assert result["patterns"][0]["name"] == "ssn"
         assert result["patterns"][0]["pattern"] == "\\d{3}-\\d{2}-\\d{4}"
         assert result["patterns"][1]["name"] == "employee_id"
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_pipe_in_regex(self):
+        """Pipe character in regex (alternation) should not be treated as name separator."""
+        file_content = "foo|bar|baz"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is True
+        assert len(result["patterns"]) == 1
+        # The whole line is the regex, not split on |
+        assert result["patterns"][0]["pattern"] == "foo|bar|baz"
+        assert result["patterns"][0]["name"] == "pattern_line_1"
 
     @pytest.mark.asyncio
     async def test_validate_patterns_invalid_regex(self):

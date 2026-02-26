@@ -4,6 +4,7 @@ CRUD ENDPOINTS FOR GUARDRAILS
 
 import concurrent.futures
 import inspect
+import re
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -1011,9 +1012,7 @@ MAX_PATTERN_LENGTH = 500
 # Heuristic to detect nested quantifiers that cause catastrophic backtracking.
 # Matches groups with a quantifier inside followed by an outer quantifier,
 # e.g. (a+)+, (.*)+, (x*)*
-import re as _re
-
-_NESTED_QUANTIFIER_RE = _re.compile(
+_NESTED_QUANTIFIER_RE = re.compile(
     r"\([^)]*[*+]\)[*+?]|\([^)]*[*+]\)\{",
 )
 
@@ -1025,14 +1024,16 @@ def _check_redos_heuristic(pattern: str) -> Optional[str]:
     return None
 
 
-def _try_compile_regex(pattern: str, timeout: float = 1.0) -> Optional[str]:
+def _try_compile_regex(
+    pattern: str,
+    executor: concurrent.futures.ThreadPoolExecutor,
+    timeout: float = 1.0,
+) -> Optional[str]:
     """
     Try to compile a regex pattern with a timeout.
 
     Returns None on success, or an error string on failure/timeout.
     """
-    import re
-
     # First, fast static check for ReDoS patterns
     redos_err = _check_redos_heuristic(pattern)
     if redos_err:
@@ -1041,14 +1042,13 @@ def _try_compile_regex(pattern: str, timeout: float = 1.0) -> Optional[str]:
     def _compile():
         re.compile(pattern, re.IGNORECASE)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_compile)
-        try:
-            future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            return "pattern compilation timed out (possible ReDoS)"
-        except re.error as e:
-            return f"invalid regex: {e}"
+    future = executor.submit(_compile)
+    try:
+        future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        return "pattern compilation timed out (possible ReDoS)"
+    except re.error as e:
+        return f"invalid regex: {e}"
     return None
 
 
@@ -1062,8 +1062,8 @@ async def validate_patterns_file(request: Dict[str, str]):
     Validate a regex patterns file (newline-separated).
 
     Each non-empty, non-comment line is either:
-      - A regex pattern, e.g. ``\\d{3}-\\d{2}-\\d{4}``
-      - A pipe-delimited name|regex, e.g. ``employee_id|EMP-\\d{5}``
+      - A bare regex pattern, e.g. ``\\d{3}-\\d{2}-\\d{4}``
+      - A named pattern using ``::`` as separator, e.g. ``employee_id::EMP-\\d{5}``
 
     Lines starting with ``#`` are treated as comments and ignored.
 
@@ -1092,45 +1092,47 @@ async def validate_patterns_file(request: Dict[str, str]):
         patterns: List[Dict[str, str]] = []
         errors: List[str] = []
 
-        for line_num, line in enumerate(lines, start=1):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            for line_num, line in enumerate(lines, start=1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
 
-            # Check max pattern count early
-            if len(patterns) + 1 > MAX_PATTERNS_PER_FILE:
-                errors.append(
-                    f"Line {line_num}: exceeds maximum of {MAX_PATTERNS_PER_FILE} patterns per file"
+                # Check max pattern count early
+                if len(patterns) + 1 > MAX_PATTERNS_PER_FILE:
+                    errors.append(
+                        f"Line {line_num}: exceeds maximum of {MAX_PATTERNS_PER_FILE} patterns per file"
+                    )
+                    break
+
+                # Parse optional name::regex format (:: avoids conflict with
+                # regex alternation operator |)
+                if "::" in stripped:
+                    parts = stripped.split("::", 1)
+                    name = parts[0].strip()
+                    regex_str = parts[1].strip()
+                else:
+                    name = None
+                    regex_str = stripped
+
+                if not regex_str:
+                    errors.append(f"Line {line_num}: empty regex pattern")
+                    continue
+
+                if len(regex_str) > MAX_PATTERN_LENGTH:
+                    errors.append(
+                        f"Line {line_num}: pattern exceeds maximum length of {MAX_PATTERN_LENGTH} characters"
+                    )
+                    continue
+
+                compile_err = _try_compile_regex(regex_str, executor)
+                if compile_err:
+                    errors.append(f"Line {line_num}: {compile_err}")
+                    continue
+
+                patterns.append(
+                    {"name": name or f"pattern_line_{line_num}", "pattern": regex_str}
                 )
-                break
-
-            # Parse optional name|regex format
-            if "|" in stripped:
-                parts = stripped.split("|", 1)
-                name = parts[0].strip()
-                regex_str = parts[1].strip()
-            else:
-                name = None
-                regex_str = stripped
-
-            if not regex_str:
-                errors.append(f"Line {line_num}: empty regex pattern")
-                continue
-
-            if len(regex_str) > MAX_PATTERN_LENGTH:
-                errors.append(
-                    f"Line {line_num}: pattern exceeds maximum length of {MAX_PATTERN_LENGTH} characters"
-                )
-                continue
-
-            compile_err = _try_compile_regex(regex_str)
-            if compile_err:
-                errors.append(f"Line {line_num}: {compile_err}")
-                continue
-
-            patterns.append(
-                {"name": name or f"pattern_line_{line_num}", "pattern": regex_str}
-            )
 
         if errors:
             return {"valid": False, "errors": errors}
