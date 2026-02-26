@@ -5,52 +5,56 @@ Tests that:
 1. The SDK document parameter with type="file" correctly converts file paths,
    file objects, and raw bytes to base64 data URIs before sending to providers.
 2. The proxy _build_document_from_upload helper correctly handles uploaded file bytes.
+3. The proxy rejects type="file" documents received via JSON (security guard).
+4. The proxy returns user-friendly errors for invalid JSON bodies.
 """
 import base64
 import os
 import tempfile
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
+import orjson
 import pytest
 
-from litellm.ocr.main import _convert_file_document_to_url_document, _get_mime_type
+from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 
 
 class TestGetMimeType:
     def test_should_detect_pdf_mime_type(self):
-        assert _get_mime_type("document.pdf") == "application/pdf"
+        assert get_mime_type("document.pdf") == "application/pdf"
 
     def test_should_detect_png_mime_type(self):
-        assert _get_mime_type("image.png") == "image/png"
+        assert get_mime_type("image.png") == "image/png"
 
     def test_should_detect_jpg_mime_type(self):
-        assert _get_mime_type("photo.jpg") == "image/jpeg"
+        assert get_mime_type("photo.jpg") == "image/jpeg"
 
     def test_should_detect_jpeg_mime_type(self):
-        assert _get_mime_type("photo.jpeg") == "image/jpeg"
+        assert get_mime_type("photo.jpeg") == "image/jpeg"
 
     def test_should_detect_gif_mime_type(self):
-        assert _get_mime_type("animation.gif") == "image/gif"
+        assert get_mime_type("animation.gif") == "image/gif"
 
     def test_should_detect_webp_mime_type(self):
-        assert _get_mime_type("image.webp") == "image/webp"
+        assert get_mime_type("image.webp") == "image/webp"
 
     def test_should_detect_tiff_mime_type(self):
-        assert _get_mime_type("scan.tiff") == "image/tiff"
+        assert get_mime_type("scan.tiff") == "image/tiff"
 
     def test_should_detect_tif_mime_type(self):
-        assert _get_mime_type("scan.tif") == "image/tiff"
+        assert get_mime_type("scan.tif") == "image/tiff"
 
     def test_should_detect_bmp_mime_type(self):
-        assert _get_mime_type("bitmap.bmp") == "image/bmp"
+        assert get_mime_type("bitmap.bmp") == "image/bmp"
 
     def test_should_be_case_insensitive(self):
-        assert _get_mime_type("DOCUMENT.PDF") == "application/pdf"
-        assert _get_mime_type("IMAGE.PNG") == "image/png"
+        assert get_mime_type("DOCUMENT.PDF") == "application/pdf"
+        assert get_mime_type("IMAGE.PNG") == "image/png"
 
     def test_should_fallback_for_unknown_extension(self):
-        result = _get_mime_type("file.xyz123")
+        result = get_mime_type("file.xyz123")
         assert isinstance(result, str)
 
 
@@ -65,7 +69,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = f.name
 
         try:
-            result = _convert_file_document_to_url_document(
+            result = convert_file_document_to_url_document(
                 {"type": "file", "file": tmp_path}
             )
 
@@ -87,7 +91,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = f.name
 
         try:
-            result = _convert_file_document_to_url_document(
+            result = convert_file_document_to_url_document(
                 {"type": "file", "file": tmp_path}
             )
 
@@ -109,7 +113,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = Path(f.name)
 
         try:
-            result = _convert_file_document_to_url_document(
+            result = convert_file_document_to_url_document(
                 {"type": "file", "file": tmp_path}
             )
 
@@ -122,7 +126,7 @@ class TestConvertFileDocumentToUrlDocument:
         """Raw bytes should be converted using a fallback MIME type."""
         content = b"raw bytes content"
 
-        result = _convert_file_document_to_url_document(
+        result = convert_file_document_to_url_document(
             {"type": "file", "file": content}
         )
 
@@ -136,7 +140,7 @@ class TestConvertFileDocumentToUrlDocument:
         """Raw bytes with explicit mime_type should use the specified MIME type."""
         content = b"raw pdf content"
 
-        result = _convert_file_document_to_url_document(
+        result = convert_file_document_to_url_document(
             {"type": "file", "file": content, "mime_type": "application/pdf"}
         )
 
@@ -147,7 +151,7 @@ class TestConvertFileDocumentToUrlDocument:
         """Raw bytes with an image MIME type should produce type=image_url."""
         content = b"raw image content"
 
-        result = _convert_file_document_to_url_document(
+        result = convert_file_document_to_url_document(
             {"type": "file", "file": content, "mime_type": "image/jpeg"}
         )
 
@@ -159,7 +163,7 @@ class TestConvertFileDocumentToUrlDocument:
         content = b"file-like content"
         file_obj = BytesIO(content)
 
-        result = _convert_file_document_to_url_document(
+        result = convert_file_document_to_url_document(
             {"type": "file", "file": file_obj}
         )
 
@@ -172,7 +176,7 @@ class TestConvertFileDocumentToUrlDocument:
         file_obj = BytesIO(content)
         file_obj.name = "test_image.png"
 
-        result = _convert_file_document_to_url_document(
+        result = convert_file_document_to_url_document(
             {"type": "file", "file": file_obj}
         )
 
@@ -182,12 +186,12 @@ class TestConvertFileDocumentToUrlDocument:
     def test_should_raise_error_for_missing_file_field(self):
         """Missing 'file' field should raise ValueError."""
         with pytest.raises(ValueError, match="must include a 'file' field"):
-            _convert_file_document_to_url_document({"type": "file"})
+            convert_file_document_to_url_document({"type": "file"})
 
     def test_should_raise_error_for_nonexistent_file_path(self):
         """Non-existent file path should raise FileNotFoundError."""
         with pytest.raises(FileNotFoundError, match="File not found"):
-            _convert_file_document_to_url_document(
+            convert_file_document_to_url_document(
                 {"type": "file", "file": "/nonexistent/path/to/file.pdf"}
             )
 
@@ -198,7 +202,7 @@ class TestConvertFileDocumentToUrlDocument:
 
         try:
             with pytest.raises(ValueError, match="File is empty"):
-                _convert_file_document_to_url_document(
+                convert_file_document_to_url_document(
                     {"type": "file", "file": tmp_path}
                 )
         finally:
@@ -207,9 +211,7 @@ class TestConvertFileDocumentToUrlDocument:
     def test_should_raise_error_for_unsupported_type(self):
         """Unsupported file input types should raise ValueError."""
         with pytest.raises(ValueError, match="Unsupported file input type"):
-            _convert_file_document_to_url_document(
-                {"type": "file", "file": 12345}
-            )
+            convert_file_document_to_url_document({"type": "file", "file": 12345})
 
     def test_should_override_mime_type_for_file_path(self):
         """Explicit mime_type should override auto-detection from extension."""
@@ -221,7 +223,7 @@ class TestConvertFileDocumentToUrlDocument:
             tmp_path = f.name
 
         try:
-            result = _convert_file_document_to_url_document(
+            result = convert_file_document_to_url_document(
                 {"type": "file", "file": tmp_path, "mime_type": "image/png"}
             )
 
@@ -332,3 +334,66 @@ class TestBuildDocumentFromUpload:
 
         b64_data = result["document_url"].split(";base64,")[1]
         assert base64.b64decode(b64_data) == content
+
+
+class TestProxySecurityGuard:
+    """Test that the proxy rejects type='file' documents in JSON requests."""
+
+    @pytest.fixture(autouse=True)
+    def _import_helpers(self):
+        """Import the proxy parser, skip if proxy deps aren't installed."""
+        try:
+            from litellm.proxy.ocr_endpoints.endpoints import _parse_ocr_request
+
+            self._parse = _parse_ocr_request
+        except ImportError:
+            pytest.skip("Proxy dependencies (fastapi/orjson) not installed")
+
+    @pytest.mark.asyncio
+    async def test_should_reject_file_type_document_in_json_body(self):
+        """type='file' in a JSON body must be rejected to prevent server-side file reads."""
+        body = orjson.dumps(
+            {
+                "model": "mistral/mistral-ocr-latest",
+                "document": {"type": "file", "file": "/etc/passwd"},
+            }
+        )
+
+        mock_request = MagicMock()
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.body = AsyncMock(return_value=body)
+        mock_request._form = None
+
+        with pytest.raises(ValueError, match="not supported through the JSON API"):
+            await self._parse(mock_request)
+
+    @pytest.mark.asyncio
+    async def test_should_accept_document_url_type_in_json_body(self):
+        """type='document_url' in a JSON body should pass through normally."""
+        expected = {
+            "model": "mistral/mistral-ocr-latest",
+            "document": {
+                "type": "document_url",
+                "document_url": "https://example.com/doc.pdf",
+            },
+        }
+        body = orjson.dumps(expected)
+
+        mock_request = MagicMock()
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.body = AsyncMock(return_value=body)
+        mock_request._form = None
+
+        result = await self._parse(mock_request)
+        assert result["document"]["type"] == "document_url"
+
+    @pytest.mark.asyncio
+    async def test_should_raise_on_invalid_json_body(self):
+        """Invalid JSON should produce a user-friendly ValueError."""
+        mock_request = MagicMock()
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.body = AsyncMock(return_value=b"not valid json{{{")
+        mock_request._form = None
+
+        with pytest.raises(ValueError, match="Invalid JSON in request body"):
+            await self._parse(mock_request)

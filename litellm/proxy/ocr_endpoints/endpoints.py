@@ -4,12 +4,11 @@ import json
 from typing import Any, Dict, Optional
 
 import orjson
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
-from starlette.datastructures import UploadFile
 
 from litellm._logging import verbose_proxy_logger
-from litellm.ocr.main import _convert_file_document_to_url_document, _get_mime_type
+from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -25,16 +24,20 @@ def _build_document_from_upload(
     """
     Convert uploaded file bytes into a Mistral-format document dict with base64 data URI.
 
-    Delegates to _convert_file_document_to_url_document after resolving MIME type
+    Delegates to convert_file_document_to_url_document after resolving MIME type
     from the upload's content_type header or filename.
     """
     mime_type = content_type
     if not mime_type or mime_type == "application/octet-stream":
         if filename:
-            mime_type = _get_mime_type(filename)
+            mime_type = get_mime_type(filename)
 
-    return _convert_file_document_to_url_document(
-        {"type": "file", "file": file_content, "mime_type": mime_type or "application/octet-stream"}
+    return convert_file_document_to_url_document(
+        {
+            "type": "file",
+            "file": file_content,
+            "mime_type": mime_type or "application/octet-stream",
+        }
     )
 
 
@@ -58,7 +61,12 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
         )
 
     uploaded_file = form.get("file")
-    if uploaded_file is None or not isinstance(uploaded_file, UploadFile):
+    # request.form() may return either a FastAPI or Starlette UploadFile
+    # depending on middleware; check both via isinstance (FastAPI's UploadFile
+    # is a subclass of Starlette's) and fall back to duck-type check.
+    if uploaded_file is None or (
+        not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")
+    ):
         raise ValueError(
             "Multipart OCR request must include a 'file' field with the document to process"
         )
@@ -145,7 +153,30 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
             "header manually."
         )
 
-    return orjson.loads(body)
+    try:
+        data = orjson.loads(body)
+    except orjson.JSONDecodeError as e:
+        raise ValueError(
+            f"Invalid JSON in request body: {e}. "
+            "Ensure the request body is valid JSON with Content-Type: application/json, "
+            "or use multipart/form-data for file uploads."
+        )
+
+    # Security: reject type="file" documents received via JSON.
+    # The "file" document type is designed for local SDK usage where the
+    # caller and the process share a filesystem.  In the proxy context the
+    # caller is remote, so allowing a file-path string would let an
+    # authenticated user read arbitrary files from the server's filesystem.
+    # File uploads must go through multipart/form-data instead.
+    doc = data.get("document") if isinstance(data, dict) else None
+    if isinstance(doc, dict) and doc.get("type") == "file":
+        raise ValueError(
+            "document type 'file' is not supported through the JSON API. "
+            "To upload a local file, use multipart/form-data with a 'file' field. "
+            "For JSON requests, use 'document_url' or 'image_url' document types."
+        )
+
+    return data
 
 
 @router.post(
@@ -240,4 +271,3 @@ async def ocr(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-
