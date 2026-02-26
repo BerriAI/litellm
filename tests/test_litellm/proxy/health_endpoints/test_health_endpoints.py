@@ -502,6 +502,18 @@ tcp4       2/0/128      *.4000               *.*                    LISTEN
     assert result["listen_queue_max"] == 128
 
 
+def test_parse_macos_netstat_listen_queue_two_column_format():
+    sample_output = """Current listen queue sizes (qlen/incqlen/maxqlen)
+Listen         Local Address
+3/0/128        *.4011
+"""
+    result = BacklogHealth.parse_macos_netstat_listen_queue(
+        output=sample_output, port=4011
+    )
+    assert result["listen_queue_current"] == 3
+    assert result["listen_queue_max"] == 128
+
+
 def test_get_cached_listen_queue_stats_uses_cache():
     mock_stats = {
         "status": "healthy",

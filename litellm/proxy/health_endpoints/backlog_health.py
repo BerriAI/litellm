@@ -37,8 +37,6 @@ class BacklogHealth:
         queue_regex = re.compile(r"(?:^|\s)(\d+)/(\d+)/(\d+)(?:\s|$)")
 
         for line in output.splitlines():
-            if "LISTEN" not in line:
-                continue
             if not port_regex.search(line):
                 continue
             queue_match = queue_regex.search(line)
