@@ -107,7 +107,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
     <div>
       {/* Session Configuration Card */}
       {sessionEvent?.session && (
-        <SessionCard session={sessionEvent.session} />
+        <SessionCard session={sessionEvent.session} turnCount={responseEvents.length} />
       )}
 
       {/* Conversation Turns */}
@@ -138,7 +138,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
   );
 }
 
-function SessionCard({ session }: { session: RealtimeSession }) {
+function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCount: number }) {
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   return (
@@ -184,6 +184,14 @@ function SessionCard({ session }: { session: RealtimeSession }) {
           <Text type="secondary" style={{ fontSize: 12 }}>
             {session.model}
           </Text>
+          {turnCount > 0 && (
+            <Tag
+              color="purple"
+              style={{ margin: 0, fontWeight: 500 }}
+            >
+              {turnCount} {turnCount === 1 ? 'turn' : 'turns'}
+            </Tag>
+          )}
           {session.voice && (
             <Tag color="blue" style={{ margin: 0 }}>
               <SoundOutlined /> {session.voice}
@@ -298,6 +306,7 @@ function ConversationCard({
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const totalTokens = totalUsage?.total_tokens;
+  const turnCount = responses.length;
   const handleCopy = () => {
     const transcripts = responses
       .flatMap((r) =>
@@ -326,6 +335,7 @@ function ConversationCard({
         onCopy={handleCopy}
         isCollapsed={isCollapsed}
         onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
+        turnCount={turnCount}
       />
 
       <div

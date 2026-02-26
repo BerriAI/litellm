@@ -187,6 +187,49 @@ describe("RealtimePrettyView", () => {
     expect(screen.getByText("text")).toBeInTheDocument();
   });
 
+  it("should display the turn count in session header", () => {
+    render(<RealtimePrettyView response={sampleRealtimeResponse} />);
+    expect(screen.getByText("2 turns")).toBeInTheDocument();
+  });
+
+  it("should display singular 'turn' for a single response event", () => {
+    const singleTurnResponse = {
+      results: [
+        {
+          type: "session.created",
+          session: {
+            id: "sess_1",
+            model: "gpt-4o-mini-realtime-preview",
+            voice: "alloy",
+            modalities: ["audio"],
+          },
+        },
+        {
+          type: "response.done",
+          response: {
+            id: "r1",
+            status: "completed",
+            output: [
+              {
+                id: "item1",
+                role: "assistant",
+                type: "message",
+                content: [{ type: "audio", transcript: "Hi!" }],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    render(<RealtimePrettyView response={singleTurnResponse} />);
+    expect(screen.getByText("1 turn")).toBeInTheDocument();
+  });
+
+  it("should display the turn count in the output section header", () => {
+    render(<RealtimePrettyView response={sampleRealtimeResponse} />);
+    expect(screen.getByText("Turns: 2")).toBeInTheDocument();
+  });
+
   it("should display the Output section header", () => {
     render(<RealtimePrettyView response={sampleRealtimeResponse} />);
     expect(screen.getByText("Output")).toBeInTheDocument();
