@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Dict,
     List,
     Literal,
@@ -37,7 +36,6 @@ from litellm.types.utils import (
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
-    ModelResponseStream,
 )
 
 if TYPE_CHECKING:
