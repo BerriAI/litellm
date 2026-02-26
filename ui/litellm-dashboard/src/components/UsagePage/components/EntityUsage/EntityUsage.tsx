@@ -256,7 +256,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         if (changed) {
           activeWindowUntilRef.current = Date.now() + ACTIVE_UPDATE_WINDOW_MS;
           unchangedPollsRef.current = 0;
-          await fetchSpendData();
+          if (newData) {
+            setSpendData(newData);
+          }
           if (cancelled) return;
           schedulePoll(POLL_FAST_MS);
           return;

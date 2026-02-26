@@ -19,6 +19,7 @@ export function useFetchWithLoadingManager<T>(
   const lastFetchEndRef = useRef(0);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchInProgressRef = useRef(false);
+  const fetchIdRef = useRef(0);
 
   const requestFetch = useCallback((): Promise<T> => {
     const now = Date.now();
@@ -27,6 +28,7 @@ export function useFetchWithLoadingManager<T>(
     const fetchInProgress = fetchInProgressRef.current;
 
     const executeFetch = async (): Promise<T> => {
+      const myId = ++fetchIdRef.current;
       fetchInProgressRef.current = true;
       setLoading(true);
       try {
@@ -35,9 +37,12 @@ export function useFetchWithLoadingManager<T>(
       } finally {
         fetchInProgressRef.current = false;
         lastFetchEndRef.current = Date.now();
-        // Always clear loading when a fetch completes. A pending debounced fetch will set
-        // loading=true when it runs—don't keep loader visible for 5s with no active fetch.
-        setLoading(false);
+        // Only clear loading when no debounced fetch is pending (avoids flicker between
+        // fetches) and when this fetch is still the latest (avoids clearing when a later
+        // debounced fetch has already started).
+        if (!debounceTimerRef.current && myId === fetchIdRef.current) {
+          setLoading(false);
+        }
       }
     };
 

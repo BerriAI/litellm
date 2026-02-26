@@ -55,6 +55,7 @@ export const LoadingOverlay: React.FC<LoadingOverlayProps> = ({
   return (
     <div className="relative">
       <div
+        data-testid="loading-overlay-content"
         className={cx(
           "transition-all duration-200",
           visibleLoading && isOverlay && "blur-[2px] opacity-90 select-none pointer-events-none"

@@ -35,15 +35,15 @@ describe("LoadingOverlay", () => {
   });
 
   it("should use overlay variant by default (blurred content, centered loader)", () => {
-    const { container } = render(
+    render(
       <LoadingOverlay loading={true} message="Updating data...">
         <div data-testid="child-content">Old data</div>
       </LoadingOverlay>
     );
     const overlay = screen.getByTestId("loading-overlay");
     expect(overlay).toHaveClass("inset-0");
-    const contentWrapper = container.querySelector(".blur-\\[2px\\]");
-    expect(contentWrapper).toBeInTheDocument();
+    const contentWrapper = screen.getByTestId("loading-overlay-content");
+    expect(contentWrapper).toHaveClass("blur-[2px]");
     expect(screen.getByText("Old data")).toBeInTheDocument();
   });
 
@@ -59,12 +59,12 @@ describe("LoadingOverlay", () => {
   });
 
   it("should blur content when variant is overlay", () => {
-    const { container } = render(
+    render(
       <LoadingOverlay loading={true} variant="overlay">
         <div data-testid="child-content">Content</div>
       </LoadingOverlay>
     );
-    const contentWrapper = container.querySelector(".blur-\\[2px\\]");
-    expect(contentWrapper).toBeInTheDocument();
+    const contentWrapper = screen.getByTestId("loading-overlay-content");
+    expect(contentWrapper).toHaveClass("blur-[2px]");
   });
 });
