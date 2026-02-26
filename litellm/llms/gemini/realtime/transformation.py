@@ -312,13 +312,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if _system_instruction is not None and isinstance(_system_instruction, str):
             session["instructions"] = _system_instruction
         if _model is not None and isinstance(_model, str):
-            # Strip "models/" prefix if present to match OpenAI model name format.
-            # Use removeprefix (not strip) — strip removes individual chars, not a substring.
-            session["model"] = (
-                _model[len("models/"):]
-                if _model.startswith("models/")
-                else _model
-            )
+            # Normalise to bare model name for OpenAI compatibility.
+            # Vertex AI uses a full resource path:
+            #   projects/{project}/locations/{location}/publishers/google/models/{model}
+            # Google AI Studio uses:
+            #   models/{model}
+            if "/models/" in _model:
+                session["model"] = _model.split("/models/")[-1]
+            elif _model.startswith("models/"):
+                session["model"] = _model[len("models/"):]
+            else:
+                session["model"] = _model
 
         return OpenAIRealtimeStreamSessionEvents(
             type="session.created",

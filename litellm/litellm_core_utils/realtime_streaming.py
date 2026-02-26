@@ -295,9 +295,9 @@ class RealTimeStreaming:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
                 # Cancel any in-flight response before speaking the warning.
                 # This handles the race where create_response fired before we could intercept.
-                await self.backend_ws.send(json.dumps({"type": "response.cancel"}))
-                # Ask OpenAI to speak the warning — TTS audio plays naturally in the client
-                await self.backend_ws.send(
+                await self._send_to_backend(json.dumps({"type": "response.cancel"}))
+                # Ask the model to speak the warning — TTS audio plays naturally in the client
+                await self._send_to_backend(
                     json.dumps(
                         {
                             "type": "response.create",
