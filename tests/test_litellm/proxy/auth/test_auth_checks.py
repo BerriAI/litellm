@@ -108,27 +108,19 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     assert token_data["models"] == ["gpt-3.5-turbo"]
     assert token_data["max_budget"] == litellm.max_ui_session_budget
 
-    # Verify expiration time is set and valid (uses LITELLM_UI_SESSION_DURATION)
-    from litellm.constants import LITELLM_UI_SESSION_DURATION
-    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-
+    # Verify expiration time is set and valid (Experimental UI uses fixed 10-min expiry)
     assert "expires" in token_data
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
-    session_duration_seconds = duration_in_seconds(LITELLM_UI_SESSION_DURATION)
     now = get_utc_datetime()
     # Allow 2 second buffer for test execution timing
     assert expires > now
-    assert expires <= now + timedelta(seconds=session_duration_seconds + 2)
+    assert expires <= now + timedelta(minutes=10, seconds=2)
 
 
-def test_get_experimental_ui_login_jwt_auth_token_respects_session_duration(
-    valid_sso_user_defined_values, monkeypatch
+def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
+    valid_sso_user_defined_values,
 ):
-    """Test that LITELLM_UI_SESSION_DURATION controls token expiration"""
-    from litellm.proxy.auth import auth_checks
-
-    monkeypatch.setattr(auth_checks, "LITELLM_UI_SESSION_DURATION", "10m")
-
+    """Test that Experimental UI token uses fixed 10-minute expiry (does not use LITELLM_UI_SESSION_DURATION)."""
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
         valid_sso_user_defined_values
     )

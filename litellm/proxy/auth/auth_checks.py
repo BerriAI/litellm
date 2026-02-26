@@ -1884,7 +1884,7 @@ class ExperimentalUIJWTToken:
         if user_info.user_role is None:
             raise Exception("User role is required for experimental UI login")
 
-        # Experimental UI flow uses shorter 10-min expiry for security (experimental = shorter-lived tokens)
+        # Experimental UI flow uses fixed 10-min expiry for security (does not use LITELLM_UI_SESSION_DURATION)
         expiration_time = get_utc_datetime() + timedelta(minutes=10)
 
         # Format the expiration time as ISO 8601 string
