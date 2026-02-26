@@ -31,6 +31,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import (CustomGuardrail,
                                                    log_guardrail_information)
+from litellm.proxy.guardrails.tool_name_extraction import \
+    extract_request_tool_names
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -41,7 +43,9 @@ if TYPE_CHECKING:
 GUARDRAIL_NAME = "tool_policy"
 
 
-def _get_request_team_and_key(request_data: dict) -> Tuple[Optional[str], Optional[str]]:
+def _get_request_team_and_key(
+    request_data: dict,
+) -> Tuple[Optional[str], Optional[str]]:
     """Extract team_id and key hash from request_data (litellm_metadata or metadata)."""
     if not request_data:
         return None, None
@@ -68,13 +72,17 @@ def _get_request_route_from_data(request_data: dict) -> Optional[str]:
     return meta.get("user_api_key_request_route")
 
 
-def _get_effective_allowed_tools_from_request(request_data: dict) -> Optional[List[str]]:
+def _get_effective_allowed_tools_from_request(
+    request_data: dict,
+) -> Optional[List[str]]:
     """Key allowed_tools overrides team; empty/missing means no restriction."""
     meta = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
     key_meta = meta.get("user_api_key_metadata") or {}
     team_meta = meta.get("user_api_key_team_metadata") or {}
     key_allowed = key_meta.get("allowed_tools") if isinstance(key_meta, dict) else None
-    team_allowed = team_meta.get("allowed_tools") if isinstance(team_meta, dict) else None
+    team_allowed = (
+        team_meta.get("allowed_tools") if isinstance(team_meta, dict) else None
+    )
     if isinstance(key_allowed, list) and len(key_allowed) > 0:
         return key_allowed
     if isinstance(team_allowed, list) and len(team_allowed) > 0:
@@ -122,8 +130,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
             if not tool_names:
                 route = _get_request_route_from_data(request_data)
                 if route:
-                    from litellm.proxy.guardrails.tool_name_extraction import \
-                        extract_request_tool_names
+
                     tool_names = extract_request_tool_names(route, request_data)
         else:  # response
             tool_calls = inputs.get("tool_calls") or []

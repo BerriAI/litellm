@@ -13,11 +13,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import TOOL_POLICY_CACHE_TTL_SECONDS
 from litellm.proxy._types import ToolDiscoveryQueueItem
-from litellm.types.tool_management import (
-    LiteLLM_ToolTableRow,
-    ToolCallPolicy,
-    ToolPolicyOverrideRow,
-)
+from litellm.types.tool_management import (LiteLLM_ToolTableRow,
+                                           ToolCallPolicy,
+                                           ToolPolicyOverrideRow)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -236,10 +234,12 @@ def _override_row_to_model(row: Any) -> ToolPolicyOverrideRow:
                 "updated_at",
             )
         }
+
     def _norm(s: Optional[str]) -> Optional[str]:
         if s is None or s == _TOOL_OVERRIDE_ANY:
             return None
         return s or None
+
     return ToolPolicyOverrideRow(
         override_id=row.get("override_id", ""),
         tool_name=row.get("tool_name", ""),
