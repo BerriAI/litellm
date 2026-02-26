@@ -2062,10 +2062,6 @@ def _schedule_background_health_check_db_save(
 async def _periodic_prometheus_cleanup():
     """
     Periodically mark dead worker PIDs in the prometheus multiproc directory.
-
-    Uses mark_process_dead() which only removes gauge_live* files, preserving
-    counter/histogram data for correct aggregation. First run is 1 hour after
-    startup (startup wipe handles stale files), then every hour thereafter.
     """
     from litellm.proxy.prometheus_cleanup import mark_dead_pids
 
