@@ -2045,7 +2045,6 @@ def _schedule_background_health_check_db_save(
     )
 
 
-
 async def _run_background_health_check():
     """
     Periodically run health checks in the background on the endpoints.
