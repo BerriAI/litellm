@@ -280,7 +280,6 @@ async def _get_merged_blocked_tools(
         try:
             row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
                 where={"object_permission_id": op_id.strip()},
-                select={"blocked_tools": True},
             )
             if row is not None and getattr(row, "blocked_tools", None):
                 blocked.update(row.blocked_tools)
@@ -403,7 +402,6 @@ async def add_tool_to_object_permission_blocked(
     try:
         row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
             where={"object_permission_id": object_permission_id},
-            select={"blocked_tools": True},
         )
         if row is None:
             return False
@@ -434,7 +432,6 @@ async def remove_tool_from_object_permission_blocked(
     try:
         row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
             where={"object_permission_id": object_permission_id},
-            select={"blocked_tools": True},
         )
         if row is None:
             return False

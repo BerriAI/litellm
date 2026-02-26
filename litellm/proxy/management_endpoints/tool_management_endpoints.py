@@ -56,7 +56,9 @@ async def list_tools(
         )
 
     try:
-        tools = await db_list_tools(prisma_client=prisma_client, call_policy=call_policy)
+        tools = await db_list_tools(
+            prisma_client=prisma_client, call_policy=call_policy
+        )
         return ToolListResponse(tools=tools, total=len(tools))
     except Exception as e:
         verbose_proxy_logger.exception("Error listing tools: %s", e)
@@ -91,9 +93,7 @@ async def get_tool_detail(
     try:
         tool = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
         if tool is None:
-            raise HTTPException(
-                status_code=404, detail=f"Tool '{tool_name}' not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         overrides = await list_overrides_for_tool(
             prisma_client=prisma_client, tool_name=tool_name
         )
@@ -119,6 +119,7 @@ def _input_snippet_for_tool_log(sl: Any, max_len: int = 200) -> Optional[str]:
         return None
     if isinstance(psr, str):
         import json
+
         try:
             psr = json.loads(psr)
         except Exception:
@@ -280,9 +281,7 @@ async def get_tool(
     try:
         tool = await db_get_tool(prisma_client=prisma_client, tool_name=tool_name)
         if tool is None:
-            raise HTTPException(
-                status_code=404, detail=f"Tool '{tool_name}' not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
         return tool
     except HTTPException:
         raise
@@ -302,8 +301,7 @@ async def _resolve_key_hash_to_object_permission_id(
     if not hashed:
         return None
     row = await prisma_client.db.litellm_verificationtoken.find_unique(
-        where={"token": hashed},
-        select={"object_permission_id": True},
+        where={"token": hashed}
     )
     if row is None:
         return None
@@ -312,6 +310,7 @@ async def _resolve_key_hash_to_object_permission_id(
         return op_id
     # Create new object permission and assign to key
     import uuid as _uuid
+
     new_id = str(_uuid.uuid4())
     await prisma_client.db.litellm_objectpermissiontable.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
@@ -340,6 +339,7 @@ async def _resolve_team_id_to_object_permission_id(
     if op_id:
         return op_id
     import uuid as _uuid
+
     new_id = str(_uuid.uuid4())
     await prisma_client.db.litellm_objectpermissiontable.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
@@ -461,8 +461,12 @@ async def update_tool_policy(
 )
 async def delete_tool_policy_override(
     tool_name: str,
-    team_id: Optional[str] = Query(None, description="Team ID of the override to remove"),
-    key_hash: Optional[str] = Query(None, description="Key hash of the override to remove"),
+    team_id: Optional[str] = Query(
+        None, description="Team ID of the override to remove"
+    ),
+    key_hash: Optional[str] = Query(
+        None, description="Key hash of the override to remove"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
