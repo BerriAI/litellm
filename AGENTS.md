@@ -225,3 +225,15 @@ cd litellm && poetry run ruff check .
 ```
 
 Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.
+
+### Running the UI dashboard (dev)
+
+```bash
+cd ui/litellm-dashboard && NEXT_PUBLIC_PROXY_BASE_URL=http://localhost:4000 npm run dev -- -p 3000
+```
+
+In dev mode the dashboard at `localhost:3000` auto-connects to the proxy at `localhost:4000`. UI tests: `npx vitest run src/components/mcp_tools/` (or omit path for all).
+
+### MCP IP filtering
+
+MCP servers with `available_on_public_internet: false` are hidden from public IPs in the tools/list endpoint. The IP check lives in `litellm/proxy/auth/ip_address_utils.py`. Bare `0.0.0.0` in `mcp_internal_ip_ranges` is auto-expanded to `0.0.0.0/0`; users should still prefer explicit CIDR notation. From localhost (127.0.0.1) the filter always passes, so to test the `ip_access_denied` path you need a public source IP or a mock.
