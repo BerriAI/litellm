@@ -1093,23 +1093,12 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def validate_credentials_requirements(cls, values):
-        if not isinstance(values, dict):
-            return values
+        """Validate credentials when provided.
 
-        auth_type = values.get("auth_type")
-        if auth_type in {MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic}:
-            credentials = values.get("credentials")
-            auth_value = None
-            if isinstance(credentials, dict):
-                auth_value = credentials.get("auth_value")
-            elif hasattr(credentials, "get"):
-                auth_value = credentials.get("auth_value")  # type: ignore[attr-defined]
-
-            if not auth_value:
-                raise ValueError(
-                    "auth_value is required when auth_type is api_key, bearer_token, or basic"
-                )
-
+        auth_value is optional — users may configure it dynamically
+        (e.g. via per-request headers or OAuth2 flows) instead of
+        storing a static value at server creation time.
+        """
         return values
 
 
