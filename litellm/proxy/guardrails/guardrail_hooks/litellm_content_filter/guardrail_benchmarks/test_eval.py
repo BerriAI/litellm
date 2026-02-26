@@ -372,6 +372,104 @@ class TestGenderContentFilter:
         )
 
 
+# ── Claims Agent Guardrails ────────────────────────────────────────
+
+
+class TestClaimsFraudCoachingContentFilter:
+    """Claims fraud coaching eval with production ContentFilterGuardrail + claims_fraud_coaching.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_fraud_coaching")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_fraud_coaching.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims Fraud Coaching — ContentFilter (claims_fraud_coaching.yaml)",
+        )
+
+
+class TestClaimsPhiDisclosureContentFilter:
+    """Claims PHI disclosure eval with production ContentFilterGuardrail + claims_phi_disclosure.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_phi_disclosure")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_phi_disclosure.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims PHI Disclosure — ContentFilter (claims_phi_disclosure.yaml)",
+        )
+
+
+class TestClaimsPriorAuthGamingContentFilter:
+    """Claims prior auth gaming eval with production ContentFilterGuardrail + claims_prior_auth_gaming.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_prior_auth_gaming")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_prior_auth_gaming.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims Prior Auth Gaming — ContentFilter (claims_prior_auth_gaming.yaml)",
+        )
+
+
+class TestClaimsSystemOverrideContentFilter:
+    """Claims system override eval with production ContentFilterGuardrail + claims_system_override.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_system_override")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_system_override.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims System Override — ContentFilter (claims_system_override.yaml)",
+        )
+
+
+class TestClaimsMedicalAdviceContentFilter:
+    """Claims medical advice eval with production ContentFilterGuardrail + claims_medical_advice.yaml."""
+
+    @pytest.fixture(scope="class")
+    def blocker(self):
+        return _content_filter("claims_medical_advice")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        return _load_jsonl("block_claims_medical_advice.jsonl")
+
+    def test_confusion_matrix(self, blocker, cases):
+        _confusion_matrix(
+            blocker,
+            cases,
+            "Block Claims Medical Advice — ContentFilter (claims_medical_advice.yaml)",
+        )
+
+
 # ── LLM-as-judge baselines ───────────────────────────────────────
 
 LLM_JUDGE_SYSTEM_PROMPT = """\

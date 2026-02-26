@@ -4,7 +4,7 @@ WebSearch Tool Transformation
 Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 import json
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
@@ -224,6 +224,7 @@ class WebSearchTransformation:
         tool_calls: List[Dict],
         search_results: List[str],
         response_format: str = "anthropic",
+        thinking_blocks: Optional[List[Dict]] = None,
     ) -> Tuple[Dict, Union[Dict, List[Dict]]]:
         """
         Transform LiteLLM search results to Anthropic/OpenAI tool_result format.
@@ -235,6 +236,10 @@ class WebSearchTransformation:
             tool_calls: List of tool_use/tool_calls dicts from transform_request
             search_results: List of search result strings (one per tool_call)
             response_format: Response format - "anthropic" or "openai" (default: "anthropic")
+            thinking_blocks: Optional list of thinking/redacted_thinking blocks
+                from the model's response. When present, prepended to the
+                assistant message content (required by Anthropic API when
+                thinking is enabled).
 
         Returns:
             (assistant_message, user_or_tool_messages):
@@ -247,19 +252,29 @@ class WebSearchTransformation:
             )
         else:
             return WebSearchTransformation._transform_response_anthropic(
-                tool_calls, search_results
+                tool_calls, search_results, thinking_blocks=thinking_blocks
             )
 
     @staticmethod
     def _transform_response_anthropic(
         tool_calls: List[Dict],
         search_results: List[str],
+        thinking_blocks: Optional[List[Dict]] = None,
     ) -> Tuple[Dict, Dict]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
-        # Build assistant message with tool_use blocks
-        assistant_message = {
-            "role": "assistant",
-            "content": [
+        # Build assistant message content
+        assistant_content: List[Dict] = []
+
+        # Prepend thinking blocks if present.
+        # When extended thinking is enabled, Anthropic requires the assistant
+        # message to start with thinking/redacted_thinking blocks before any
+        # tool_use blocks. Same pattern as anthropic_messages_pt in factory.py.
+        if thinking_blocks:
+            assistant_content.extend(thinking_blocks)
+
+        # Add tool_use blocks
+        assistant_content.extend(
+            [
                 {
                     "type": "tool_use",
                     "id": tc["id"],
@@ -267,7 +282,12 @@ class WebSearchTransformation:
                     "input": tc["input"],
                 }
                 for tc in tool_calls
-            ],
+            ]
+        )
+
+        assistant_message = {
+            "role": "assistant",
+            "content": assistant_content,
         }
 
         # Build user message with tool_result blocks

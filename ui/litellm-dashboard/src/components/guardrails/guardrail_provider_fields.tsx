@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Spin, Input } from "antd";
+import { Form, Select, Spin, Input, Slider } from "antd";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
@@ -20,12 +20,15 @@ interface ProviderParam {
   param: string;
   description: string;
   required: boolean;
-  default_value?: string;
+  default_value?: string | number;
   options?: string[];
   type?: string;
   fields?: { [key: string]: ProviderParam };
   dict_key_options?: string[];
   dict_value_type?: string;
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 interface ProviderParamsResponse {
@@ -154,6 +157,11 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         );
       }
 
+      const percentageInitialValue =
+        field.type === "percentage" && (fieldValue === undefined || fieldValue === null)
+          ? (field.default_value ?? 0.5)
+          : undefined;
+
       return (
         <Form.Item
           key={fullFieldKey}
@@ -161,6 +169,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           label={fieldKey}
           tooltip={field.description}
           rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
+          initialValue={percentageInitialValue}
         >
           {field.type === "select" && field.options ? (
             <Select placeholder={field.description} defaultValue={fieldValue || field.default_value}>
@@ -186,6 +195,17 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               <Select.Option value="true">True</Select.Option>
               <Select.Option value="false">False</Select.Option>
             </Select>
+          ) : field.type === "percentage" && field.min != null && field.max != null ? (
+            <Slider
+              min={field.min}
+              max={field.max}
+              step={field.step ?? 0.1}
+              marks={{
+                [field.min]: "0%",
+                [(field.min + field.max) / 2]: "50%",
+                [field.max]: "100%",
+              }}
+            />
           ) : field.type === "number" ? (
             <NumericalInput
               step={1}
