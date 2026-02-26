@@ -132,9 +132,10 @@ async def test_disconnect_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_eviction_calls_aclose():
+async def test_eviction_does_not_close_client():
     """When an async client is evicted from LLMClientCache, its aclose()
-    should be scheduled via create_task."""
+    must NOT be called — callers may still hold references to the client.
+    Closing it would cause 'Cannot send a request, as the client has been closed.'"""
     cache = LLMClientCache(max_size_in_memory=2, default_ttl=600)
 
     client = AsyncMock()
@@ -145,10 +146,10 @@ async def test_eviction_calls_aclose():
     # Third insert triggers eviction of client-0
     cache.set_cache(key="trigger", value="y")
 
-    # Let the scheduled task run
+    # Let any scheduled tasks run
     await asyncio.sleep(0.05)
 
-    assert client.aclose.await_count > 0
+    client.aclose.assert_not_awaited()
 
 
 @pytest.mark.asyncio

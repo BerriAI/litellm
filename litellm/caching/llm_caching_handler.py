@@ -9,23 +9,20 @@ from .in_memory_cache import InMemoryCache
 
 class LLMClientCache(InMemoryCache):
     def _remove_key(self, key: str) -> None:
-        """Close async clients before evicting them to prevent connection pool leaks."""
-        value = self.cache_dict.get(key)
+        """Remove key from cache WITHOUT closing the client.
+
+        Callers of get_async_httpx_client / _get_httpx_client hold direct
+        references to the returned client objects (e.g. litellm.module_level_aclient,
+        streaming handlers, passthrough request handlers).  If we close the
+        underlying httpx client here, those callers will receive:
+
+            RuntimeError: Cannot send a request, as the client has been closed.
+
+        Instead we simply drop the cache's own reference.  When all external
+        references are released the normal Python GC cycle will finalize the
+        transport / connection-pool resources.
+        """
         super()._remove_key(key)
-        if value is not None:
-            close_fn = getattr(value, "aclose", None) or getattr(
-                value, "close", None
-            )
-            if close_fn and asyncio.iscoroutinefunction(close_fn):
-                try:
-                    asyncio.get_running_loop().create_task(close_fn())
-                except RuntimeError:
-                    pass
-            elif close_fn and callable(close_fn):
-                try:
-                    close_fn()
-                except Exception:
-                    pass
 
     def update_cache_key_with_event_loop(self, key):
         """
