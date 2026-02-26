@@ -6,11 +6,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from websockets.exceptions import ConnectionClosed
 
+import litellm
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
@@ -577,10 +581,6 @@ async def test_end_session_after_n_fails_closes_connection():
     Test that end_session_after_n_fails=2 closes the backend websocket after
     the second guardrail violation in a session.
     """
-    import litellm
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
-
     class BadWordGuardrail(CustomGuardrail):
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
             for text in inputs.get("texts", []):
@@ -635,10 +635,6 @@ async def test_on_violation_end_session_closes_on_first_fail():
     Test that on_violation='end_session' closes the session immediately on the
     first violation, regardless of end_session_after_n_fails.
     """
-    import litellm
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
-
     class TopicGuardrail(CustomGuardrail):
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
             for text in inputs.get("texts", []):
