@@ -14,7 +14,6 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
     CustomCodeValidationError,
     validate_custom_code,
@@ -22,6 +21,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
     get_custom_code_primitives,
 )
+from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
@@ -999,6 +999,152 @@ async def validate_blocked_words_file(request: Dict[str, str]):
         return {"valid": False, "error": f"Invalid YAML syntax: {str(e)}"}
     except Exception as e:
         verbose_proxy_logger.exception("Error validating blocked words file")
+        return {"valid": False, "error": f"Validation error: {str(e)}"}
+
+
+# --- Regex pattern file validation ---
+
+MAX_PATTERNS_FILE_SIZE = 100 * 1024  # 100 KB
+MAX_PATTERNS_PER_FILE = 100
+MAX_PATTERN_LENGTH = 500
+
+# Heuristic to detect nested quantifiers that cause catastrophic backtracking.
+# Matches groups with a quantifier inside followed by an outer quantifier,
+# e.g. (a+)+, (.*)+, (x*)*
+import re as _re
+
+_NESTED_QUANTIFIER_RE = _re.compile(
+    r"\([^)]*[*+]\)[*+?]|\([^)]*[*+]\)\{",
+)
+
+
+def _check_redos_heuristic(pattern: str) -> Optional[str]:
+    """Return an error message if the pattern looks like it could cause ReDoS."""
+    if _NESTED_QUANTIFIER_RE.search(pattern):
+        return "pattern contains nested quantifiers which can cause catastrophic backtracking"
+    return None
+
+
+def _try_compile_regex(pattern: str, timeout: float = 1.0) -> Optional[str]:
+    """
+    Try to compile a regex pattern with a timeout.
+
+    Returns None on success, or an error string on failure/timeout.
+    """
+    import re
+
+    # First, fast static check for ReDoS patterns
+    redos_err = _check_redos_heuristic(pattern)
+    if redos_err:
+        return redos_err
+
+    def _compile():
+        re.compile(pattern, re.IGNORECASE)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_compile)
+        try:
+            future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            return "pattern compilation timed out (possible ReDoS)"
+        except re.error as e:
+            return f"invalid regex: {e}"
+    return None
+
+
+@router.post(
+    "/guardrails/validate_patterns_file",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def validate_patterns_file(request: Dict[str, str]):
+    """
+    Validate a regex patterns file (newline-separated).
+
+    Each non-empty, non-comment line is either:
+      - A regex pattern, e.g. ``\\d{3}-\\d{2}-\\d{4}``
+      - A pipe-delimited name|regex, e.g. ``employee_id|EMP-\\d{5}``
+
+    Lines starting with ``#`` are treated as comments and ignored.
+
+    Limits: max 100 KB file, 100 patterns, 500 chars per pattern.
+    Patterns with nested quantifiers (ReDoS risk) are rejected.
+
+    Args:
+        request: Dictionary with ``file_content`` key containing the file text.
+
+    Returns:
+        ``{"valid": true, "patterns": [...], "message": "..."}`` on success.
+        ``{"valid": false, "errors": [...]}`` on failure.
+    """
+    try:
+        file_content = request.get("file_content", "")
+        if not file_content:
+            return {"valid": False, "error": "No file content provided"}
+
+        if len(file_content.encode("utf-8")) > MAX_PATTERNS_FILE_SIZE:
+            return {
+                "valid": False,
+                "error": f"File too large (max {MAX_PATTERNS_FILE_SIZE // 1024} KB)",
+            }
+
+        lines = file_content.splitlines()
+        patterns: List[Dict[str, str]] = []
+        errors: List[str] = []
+
+        for line_num, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            # Check max pattern count early
+            if len(patterns) + 1 > MAX_PATTERNS_PER_FILE:
+                errors.append(
+                    f"Line {line_num}: exceeds maximum of {MAX_PATTERNS_PER_FILE} patterns per file"
+                )
+                break
+
+            # Parse optional name|regex format
+            if "|" in stripped:
+                parts = stripped.split("|", 1)
+                name = parts[0].strip()
+                regex_str = parts[1].strip()
+            else:
+                name = None
+                regex_str = stripped
+
+            if not regex_str:
+                errors.append(f"Line {line_num}: empty regex pattern")
+                continue
+
+            if len(regex_str) > MAX_PATTERN_LENGTH:
+                errors.append(
+                    f"Line {line_num}: pattern exceeds maximum length of {MAX_PATTERN_LENGTH} characters"
+                )
+                continue
+
+            compile_err = _try_compile_regex(regex_str)
+            if compile_err:
+                errors.append(f"Line {line_num}: {compile_err}")
+                continue
+
+            patterns.append(
+                {"name": name or f"pattern_line_{line_num}", "pattern": regex_str}
+            )
+
+        if errors:
+            return {"valid": False, "errors": errors}
+
+        if not patterns:
+            return {"valid": False, "error": "No patterns found in file"}
+
+        return {
+            "valid": True,
+            "message": f"Valid file with {len(patterns)} pattern(s)",
+            "patterns": patterns,
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception("Error validating patterns file")
         return {"valid": False, "error": f"Validation error: {str(e)}"}
 
 

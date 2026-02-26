@@ -756,6 +756,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         selectedPatterns={selectedPatterns}
         blockedWords={blockedWords}
         onPatternAdd={(pattern) => setSelectedPatterns([...selectedPatterns, pattern])}
+        onPatternsAdd={(patterns) => setSelectedPatterns([...selectedPatterns, ...patterns])}
         onPatternRemove={(id) => setSelectedPatterns(selectedPatterns.filter((p) => p.id !== id))}
         onPatternActionChange={(id, action) => {
           setSelectedPatterns(selectedPatterns.map((p) => (p.id === id ? { ...p, action } : p)));

@@ -24,6 +24,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     list_guardrails_v2,
     patch_guardrail,
     update_guardrail,
+    validate_patterns_file,
 )
 from litellm.proxy.guardrails.guardrail_registry import (
     IN_MEMORY_GUARDRAIL_HANDLER,
@@ -1101,3 +1102,99 @@ async def test_get_guardrail_info_endpoint_db_guardrail(mocker):
     assert result.guardrail_id == "test-db-guardrail"
     assert result.guardrail_name == "Test DB Guardrail"
     assert result.guardrail_definition_location == "db"
+
+
+class TestValidatePatternsFile:
+    """Tests for the validate_patterns_file endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_valid_simple(self):
+        """Valid file with simple regex patterns."""
+        file_content = "\\d{3}-\\d{2}-\\d{4}\n[A-Z]{2}\\d{6}\n\\b\\w+@\\w+\\.\\w+\\b"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is True
+        assert len(result["patterns"]) == 3
+        assert result["patterns"][0]["name"] == "pattern_line_1"
+        assert result["patterns"][0]["pattern"] == "\\d{3}-\\d{2}-\\d{4}"
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_valid_named(self):
+        """Valid file with named name|regex patterns."""
+        file_content = "ssn|\\d{3}-\\d{2}-\\d{4}\nemployee_id|EMP-\\d{5}"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is True
+        assert len(result["patterns"]) == 2
+        assert result["patterns"][0]["name"] == "ssn"
+        assert result["patterns"][0]["pattern"] == "\\d{3}-\\d{2}-\\d{4}"
+        assert result["patterns"][1]["name"] == "employee_id"
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_invalid_regex(self):
+        """Invalid regex syntax returns errors with line numbers."""
+        file_content = "\\d{3}\n[invalid\n\\w+"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is False
+        assert "errors" in result
+        assert len(result["errors"]) == 1
+        assert "Line 2" in result["errors"][0]
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_empty_file(self):
+        """Empty file returns error."""
+        result = await validate_patterns_file({"file_content": ""})
+        assert result["valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_no_content(self):
+        """Missing file_content key returns error."""
+        result = await validate_patterns_file({})
+        assert result["valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_comments_and_blanks(self):
+        """Comments and blank lines are ignored."""
+        file_content = "# This is a comment\n\n\\d{3}\n\n# Another comment\n\\w+"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is True
+        assert len(result["patterns"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_max_length_exceeded(self):
+        """Pattern exceeding max length is rejected."""
+        long_pattern = "a" * 501
+        file_content = f"{long_pattern}"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is False
+        assert any("maximum length" in e for e in result.get("errors", []))
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_too_many(self):
+        """More than 100 patterns is rejected."""
+        lines = [f"pattern_{i}" for i in range(101)]
+        file_content = "\n".join(lines)
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is False
+        assert any("maximum" in e.lower() for e in result.get("errors", []))
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_nested_quantifier_rejected(self):
+        """Patterns with nested quantifiers (ReDoS risk) are rejected."""
+        file_content = "(a+)+b"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is False
+        assert any("nested quantifier" in e.lower() for e in result.get("errors", []))
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_file_too_large(self):
+        """File exceeding 100KB is rejected."""
+        file_content = "a\n" * 60000  # >100KB
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is False
+        assert "too large" in result.get("error", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_only_comments(self):
+        """File with only comments returns no patterns error."""
+        file_content = "# comment 1\n# comment 2\n"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is False
