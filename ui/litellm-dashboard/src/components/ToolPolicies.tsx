@@ -1,24 +1,19 @@
 "use client";
 
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { Button, Modal, Select, Switch, Tooltip } from "antd";
+import { Button, Switch, Tooltip } from "antd";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import { TimeCell } from "./view_logs/time_cell";
 import { TableHeaderSortDropdown } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import type { SortState } from "./common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import FilterComponent, { FilterOption } from "./molecules/filter";
 import { MetricCard } from "./GuardrailsMonitor/MetricCard";
-import TeamDropdown from "./common_components/team_dropdown";
+import { PolicySelect, POLICY_OPTIONS } from "./ToolPolicies/PolicySelect";
 import {
-  fetchToolDetail,
   fetchToolsList,
   updateToolPolicy,
-  deleteToolPolicyOverride,
   ToolRow,
-  ToolDetailResponse,
-  ToolPolicyOverrideRow,
 } from "./networking";
-import { teamListCall, keyListCall } from "./networking";
 
 // --- Date helpers (UTC) for "new tools" counts ---
 function getUTCDateKey(date: Date): string {
@@ -46,15 +41,6 @@ function getTrendSubtitle(newToday: number, newYesterday: number): string | unde
   return `${diff} since yesterday`;
 }
 
-const POLICY_OPTIONS = [
-  { value: "trusted", label: "trusted", color: "#065f46", bg: "#d1fae5", border: "#6ee7b7" },
-  { value: "blocked", label: "blocked", color: "#991b1b", bg: "#fee2e2", border: "#fca5a5" },
-] as const;
-
-type PolicyValue = "trusted" | "blocked";
-
-const policyStyle = (p: string) => POLICY_OPTIONS.find((o) => o.value === p) ?? POLICY_OPTIONS[1];
-
 type SortField = "tool_name" | "call_policy" | "team_id" | "key_alias" | "created_at" | "call_count";
 
 interface FilterValues {
@@ -64,98 +50,15 @@ interface FilterValues {
 interface ToolPoliciesProps {
   accessToken: string | null;
   userRole?: string;
+  onSelectTool?: (toolName: string) => void;
 }
 
-const PolicySelect: React.FC<{
-  value: string;
-  toolName: string;
-  saving: boolean;
-  onChange: (toolName: string, policy: string) => void;
-}> = ({ value, toolName, saving, onChange }) => {
-  const style = policyStyle(value);
-  return (
-    <Select
-      size="small"
-      value={value}
-      disabled={saving}
-      loading={saving}
-      onChange={(v) => onChange(toolName, v)}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        minWidth: 110,
-        fontWeight: 500,
-      }}
-      styles={{
-        selector: {
-          backgroundColor: style.bg,
-          borderColor: style.border,
-          color: style.color,
-          borderRadius: 999,
-          fontSize: 11,
-          fontWeight: 600,
-          paddingLeft: 8,
-          paddingRight: 4,
-        },
-      }}
-      popupMatchSelectWidth={false}
-      options={POLICY_OPTIONS.map((o) => ({
-        value: o.value,
-        label: (
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12,
-              fontWeight: 500,
-              color: o.color,
-            }}
-          >
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: o.color,
-                display: "inline-block",
-                flexShrink: 0,
-              }}
-            />
-            {o.label}
-          </span>
-        ),
-      }))}
-    />
-  );
-};
-
-interface TeamOption {
-  team_id: string;
-  team_alias?: string;
-}
-
-interface KeyOption {
-  token: string;
-  key_alias?: string;
-}
-
-export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
+export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken, onSelectTool }) => {
   const [tools, setTools] = useState<ToolRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
-
-  const [detailModalOpen, setDetailModalOpen] = useState(false);
-  const [detailToolName, setDetailToolName] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ToolDetailResponse | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [teams, setTeams] = useState<TeamOption[]>([]);
-  const [keys, setKeys] = useState<KeyOption[]>([]);
-  const [overrideSaving, setOverrideSaving] = useState(false);
-  const [blockScope, setBlockScope] = useState<"team" | "key">("team");
-  const [blockTeamId, setBlockTeamId] = useState<string | null>(null);
-  const [blockKey, setBlockKey] = useState<{ token: string; key_alias?: string } | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState<SortField>("created_at");
@@ -199,100 +102,12 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
     try {
       await updateToolPolicy(accessToken, toolName, newPolicy);
       setTools((prev) => prev.map((t) => (t.tool_name === toolName ? { ...t, call_policy: newPolicy } : t)));
-      if (detailToolName === toolName && detail) {
-        setDetail((d) => (d ? { ...d, tool: { ...d.tool, call_policy: newPolicy } } : null));
-      }
     } catch (e: any) {
       alert(`Failed to update policy: ${e.message}`);
     } finally {
       setSaving(null);
     }
   };
-
-  const openDetailModal = useCallback(
-    async (toolName: string) => {
-      if (!accessToken) return;
-      setDetailToolName(toolName);
-      setDetailModalOpen(true);
-      setDetail(null);
-      setDetailLoading(true);
-      setBlockTeamId(null);
-      setBlockKey(null);
-      try {
-        const [detailRes, teamsRes, keysRes] = await Promise.all([
-          fetchToolDetail(accessToken, toolName),
-          teamListCall(accessToken, null, null),
-          keyListCall(accessToken, null, null, null, null, null, 1, 100),
-        ]);
-        setDetail(detailRes);
-        const teamsArray = Array.isArray(teamsRes) ? teamsRes : teamsRes?.data ?? [];
-        setTeams(
-          teamsArray.map((t: any) => ({ team_id: t.team_id ?? t.id, team_alias: t.team_alias ?? t.team_id }))
-        );
-        const keysArray = keysRes?.keys ?? keysRes?.data ?? [];
-        setKeys(
-          keysArray.map((k: any) => ({
-            token: k.token ?? k.api_key ?? k.key_hash ?? "",
-            key_alias: k.key_alias ?? k.token?.substring?.(0, 8),
-          }))
-        );
-      } catch (e: any) {
-        setError(e.message ?? "Failed to load tool detail");
-      } finally {
-        setDetailLoading(false);
-      }
-    },
-    [accessToken]
-  );
-
-  const closeDetailModal = useCallback(() => {
-    setDetailModalOpen(false);
-    setDetailToolName(null);
-    setDetail(null);
-  }, []);
-
-  const handleAddOverride = useCallback(async () => {
-    if (!accessToken || !detailToolName) return;
-    const isTeam = blockScope === "team";
-    if (isTeam && !blockTeamId) return;
-    if (!isTeam && !blockKey?.token) return;
-    setOverrideSaving(true);
-    try {
-      await updateToolPolicy(accessToken, detailToolName, "blocked", {
-        team_id: isTeam ? blockTeamId! : undefined,
-        key_hash: !isTeam ? blockKey!.token : undefined,
-        key_alias: !isTeam ? blockKey!.key_alias : undefined,
-      });
-      const refreshed = await fetchToolDetail(accessToken, detailToolName);
-      setDetail(refreshed);
-      setBlockTeamId(null);
-      setBlockKey(null);
-    } catch (e: any) {
-      alert(`Failed to add override: ${e.message}`);
-    } finally {
-      setOverrideSaving(false);
-    }
-  }, [accessToken, detailToolName, blockScope, blockTeamId, blockKey]);
-
-  const handleRemoveOverride = useCallback(
-    async (override: ToolPolicyOverrideRow) => {
-      if (!accessToken || !detailToolName) return;
-      setOverrideSaving(true);
-      try {
-        await deleteToolPolicyOverride(accessToken, detailToolName, {
-          team_id: override.team_id ?? undefined,
-          key_hash: override.key_hash ?? undefined,
-        });
-        const refreshed = await fetchToolDetail(accessToken, detailToolName);
-        setDetail(refreshed);
-      } catch (e: any) {
-        alert(`Failed to remove override: ${e.message}`);
-      } finally {
-        setOverrideSaving(false);
-      }
-    },
-    [accessToken, detailToolName]
-  );
 
   const handleSortChange = (field: SortField, newState: SortState) => {
     if (newState === false) {
@@ -431,7 +246,7 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="p-6 w-full">
+    <div className="w-full">
       <h1 className="text-2xl font-semibold text-gray-900 mb-6">Tool Policies</h1>
 
       {/* Summary cards */}
@@ -644,10 +459,10 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                   <TableCell className="py-0.5 max-h-8 overflow-hidden">
                     <button
                       type="button"
-                      onClick={() => openDetailModal(tool.tool_name)}
+                      onClick={() => onSelectTool?.(tool.tool_name)}
                       className="text-left w-full font-mono text-xs max-w-[20ch] truncate block font-medium text-blue-600 hover:text-blue-800 hover:underline focus:outline-none focus:ring-0"
                     >
-                      <Tooltip title="Click to view details and block for team/key">
+                      <Tooltip title={onSelectTool ? "Click to view details and block for team/key" : tool.tool_name}>
                         <span>{tool.tool_name}</span>
                       </Tooltip>
                     </button>
@@ -660,8 +475,10 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
                       onChange={handlePolicyChange}
                     />
                   </TableCell>
-                  <TableCell className="py-0.5 max-h-8 text-right tabular-nums text-sm font-mono text-gray-700">
-                    {(tool.call_count ?? 0).toLocaleString()}
+                  <TableCell className="py-0.5 max-h-8">
+                    <div className="flex items-center justify-end h-8 tabular-nums text-sm font-mono text-gray-700">
+                      {(tool.call_count ?? 0).toLocaleString()}
+                    </div>
                   </TableCell>
                   <TableCell className="py-0.5 max-h-8 overflow-hidden whitespace-nowrap">
                     <Tooltip title={tool.team_id ?? "-"}>
@@ -718,134 +535,6 @@ export const ToolPolicies: React.FC<ToolPoliciesProps> = ({ accessToken }) => {
         )}
       </div>
 
-      {/* Tool detail modal: view tool, global policy, overrides, block for team/key */}
-      <Modal
-        title={detailToolName ? `Tool: ${detailToolName}` : "Tool details"}
-        open={detailModalOpen}
-        onCancel={closeDetailModal}
-        footer={null}
-        width={640}
-        destroyOnClose
-      >
-        {detailLoading ? (
-          <p className="text-gray-500 py-4">Loading…</p>
-        ) : detail ? (
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-4 text-sm">
-              <span>
-                <strong>Origin:</strong> {detail.tool.origin ?? "—"}
-              </span>
-              <span>
-                <strong># Calls:</strong> {(detail.tool.call_count ?? 0).toLocaleString()}
-              </span>
-            </div>
-            <div>
-              <strong className="block text-sm text-gray-700 mb-1">Global policy</strong>
-              <PolicySelect
-                value={detail.tool.call_policy}
-                toolName={detail.tool.tool_name}
-                saving={saving === detail.tool.tool_name}
-                onChange={handlePolicyChange}
-              />
-            </div>
-
-            {detail.overrides.length > 0 && (
-              <div>
-                <strong className="block text-sm text-gray-700 mb-2">Blocked for team/key</strong>
-                <ul className="border rounded-md divide-y divide-gray-100">
-                  {detail.overrides.map((ov) => (
-                    <li
-                      key={ov.override_id}
-                      className="flex items-center justify-between px-3 py-2 text-sm bg-red-50/50"
-                    >
-                      <span>
-                        {ov.team_id ? `Team: ${ov.team_id}` : ""}
-                        {ov.team_id && ov.key_hash ? " · " : ""}
-                        {ov.key_hash ? `Key: ${ov.key_alias || ov.key_hash.substring(0, 8)}` : ""}
-                        {!ov.team_id && !ov.key_hash ? "—" : ""}
-                      </span>
-                      <Button
-                        type="link"
-                        danger
-                        size="small"
-                        disabled={overrideSaving}
-                        onClick={() => handleRemoveOverride(ov)}
-                      >
-                        Remove
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div className="border-t pt-4">
-              <strong className="block text-sm text-gray-700 mb-2">Block for team or key</strong>
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="flex items-center gap-2">
-                  <label className="text-sm">
-                    <input
-                      type="radio"
-                      checked={blockScope === "team"}
-                      onChange={() => setBlockScope("team")}
-                      className="mr-1"
-                    />
-                    Team
-                  </label>
-                  <label className="text-sm">
-                    <input
-                      type="radio"
-                      checked={blockScope === "key"}
-                      onChange={() => setBlockScope("key")}
-                      className="mr-1"
-                    />
-                    Key
-                  </label>
-                </div>
-                {blockScope === "team" ? (
-                  <div className="min-w-[200px]">
-                    <TeamDropdown
-                      teams={teams}
-                      value={blockTeamId}
-                      onChange={(id) => setBlockTeamId(id ?? null)}
-                    />
-                  </div>
-                ) : (
-                  <Select
-                    placeholder="Select key"
-                    allowClear
-                    showSearch
-                    optionFilterProp="label"
-                    value={blockKey ? blockKey.token : undefined}
-                    onChange={(token) => {
-                      const k = keys.find((x) => x.token === token);
-                      setBlockKey(k ?? null);
-                    }}
-                    options={keys.map((k) => ({
-                      value: k.token,
-                      label: k.key_alias || k.token?.substring?.(0, 12) || k.token,
-                    }))}
-                    style={{ minWidth: 200 }}
-                  />
-                )}
-                <Button
-                  type="primary"
-                  danger
-                  disabled={
-                    overrideSaving || (blockScope === "team" ? !blockTeamId : !blockKey?.token)
-                  }
-                  loading={overrideSaving}
-                  onClick={handleAddOverride}
-                >
-                  Block for {blockScope}
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <p className="text-gray-500 py-4">No data</p>
-        )}
-      </Modal>
     </div>
   );
 };

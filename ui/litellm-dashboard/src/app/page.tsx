@@ -38,7 +38,7 @@ import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
-import ToolPolicies from "@/components/ToolPolicies";
+import ToolPoliciesView from "@/components/ToolPoliciesView";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -550,7 +550,7 @@ function CreateKeyPageContent() {
                   ) : page == "vector-stores" ? (
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tool-policies" ? (
-                    <ToolPolicies accessToken={accessToken} userRole={userRole} />
+                    <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
                   ) : page == "guardrails-monitor" ? (
                     <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (
