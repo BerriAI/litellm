@@ -7,6 +7,12 @@ from typing import List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_env,
+    get_datadog_hostname,
+    get_datadog_pod_name,
+    get_datadog_service,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -22,7 +28,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 
 class DatadogMetricsLogger(CustomBatchLogger):
-    def __init__(self, **kwargs):
+    def __init__(self, start_periodic_flush: bool = True, **kwargs):
         self.dd_api_key = os.getenv("DD_API_KEY")
         self.dd_app_key = os.getenv("DD_APP_KEY")
         self.dd_site = os.getenv("DD_SITE", "datadoghq.com")
@@ -51,8 +57,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
         super().__init__(**kwargs)
 
-        # Start periodic flush task
-        asyncio.create_task(self.periodic_flush())
+        # Start periodic flush task only if instructed
+        if start_periodic_flush:
+            asyncio.create_task(self.periodic_flush())
 
     def _extract_tags(
         self,
@@ -62,13 +69,6 @@ class DatadogMetricsLogger(CustomBatchLogger):
         """
         Builds the list of tags for a Datadog metric point
         """
-        from litellm.integrations.datadog.datadog_handler import (
-            get_datadog_env,
-            get_datadog_hostname,
-            get_datadog_pod_name,
-            get_datadog_service,
-        )
-
         # Base tags
         tags = [
             f"env:{get_datadog_env()}",
@@ -188,8 +188,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
             error_information = (
                 standard_logging_object.get("error_information", {}) or {}
             )
-            if "error_code" in error_information and error_information["error_code"] is not None:  # type: ignore
-                status_code = str(error_information["error_code"])  # type: ignore
+            error_code = error_information.get("error_code")  # type: ignore
+            if error_code is not None:
+                status_code = str(error_code)
 
             self._add_metrics_from_log(
                 log=standard_logging_object, kwargs=kwargs, status_code=status_code
