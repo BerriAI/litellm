@@ -1206,25 +1206,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         Return Dictionary of finish reasons which indicate response was flagged
 
-        and what it means
+        and what it means.
+
+        Delegates to the centralized _FINISH_REASON_MAP to avoid duplication.
         """
-        return {
-            "FINISH_REASON_UNSPECIFIED": "stop",
-            "STOP": "stop",
-            "MAX_TOKENS": "length",
-            "SAFETY": "content_filter",
-            "RECITATION": "content_filter",
-            "LANGUAGE": "content_filter",
-            "OTHER": "content_filter",
-            "BLOCKLIST": "content_filter",
-            "PROHIBITED_CONTENT": "content_filter",
-            "SPII": "content_filter",
-            "MALFORMED_FUNCTION_CALL": "stop",
-            "IMAGE_SAFETY": "content_filter",
-            "IMAGE_PROHIBITED_CONTENT": "content_filter",
-            "TOO_MANY_TOOL_CALLS": "stop",
-            "MALFORMED_RESPONSE": "stop",
-        }
+        from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
+
+        return _FINISH_REASON_MAP
 
     def translate_exception_str(self, exception_string: str):
         if (
@@ -1728,15 +1716,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_message: Optional[ChatCompletionResponseMessage],
         finish_reason: Optional[str],
     ) -> OpenAIChatCompletionFinishReason:
-        mapped_finish_reason = VertexGeminiConfig.get_finish_reason_mapping()
+        from litellm.litellm_core_utils.core_helpers import map_finish_reason
+
         if chat_completion_message and chat_completion_message.get("function_call"):
             return "function_call"
         elif chat_completion_message and chat_completion_message.get("tool_calls"):
             return "tool_calls"
-        elif (
-            finish_reason and finish_reason in mapped_finish_reason.keys()
-        ):  # vertex ai
-            return mapped_finish_reason[finish_reason]
+        elif finish_reason:
+            return map_finish_reason(finish_reason)
         else:
             return "stop"
 
