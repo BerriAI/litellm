@@ -444,3 +444,75 @@ def test_on_engine_death_from_thread_ignores_stale_pid(engine_client):
         engine_client._on_engine_death_from_thread(1234)
 
     mock_create_task.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Reconnect escalation: lightweight -> heavy after consecutive failures
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_escalation_after_consecutive_lightweight_failures(engine_client):
+    """After N consecutive lightweight reconnect failures, _engine_confirmed_dead
+    is set to True so _run_reconnect_cycle takes the heavy reconnect path."""
+    engine_client._reconnect_escalation_threshold = 3
+    engine_client._consecutive_reconnect_failures = 0
+    engine_client._db_reconnect_cooldown_seconds = 0  # disable cooldown for test
+
+    # Make lightweight reconnect fail every time
+    engine_client.db.disconnect = AsyncMock(return_value=None)
+    engine_client.db.connect = AsyncMock(side_effect=Exception("connect failed"))
+
+    # Run 3 failed reconnect attempts
+    for i in range(3):
+        result = await engine_client._attempt_reconnect_inside_lock(
+            force=True, reason="test", timeout_seconds=5.0
+        )
+        assert result is False
+
+    assert engine_client._consecutive_reconnect_failures == 3
+
+    # Next attempt should escalate: _engine_confirmed_dead set to True before _run_reconnect_cycle
+    engine_client.db.recreate_prisma_client = AsyncMock(return_value=None)
+    engine_client._start_engine_watcher = AsyncMock(return_value=None)
+
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        result = await engine_client._attempt_reconnect_inside_lock(
+            force=True, reason="test_escalation", timeout_seconds=5.0
+        )
+
+    # Heavy reconnect should have been attempted (recreate_prisma_client called)
+    engine_client.db.recreate_prisma_client.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_successful_reconnect_resets_failure_counter(engine_client):
+    """A successful reconnect resets _consecutive_reconnect_failures to 0."""
+    engine_client._consecutive_reconnect_failures = 2
+    engine_client._db_reconnect_cooldown_seconds = 0
+
+    # Make reconnect succeed
+    engine_client.db.disconnect = AsyncMock(return_value=None)
+    engine_client.db.connect = AsyncMock(return_value=None)
+    engine_client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+
+    result = await engine_client._attempt_reconnect_inside_lock(
+        force=True, reason="test", timeout_seconds=5.0
+    )
+
+    assert result is True
+    assert engine_client._consecutive_reconnect_failures == 0
+
+
+def test_escalation_threshold_env_var(mock_proxy_logging):
+    """PRISMA_RECONNECT_ESCALATION_THRESHOLD env var is respected."""
+    with patch.dict(os.environ, {"PRISMA_RECONNECT_ESCALATION_THRESHOLD": "5"}):
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    assert client._reconnect_escalation_threshold == 5
+
+
+def test_escalation_threshold_min_guard(mock_proxy_logging):
+    """Escalation threshold cannot be set below 1."""
+    with patch.dict(os.environ, {"PRISMA_RECONNECT_ESCALATION_THRESHOLD": "0"}):
+        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    assert client._reconnect_escalation_threshold == 1
