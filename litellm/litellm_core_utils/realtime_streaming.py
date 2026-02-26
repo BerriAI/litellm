@@ -363,13 +363,11 @@ class RealTimeStreaming:
                         },
                     })
                 )
-                # Ask the LLM to voice the guardrail message so the user
-                # hears it as audio in voice sessions (not just text).
+                # Ask the LLM to voice the exact guardrail message so the
+                # user hears it as audio in voice sessions (not just text).
                 guardrail_prompt = (
-                    f"The user's last message was blocked by a content guardrail "
-                    f"before it reached you. Briefly inform the user in a helpful "
-                    f"and empathetic tone: {error_msg}. "
-                    f"Do not repeat the blocked content."
+                    f"Say exactly the following message to the user, word for word, "
+                    f"do not add anything else: {error_msg}"
                 )
                 await self._send_to_backend(json.dumps({
                     "type": "conversation.item.create",
