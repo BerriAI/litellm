@@ -497,10 +497,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             start:end
                         ]  # get text it'll replace
 
-                        verbose_proxy_logger.info(
-                            f"\033[92mPII Masking\033[0m: Created token {replacement} for original text: '{new_text[start:end]}'"
-                        )
-
                     new_text = new_text[:start] + replacement + new_text[end:]
                     entity_type = item.get("entity_type", None)
                     if entity_type is not None:
@@ -537,12 +533,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return analyze_results
 
         filtered_results: List[PresidioAnalyzeResponseItem] = []
-        print(
-            "DEBUG filter input:",
-            analyze_results,
-            " deny_list:",
-            self.presidio_entities_deny_list,
-        )
         for item in analyze_results:
             entity_type = item.get("entity_type")
 
@@ -553,11 +543,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             str_entity_type = str(
                 entity_type.value if hasattr(entity_type, "value") else entity_type
             )
-            print(
-                f"DEBUG entity_type: {entity_type}, str_entity_type: '{str_entity_type}', deny_strings: {deny_list_strings}"
-            )
             if entity_type and str_entity_type in deny_list_strings:
-                print(f"DEBUG Skipping {entity_type} due to deny list")
                 continue
 
             if self.presidio_score_thresholds:
@@ -933,9 +919,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 if mode == "unmask":
                     for token, original_text in pii_tokens.items():
                         if token in content:
-                            verbose_proxy_logger.info(
-                                f"\033[94mPII Unmasking\033[0m: Found token {token} in response. Replacing with original text."
-                            )
                             content = content.replace(token, original_text)
                         # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
                         elif any(
@@ -951,9 +934,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             ):
                                 sub = content[i:]
                                 if token.startswith(sub) and len(sub) > 15:
-                                    verbose_proxy_logger.info(
-                                        f"\033[93mPII Unmasking\033[0m: Found truncated token {sub}... in response. Replacing with original text."
-                                    )
                                     content = content[:i] + original_text
                                     break
                     message.content = content
