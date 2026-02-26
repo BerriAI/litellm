@@ -70,6 +70,8 @@ class RealTimeStreaming:
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
         self.request_data: Dict = request_data or {}
+        # Violation counter for end_session_after_n_fails support
+        self._violation_count: int = 0
 
     def _should_store_message(
         self,
@@ -329,6 +331,10 @@ class RealTimeStreaming:
                     safe_msg = str(detail)
                 else:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
+
+                # Use realtime_violation_message if configured; fall back to guardrail error text.
+                error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
+
                 # Return the error directly to the WebSocket consumer.
                 await self.websocket.send_text(
                     json.dumps(
@@ -336,14 +342,31 @@ class RealTimeStreaming:
                             "type": "error",
                             "error": {
                                 "type": "guardrail_violation",
-                                "message": safe_msg,
+                                "message": error_msg,
                                 "code": "content_policy_violation",
                             },
                         }
                     )
                 )
+
+                self._violation_count += 1
+                end_session_after: Optional[int] = getattr(
+                    callback, "end_session_after_n_fails", None
+                )
+                should_end = getattr(callback, "on_violation", None) == "end_session" or (
+                    end_session_after is not None
+                    and self._violation_count >= end_session_after
+                )
+                if should_end:
+                    verbose_logger.warning(
+                        "[realtime guardrail] ending session after violation %d",
+                        self._violation_count,
+                    )
+                    await self.backend_ws.close()
+
                 verbose_logger.warning(
-                    "[realtime guardrail] BLOCKED transcript: %r",
+                    "[realtime guardrail] BLOCKED transcript (violation %d): %r",
+                    self._violation_count,
                     transcript[:80],
                 )
                 return True
