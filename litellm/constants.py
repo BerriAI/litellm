@@ -46,6 +46,14 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
     os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
+
+# Maximum wall-clock seconds a streaming response is allowed to run.
+# Streams exceeding this duration are terminated with a Timeout error.
+# None (default) = no limit.  Set env var to a number of seconds to enable globally.
+_max_stream_duration_env = os.getenv("LITELLM_MAX_STREAMING_DURATION_SECONDS", None)
+LITELLM_MAX_STREAMING_DURATION_SECONDS = (
+    float(_max_stream_duration_env) if _max_stream_duration_env is not None else None
+)
 DEFAULT_IMAGE_WIDTH = int(os.getenv("DEFAULT_IMAGE_WIDTH", 300))
 DEFAULT_IMAGE_HEIGHT = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
