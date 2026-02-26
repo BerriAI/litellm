@@ -1003,7 +1003,6 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         self.request = _saved_request
         self.message = _saved_message
         self.args = (_saved_message,)
-        self.args = (_saved_message,)
 
     def __str__(self):
         _message = self.message
