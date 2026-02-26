@@ -39,6 +39,7 @@ export function useFilterLogic({
   const [allTeams, setAllTeams] = useState<Team[]>(teams || []);
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
+  const [filteredTotalCount, setFilteredTotalCount] = useState<number | null>(null);
   const lastSearchTimestamp = useRef(0);
   const debouncedSearch = useCallback(
     debounce(async (filters: FilterState) => {
@@ -68,6 +69,7 @@ export function useFilterLogic({
         if (currentTimestamp === lastSearchTimestamp.current) {
           if (data) {
             setFilteredKeys(data.keys);
+            setFilteredTotalCount(data.total_count ?? null);
             console.log("called from debouncedSearch filters:", JSON.stringify(filters));
             console.log("called from debouncedSearch data:", JSON.stringify(data));
           }
@@ -166,6 +168,7 @@ export function useFilterLogic({
   const handleFilterReset = () => {
     // Reset filters state
     setFilters(defaultFilters);
+    setFilteredTotalCount(null);
 
     // Reset selections
     debouncedSearch(defaultFilters);
@@ -174,6 +177,7 @@ export function useFilterLogic({
   return {
     filters,
     filteredKeys,
+    filteredTotalCount,
     allTeams,
     allOrganizations,
     handleFilterChange,
