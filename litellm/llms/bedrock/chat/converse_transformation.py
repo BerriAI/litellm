@@ -1355,7 +1355,7 @@ class AmazonConverseConfig(BaseConfig):
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         base_model = BedrockModelInfo.get_base_model(model)
-        if anthropic_beta_list and base_model.startswith("anthropic"):
+        if anthropic_beta_list and (base_model.startswith("anthropic") or "arn:aws:bedrock" in model.lower()):
             additional_request_params["anthropic_beta"] = anthropic_beta_list
 
         return bedrock_tools, anthropic_beta_list
