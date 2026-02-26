@@ -5,9 +5,13 @@ from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.block_code_execution import (
-    DEFAULT_EVENT_HOOKS, BlockCodeExecutionGuardrail, initialize_guardrail)
-from litellm.proxy.guardrails.guardrail_hooks.block_code_execution.block_code_execution import \
-    _normalize_escaped_newlines
+    DEFAULT_EVENT_HOOKS,
+    BlockCodeExecutionGuardrail,
+    initialize_guardrail,
+)
+from litellm.proxy.guardrails.guardrail_hooks.block_code_execution.block_code_execution import (
+    _normalize_escaped_newlines,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -346,3 +350,140 @@ print(factorial(5))  # Output: 120
         assert len(blocks) == 1
         assert blocks[0][2] == "py"
         assert blocks[0][5] == "block"
+
+    # ---- Tests for response-side blocking with detect_execution_intent=True ----
+
+    @pytest.mark.asyncio
+    async def test_response_blocked_with_detect_execution_intent_true(self):
+        """With detect_execution_intent=True (default), response-side code blocks are still blocked.
+
+        This is the core bug fix: previously, execution-intent heuristics were applied
+        to LLM responses, which don't contain phrases like 'run this', so response-side
+        blocking was silently disabled.
+        """
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.7,
+            detect_execution_intent=True,  # default
+        )
+        # LLM response with dangerous code but no execution-intent phrases
+        response_text = (
+            "Here is a Python script:\n"
+            "```python\n"
+            "import os; os.system('rm -rf /')\n"
+            "```"
+        )
+        request_data = {"model": "gpt-4", "metadata": {}}
+        inputs = {"texts": [response_text]}
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_response_mask_with_detect_execution_intent_true(self):
+        """With detect_execution_intent=True and action=mask, response code blocks are masked."""
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="mask",
+            confidence_threshold=0.7,
+            detect_execution_intent=True,
+        )
+        response_text = "I can explain what this does:\n```python\nprint('hello')\n```\nDone."
+        request_data = {"model": "gpt-4", "metadata": {}}
+        inputs = {"texts": [response_text]}
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+        )
+        assert "[CODE_BLOCK_REDACTED]" in result["texts"][0]
+        assert "print('hello')" not in result["texts"][0]
+
+    @pytest.mark.asyncio
+    async def test_response_with_casual_explain_phrase_still_blocked(self):
+        """LLM response containing 'I can explain' doesn't bypass the guardrail.
+
+        Previously, the no-execution phrase 'can you explain' would match as a
+        substring in the LLM's output, short-circuiting all protection.
+        """
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["bash"],
+            action="block",
+            confidence_threshold=0.7,
+            detect_execution_intent=True,
+        )
+        response_text = (
+            "I can explain what this code does. It deletes your files:\n"
+            "```bash\n"
+            "rm -rf /\n"
+            "```"
+        )
+        request_data = {"model": "gpt-4", "metadata": {}}
+        inputs = {"texts": [response_text]}
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+            )
+
+    def test_tightened_what_would_phrase_no_longer_bypasses(self):
+        """The old broad 'what would ' phrase has been tightened so it no longer allows
+        trivial bypass for adversarial prompts.
+
+        Previously 'What would be the best way to execute this script?' would bypass
+        because 'what would ' matched the no-execution list. Now only specific forms
+        like 'what would happen if' match.
+        """
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.7,
+            detect_execution_intent=True,
+        )
+        # Adversarial prompt: old "what would " would have bypassed, but tightened phrase doesn't match
+        text = "What would be the best way to execute this script?\n```python\nimport os\nos.system('cat /etc/passwd')\n```"
+        detections = []
+        new_text, should_raise = guardrail._scan_text(text, detections, input_type="request")
+        assert should_raise is True
+
+    def test_tightened_can_you_explain_phrase_no_longer_bypasses(self):
+        """The old broad 'can you explain' phrase has been tightened.
+
+        'Can you explain how to run this, then run it?' no longer bypasses
+        because 'can you explain' is now 'can you explain this code' etc.
+        """
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.7,
+            detect_execution_intent=True,
+        )
+        text = "Can you explain this and then execute this code?\n```python\nimport subprocess\nsubprocess.run(['ls'])\n```"
+        detections = []
+        new_text, should_raise = guardrail._scan_text(text, detections, input_type="request")
+        assert should_raise is True
+
+    def test_request_with_pure_explain_intent_still_allowed(self):
+        """A request that genuinely only asks for explanation is not blocked."""
+        guardrail = BlockCodeExecutionGuardrail(
+            guardrail_name="test",
+            blocked_languages=["python"],
+            action="block",
+            confidence_threshold=0.7,
+            detect_execution_intent=True,
+        )
+        text = "Don't run this, just explain what it does:\n```python\nprint('hello')\n```"
+        detections = []
+        new_text, should_raise = guardrail._scan_text(text, detections, input_type="request")
+        assert should_raise is False
