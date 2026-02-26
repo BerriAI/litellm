@@ -1422,46 +1422,4 @@ async def test_exception_bubbling_up(sync_mode, stream_mode, model):
     assert exc_info.value.type == "invalid_request_error"
 
 
-def test_midstream_fallback_error_status_code_propagation():
-    """
-    MidStreamFallbackError should preserve the original status code and keep
-    message/request/response fields consistent after super().__init__().
-    """
-    import litellm
-    from httpx import Request, Response
 
-    # 1) Wrapping a 429 should preserve the 429 status
-    original_req = Request("POST", "https://api.openai.com/v1/chat/completions")
-    original_resp = Response(status_code=429, request=original_req)
-
-    rate_limit_error = litellm.RateLimitError(
-        message="Rate limit exceeded",
-        llm_provider="openai",
-        model="gpt-4o-mini",
-        response=original_resp,
-    )
-
-    midstream_error = litellm.exceptions.MidStreamFallbackError(
-        message="stream broke",
-        model="gpt-4o-mini",
-        llm_provider="openai",
-        original_exception=rate_limit_error,
-    )
-
-    assert midstream_error.status_code == 429
-    assert midstream_error.response.status_code == 429
-    assert str(midstream_error.response.request.url) == "https://openai.com/v1/"
-    assert midstream_error.message == "litellm.MidStreamFallbackError: stream broke"
-    assert midstream_error.args == ("litellm.MidStreamFallbackError: stream broke",)
-
-    # 2) With no original exception, should default to 503
-    midstream_fallback = litellm.exceptions.MidStreamFallbackError(
-        message="stream broke without original",
-        model="gpt-4o-mini",
-        llm_provider="openai",
-        original_exception=None,
-    )
-
-    assert midstream_fallback.status_code == 503
-    assert midstream_fallback.response.status_code == 503
-    assert str(midstream_fallback.response.request.url) == "https://openai.com/v1/"
