@@ -192,6 +192,37 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return {"type": "auto"}
 
     @staticmethod
+    def translate_context_management_to_responses_api(
+        context_management: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Convert Anthropic context_management dict to OpenAI Responses API array format.
+
+        Anthropic format: {"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 150000}}]}
+        OpenAI format:    [{"type": "compaction", "compact_threshold": 150000}]
+        """
+        if not isinstance(context_management, dict):
+            return None
+
+        edits = context_management.get("edits", [])
+        if not isinstance(edits, list):
+            return None
+
+        result: List[Dict[str, Any]] = []
+        for edit in edits:
+            if not isinstance(edit, dict):
+                continue
+            edit_type = edit.get("type", "")
+            if edit_type == "compact_20260112":
+                entry: Dict[str, Any] = {"type": "compaction"}
+                trigger = edit.get("trigger")
+                if isinstance(trigger, dict) and trigger.get("value") is not None:
+                    entry["compact_threshold"] = int(trigger["value"])
+                result.append(entry)
+
+        return result if result else None
+
+    @staticmethod
     def translate_thinking_to_reasoning(thinking: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
@@ -276,8 +307,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
 
-        # output_format -> text format
+        # output_format / output_config.format -> text format
+        # output_format: {"type": "json_schema", "schema": {...}}
+        # output_config: {"format": {"type": "json_schema", "schema": {...}}}
         output_format = anthropic_request.get("output_format")
+        output_config = anthropic_request.get("output_config")
+        if not isinstance(output_format, dict) and isinstance(output_config, dict):
+            output_format = output_config.get("format")
         if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
             schema = output_format.get("schema")
             if schema:
@@ -290,10 +326,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     }
                 }
 
+        # context_management: Anthropic dict -> OpenAI array
+        context_management = anthropic_request.get("context_management")
+        if isinstance(context_management, dict):
+            openai_cm = self.translate_context_management_to_responses_api(context_management)
+            if openai_cm is not None:
+                responses_kwargs["context_management"] = openai_cm
+
         # metadata user_id -> user
         metadata = anthropic_request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
-            responses_kwargs["user"] = metadata["user_id"]
+            responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
         return responses_kwargs
 

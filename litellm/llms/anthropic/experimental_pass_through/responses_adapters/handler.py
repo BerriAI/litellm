@@ -24,7 +24,9 @@ def _build_responses_kwargs(
     max_tokens: int,
     messages: List[Dict],
     model: str,
+    context_management: Optional[Dict] = None,
     metadata: Optional[Dict] = None,
+    output_config: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
     system: Optional[str] = None,
@@ -42,6 +44,10 @@ def _build_responses_kwargs(
     """
     # Build a typed AnthropicMessagesRequest for the adapter
     request_data: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    if context_management:
+        request_data["context_management"] = context_management
+    if output_config:
+        request_data["output_config"] = output_config
     if metadata:
         request_data["metadata"] = metadata
     if system:
@@ -98,7 +104,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         max_tokens: int,
         messages: List[Dict],
         model: str,
+        context_management: Optional[Dict] = None,
         metadata: Optional[Dict] = None,
+        output_config: Optional[Dict] = None,
         stop_sequences: Optional[List[str]] = None,
         stream: Optional[bool] = False,
         system: Optional[str] = None,
@@ -115,7 +123,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             max_tokens=max_tokens,
             messages=messages,
             model=model,
+            context_management=context_management,
             metadata=metadata,
+            output_config=output_config,
             stop_sequences=stop_sequences,
             stream=stream,
             system=system,
@@ -145,7 +155,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         max_tokens: int,
         messages: List[Dict],
         model: str,
+        context_management: Optional[Dict] = None,
         metadata: Optional[Dict] = None,
+        output_config: Optional[Dict] = None,
         stop_sequences: Optional[List[str]] = None,
         stream: Optional[bool] = False,
         system: Optional[str] = None,
@@ -168,7 +180,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 max_tokens=max_tokens,
                 messages=messages,
                 model=model,
+                context_management=context_management,
                 metadata=metadata,
+                output_config=output_config,
                 stop_sequences=stop_sequences,
                 stream=stream,
                 system=system,
@@ -187,7 +201,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             max_tokens=max_tokens,
             messages=messages,
             model=model,
+            context_management=context_management,
             metadata=metadata,
+            output_config=output_config,
             stop_sequences=stop_sequences,
             stream=stream,
             system=system,
