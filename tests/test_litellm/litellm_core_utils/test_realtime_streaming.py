@@ -591,12 +591,6 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
         f"Blocked item should not be forwarded to backend, got: {forwarded_items}"
     )
 
-    # ASSERT: counter was incremented and is now back to 0 after we confirmed the block
-    # (the loop stopped before a response.create came in, so it stays at 1)
-    assert streaming._swallow_pending_response_creates == 1, (
-        "Counter should be 1 since no response.create arrived to consume it"
-    )
-
     litellm.callbacks = []  # cleanup
 
 
@@ -755,65 +749,3 @@ async def test_realtime_session_created_no_injection_for_pre_call_only():
     litellm.callbacks = []  # cleanup
 
 
-@pytest.mark.asyncio
-async def test_swallow_pending_response_creates_counter_consecutive_blocks():
-    """
-    Test that consecutive blocked items correctly increment the counter so that
-    each subsequent response.create is swallowed, not just the first.
-    """
-    from fastapi import HTTPException
-
-    import litellm
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
-
-    class AlwaysBlock(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-            raise HTTPException(status_code=403, detail={"error": "blocked"})
-
-    guardrail = AlwaysBlock(
-        guardrail_name="always-block",
-        event_hook=GuardrailEventHooks.pre_call,
-        default_on=True,
-    )
-    litellm.callbacks = [guardrail]
-
-    client_ws = MagicMock()
-    client_ws.send_text = AsyncMock()
-
-    backend_ws = MagicMock()
-    backend_ws.send = AsyncMock()
-    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
-
-    logging_obj = MagicMock()
-    logging_obj.pre_call = MagicMock()
-
-    item_create = json.dumps({
-        "type": "conversation.item.create",
-        "item": {"role": "user", "content": [{"type": "input_text", "text": "bad text"}]},
-    })
-    response_create = json.dumps({"type": "response.create"})
-
-    # Two blocked items, each followed by a response.create
-    client_ws.receive_text = AsyncMock(
-        side_effect=[
-            item_create,
-            response_create,
-            item_create,
-            response_create,
-            Exception("done"),
-        ]
-    )
-
-    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
-    await streaming.client_ack_messages()
-
-    # Neither item_create nor response_create should have been forwarded
-    assert backend_ws.send.call_count == 0, (
-        f"No messages should be forwarded to backend when all are blocked, "
-        f"got {backend_ws.send.call_count} sends"
-    )
-    # Counter should be back to 0 (both response.creates consumed the increments)
-    assert streaming._swallow_pending_response_creates == 0
-
-    litellm.callbacks = []  # cleanup

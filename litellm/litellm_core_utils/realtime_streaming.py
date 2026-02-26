@@ -70,9 +70,6 @@ class RealTimeStreaming:
         self.session_configuration_request: Optional[str] = None
         self.user_api_key_dict = user_api_key_dict
         self.request_data: Dict = request_data or {}
-        # Counter of pending response.create messages to swallow (incremented on each
-        # text-input block so consecutive blocks are handled correctly).
-        self._swallow_pending_response_creates: int = 0
 
     def _should_store_message(
         self,
@@ -523,12 +520,6 @@ class RealTimeStreaming:
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
 
-                    # Swallow the client's response.create if any items were blocked
-                    # (use a counter so consecutive blocks are handled correctly).
-                    if msg_type == "response.create" and self._swallow_pending_response_creates > 0:
-                        self._swallow_pending_response_creates -= 1
-                        continue  # block response already sent by guardrail
-
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
                         item = msg_obj.get("item", {})
@@ -545,7 +536,6 @@ class RealTimeStreaming:
                                     combined_text
                                 )
                                 if blocked:
-                                    self._swallow_pending_response_creates += 1
                                     continue  # don't forward to backend
 
                 except (json.JSONDecodeError, AttributeError):
