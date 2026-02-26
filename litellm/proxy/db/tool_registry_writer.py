@@ -3,15 +3,11 @@ DB helpers for LiteLLM_ToolTable — the global tool registry.
 
 Tools are auto-discovered from LLM responses and upserted here.
 Admins use the management endpoints to read and update call_policy.
-
-NOTE: Uses raw SQL (query_raw / execute_raw) instead of Prisma model methods
-because the generated Prisma Python client may not have LiteLLM_ToolTable
-when running against an older generated schema.
 """
 
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
@@ -21,7 +17,30 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
-def _row_to_model(row: dict) -> LiteLLM_ToolTableRow:
+def _row_to_model(row: Union[dict, Any]) -> LiteLLM_ToolTableRow:
+    """Convert a Prisma model instance or dict to LiteLLM_ToolTableRow."""
+    model_dump = getattr(row, "model_dump", None)
+    if callable(model_dump):
+        row = model_dump()
+    elif not isinstance(row, dict):
+        row = {
+            k: getattr(row, k, None)
+            for k in (
+                "tool_id",
+                "tool_name",
+                "origin",
+                "call_policy",
+                "call_count",
+                "assignments",
+                "key_hash",
+                "team_id",
+                "key_alias",
+                "created_at",
+                "updated_at",
+                "created_by",
+                "updated_by",
+            )
+        }
     return LiteLLM_ToolTableRow(
         tool_id=row.get("tool_id", ""),
         tool_name=row.get("tool_name", ""),
@@ -44,7 +63,7 @@ async def batch_upsert_tools(
     items: List[ToolDiscoveryQueueItem],
 ) -> None:
     """
-    Batch-upsert tool registry rows via raw SQL.
+    Batch-upsert tool registry rows via Prisma.
 
     On first insert: sets call_policy = "untrusted" (schema default), call_count = 1.
     On conflict: increments call_count; preserves existing call_policy.
@@ -55,6 +74,8 @@ async def batch_upsert_tools(
         data = [item for item in items if item.get("tool_name")]
         if not data:
             return
+        now = datetime.now(timezone.utc)
+        table = prisma_client.db.litellm_tooltable
         for item in data:
             tool_name = item.get("tool_name", "")
             origin = item.get("origin") or "user_defined"
@@ -62,22 +83,26 @@ async def batch_upsert_tools(
             key_hash = item.get("key_hash")
             team_id = item.get("team_id")
             key_alias = item.get("key_alias")
-            now = datetime.now(timezone.utc).isoformat()
-            await prisma_client.db.execute_raw(
-                'INSERT INTO "LiteLLM_ToolTable" '
-                "(tool_id, tool_name, origin, call_policy, call_count, created_by, updated_by, key_hash, team_id, key_alias, created_at, updated_at) "
-                "VALUES ($7, $1, $2, 'untrusted', 1, $3, $3, $4, $5, $6, $8::timestamp, $8::timestamp) "
-                "ON CONFLICT (tool_name) DO UPDATE SET "
-                'call_count = "LiteLLM_ToolTable".call_count + 1, '
-                "updated_at = $8::timestamp",
-                tool_name,
-                origin,
-                created_by,
-                key_hash,
-                team_id,
-                key_alias,
-                str(uuid.uuid4()),
-                now,
+            await table.upsert(
+                where={"tool_name": tool_name},
+                data={
+                    "create": {
+                        "tool_id": str(uuid.uuid4()),
+                        "tool_name": tool_name,
+                        "origin": origin,
+                        "call_policy": "untrusted",
+                        "call_count": 1,
+                        "created_by": created_by,
+                        "updated_by": created_by,
+                        "key_hash": key_hash,
+                        "team_id": team_id,
+                        "key_alias": key_alias,
+                    },
+                    "update": {
+                        "call_count": {"increment": 1},
+                        "updated_at": now,
+                    },
+                },
             )
         verbose_proxy_logger.debug(
             "tool_registry_writer: upserted %d tool(s)", len(data)
@@ -94,19 +119,11 @@ async def list_tools(
 ) -> List[LiteLLM_ToolTableRow]:
     """Return all tools, optionally filtered by call_policy."""
     try:
-        if call_policy is not None:
-            rows = await prisma_client.db.query_raw(
-                "SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, "
-                "key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by "
-                'FROM "LiteLLM_ToolTable" WHERE call_policy = $1 ORDER BY created_at DESC',
-                call_policy,
-            )
-        else:
-            rows = await prisma_client.db.query_raw(
-                "SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, "
-                "key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by "
-                'FROM "LiteLLM_ToolTable" ORDER BY created_at DESC',
-            )
+        where = {"call_policy": call_policy} if call_policy is not None else {}
+        rows = await prisma_client.db.litellm_tooltable.find_many(
+            where=where,
+            order={"created_at": "desc"},
+        )
         return [_row_to_model(row) for row in rows]
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer list_tools error: %s", e)
@@ -119,15 +136,12 @@ async def get_tool(
 ) -> Optional[LiteLLM_ToolTableRow]:
     """Return a single tool row by tool_name."""
     try:
-        rows = await prisma_client.db.query_raw(
-            "SELECT tool_id, tool_name, origin, call_policy, call_count, assignments, "
-            "key_hash, team_id, key_alias, created_at, updated_at, created_by, updated_by "
-            'FROM "LiteLLM_ToolTable" WHERE tool_name = $1',
-            tool_name,
+        row = await prisma_client.db.litellm_tooltable.find_unique(
+            where={"tool_name": tool_name},
         )
-        if not rows:
+        if row is None:
             return None
-        return _row_to_model(rows[0])
+        return _row_to_model(row)
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer get_tool error: %s", e)
         return None
@@ -142,16 +156,25 @@ async def update_tool_policy(
     """Update the call_policy for a tool. Upserts the row if it does not exist yet."""
     try:
         _updated_by = updated_by or "system"
-        now = datetime.now(timezone.utc).isoformat()
-        await prisma_client.db.execute_raw(
-            'INSERT INTO "LiteLLM_ToolTable" (tool_id, tool_name, call_policy, created_by, updated_by, created_at, updated_at) '
-            "VALUES ($4, $1, $2, $3, $3, $5::timestamp, $5::timestamp) "
-            "ON CONFLICT (tool_name) DO UPDATE SET call_policy = $2, updated_by = $3, updated_at = $5::timestamp",
-            tool_name,
-            call_policy,
-            _updated_by,
-            str(uuid.uuid4()),
-            now,
+        now = datetime.now(timezone.utc)
+        await prisma_client.db.litellm_tooltable.upsert(
+            where={"tool_name": tool_name},
+            data={
+                "create": {
+                    "tool_id": str(uuid.uuid4()),
+                    "tool_name": tool_name,
+                    "call_policy": call_policy,
+                    "created_by": _updated_by,
+                    "updated_by": _updated_by,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                "update": {
+                    "call_policy": call_policy,
+                    "updated_by": _updated_by,
+                    "updated_at": now,
+                },
+            },
         )
         return await get_tool(prisma_client, tool_name)
     except Exception as e:
@@ -172,12 +195,10 @@ async def get_tools_by_names(
     if not tool_names:
         return {}
     try:
-        placeholders = ", ".join(f"${i+1}" for i in range(len(tool_names)))
-        rows = await prisma_client.db.query_raw(
-            f'SELECT tool_name, call_policy FROM "LiteLLM_ToolTable" WHERE tool_name IN ({placeholders})',
-            *tool_names,
+        rows = await prisma_client.db.litellm_tooltable.find_many(
+            where={"tool_name": {"in": tool_names}},
         )
-        return {row["tool_name"]: row["call_policy"] for row in rows}
+        return {row.tool_name: row.call_policy for row in rows}
     except Exception as e:
         verbose_proxy_logger.error(
             "tool_registry_writer get_tools_by_names error: %s", e

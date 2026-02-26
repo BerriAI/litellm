@@ -107,6 +107,10 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Migration files auto-generated with `prisma migrate dev`
 - Always test migrations against both PostgreSQL and SQLite
 
+### Proxy database access
+- **Do not write raw SQL** for proxy DB operations. Use Prisma model methods instead of `execute_raw` / `query_raw`.
+- Use the generated client: `prisma_client.db.<model>` (e.g. `litellm_tooltable`, `litellm_usertable`) with `.upsert()`, `.find_many()`, `.find_unique()`, `.update()`, `.update_many()` as appropriate. This avoids schema/client drift, keeps code testable with simple mocks, and matches patterns used in spend logs and other proxy code.
+
 ### Enterprise Features
 - Enterprise-specific code in `enterprise/` directory
 - Optional features enabled via environment variables
