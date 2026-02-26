@@ -241,13 +241,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True
 
-        # Check if output_config is directly provided
-        output_config = optional_params.get("output_config")
-        if output_config and isinstance(output_config, dict):
-            effort = output_config.get("effort")
-            if effort and isinstance(effort, str):
-                return True
-
         return False
 
     def is_code_execution_tool_used(self, tools: Optional[List]) -> bool:

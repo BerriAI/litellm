@@ -1560,12 +1560,12 @@ def test_effort_output_config_preservation():
 
 
 def test_effort_beta_header_injection():
-    """Test that effort beta header is automatically added when output_config is detected."""
+    """Test that effort beta header is only added for Opus 4.5 reasoning_effort, not for output_config (#22213)."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     model_info = AnthropicModelInfo()
 
-    # Test with effort parameter
+    # output_config.effort should NOT trigger the beta header (fixes #22213)
     optional_params = {
         "output_config": {
             "effort": "low"
@@ -1573,15 +1573,63 @@ def test_effort_beta_header_injection():
     }
 
     effort_used = model_info.is_effort_used(optional_params=optional_params)
-    assert effort_used is True
+    assert effort_used is False
 
     headers = model_info.get_anthropic_headers(
         api_key="test-key",
         effort_used=effort_used
     )
 
-    assert "anthropic-beta" in headers
-    assert "effort-2025-11-24" in headers["anthropic-beta"]
+    # No effort beta header should be present
+    beta_header = headers.get("anthropic-beta", "")
+    assert "effort-2025-11-24" not in beta_header
+
+    # Opus 4.5 with reasoning_effort SHOULD trigger the beta header
+    opus_45_params = {
+        "reasoning_effort": "medium"
+    }
+    effort_used_opus = model_info.is_effort_used(
+        optional_params=opus_45_params, model="claude-opus-4-5-20251101"
+    )
+    assert effort_used_opus is True
+
+    headers_opus = model_info.get_anthropic_headers(
+        api_key="test-key",
+        effort_used=effort_used_opus
+    )
+    assert "anthropic-beta" in headers_opus
+    assert "effort-2025-11-24" in headers_opus["anthropic-beta"]
+
+
+def test_output_config_effort_no_beta_header_for_claude_46():
+    """Test that output_config.effort on Claude 4.6 models does NOT inject effort beta header (#22213)."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    # Claude 4.6 with output_config.effort should NOT trigger beta header
+    for model in [
+        "claude-opus-4-6-20260205",
+        "claude-sonnet-4-6-20260301",
+        "anthropic/claude-opus-4-6-20260205",
+    ]:
+        optional_params = {
+            "output_config": {
+                "effort": "high"
+            }
+        }
+        effort_used = model_info.is_effort_used(
+            optional_params=optional_params, model=model
+        )
+        assert effort_used is False, (
+            f"is_effort_used should return False for output_config.effort on model {model}"
+        )
+
+    # Even without a model specified, output_config should not trigger it
+    effort_used_no_model = model_info.is_effort_used(
+        optional_params={"output_config": {"effort": "low"}}
+    )
+    assert effort_used_no_model is False
 
 
 def test_effort_validation():
