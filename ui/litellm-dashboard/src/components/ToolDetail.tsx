@@ -2,9 +2,11 @@
 
 import { ArrowLeftOutlined, HistoryOutlined, ToolOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Pagination, Select, Spin, Table } from "antd";
+import { Button, Select, Spin } from "antd";
 import React, { useCallback, useMemo, useState } from "react";
 import TeamDropdown from "@/components/common_components/team_dropdown";
+import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
+import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
 import { PolicySelect } from "@/components/ToolPolicies/PolicySelect";
 import {
   deleteToolPolicyOverride,
@@ -12,14 +14,10 @@ import {
   getToolUsageLogs,
   keyListCall,
   teamListCall,
-  uiSpendLogsCall,
   updateToolPolicy,
   type ToolPolicyOverrideRow,
-  type ToolUsageLogEntry,
 } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
-import type { LogEntry } from "@/components/view_logs/columns";
-import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
 
 interface ToolDetailProps {
   toolName: string;
@@ -39,7 +37,7 @@ interface KeyOption {
 
 const TOOL_DETAIL_QUERY_KEY = "tool-detail";
 
-const LOGS_PAGE_SIZE = 20;
+const LOGS_PAGE_SIZE = 50;
 
 function getDefaultLogsDateRange(): { start: string; end: string } {
   const end = new Date();
@@ -57,9 +55,6 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
   const [blockScope, setBlockScope] = useState<"team" | "key">("team");
   const [blockTeamId, setBlockTeamId] = useState<string | null>(null);
   const [blockKey, setBlockKey] = useState<KeyOption | null>(null);
-  const [logsPage, setLogsPage] = useState(1);
-  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const logsDateRange = useMemo(() => getDefaultLogsDateRange(), []);
 
@@ -82,33 +77,27 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
   });
 
   const { data: logsData, isLoading: logsLoading } = useQuery({
-    queryKey: ["tool-usage-logs", toolName, logsPage],
+    queryKey: ["tool-usage-logs", toolName, logsDateRange.start, logsDateRange.end],
     queryFn: () =>
       getToolUsageLogs(accessToken!, toolName, {
-        page: logsPage,
+        page: 1,
         pageSize: LOGS_PAGE_SIZE,
+        startDate: logsDateRange.start,
+        endDate: logsDateRange.end,
       }),
     enabled: !!accessToken && !!toolName,
   });
 
-  const { data: fullLogResponse } = useQuery({
-    queryKey: ["spend-log-by-request-tool-detail", selectedRequestId, logsDateRange.start, logsDateRange.end],
-    queryFn: async () => {
-      if (!accessToken || !selectedRequestId) return null;
-      const res = await uiSpendLogsCall({
-        accessToken,
-        start_date: logsDateRange.start,
-        end_date: logsDateRange.end,
-        page: 1,
-        page_size: 10,
-        params: { request_id: selectedRequestId },
-      });
-      return res as { data: LogEntry[]; total: number };
-    },
-    enabled: !!accessToken && !!selectedRequestId && drawerOpen,
-  });
-
-  const selectedLog: LogEntry | null = fullLogResponse?.data?.[0] ?? null;
+  const logs: LogEntry[] = useMemo(() => {
+    const list = logsData?.logs ?? [];
+    return list.map((l) => ({
+      id: l.id,
+      timestamp: l.timestamp,
+      action: "passed" as const,
+      model: l.model ?? undefined,
+      input_snippet: l.input_snippet ?? undefined,
+    }));
+  }, [logsData?.logs]);
 
   const teams: Team[] = useMemo(() => {
     const arr = Array.isArray(teamsData) ? teamsData : teamsData?.data ?? [];
@@ -367,98 +356,18 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
             <HistoryOutlined />
             Recent logs
           </h2>
-          <p className="text-xs text-gray-500 mb-4">
-            Requests that used this tool. Click a row to open full log details.
-          </p>
-          {logsLoading && (
-            <div className="flex justify-center py-8">
-              <Spin />
-            </div>
-          )}
-          {!logsLoading && (!logsData?.logs?.length) && (
-            <div className="py-8 text-center text-sm text-gray-500">
-              No logs for this tool yet. Usage will appear here after requests that call this tool.
-            </div>
-          )}
-          {!logsLoading && logsData && logsData.logs.length > 0 && (
-            <>
-              <Table<ToolUsageLogEntry>
-                dataSource={logsData.logs}
-                rowKey="id"
-                size="small"
-                pagination={false}
-                onRow={(record) => ({
-                  onClick: () => {
-                    setSelectedRequestId(record.id);
-                    setDrawerOpen(true);
-                  },
-                  style: { cursor: "pointer" },
-                })}
-                columns={[
-                  {
-                    title: "Time",
-                    dataIndex: "timestamp",
-                    key: "timestamp",
-                    width: 200,
-                    render: (ts: string) =>
-                      ts ? new Date(ts).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "—",
-                  },
-                  {
-                    title: "Model",
-                    dataIndex: "model",
-                    key: "model",
-                    ellipsis: true,
-                    render: (v: string | null) => v ?? "—",
-                  },
-                  {
-                    title: "Spend",
-                    dataIndex: "spend",
-                    key: "spend",
-                    width: 90,
-                    render: (v: number | null) =>
-                      v != null ? `$${Number(v).toFixed(4)}` : "—",
-                  },
-                  {
-                    title: "Tokens",
-                    dataIndex: "total_tokens",
-                    key: "total_tokens",
-                    width: 90,
-                    render: (v: number | null) => (v != null ? v.toLocaleString() : "—"),
-                  },
-                  {
-                    title: "Input",
-                    dataIndex: "input_snippet",
-                    key: "input_snippet",
-                    ellipsis: true,
-                    render: (v: string | null) => (v ? String(v).slice(0, 80) + (String(v).length > 80 ? "…" : "") : "—"),
-                  },
-                ]}
-              />
-              <div className="mt-4 flex justify-end">
-                <Pagination
-                  current={logsPage}
-                  pageSize={LOGS_PAGE_SIZE}
-                  total={logsData.total}
-                  showSizeChanger={false}
-                  onChange={setLogsPage}
-                />
-              </div>
-            </>
-          )}
+          <LogViewer
+            guardrailName={tool.tool_name}
+            filterAction="passed"
+            logs={logs}
+            logsLoading={logsLoading}
+            totalLogs={logsData?.total ?? 0}
+            accessToken={accessToken}
+            startDate={logsDateRange.start}
+            endDate={logsDateRange.end}
+          />
         </section>
       </div>
-
-      <LogDetailsDrawer
-        open={drawerOpen}
-        onClose={() => {
-          setDrawerOpen(false);
-          setSelectedRequestId(null);
-        }}
-        logEntry={selectedLog}
-        accessToken={accessToken}
-        allLogs={selectedLog ? [selectedLog] : []}
-        startTime={logsDateRange.start}
-      />
     </div>
   );
 }

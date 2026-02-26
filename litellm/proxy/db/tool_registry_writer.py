@@ -328,6 +328,85 @@ async def get_effective_policies(
         return {}
 
 
+class ToolPolicyRegistry:
+    """
+    In-memory registry of tool policies synced from DB.
+    Synced in _init_tool_policy_in_db (from add_deployment / _init_non_llm_objects_in_db).
+    Hot path uses get_effective_policies only — no DB, no cache.
+    """
+
+    def __init__(self) -> None:
+        self._global_tool_policies: Dict[str, str] = {}
+        self._blocked_tools_by_op_id: Dict[str, List[str]] = {}
+        self._initialized: bool = False
+
+    def is_initialized(self) -> bool:
+        return self._initialized
+
+    async def sync_tool_policy_from_db(self, prisma_client: "PrismaClient") -> None:
+        """Load all tool policies and object-permission blocked_tools from DB; replace in-memory state."""
+        try:
+            tools = await prisma_client.db.litellm_tooltable.find_many()
+            self._global_tool_policies = {row.tool_name: row.call_policy for row in tools}
+
+            perms = await prisma_client.db.litellm_objectpermissiontable.find_many()
+            self._blocked_tools_by_op_id = {}
+            for row in perms:
+                op_id = getattr(row, "object_permission_id", None)
+                blocked = getattr(row, "blocked_tools", None) or []
+                if op_id:
+                    self._blocked_tools_by_op_id[op_id] = list(blocked)
+
+            self._initialized = True
+            verbose_proxy_logger.info(
+                "ToolPolicyRegistry: synced %d global tool policies and %d object permissions from DB",
+                len(self._global_tool_policies),
+                len(self._blocked_tools_by_op_id),
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "ToolPolicyRegistry sync_tool_policy_from_db error: %s", e
+            )
+            raise
+
+    def get_effective_policies(
+        self,
+        tool_names: List[str],
+        object_permission_id: Optional[str] = None,
+        team_object_permission_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """
+        Return effective call_policy per tool from in-memory state.
+        If tool is in key or team blocked_tools -> "blocked", else global policy or "untrusted".
+        """
+        if not tool_names:
+            return {}
+        blocked: set = set()
+        for op_id in (object_permission_id, team_object_permission_id):
+            if op_id and op_id.strip():
+                blocked.update(
+                    self._blocked_tools_by_op_id.get(op_id.strip(), [])
+                )
+        result: Dict[str, str] = {}
+        for name in tool_names:
+            if name in blocked:
+                result[name] = "blocked"
+            else:
+                result[name] = self._global_tool_policies.get(name, "untrusted")
+        return result
+
+
+_tool_policy_registry: Optional[ToolPolicyRegistry] = None
+
+
+def get_tool_policy_registry() -> ToolPolicyRegistry:
+    """Return the global ToolPolicyRegistry singleton."""
+    global _tool_policy_registry
+    if _tool_policy_registry is None:
+        _tool_policy_registry = ToolPolicyRegistry()
+    return _tool_policy_registry
+
+
 def _effective_cache_suffix(
     object_permission_id: Optional[str],
     team_object_permission_id: Optional[str],

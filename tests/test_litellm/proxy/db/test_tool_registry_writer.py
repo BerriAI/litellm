@@ -12,8 +12,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from litellm.proxy.db.tool_registry_writer import (batch_upsert_tools,
+from litellm.proxy.db.tool_registry_writer import (ToolPolicyRegistry,
+                                                   batch_upsert_tools,
                                                    get_tool,
+                                                   get_tool_policy_registry,
                                                    get_tools_by_names,
                                                    list_tools,
                                                    update_tool_policy)
@@ -208,3 +210,65 @@ async def test_get_tools_by_names_empty_list():
     result = await get_tools_by_names(prisma, [])
     assert result == {}
     prisma.db.litellm_tooltable.find_many.assert_not_awaited()
+
+
+# --- ToolPolicyRegistry ---
+
+
+def _mock_tool_row(tool_name: str, call_policy: str = "untrusted"):
+    row = MagicMock()
+    row.tool_name = tool_name
+    row.call_policy = call_policy
+    return row
+
+
+def _mock_perm_row(object_permission_id: str, blocked_tools: list):
+    row = MagicMock()
+    row.object_permission_id = object_permission_id
+    row.blocked_tools = blocked_tools
+    return row
+
+
+@pytest.mark.asyncio
+async def test_tool_policy_registry_sync_and_get_effective_policies():
+    """Registry syncs from DB; get_effective_policies returns merged blocked + global."""
+    prisma = MagicMock()
+    prisma.db.litellm_tooltable.find_many = AsyncMock(
+        return_value=[
+            _mock_tool_row("tool_a", "trusted"),
+            _mock_tool_row("tool_b", "blocked"),
+            _mock_tool_row("tool_c", "untrusted"),
+        ]
+    )
+    prisma.db.litellm_objectpermissiontable.find_many = AsyncMock(
+        return_value=[
+            _mock_perm_row("op-key-1", ["tool_a"]),
+            _mock_perm_row("op-team-1", ["tool_c"]),
+        ]
+    )
+    registry = get_tool_policy_registry()
+    await registry.sync_tool_policy_from_db(prisma)
+    assert registry.is_initialized()
+    # Key blocked: tool_a. Team blocked: tool_c. Global: tool_b blocked.
+    result = registry.get_effective_policies(
+        ["tool_a", "tool_b", "tool_c"],
+        object_permission_id="op-key-1",
+        team_object_permission_id="op-team-1",
+    )
+    assert result["tool_a"] == "blocked"
+    assert result["tool_b"] == "blocked"
+    assert result["tool_c"] == "blocked"
+    # No op ids: only global
+    result_global = registry.get_effective_policies(["tool_a", "tool_b", "tool_c"])
+    assert result_global["tool_a"] == "trusted"
+    assert result_global["tool_b"] == "blocked"
+    assert result_global["tool_c"] == "untrusted"
+
+
+@pytest.mark.asyncio
+async def test_tool_policy_registry_not_initialized_returns_untrusted():
+    """When not synced, get_effective_policies still returns untrusted for unknown tools."""
+    registry = ToolPolicyRegistry()
+    assert not registry.is_initialized()
+    result = registry.get_effective_policies(["unknown_tool"])
+    assert result == {"unknown_tool": "untrusted"}

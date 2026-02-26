@@ -23,12 +23,11 @@ or both pre and post call:
         mode: during_call  # runs before LLM and on response
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import (CustomGuardrail,
                                                    log_guardrail_information)
 from litellm.proxy.guardrails.tool_name_extraction import \
@@ -101,9 +100,9 @@ def _get_effective_allowed_tools_from_request(
 
 class ToolPolicyGuardrail(CustomGuardrail):
     """
-    Guardrail that enforces per-tool call policies stored in LiteLLM_ToolTable
-    and key/team allowed_tools (allowlist). No DB in hot path for policy lookup —
-    uses shared cache (user_api_key_cache).
+    Guardrail that enforces per-tool call policies from the in-memory
+    ToolPolicyRegistry (synced from DB). Key/team allowed_tools (allowlist) still
+    enforced. No DB or cache in hot path — registry lookups only.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -114,7 +113,6 @@ class ToolPolicyGuardrail(CustomGuardrail):
                 GuardrailEventHooks.during_call,
             ]
         super().__init__(**kwargs)
-        self._policy_cache: DualCache = DualCache()
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -177,11 +175,18 @@ class ToolPolicyGuardrail(CustomGuardrail):
         object_permission_id, team_object_permission_id = (
             _get_request_object_permission_ids(request_data)
         )
-        policy_map = await self._get_policies_cached(
-            tool_names,
-            object_permission_id=object_permission_id,
-            team_object_permission_id=team_object_permission_id,
-        )
+        from litellm.proxy.db.tool_registry_writer import \
+            get_tool_policy_registry
+
+        registry = get_tool_policy_registry()
+        if not registry.is_initialized():
+            policy_map = {}
+        else:
+            policy_map = registry.get_effective_policies(
+                tool_names,
+                object_permission_id=object_permission_id,
+                team_object_permission_id=team_object_permission_id,
+            )
         blocked = [name for name in tool_names if policy_map.get(name) == "blocked"]
         if blocked:
             verbose_proxy_logger.warning(
@@ -197,28 +202,3 @@ class ToolPolicyGuardrail(CustomGuardrail):
             )
 
         return inputs
-
-    async def _get_policies_cached(
-        self,
-        tool_names: List[str],
-        object_permission_id: Optional[str] = None,
-        team_object_permission_id: Optional[str] = None,
-    ) -> Dict[str, str]:
-        """
-        Fetch effective call_policy (blocked if in object permission blocked_tools,
-        else global) via shared cache to avoid DB in hot path.
-        """
-        from litellm.proxy.db.tool_registry_writer import \
-            get_tool_policies_cached
-        from litellm.proxy.proxy_server import (prisma_client,
-                                                user_api_key_cache)
-
-        if not tool_names:
-            return {}
-        return await get_tool_policies_cached(
-            tool_names=tool_names,
-            cache=user_api_key_cache,
-            prisma_client=prisma_client,
-            object_permission_id=object_permission_id,
-            team_object_permission_id=team_object_permission_id,
-        )

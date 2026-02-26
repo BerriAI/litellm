@@ -4223,6 +4223,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="search_tools"):
             await self._init_search_tools_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="tools"):
+            await self._init_tool_policy_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="model_cost_map"):
             await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
 
@@ -4652,6 +4655,25 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_policies_in_db - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_tool_policy_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize tool policy from database into the in-memory registry.
+        Synced periodically by add_deployment -> _init_non_llm_objects_in_db.
+        """
+        from litellm.proxy.db.tool_registry_writer import \
+            get_tool_policy_registry
+
+        try:
+            registry = get_tool_policy_registry()
+            await registry.sync_tool_policy_from_db(prisma_client=prisma_client)
+            verbose_proxy_logger.debug("Successfully synced tool policy from DB")
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_tool_policy_in_db - {}".format(
                     str(e)
                 )
             )

@@ -12,9 +12,8 @@ from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
-from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import (
-    ToolPolicyGuardrail,
-)
+from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import \
+    ToolPolicyGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -70,10 +69,21 @@ async def test_no_tool_calls_in_response_passes_through(guardrail):
     assert result is inputs
 
 
+def _registry_mock(policy_map: dict):
+    """Return a mock registry with is_initialized=True and get_effective_policies returning policy_map."""
+    reg = MagicMock()
+    reg.is_initialized.return_value = True
+    reg.get_effective_policies.return_value = policy_map
+    return reg
+
+
 @pytest.mark.asyncio
 async def test_untrusted_tools_pass_through(guardrail):
     policy_map = {"search": "untrusted", "read_file": "trusted"}
-    with patch.object(guardrail, "_get_policies_cached", new=AsyncMock(return_value=policy_map)):
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock(policy_map),
+    ):
         inputs: Any = _tool_request_inputs(["search", "read_file"])
         result = await guardrail.apply_guardrail(
             inputs=inputs, request_data={}, input_type="request"
@@ -84,7 +94,10 @@ async def test_untrusted_tools_pass_through(guardrail):
 @pytest.mark.asyncio
 async def test_blocked_tool_in_request_raises_http_exception(guardrail):
     policy_map = {"dangerous_tool": "blocked"}
-    with patch.object(guardrail, "_get_policies_cached", new=AsyncMock(return_value=policy_map)):
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock(policy_map),
+    ):
         inputs: Any = _tool_request_inputs(["dangerous_tool"])
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
@@ -97,7 +110,10 @@ async def test_blocked_tool_in_request_raises_http_exception(guardrail):
 @pytest.mark.asyncio
 async def test_blocked_tool_in_response_raises_http_exception(guardrail):
     policy_map = {"exfil_tool": "blocked"}
-    with patch.object(guardrail, "_get_policies_cached", new=AsyncMock(return_value=policy_map)):
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock(policy_map),
+    ):
         inputs: Any = _tool_response_inputs(["exfil_tool"])
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
@@ -110,7 +126,10 @@ async def test_blocked_tool_in_response_raises_http_exception(guardrail):
 @pytest.mark.asyncio
 async def test_mixed_blocked_and_allowed_raises_for_blocked(guardrail):
     policy_map = {"safe_tool": "trusted", "bad_tool": "blocked"}
-    with patch.object(guardrail, "_get_policies_cached", new=AsyncMock(return_value=policy_map)):
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock(policy_map),
+    ):
         inputs: Any = _tool_request_inputs(["safe_tool", "bad_tool"])
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.apply_guardrail(
@@ -123,8 +142,11 @@ async def test_mixed_blocked_and_allowed_raises_for_blocked(guardrail):
 
 @pytest.mark.asyncio
 async def test_tool_not_in_db_passes_through(guardrail):
-    """Tools not found in the DB (no entry) should not be blocked."""
-    with patch.object(guardrail, "_get_policies_cached", new=AsyncMock(return_value={})):
+    """When registry returns no policy (or empty), tools are not blocked."""
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock({}),
+    ):
         inputs: Any = _tool_request_inputs(["unknown_tool"])
         result = await guardrail.apply_guardrail(
             inputs=inputs, request_data={}, input_type="request"
@@ -133,43 +155,30 @@ async def test_tool_not_in_db_passes_through(guardrail):
 
 
 @pytest.mark.asyncio
-async def test_get_policies_cached_uses_cache(guardrail):
-    """Second call with same tool names should return the cached result."""
-    policy_map = {"tool_a": "trusted"}
+async def test_registry_not_initialized_passes_through(guardrail):
+    """When registry is not initialized, no tools are blocked (empty policy map)."""
+    reg = MagicMock()
+    reg.is_initialized.return_value = False
     with patch(
-        "litellm.proxy.db.tool_registry_writer.get_tools_by_names",
-        new=AsyncMock(return_value=policy_map),
-    ) as mock_db, patch(
-        "litellm.proxy.proxy_server.prisma_client",
-        new=MagicMock(),
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=reg,
     ):
-        # first call — should hit DB
-        result1 = await guardrail._get_policies_cached(["tool_a"])
-        assert result1 == policy_map
-
-        # second call — should hit cache, not DB again
-        result2 = await guardrail._get_policies_cached(["tool_a"])
-        assert result2 == policy_map
-
-    assert mock_db.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_get_policies_cached_no_prisma(guardrail):
-    """Without a prisma client, returns empty dict."""
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client",
-        None,
-    ):
-        result = await guardrail._get_policies_cached(["tool_a"])
-    assert result == {}
+        inputs: Any = _tool_request_inputs(["any_tool"])
+        result = await guardrail.apply_guardrail(
+            inputs=inputs, request_data={}, input_type="request"
+        )
+    assert result is inputs
+    reg.get_effective_policies.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_response_tool_calls_as_objects(guardrail):
     """tool_calls that are objects (not dicts) with .function.name should work."""
     policy_map = {"obj_tool": "blocked"}
-    with patch.object(guardrail, "_get_policies_cached", new=AsyncMock(return_value=policy_map)):
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock(policy_map),
+    ):
         fn = MagicMock()
         fn.name = "obj_tool"
         tc = MagicMock()
