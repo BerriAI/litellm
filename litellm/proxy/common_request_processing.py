@@ -605,10 +605,10 @@ class ProxyBaseLLMRequestProcessing:
             ] = queue_time_seconds
 
         self.data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
+            user_model  # model name passed via cli args
             or model  # for azure deployments
             or self.data.get("model", None)  # default passed in http request
+            or general_settings.get("completion_model", None)  # server default
         )
 
         # override with user settings, these are params passed via cli
