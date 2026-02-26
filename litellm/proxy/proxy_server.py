@@ -899,12 +899,6 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
-    ## Start periodic prometheus multiproc directory cleanup
-    from litellm.proxy.prometheus_cleanup import _get_multiproc_dir
-
-    if _get_multiproc_dir():
-        asyncio.create_task(_periodic_prometheus_cleanup())
-
     # End of startup event
     yield
 
@@ -2058,21 +2052,6 @@ def _schedule_background_health_check_db_save(
         )
     )
 
-
-async def _periodic_prometheus_cleanup():
-    """
-    Periodically mark dead worker PIDs in the prometheus multiproc directory.
-    """
-    from litellm.proxy.prometheus_cleanup import mark_dead_pids
-
-    while True:
-        await asyncio.sleep(3600)  # 1 hour
-        try:
-            mark_dead_pids()
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                f"Error in periodic prometheus cleanup: {e}"
-            )
 
 
 async def _run_background_health_check():
