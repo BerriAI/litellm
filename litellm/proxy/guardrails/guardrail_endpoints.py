@@ -14,7 +14,6 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import (
     CustomCodeValidationError,
     validate_custom_code,
@@ -22,6 +21,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.code_validator import 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.primitives import (
     get_custom_code_primitives,
 )
+from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
@@ -1170,10 +1170,11 @@ def _build_field_dict(
     # Determine the field type from annotation
     field_type = _get_field_type_from_annotation(field_annotation)
 
-    # Check for custom UI type override
-    field_json_schema_extra = getattr(field, "json_schema_extra", {})
+    # Check for custom UI type override (ui_type preferred; "type" leaks into OpenAPI and breaks schema)
+    field_json_schema_extra = getattr(field, "json_schema_extra", {}) or {}
     if field_json_schema_extra and "ui_type" in field_json_schema_extra:
-        field_type = field_json_schema_extra["ui_type"].value
+        ut = field_json_schema_extra["ui_type"]
+        field_type = ut if isinstance(ut, str) else getattr(ut, "value", ut)
     elif field_json_schema_extra and "type" in field_json_schema_extra:
         field_type = field_json_schema_extra["type"]
 
@@ -1205,10 +1206,21 @@ def _build_field_dict(
     # Add options if they exist in json_schema_extra (this takes precedence)
     if field_json_schema_extra and "options" in field_json_schema_extra:
         field_dict["options"] = field_json_schema_extra["options"]
+    elif field_type == "select":
+        # For Literal types, populate options so the UI can render a dropdown
+        literal_options = _extract_literal_values(field_annotation)
+        if literal_options:
+            field_dict["options"] = literal_options
 
     # Add default value if it exists
     if field.default is not None and field.default is not ...:
         field_dict["default_value"] = field.default
+
+    # Copy min, max, step from json_schema_extra for number/percentage inputs
+    if field_json_schema_extra:
+        for key in ("min", "max", "step", "default_value"):
+            if key in field_json_schema_extra:
+                field_dict[key] = field_json_schema_extra[key]
 
     return field_dict
 
@@ -1484,6 +1496,7 @@ async def test_custom_code_guardrail(
     }
     ```
     """
+
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
