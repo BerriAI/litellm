@@ -1326,6 +1326,13 @@ SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+# Max number of spend log entries to hold in the in-memory queue.
+# Beyond this limit, new entries are dropped to prevent unbounded memory growth
+# which can cause the Prisma query engine to OOM (the engine must serialize/parse
+# all batch payloads). Default 10000 entries.
+SPEND_LOG_TRANSACTION_MAX_QUEUE_SIZE = int(
+    os.getenv("SPEND_LOG_TRANSACTION_MAX_QUEUE_SIZE", 10000)
+)
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

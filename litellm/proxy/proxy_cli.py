@@ -617,8 +617,12 @@ def run_server(  # noqa: PLR0915
                 "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
             )
 
-        db_connection_pool_limit = 100
-        db_connection_timeout = 60
+        # Reduced default from 100 to 10. Each connection in the Prisma engine's
+        # pool consumes memory (buffers, prepared statements). With 100 connections
+        # the engine can hold significant memory just for idle pool slots.
+        # Users needing more can set database_connection_pool_limit in general_settings.
+        db_connection_pool_limit = LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value
+        db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 

@@ -3236,24 +3236,28 @@ class PrismaClient:
                 and isinstance(data_list, list)
             ):
                 """
-                Batch write update queries
+                Batch write update queries - chunked to avoid Prisma engine OOM
                 """
-                batcher = self.db.batch_()
-                for idx, t in enumerate(data_list):
-                    # check if plain text or hash
-                    if t.token.startswith("sk-"):  # type: ignore
-                        t.token = self.hash_token(token=t.token)  # type: ignore
-                    try:
-                        data_json = self.jsonify_object(
-                            data=t.model_dump(exclude_none=True)
+                _UPDATE_MANY_CHUNK_SIZE = 100
+                for chunk_start in range(0, len(data_list), _UPDATE_MANY_CHUNK_SIZE):
+                    chunk = data_list[chunk_start : chunk_start + _UPDATE_MANY_CHUNK_SIZE]
+                    batcher = self.db.batch_()
+                    for idx, t in enumerate(chunk):
+                        # check if plain text or hash
+                        if t.token.startswith("sk-"):  # type: ignore
+                            t.token = self.hash_token(token=t.token)  # type: ignore
+                        try:
+                            data_json = self.jsonify_object(
+                                data=t.model_dump(exclude_none=True)
+                            )
+                        except Exception:
+                            data_json = self.jsonify_object(data=t.dict(exclude_none=True))
+                        batcher.litellm_verificationtoken.update(
+                            where={"token": t.token},  # type: ignore
+                            data={**data_json},  # type: ignore
                         )
-                    except Exception:
-                        data_json = self.jsonify_object(data=t.dict(exclude_none=True))
-                    batcher.litellm_verificationtoken.update(
-                        where={"token": t.token},  # type: ignore
-                        data={**data_json},  # type: ignore
-                    )
-                await batcher.commit()
+                    await batcher.commit()
+                    await asyncio.sleep(0)  # yield to let engine release memory
                 print_verbose(
                     "\033[91m" + "DB Token Table update succeeded" + "\033[0m"
                 )
@@ -3265,26 +3269,30 @@ class PrismaClient:
                 and isinstance(data_list, list)
             ):
                 """
-                Batch write update queries
+                Batch write update queries - chunked to avoid Prisma engine OOM
                 """
-                batcher = self.db.batch_()
-                for idx, user in enumerate(data_list):
-                    try:
-                        data_json = self.jsonify_object(
-                            data=user.model_dump(exclude_none=True)
+                _UPDATE_MANY_CHUNK_SIZE = 100
+                for chunk_start in range(0, len(data_list), _UPDATE_MANY_CHUNK_SIZE):
+                    chunk = data_list[chunk_start : chunk_start + _UPDATE_MANY_CHUNK_SIZE]
+                    batcher = self.db.batch_()
+                    for idx, user in enumerate(chunk):
+                        try:
+                            data_json = self.jsonify_object(
+                                data=user.model_dump(exclude_none=True)
+                            )
+                        except Exception:
+                            data_json = self.jsonify_object(data=user.dict())
+                        batcher.litellm_usertable.upsert(
+                            where={"user_id": user.user_id},  # type: ignore
+                            data={
+                                "create": {**data_json},  # type: ignore
+                                "update": {
+                                    **data_json  # type: ignore
+                                },  # just update user-specified values, if it already exists
+                            },
                         )
-                    except Exception:
-                        data_json = self.jsonify_object(data=user.dict())
-                    batcher.litellm_usertable.upsert(
-                        where={"user_id": user.user_id},  # type: ignore
-                        data={
-                            "create": {**data_json},  # type: ignore
-                            "update": {
-                                **data_json  # type: ignore
-                            },  # just update user-specified values, if it already exists
-                        },
-                    )
-                await batcher.commit()
+                    await batcher.commit()
+                    await asyncio.sleep(0)  # yield to let engine release memory
                 verbose_proxy_logger.info(
                     "\033[91m" + "DB User Table Batch update succeeded" + "\033[0m"
                 )
@@ -3296,26 +3304,30 @@ class PrismaClient:
                 and isinstance(data_list, list)
             ):
                 """
-                Batch write update queries
+                Batch write update queries - chunked to avoid Prisma engine OOM
                 """
-                batcher = self.db.batch_()
-                for enduser in data_list:
-                    try:
-                        data_json = self.jsonify_object(
-                            data=enduser.model_dump(exclude_none=True)
+                _UPDATE_MANY_CHUNK_SIZE = 100
+                for chunk_start in range(0, len(data_list), _UPDATE_MANY_CHUNK_SIZE):
+                    chunk = data_list[chunk_start : chunk_start + _UPDATE_MANY_CHUNK_SIZE]
+                    batcher = self.db.batch_()
+                    for enduser in chunk:
+                        try:
+                            data_json = self.jsonify_object(
+                                data=enduser.model_dump(exclude_none=True)
+                            )
+                        except Exception:
+                            data_json = self.jsonify_object(data=enduser.dict())
+                        batcher.litellm_endusertable.upsert(
+                            where={"user_id": enduser.user_id},  # type: ignore
+                            data={
+                                "create": {**data_json},  # type: ignore
+                                "update": {
+                                    **data_json  # type: ignore
+                                },  # just update end-user-specified values, if it already exists
+                            },
                         )
-                    except Exception:
-                        data_json = self.jsonify_object(data=enduser.dict())
-                    batcher.litellm_endusertable.upsert(
-                        where={"user_id": enduser.user_id},  # type: ignore
-                        data={
-                            "create": {**data_json},  # type: ignore
-                            "update": {
-                                **data_json  # type: ignore
-                            },  # just update end-user-specified values, if it already exists
-                        },
-                    )
-                await batcher.commit()
+                    await batcher.commit()
+                    await asyncio.sleep(0)  # yield to let engine release memory
                 verbose_proxy_logger.info(
                     "\033[91m" + "DB End User Table Batch update succeeded" + "\033[0m"
                 )
@@ -3327,26 +3339,30 @@ class PrismaClient:
                 and isinstance(data_list, list)
             ):
                 """
-                Batch write update queries
+                Batch write update queries - chunked to avoid Prisma engine OOM
                 """
-                batcher = self.db.batch_()
-                for budget in data_list:
-                    try:
-                        data_json = self.jsonify_object(
-                            data=budget.model_dump(exclude_none=True)
+                _UPDATE_MANY_CHUNK_SIZE = 100
+                for chunk_start in range(0, len(data_list), _UPDATE_MANY_CHUNK_SIZE):
+                    chunk = data_list[chunk_start : chunk_start + _UPDATE_MANY_CHUNK_SIZE]
+                    batcher = self.db.batch_()
+                    for budget in chunk:
+                        try:
+                            data_json = self.jsonify_object(
+                                data=budget.model_dump(exclude_none=True)
+                            )
+                        except Exception:
+                            data_json = self.jsonify_object(data=budget.dict())
+                        batcher.litellm_budgettable.upsert(
+                            where={"budget_id": budget.budget_id},  # type: ignore
+                            data={
+                                "create": {**data_json},  # type: ignore
+                                "update": {
+                                    **data_json  # type: ignore
+                                },  # just update end-user-specified values, if it already exists
+                            },
                         )
-                    except Exception:
-                        data_json = self.jsonify_object(data=budget.dict())
-                    batcher.litellm_budgettable.upsert(
-                        where={"budget_id": budget.budget_id},  # type: ignore
-                        data={
-                            "create": {**data_json},  # type: ignore
-                            "update": {
-                                **data_json  # type: ignore
-                            },  # just update end-user-specified values, if it already exists
-                        },
-                    )
-                await batcher.commit()
+                    await batcher.commit()
+                    await asyncio.sleep(0)  # yield to let engine release memory
                 verbose_proxy_logger.info(
                     "\033[91m" + "DB Budget Table Batch update succeeded" + "\033[0m"
                 )
@@ -3357,27 +3373,31 @@ class PrismaClient:
                 and data_list is not None
                 and isinstance(data_list, list)
             ):
-                # Batch write update queries
-                batcher = self.db.batch_()
-                for idx, team in enumerate(data_list):
-                    try:
-                        data_json = self.jsonify_team_object(
-                            db_data=team.model_dump(exclude_none=True)
+                # Batch write update queries - chunked to avoid Prisma engine OOM
+                _UPDATE_MANY_CHUNK_SIZE = 100
+                for chunk_start in range(0, len(data_list), _UPDATE_MANY_CHUNK_SIZE):
+                    chunk = data_list[chunk_start : chunk_start + _UPDATE_MANY_CHUNK_SIZE]
+                    batcher = self.db.batch_()
+                    for idx, team in enumerate(chunk):
+                        try:
+                            data_json = self.jsonify_team_object(
+                                db_data=team.model_dump(exclude_none=True)
+                            )
+                        except Exception:
+                            data_json = self.jsonify_object(
+                                data=team.dict(exclude_none=True)
+                            )
+                        batcher.litellm_teamtable.upsert(
+                            where={"team_id": team.team_id},  # type: ignore
+                            data={
+                                "create": {**data_json},  # type: ignore
+                                "update": {
+                                    **data_json  # type: ignore
+                                },  # just update user-specified values, if it already exists
+                            },
                         )
-                    except Exception:
-                        data_json = self.jsonify_object(
-                            data=team.dict(exclude_none=True)
-                        )
-                    batcher.litellm_teamtable.upsert(
-                        where={"team_id": team.team_id},  # type: ignore
-                        data={
-                            "create": {**data_json},  # type: ignore
-                            "update": {
-                                **data_json  # type: ignore
-                            },  # just update user-specified values, if it already exists
-                        },
-                    )
-                await batcher.commit()
+                    await batcher.commit()
+                    await asyncio.sleep(0)  # yield to let engine release memory
                 verbose_proxy_logger.info(
                     "\033[91m" + "DB Team Table Batch update succeeded" + "\033[0m"
                 )
@@ -4441,7 +4461,11 @@ class ProxyUpdateSpend:
         proxy_logging_obj: ProxyLogging,
         logs_to_process: Optional[List[Dict[str, Any]]] = None,
     ):
-        BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
+        # Reduced from 1000 to 100 to limit Prisma query engine memory pressure.
+        # The Prisma engine binary must hold the entire batch in memory while
+        # constructing SQL. Large batches with JSON fields (messages, response,
+        # proxy_server_request) caused the engine to grow to 28GB+ RSS.
+        BATCH_SIZE = 100
         MAX_LOGS_PER_INTERVAL = (
             10000  # Maximum number of logs to flush in a single interval
         )
@@ -4500,6 +4524,9 @@ class ProxyUpdateSpend:
                             )
                             # Explicitly clear batch memory
                             del batch, batch_with_dates
+                            # Yield control between batches to let the Prisma
+                            # engine release memory from the previous batch
+                            await asyncio.sleep(0)
 
                         # Items already removed from queue at start of function
                         async with prisma_client._spend_log_transactions_lock:

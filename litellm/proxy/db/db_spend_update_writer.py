@@ -673,16 +673,26 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient] = None,
         spend_logs_url: Optional[str] = os.getenv("SPEND_LOGS_URL"),
     ) -> Optional[PrismaClient]:
+        from litellm.constants import SPEND_LOG_TRANSACTION_MAX_QUEUE_SIZE
+
         verbose_proxy_logger.debug(
             "Writing spend log to db - request_id: {}, spend: {}".format(
                 payload.get("request_id"), payload.get("spend")
             )
         )
-        if prisma_client is not None and spend_logs_url is not None:
+        if prisma_client is not None:
             async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
-        elif prisma_client is not None:
-            async with prisma_client._spend_log_transactions_lock:
+                if (
+                    len(prisma_client.spend_log_transactions)
+                    >= SPEND_LOG_TRANSACTION_MAX_QUEUE_SIZE
+                ):
+                    verbose_proxy_logger.warning(
+                        "Spend log queue is full (%d items). Dropping oldest entry to prevent OOM. "
+                        "Consider increasing SPEND_LOG_TRANSACTION_MAX_QUEUE_SIZE or "
+                        "reducing request volume.",
+                        len(prisma_client.spend_log_transactions),
+                    )
+                    prisma_client.spend_log_transactions.pop(0)
                 prisma_client.spend_log_transactions.append(payload)
         else:
             verbose_proxy_logger.debug(
@@ -1432,7 +1442,10 @@ class DBSpendUpdateWriter:
         verbose_proxy_logger.debug(
             f"Daily {entity_type.capitalize()} Spend transactions: {len(daily_spend_transactions)}"
         )
-        BATCH_SIZE = 100
+        # Reduced from 100 to 50 to limit Prisma query engine memory pressure.
+        # Each upsert sends both create and update payloads to the engine,
+        # roughly doubling the per-operation memory cost vs simple inserts.
+        BATCH_SIZE = 50
         start_time = time.time()
 
         try:
