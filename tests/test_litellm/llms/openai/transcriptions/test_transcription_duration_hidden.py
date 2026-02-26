@@ -7,11 +7,9 @@ deserialization" into thinking a plain Transcription is a
 TranscriptionVerbose/Diarized type.
 """
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
-import pytest
-
+from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
@@ -38,9 +36,7 @@ class TestTranscriptionDurationNotInResponseBody:
             response_type="audio_transcription",
         )
 
-        # Duration should be in _hidden_params
         assert result._hidden_params["audio_transcription_duration"] == 12.5
-        # Duration should NOT be a visible attribute on the response
         assert not hasattr(result, "_audio_transcription_duration")
 
     def test_convert_dict_preserves_provider_duration(self):
@@ -61,7 +57,6 @@ class TestTranscriptionDurationNotInResponseBody:
             response_type="audio_transcription",
         )
 
-        # Provider-returned duration should be in the response body
         assert result.duration == 42.7
 
     def test_plain_json_response_has_no_duration(self):
@@ -79,61 +74,80 @@ class TestTranscriptionDurationNotInResponseBody:
             response_type="audio_transcription",
         )
 
-        # No duration should be set
         duration = getattr(result, "duration", None)
         assert duration is None
 
 
 class TestCostCalculatorReadsDurationFromHiddenParams:
-    """The cost calculator should read duration from _hidden_params first."""
+    """The cost calculator should read duration from _hidden_params via completion_cost()."""
 
-    def test_cost_calculator_reads_hidden_params_duration(self):
+    @patch("litellm.cost_calculator.openai_cost_per_second")
+    def test_completion_cost_uses_hidden_params_duration(self, mock_cost_fn):
         """
-        When _hidden_params has audio_transcription_duration, the cost
-        calculator should use it instead of looking for response.duration.
+        completion_cost() should pass the duration from _hidden_params to
+        openai_cost_per_second when calculating transcription costs.
         """
+        mock_cost_fn.return_value = (0.001, 0.0)
+
         response = TranscriptionResponse(text="test")
         response._hidden_params = {
             "audio_transcription_duration": 17.5,
-            "model": "gpt-4o-transcribe",
+            "model": "whisper-1",
             "custom_llm_provider": "openai",
         }
 
-        # Simulate what cost_calculator.py does
-        _hidden = getattr(response, "_hidden_params", {}) or {}
-        duration = _hidden.get(
-            "audio_transcription_duration",
-            getattr(response, "duration", 0.0),
+        completion_cost(
+            completion_response=response,
+            model="whisper-1",
+            call_type="atranscription",
         )
 
-        assert duration == 17.5
+        mock_cost_fn.assert_called_once()
+        _, kwargs = mock_cost_fn.call_args
+        assert kwargs["duration"] == 17.5
 
-    def test_cost_calculator_falls_back_to_response_duration(self):
+    @patch("litellm.cost_calculator.openai_cost_per_second")
+    def test_completion_cost_falls_back_to_response_duration(self, mock_cost_fn):
         """
-        When _hidden_params doesn't have duration (e.g. verbose_json response),
-        fall back to response.duration.
+        When _hidden_params doesn't have duration (e.g. verbose_json response
+        where the provider returned it), fall back to response.duration.
         """
+        mock_cost_fn.return_value = (0.001, 0.0)
+
         response = TranscriptionResponse(text="test")
-        response._hidden_params = {}
+        response._hidden_params = {
+            "model": "whisper-1",
+            "custom_llm_provider": "openai",
+        }
         response.duration = 42.7  # type: ignore
 
-        _hidden = getattr(response, "_hidden_params", {}) or {}
-        duration = _hidden.get(
-            "audio_transcription_duration",
-            getattr(response, "duration", 0.0),
+        completion_cost(
+            completion_response=response,
+            model="whisper-1",
+            call_type="atranscription",
         )
 
-        assert duration == 42.7
+        mock_cost_fn.assert_called_once()
+        _, kwargs = mock_cost_fn.call_args
+        assert kwargs["duration"] == 42.7
 
-    def test_cost_calculator_returns_zero_when_no_duration(self):
-        """When neither hidden params nor response has duration, return 0.0."""
+    @patch("litellm.cost_calculator.openai_cost_per_second")
+    def test_completion_cost_defaults_to_zero_duration(self, mock_cost_fn):
+        """When neither hidden params nor response has duration, use 0.0."""
+        mock_cost_fn.return_value = (0.0, 0.0)
+
         response = TranscriptionResponse(text="test")
-        response._hidden_params = {}
+        response._hidden_params = {
+            "model": "whisper-1",
+            "custom_llm_provider": "openai",
+        }
 
-        _hidden = getattr(response, "_hidden_params", {}) or {}
-        duration = _hidden.get(
-            "audio_transcription_duration",
-            getattr(response, "duration", 0.0),
+        completion_cost(
+            completion_response=response,
+            model="whisper-1",
+            call_type="atranscription",
         )
 
-        assert duration == 0.0
+        mock_cost_fn.assert_called_once()
+        _, kwargs = mock_cost_fn.call_args
+        assert kwargs["duration"] == 0.0
