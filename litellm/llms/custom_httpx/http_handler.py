@@ -69,6 +69,7 @@ headers = get_default_headers()
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+MODULE_LEVEL_ASYNC_HTTP_CLIENT_PROVIDER_ID = "litellm_module_level_client"
 
 
 def _prepare_request_data_and_content(
@@ -1210,6 +1211,21 @@ def get_async_httpx_client(
 
     Caches the new client and returns it.
     """
+    if llm_provider == MODULE_LEVEL_ASYNC_HTTP_CLIENT_PROVIDER_ID:
+        # module_level_aclient is a process-wide singleton and should not be
+        # evicted from bounded in-memory cache under high traffic.
+        if params is not None:
+            handler_params = {
+                k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+            }
+            handler_params["shared_session"] = shared_session
+            return AsyncHTTPHandler(**handler_params)
+
+        return AsyncHTTPHandler(
+            timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+            shared_session=shared_session,
+        )
+
     _params_key_name = ""
     if params is not None:
         for key, value in params.items():

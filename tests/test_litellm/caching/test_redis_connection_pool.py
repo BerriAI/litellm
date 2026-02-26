@@ -10,8 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import redis.asyncio as async_redis
 
+import litellm
 from litellm._redis import get_redis_async_client, get_redis_connection_pool
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.llms.custom_httpx.http_handler import (
+    MODULE_LEVEL_ASYNC_HTTP_CLIENT_PROVIDER_ID,
+    get_async_httpx_client,
+)
 
 
 def test_url_config_uses_passed_pool():
@@ -165,3 +170,48 @@ async def test_eviction_non_closeable_safe():
 
     # If we got here without exception, the test passes
     assert cache.get_cache(key="int-val") == 42
+
+
+@pytest.mark.asyncio
+async def test_module_level_async_client_not_stored_in_bounded_cache():
+    """
+    module_level_aclient is a process-wide singleton and should not be tied to
+    the bounded in-memory cache used for per-provider ephemeral clients.
+    """
+    module_client = litellm.module_level_aclient
+    try:
+        cache_keys = list(getattr(litellm.in_memory_llm_clients_cache, "cache_dict", {}).keys())
+        assert all(
+            MODULE_LEVEL_ASYNC_HTTP_CLIENT_PROVIDER_ID not in key for key in cache_keys
+        )
+        assert module_client.client.is_closed is False
+    finally:
+        await module_client.close()
+        litellm.__dict__.pop("module_level_aclient", None)
+
+
+@pytest.mark.asyncio
+async def test_module_level_async_client_survives_cache_eviction_pressure():
+    """
+    Repro for RuntimeError("client has been closed") seen under traffic:
+    evicting many cached clients must not close module_level_aclient.
+    """
+    module_client = litellm.module_level_aclient
+    cache = litellm.in_memory_llm_clients_cache
+    original_max_size = cache.max_size_in_memory
+    original_default_ttl = cache.default_ttl
+
+    try:
+        cache.max_size_in_memory = 2
+        cache.default_ttl = 3600
+
+        get_async_httpx_client("eviction_provider_1", params={"timeout": None})
+        get_async_httpx_client("eviction_provider_2", params={"timeout": None})
+        await asyncio.sleep(0.05)
+
+        assert module_client.client.is_closed is False
+    finally:
+        cache.max_size_in_memory = original_max_size
+        cache.default_ttl = original_default_ttl
+        await module_client.close()
+        litellm.__dict__.pop("module_level_aclient", None)

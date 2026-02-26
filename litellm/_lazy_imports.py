@@ -408,14 +408,17 @@ def _lazy_import_http_handlers(name: str) -> Any:
 
     if name == "module_level_aclient":
         # Create an async HTTP client using the factory function
-        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.llms.custom_httpx.http_handler import (
+            MODULE_LEVEL_ASYNC_HTTP_CLIENT_PROVIDER_ID,
+            get_async_httpx_client,
+        )
 
         # Get timeout from module config (if set)
         timeout = _globals.get("request_timeout")
         params = {"timeout": timeout, "client_alias": "module level aclient"}
         
         # Create the client instance
-        provider_id = cast(Any, "litellm_module_level_client")
+        provider_id = cast(Any, MODULE_LEVEL_ASYNC_HTTP_CLIENT_PROVIDER_ID)
         async_client = get_async_httpx_client(
             llm_provider=provider_id,
             params=params,
