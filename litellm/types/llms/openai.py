@@ -699,7 +699,15 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
     content: Optional[
         Union[
-            str, Iterable[Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]]
+            str,
+            Iterable[
+                Union[
+                    ChatCompletionTextObject,
+                    ChatCompletionThinkingBlock,
+                    ChatCompletionRedactedThinkingBlock,
+                    ChatCompletionImageObject,
+                ]
+            ],
         ]
     ]
     name: Optional[str]
