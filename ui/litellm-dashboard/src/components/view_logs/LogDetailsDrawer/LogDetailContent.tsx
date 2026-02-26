@@ -283,7 +283,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
             />
           </Descriptions.Item>
           <Descriptions.Item label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</Descriptions.Item>
-          <Descriptions.Item label="Duration">{logEntry.duration?.toFixed(3)} s</Descriptions.Item>
+          <Descriptions.Item label="Duration">{logEntry.request_duration_ms != null ? (logEntry.request_duration_ms / 1000).toFixed(3) : "-"} s</Descriptions.Item>
 
           {hasCacheActivity && (
             <>
