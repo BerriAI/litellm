@@ -7,14 +7,14 @@ import json
 from datetime import date
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, cast
 
+from typing_extensions import TypedDict
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-
-from typing_extensions import TypedDict
 
 # ---------------------------------------------------------------------------
 # Constants
