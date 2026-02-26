@@ -9,7 +9,7 @@ from fastapi import HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.auth_utils import _get_request_ip_address, abbreviate_api_key
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -75,13 +75,69 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
             )
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - {}\nRequester IP Address:{}".format(
-                    str(e),
-                    requester_ip,
-                ),
-                extra={"requester_ip": requester_ip},
+
+            # Build structured context for the log message
+            masked_key = abbreviate_api_key(api_key=api_key) if api_key else "None"
+            http_method = getattr(request, "method", "UNKNOWN")
+
+            # Extract error category and status code from typed exceptions
+            if isinstance(e, ProxyException):
+                error_type = e.type
+                error_code = e.code
+            elif isinstance(e, HTTPException):
+                error_type = "http_exception"
+                error_code = str(getattr(e, "status_code", "unknown"))
+            elif isinstance(e, litellm.BudgetExceededError):
+                error_type = "budget_exceeded"
+                error_code = "400"
+            else:
+                error_type = type(e).__name__
+                error_code = "401"
+
+            log_extra = {
+                "requester_ip": requester_ip,
+                "route": route,
+                "api_key": masked_key,
+                "error_type": error_type,
+                "error_code": error_code,
+                "http_method": http_method,
+            }
+
+            # Use warning level for expected auth failures to avoid noisy ERROR logs
+            # and full tracebacks for routine rejected requests (e.g. missing/invalid key).
+            # Reserve ERROR + traceback for truly unexpected exceptions and server errors.
+            _is_expected_auth_error = isinstance(
+                e, (ProxyException, litellm.BudgetExceededError)
+            ) or (
+                isinstance(e, HTTPException)
+                and getattr(e, "status_code", 500) < 500
             )
+            if _is_expected_auth_error:
+                verbose_proxy_logger.warning(
+                    "Auth failed: error_type={}, error_code={}, route={} {}, api_key={}, ip={} - {}".format(
+                        error_type,
+                        error_code,
+                        http_method,
+                        route,
+                        masked_key,
+                        requester_ip,
+                        str(e),
+                    ),
+                    extra=log_extra,
+                )
+            else:
+                verbose_proxy_logger.exception(
+                    "Auth exception: error_type={}, error_code={}, route={} {}, api_key={}, ip={} - {}".format(
+                        error_type,
+                        error_code,
+                        http_method,
+                        route,
+                        masked_key,
+                        requester_ip,
+                        str(e),
+                    ),
+                    extra=log_extra,
+                )
 
             # Log this exception to OTEL, Datadog etc
             user_api_key_dict = UserAPIKeyAuth(
