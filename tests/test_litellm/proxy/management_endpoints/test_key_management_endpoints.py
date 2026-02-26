@@ -45,6 +45,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     check_team_key_model_specific_limits,
     delete_verification_tokens,
     generate_key_helper_fn,
+    key_aliases,
     list_keys,
     prepare_key_update_data,
     reset_key_spend_fn,
@@ -6211,3 +6212,100 @@ async def test_generate_key_helper_fn_agent_id():
     assert key_data.get("agent_id") == "test-agent-456", (
         f"Expected agent_id='test-agent-456' in key_data, got: {key_data.get('agent_id')}"
     )
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_response_shape():
+    """Test that key_aliases returns the correct paginated response shape."""
+    mock_row1 = MagicMock()
+    mock_row1.key_alias = "alias-alpha"
+    mock_row2 = MagicMock()
+    mock_row2.key_alias = "alias-beta"
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=2)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[mock_row1, mock_row2]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(page=1, size=50, search=None)
+
+    assert result["aliases"] == ["alias-alpha", "alias-beta"]
+    assert result["total_count"] == 2
+    assert result["current_page"] == 1
+    assert result["total_pages"] == 1
+    assert result["size"] == 50
+
+    # Both count and find_many must use the same where clause
+    count_where = mock_prisma_client.db.litellm_verificationtoken.count.call_args.kwargs["where"]
+    find_where = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert count_where == find_where
+
+    # Non-null alias filter must be present
+    assert json.dumps({"key_alias": {"not": None}}) in json.dumps(count_where)
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_pagination_skip_take():
+    """Test that skip and take are correctly computed from page and size."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=120)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        result = await key_aliases(page=3, size=25, search=None)
+
+    assert result["current_page"] == 3
+    assert result["size"] == 25
+    assert result["total_count"] == 120
+    assert result["total_pages"] == 5  # ceil(120 / 25)
+
+    find_many_kwargs = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs
+    assert find_many_kwargs["skip"] == 50  # (3 - 1) * 25
+    assert find_many_kwargs["take"] == 25
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_search_filter():
+    """Test that the search param adds a case-insensitive contains condition."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await key_aliases(page=1, size=50, search="my-key")
+
+    where = mock_prisma_client.db.litellm_verificationtoken.count.call_args.kwargs["where"]
+    assert (
+        json.dumps({"key_alias": {"contains": "my-key", "mode": "insensitive"}})
+        in json.dumps(where)
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_no_search_omits_contains_filter():
+    """Test that without a search term no contains condition is added."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await key_aliases(page=1, size=50, search=None)
+
+    where = mock_prisma_client.db.litellm_verificationtoken.count.call_args.kwargs["where"]
+    assert "contains" not in json.dumps(where)
+
+
+@pytest.mark.asyncio
+async def test_key_aliases_select_only_key_alias():
+    """Test that find_many is called with select={key_alias: True} to avoid fetching full rows."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        await key_aliases(page=1, size=50, search=None)
+
+    find_many_kwargs = mock_prisma_client.db.litellm_verificationtoken.find_many.call_args.kwargs
+    assert find_many_kwargs.get("select") == {"key_alias": True}
