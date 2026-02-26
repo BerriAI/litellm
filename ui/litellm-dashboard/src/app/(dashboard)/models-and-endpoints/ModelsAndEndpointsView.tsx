@@ -8,6 +8,7 @@ import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/compo
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 import { Team } from "@/components/key_team_helpers/key_list";
 import CredentialsPanel from "@/components/model_add/credentials";
+import ModelGarden from "@/components/model_garden/model_garden";
 import { getCallbacksCall, setCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
@@ -338,6 +339,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
             <TabGroup index={selectedTabIndex} onIndexChange={setSelectedTabIndex} className="gap-2 h-[75vh] w-full ">
               <TabList className="flex justify-between mt-2 w-full items-center">
                 <div className="flex">
+                  <Tab>Model Garden</Tab>
                   {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
                   {!shouldHideAddModelTab && <Tab>Add Model</Tab>}
                   {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
@@ -360,6 +362,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 </div>
               </TabList>
               <TabPanels>
+                <TabPanel>
+                  <ModelGarden
+                    modelCostMap={modelCostMapData}
+                    isLoading={isLoadingModelCostMap}
+                  />
+                </TabPanel>
                 <AllModelsTab
                   selectedModelGroup={selectedModelGroup}
                   setSelectedModelGroup={setSelectedModelGroup}
