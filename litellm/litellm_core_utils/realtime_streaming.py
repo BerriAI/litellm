@@ -70,6 +70,8 @@ class RealTimeStreaming:
         self.user_api_key_dict = user_api_key_dict
         # Buffer for response.text.delta events pending output-guardrail check
         self._pending_output_text_events: List[str] = []
+        # Violation counter for end_session_after_n_fails support
+        self._violation_count: int = 0
 
     def _should_store_message(
         self,
@@ -227,6 +229,37 @@ class RealTimeStreaming:
             for cb in litellm.callbacks
         )
 
+    async def _handle_violation_action(
+        self, callback: Any, safe_msg: str, end_session: bool = False
+    ) -> None:
+        """
+        Speak the violation message to the user, then optionally close the session.
+
+        end_session=True is set either when on_violation=='end_session' or when the
+        session-level end_session_after_n_fails threshold has been reached.
+        """
+        spoken_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
+        await self.backend_ws.send(json.dumps({"type": "response.cancel"}))
+        await self.backend_ws.send(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "response": {
+                        "modalities": ["text", "audio"],
+                        "instructions": (
+                            f"Say exactly and only: \"{spoken_msg}\". "
+                            "Do not add anything else."
+                        ),
+                    },
+                }
+            )
+        )
+        if end_session:
+            verbose_logger.warning(
+                "[realtime guardrail] ending session after violation"
+            )
+            await self.backend_ws.close()
+
     async def run_realtime_guardrails(
         self,
         transcript: str,
@@ -234,6 +267,10 @@ class RealTimeStreaming:
     ) -> bool:
         """
         Run registered guardrails on a completed speech transcription.
+
+        On each violation, increments the session violation counter.
+        If end_session_after_n_fails is configured and the counter reaches that
+        threshold, the session is terminated after speaking the violation message.
 
         Returns True if blocked (synthetic warning already sent to client).
         Returns False if clean (caller should send response.create to the backend).
@@ -252,6 +289,7 @@ class RealTimeStreaming:
                 is not True
             ):
                 continue
+
             try:
                 await callback.apply_guardrail(
                     inputs={"texts": [transcript], "images": []},
@@ -276,26 +314,22 @@ class RealTimeStreaming:
                     safe_msg = str(detail)
                 else:
                     safe_msg = str(e) or "I'm sorry, that request was blocked by the content filter."
-                # Cancel any in-flight response before speaking the warning.
-                # This handles the race where create_response fired before we could intercept.
-                await self.backend_ws.send(json.dumps({"type": "response.cancel"}))
-                # Ask OpenAI to speak the warning — TTS audio plays naturally in the client
-                await self.backend_ws.send(
-                    json.dumps(
-                        {
-                            "type": "response.create",
-                            "response": {
-                                "modalities": ["text", "audio"],
-                                "instructions": (
-                                    f"Say exactly and only: \"{safe_msg}\". "
-                                    "Do not add anything else."
-                                ),
-                            },
-                        }
+
+                self._violation_count += 1
+                end_session_after: Optional[int] = getattr(
+                    callback, "end_session_after_n_fails", None
+                )
+                should_end = (
+                    getattr(callback, "on_violation", None) == "end_session"
+                    or (
+                        end_session_after is not None
+                        and self._violation_count >= end_session_after
                     )
                 )
+                await self._handle_violation_action(callback, safe_msg, end_session=should_end)
                 verbose_logger.warning(
-                    "[realtime guardrail] BLOCKED transcript: %r",
+                    "[realtime guardrail] BLOCKED transcript (violation %d): %r",
+                    self._violation_count,
                     transcript[:80],
                 )
                 return True
@@ -494,7 +528,6 @@ class RealTimeStreaming:
         """
         try:
             event_obj = json.loads(raw_response)
-
             if event_obj.get("type") == "session.created":
                 # If any realtime guardrails are registered, proactively
                 # set create_response=false so the LLM never auto-responds
@@ -539,11 +572,22 @@ class RealTimeStreaming:
                 return True
 
             if event_obj.get("type") == "response.text.delta":
-                if self._has_realtime_output_guardrails():
+                has_guardrails = self._has_realtime_output_guardrails()
+                verbose_logger.warning(
+                    "[realtime output guardrail] response.text.delta — _has_realtime_output_guardrails=%s callbacks=%s",
+                    has_guardrails,
+                    [type(c).__name__ for c in litellm.callbacks],
+                )
+                if has_guardrails:
                     self._pending_output_text_events.append(raw_response)
                     return True
 
             if event_obj.get("type") == "response.text.done":
+                verbose_logger.warning(
+                    "[realtime output guardrail] response.text.done — text=%r _has_guardrails=%s",
+                    event_obj.get("text", "")[:60],
+                    self._has_realtime_output_guardrails(),
+                )
                 await self._send_output_text_done(event_obj, raw_response)
                 return True
 
