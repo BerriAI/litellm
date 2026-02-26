@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Annotated
 
 import litellm
@@ -720,6 +720,13 @@ class UserAPIKeyLabelValues(BaseModel):
     stream: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
     ] = None
+
+    @field_validator("stream", mode="before")
+    @classmethod
+    def coerce_stream_to_str(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        return str(v)
 
 
 class PrometheusMetricsConfig(BaseModel):
