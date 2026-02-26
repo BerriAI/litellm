@@ -165,3 +165,57 @@ async def test_eviction_non_closeable_safe():
 
     # If we got here without exception, the test passes
     assert cache.get_cache(key="int-val") == 42
+
+
+@pytest.mark.asyncio
+async def test_eviction_cleanup_task_is_retained_until_done():
+    """Cleanup tasks created by _remove_key must be held in
+    _cleanup_tasks until completion so the GC does not collect them
+    before they finish.  Regression test for #22128."""
+    cache = LLMClientCache(max_size_in_memory=2, default_ttl=600)
+
+    # Clear any leftover tasks from other tests (class-level set)
+    cache._cleanup_tasks.clear()
+
+    client = AsyncMock()
+
+    # Make aclose a slow coroutine so we can observe the task in the set
+    async def slow_aclose():
+        await asyncio.sleep(0.1)
+
+    client.aclose = slow_aclose
+
+    cache.set_cache(key="client-0", value=client)
+    cache.set_cache(key="filler", value="x")
+    # Third insert triggers eviction of client-0
+    cache.set_cache(key="trigger", value="y")
+
+    # The cleanup task should be in the set *before* it completes
+    assert len(cache._cleanup_tasks) == 1
+
+    # Wait for the slow aclose to finish
+    await asyncio.sleep(0.2)
+
+    # After completion the done-callback should have removed it
+    assert len(cache._cleanup_tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_eviction_no_running_loop_does_not_raise():
+    """When _remove_key is called outside an event loop (RuntimeError),
+    no task is created and no exception is raised."""
+    cache = LLMClientCache(max_size_in_memory=200, default_ttl=600)
+
+    client = AsyncMock()
+    client.aclose = AsyncMock()
+
+    # Directly put client in cache_dict to bypass event-loop key mangling
+    cache.cache_dict["manual-key"] = client
+    cache.ttl_dict["manual-key"] = 0
+
+    # Simulate calling _remove_key with no running loop by patching
+    with patch("asyncio.get_running_loop", side_effect=RuntimeError):
+        cache._remove_key("manual-key")
+
+    # No task should have been created
+    assert "manual-key" not in cache.cache_dict
