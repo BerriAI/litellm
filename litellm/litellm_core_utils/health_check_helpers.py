@@ -44,7 +44,9 @@ class HealthCheckHelpers:
         model_params["model"] = cheapest_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
-        model_params["max_tokens"] = 10  # gpt-5-nano throws errors for max_tokens=1
+        model_params["max_tokens"] = model_params.get(
+            "max_tokens", 10
+        )  # gpt-5-nano throws errors for max_tokens=1
         await acompletion(**model_params)
         return {}
 

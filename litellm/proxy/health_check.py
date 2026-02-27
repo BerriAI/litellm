@@ -234,6 +234,14 @@ def _update_litellm_params_for_health_check(
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
+    _health_check_max_tokens = model_info.get("health_check_max_tokens", None)
+    if _health_check_max_tokens is not None:
+        litellm_params["max_tokens"] = _health_check_max_tokens
+    elif "*" not in (
+        model_info.get("health_check_model") or litellm_params.get("model") or ""
+    ):
+        litellm_params["max_tokens"] = 1
+
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
         litellm_params["model"] = _health_check_model
