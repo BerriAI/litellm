@@ -4,7 +4,7 @@ Anthropic CountTokens API transformation logic.
 This module handles the transformation of requests to Anthropic's CountTokens API format.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 
@@ -32,26 +32,26 @@ class AnthropicCountTokensConfig:
         self,
         model: str,
         messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Transform request to Anthropic CountTokens format.
 
-        Input:
-        {
-            "model": "claude-3-5-sonnet-20241022",
-            "messages": [{"role": "user", "content": "Hello!"}]
-        }
-
-        Output (Anthropic CountTokens format):
-        {
-            "model": "claude-3-5-sonnet-20241022",
-            "messages": [{"role": "user", "content": "Hello!"}]
-        }
+        Includes optional system and tools fields for accurate token counting.
         """
-        return {
+        request: Dict[str, Any] = {
             "model": model,
             "messages": messages,
         }
+
+        if system is not None:
+            request["system"] = system
+
+        if tools is not None:
+            request["tools"] = tools
+
+        return request
 
     def get_required_headers(self, api_key: str) -> Dict[str, str]:
         """
