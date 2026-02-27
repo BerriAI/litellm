@@ -427,7 +427,8 @@ async def test_streamable_http_mcp_handler_mock():
         # Call the handler
         await handle_streamable_http_mcp(mock_scope, mock_receive, mock_send)
 
-        # Verify session manager handle_request was called
+        # Verify session manager handle_request was called with correct args
+        # send is passed directly (no wrapper)
         mock_session_manager.handle_request.assert_called_once_with(
             mock_scope, mock_receive, mock_send
         )
