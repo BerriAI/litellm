@@ -217,7 +217,117 @@ class ResponsesAPIRequestUtils:
             responses_api_response["id"] = updated_id
         else:
             responses_api_response.id = updated_id
+
+        if litellm_metadata.get("encrypted_content_affinity_enabled"):
+            responses_api_response = (
+                ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+                    response=responses_api_response,
+                    model_id=model_id,
+                )
+            )
+
         return responses_api_response
+
+    @staticmethod
+    def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
+        """Encode model_id into an output item ID for encrypted-content items.
+
+        Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
+        """
+        assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
+        encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
+        return f"encitem_{encoded}"
+
+    @staticmethod
+    def _decode_encrypted_item_id(encoded_id: str) -> Optional[Dict[str, str]]:
+        """Decode a litellm-encoded encrypted-content item ID.
+
+        Returns a dict with ``model_id`` and ``item_id`` keys, or ``None`` if
+        the string is not a litellm-encoded item ID.
+        """
+        if not encoded_id.startswith("encitem_"):
+            return None
+        try:
+            cleaned = encoded_id[len("encitem_"):]
+            # Restore any padding that may have been stripped in transit
+            missing = len(cleaned) % 4
+            if missing:
+                cleaned += "=" * (4 - missing)
+            decoded = base64.b64decode(cleaned.encode("utf-8")).decode("utf-8")
+            # Split on first ";" only so that semicolons inside item_id are preserved
+            parts = decoded.split(";", 1)
+            if len(parts) < 2:
+                return None
+            model_id = parts[0].replace("litellm:model_id:", "")
+            item_id = parts[1].replace("item_id:", "")
+            return {"model_id": model_id, "item_id": item_id}
+        except Exception:
+            return None
+
+    @staticmethod
+    def _update_encrypted_content_item_ids_in_response(
+        response: Union["ResponsesAPIResponse", Dict[str, Any]],
+        model_id: Optional[str],
+    ) -> Union["ResponsesAPIResponse", Dict[str, Any]]:
+        """Rewrite item IDs for output items that contain ``encrypted_content``.
+
+        Encodes ``model_id`` into the item ID so that follow-up requests can be
+        routed back to the originating deployment without any cache lookup.
+        """
+        if not model_id:
+            return response
+
+        output: Optional[list] = None
+        if isinstance(response, dict):
+            output = response.get("output")
+        else:
+            output = getattr(response, "output", None)
+
+        if not isinstance(output, list):
+            return response
+
+        for item in output:
+            if isinstance(item, dict):
+                item_id = item.get("id")
+                if item_id and isinstance(item_id, str) and "encrypted_content" in item:
+                    item["id"] = ResponsesAPIRequestUtils._build_encrypted_item_id(
+                        model_id, item_id
+                    )
+            else:
+                item_id = getattr(item, "id", None)
+                if (
+                    item_id
+                    and isinstance(item_id, str)
+                    and hasattr(item, "encrypted_content")
+                ):
+                    try:
+                        item.id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+                            model_id, item_id
+                        )
+                    except AttributeError:
+                        pass
+
+        return response
+
+    @staticmethod
+    def _restore_encrypted_content_item_ids_in_input(request_input: Any) -> Any:
+        """Decode litellm-encoded item IDs in request input back to original IDs.
+
+        Called before forwarding the request to the upstream provider so the
+        provider receives the original item IDs it issued.
+        """
+        if not isinstance(request_input, list):
+            return request_input
+
+        for item in request_input:
+            if isinstance(item, dict):
+                item_id = item.get("id")
+                if item_id and isinstance(item_id, str):
+                    decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+                    if decoded:
+                        item["id"] = decoded["item_id"]
+
+        return request_input
 
     @staticmethod
     def _build_responses_api_response_id(

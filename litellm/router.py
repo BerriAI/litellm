@@ -1262,10 +1262,7 @@ class Router:
                 for cb in self.optional_callbacks
             )
             if not already_registered:
-                ec_callback = EncryptedContentAffinityCheck(
-                    cache=self.cache,
-                    ttl_seconds=self.deployment_affinity_ttl_seconds,
-                )
+                ec_callback = EncryptedContentAffinityCheck()
                 self.optional_callbacks.append(ec_callback)
                 litellm.logging_callback_manager.add_litellm_callback(ec_callback)
 
