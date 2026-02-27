@@ -8,6 +8,7 @@ GET  /v1/tool/{tool_name}       - Get a single tool's details
 POST /v1/tool/policy            - Update the call_policy for a tool
 """
 
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, List, Optional
 
@@ -310,17 +311,26 @@ async def _resolve_key_hash_to_object_permission_id(
     op_id = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
-    # Create new object permission and assign to key
-    import uuid as _uuid
-
-    new_id = str(_uuid.uuid4())
+    # Create new object permission and atomically assign to key.
+    # Uses update_many with object_permission_id=None to prevent race conditions:
+    # only one concurrent request wins; the loser cleans up its orphaned row.
+    new_id = str(uuid.uuid4())
     await prisma_client.db.litellm_objectpermissiontable.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    await prisma_client.db.litellm_verificationtoken.update(
-        where={"token": hashed},
+    updated_count = await prisma_client.db.litellm_verificationtoken.update_many(
+        where={"token": hashed, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
+    if updated_count == 0:
+        # Another request already assigned a permission; clean up orphan
+        await prisma_client.db.litellm_objectpermissiontable.delete(
+            where={"object_permission_id": new_id}
+        )
+        row = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed}
+        )
+        return getattr(row, "object_permission_id", None) if row else None
     return new_id
 
 
@@ -331,8 +341,9 @@ async def _resolve_team_id_to_object_permission_id(
     """Resolve team_id to object_permission_id; create permission if team has none."""
     if not team_id or not team_id.strip():
         return None
+    team_id_clean = team_id.strip()
     row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": team_id.strip()},
+        where={"team_id": team_id_clean},
         select={"object_permission_id": True},
     )
     if row is None:
@@ -340,16 +351,24 @@ async def _resolve_team_id_to_object_permission_id(
     op_id = getattr(row, "object_permission_id", None)
     if op_id:
         return op_id
-    import uuid as _uuid
-
-    new_id = str(_uuid.uuid4())
+    # Same atomic pattern as _resolve_key_hash_to_object_permission_id
+    new_id = str(uuid.uuid4())
     await prisma_client.db.litellm_objectpermissiontable.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": team_id.strip()},
+    updated_count = await prisma_client.db.litellm_teamtable.update_many(
+        where={"team_id": team_id_clean, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
+    if updated_count == 0:
+        await prisma_client.db.litellm_objectpermissiontable.delete(
+            where={"object_permission_id": new_id}
+        )
+        row = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id_clean},
+            select={"object_permission_id": True},
+        )
+        return getattr(row, "object_permission_id", None) if row else None
     return new_id
 
 

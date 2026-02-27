@@ -23,21 +23,21 @@ or both pre and post call:
         mode: during_call  # runs before LLM and on response
 """
 
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (CustomGuardrail,
-                                                   log_guardrail_information)
-from litellm.proxy.guardrails.tool_name_extraction import \
-    extract_request_tool_names
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
+from litellm.proxy.guardrails.tool_name_extraction import extract_request_tool_names
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import \
-        Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "tool_policy"
 
@@ -80,29 +80,12 @@ def _get_request_route_from_data(request_data: dict) -> Optional[str]:
     return meta.get("user_api_key_request_route")
 
 
-def _get_effective_allowed_tools_from_request(
-    request_data: dict,
-) -> Optional[List[str]]:
-    """Key allowed_tools overrides team; empty/missing means no restriction."""
-    meta = request_data.get("metadata") or request_data.get("litellm_metadata") or {}
-    key_meta = meta.get("user_api_key_metadata") or {}
-    team_meta = meta.get("user_api_key_team_metadata") or {}
-    key_allowed = key_meta.get("allowed_tools") if isinstance(key_meta, dict) else None
-    team_allowed = (
-        team_meta.get("allowed_tools") if isinstance(team_meta, dict) else None
-    )
-    if isinstance(key_allowed, list) and len(key_allowed) > 0:
-        return key_allowed
-    if isinstance(team_allowed, list) and len(team_allowed) > 0:
-        return team_allowed
-    return None
-
-
 class ToolPolicyGuardrail(CustomGuardrail):
     """
     Guardrail that enforces per-tool call policies from the in-memory
-    ToolPolicyRegistry (synced from DB). Key/team allowed_tools (allowlist) still
-    enforced. No DB or cache in hot path — registry lookups only.
+    ToolPolicyRegistry (synced from DB). Key/team allowed_tools (allowlist) is
+    enforced in the auth layer (check_tools_allowlist). No DB or cache in hot
+    path — registry lookups only.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -123,7 +106,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """
-        Enforce key/team allowlist then DB call_policy on request tools / response tool_calls.
+        Enforce DB call_policy on request tools / response tool_calls.
         """
         if input_type == "request":
             tools = inputs.get("tools") or []
@@ -154,29 +137,10 @@ class ToolPolicyGuardrail(CustomGuardrail):
         if not tool_names:
             return inputs
 
-        allowed_tools = _get_effective_allowed_tools_from_request(request_data)
-        if isinstance(allowed_tools, list) and len(allowed_tools) > 0:
-            allowed_set = {str(t) for t in allowed_tools}
-            disallowed = [n for n in tool_names if n not in allowed_set]
-            if disallowed:
-                verbose_proxy_logger.warning(
-                    "ToolPolicyGuardrail: tool(s) %s not in key/team allowed_tools",
-                    disallowed,
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Violated tool allowlist",
-                        "disallowed_tools": disallowed,
-                        "message": f"Tool(s) {disallowed} are not in the allowed tools list for this key/team.",
-                    },
-                )
-
         object_permission_id, team_object_permission_id = (
             _get_request_object_permission_ids(request_data)
         )
-        from litellm.proxy.db.tool_registry_writer import \
-            get_tool_policy_registry
+        from litellm.proxy.db.tool_registry_writer import get_tool_policy_registry
 
         registry = get_tool_policy_registry()
         if not registry.is_initialized():
