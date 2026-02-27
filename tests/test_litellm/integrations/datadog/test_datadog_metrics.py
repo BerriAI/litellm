@@ -43,7 +43,7 @@ async def test_init(clean_env):
 @pytest.mark.asyncio
 async def test_extract_tags(clean_env):
     """Test tag extraction from a StandardLoggingPayload."""
-    logger = DatadogMetricsLogger()
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
 
     payload = StandardLoggingPayload(
         custom_llm_provider="openai",
