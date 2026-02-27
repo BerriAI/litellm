@@ -394,6 +394,13 @@ async def update_access_group(
     for field, value in update_fields.items():
         update_data[field] = value
 
+    # Initialize delta lists before the try block so they remain accessible
+    # for cache updates after the transaction, even if an error path is added later.
+    teams_to_add: List[str] = []
+    teams_to_remove: List[str] = []
+    keys_to_add: List[str] = []
+    keys_to_remove: List[str] = []
+
     try:
         async with prisma_client.db.tx() as tx:
             # Read inside the transaction so delta computation is consistent with the write,
@@ -495,8 +502,25 @@ async def delete_access_group(
             )
             affected_key_tokens = list(all_affected_key_tokens)
 
-            await _sync_remove_access_group_from_teams(tx, affected_team_ids, access_group_id)
-            await _sync_remove_access_group_from_keys(tx, affected_key_tokens, access_group_id)
+            # Update teams returned by find_many directly — we already have their data.
+            for team in teams_with_group:
+                await tx.litellm_teamtable.update(
+                    where={"team_id": team.team_id},
+                    data={"access_group_ids": [ag for ag in (team.access_group_ids or []) if ag != access_group_id]},
+                )
+            # Use _sync_remove only for out-of-sync teams not found by the hasSome query.
+            out_of_sync_team_ids = set(existing.assigned_team_ids or []) - {t.team_id for t in teams_with_group}
+            await _sync_remove_access_group_from_teams(tx, list(out_of_sync_team_ids), access_group_id)
+
+            # Update keys returned by find_many directly — we already have their data.
+            for key in keys_with_group:
+                await tx.litellm_verificationtoken.update(
+                    where={"token": key.token},
+                    data={"access_group_ids": [ag for ag in (key.access_group_ids or []) if ag != access_group_id]},
+                )
+            # Use _sync_remove only for out-of-sync keys not found by the hasSome query.
+            out_of_sync_key_tokens = set(existing.assigned_key_ids or []) - {k.token for k in keys_with_group}
+            await _sync_remove_access_group_from_keys(tx, list(out_of_sync_key_tokens), access_group_id)
 
             await tx.litellm_accessgrouptable.delete(
                 where={"access_group_id": access_group_id}
