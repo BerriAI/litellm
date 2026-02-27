@@ -7004,6 +7004,7 @@ async def ahealth_check(
             "realtime",
             "responses",
             "ocr",
+            "image_edit",
         ]
     ] = "chat",
     prompt: Optional[str] = None,

@@ -811,3 +811,34 @@ async def test_health_check_with_custom_llm_provider():
         # Should succeed without "LLM Provider NOT provided" error
         assert "error" not in response
         assert isinstance(response, dict)
+
+
+@pytest.mark.asyncio
+async def test_image_edit_health_check():
+    """
+    Test that ahealth_check(mode="image_edit") calls litellm.aimage_edit
+    with an image (BytesIO) and prompt parameter.
+    """
+    from io import BytesIO
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response._hidden_params = {"headers": {}}
+
+    with patch("litellm.aimage_edit", return_value=mock_response) as mock_edit:
+        response = await litellm.ahealth_check(
+            model_params={
+                "model": "openai/dall-e-2",
+                "api_key": "fake-key",
+            },
+            mode="image_edit",
+            prompt="test",
+        )
+
+        mock_edit.assert_called_once()
+
+        call_kwargs = mock_edit.call_args.kwargs
+        assert isinstance(call_kwargs["image"], BytesIO)
+        assert call_kwargs["prompt"] == "test"
+
+        assert "error" not in response
