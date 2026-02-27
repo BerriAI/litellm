@@ -430,19 +430,36 @@ async def test_realtime_guardrail_blocks_prompt_injection():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # ASSERT 1: no response.create was sent to backend (injection blocked).
+    # ASSERT 1: guardrail sends response.cancel, a synthetic conversation.item.create
+    # with the guardrail prompt, and response.create so the LLM voices the error.
     sent_to_backend = [
         json.loads(c.args[0])
         for c in backend_ws.send.call_args_list
         if c.args
     ]
+    response_cancels = [
+        e for e in sent_to_backend
+        if e.get("type") == "response.cancel"
+    ]
+    assert len(response_cancels) == 1, (
+        f"Guardrail should send response.cancel, got: {sent_to_backend}"
+    )
     response_creates = [
         e for e in sent_to_backend
         if e.get("type") == "response.create"
     ]
-    assert len(response_creates) == 0, (
-        f"Guardrail should prevent response.create for injected content, "
-        f"but got: {response_creates}"
+    assert len(response_creates) == 1, (
+        f"Guardrail should send response.create for voicing the error, "
+        f"got: {sent_to_backend}"
+    )
+    # The synthetic conversation.item.create should contain the guardrail prompt
+    item_creates = [
+        e for e in sent_to_backend
+        if e.get("type") == "conversation.item.create"
+    ]
+    assert len(item_creates) == 1, (
+        f"Guardrail should send conversation.item.create with error prompt, "
+        f"got: {sent_to_backend}"
     )
 
     # ASSERT 2: error event was sent directly to the client WebSocket
@@ -595,14 +612,22 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
     assert len(error_events) == 1, f"Expected one error event, got: {sent_texts}"
     assert error_events[0]["error"]["type"] == "guardrail_violation"
 
-    # ASSERT: blocked item was NOT forwarded to the backend
+    # ASSERT: the original blocked item was NOT forwarded, but the guardrail
+    # sends a synthetic conversation.item.create with the guardrail prompt so
+    # the LLM voices the error message.
     sent_to_backend = [c.args[0] for c in backend_ws.send.call_args_list if c.args]
     forwarded_items = [
         json.loads(m) for m in sent_to_backend
         if isinstance(m, str) and json.loads(m).get("type") == "conversation.item.create"
     ]
-    assert len(forwarded_items) == 0, (
-        f"Blocked item should not be forwarded to backend, got: {forwarded_items}"
+    # The guardrail sends its own synthetic item with the error prompt
+    assert len(forwarded_items) == 1, (
+        f"Expected one synthetic guardrail item forwarded to backend, got: {forwarded_items}"
+    )
+    # Verify the synthetic item contains the guardrail prompt, not the original blocked text
+    synthetic_text = forwarded_items[0]["item"]["content"][0]["text"]
+    assert "Say exactly the following" in synthetic_text, (
+        f"Expected guardrail prompt, got: {synthetic_text}"
     )
 
     litellm.callbacks = []  # cleanup
