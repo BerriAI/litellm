@@ -26715,8 +26715,8 @@
         "mode": "chat",
         "output_cost_per_token": 0.0,
         "source": "https://platform.publicai.co/docs",
-        "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_function_calling": false,
+        "supports_tool_choice": false
     },
     "publicai/swiss-ai/apertus-70b-instruct": {
         "input_cost_per_token": 0.0,
@@ -26727,8 +26727,8 @@
         "mode": "chat",
         "output_cost_per_token": 0.0,
         "source": "https://platform.publicai.co/docs",
-        "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_function_calling": false,
+        "supports_tool_choice": false
     },
     "publicai/aisingapore/Gemma-SEA-LION-v4-27B-IT": {
         "input_cost_per_token": 0.0,
