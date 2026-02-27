@@ -119,47 +119,59 @@ Implemented a new `encrypted_content_affinity` pre-call check that intelligently
 
 ### Implementation
 
-**1. New `EncryptedContentAffinityCheck` Class** ([`encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router_utils/pre_call_checks/encrypted_content_affinity_check.py))
+**1. Encoding `model_id` into output item IDs** ([`responses/utils.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/responses/utils.py))
+
+The same approach used for `previous_response_id` affinity — no cache needed. When a response contains output items with `encrypted_content`, LiteLLM rewrites their IDs to embed the originating deployment's `model_id`:
+
+```python
+# On response: rs_abc123 → encitem_{base64("litellm:model_id:{model_id};item_id:rs_abc123")}
+def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
+    assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
+    encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
+    return f"encitem_{encoded}"
+
+# On request: decode encitem_... → extract model_id for routing
+def _decode_encrypted_item_id(encoded_id: str) -> Optional[Dict[str, str]]:
+    if not encoded_id.startswith("encitem_"):
+        return None
+    cleaned = encoded_id[len("encitem_"):]
+    missing = len(cleaned) % 4
+    if missing:
+        cleaned += "=" * (4 - missing)  # restore padding stripped in transit
+    decoded = base64.b64decode(cleaned).decode("utf-8")
+    model_id, item_id = decoded.split(";", 1)
+    return {"model_id": model_id.replace("litellm:model_id:", ""),
+            "item_id": item_id.replace("item_id:", "")}
+```
+
+Before forwarding to the upstream provider, LiteLLM restores the original item IDs so the provider never sees the encoded form:
+
+```python
+# In responses/main.py — before calling the handler
+input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(input)
+```
+
+**2. `EncryptedContentAffinityCheck` — routing only** ([`encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router_utils/pre_call_checks/encrypted_content_affinity_check.py))
+
+No `async_log_success_event` or cache lookups — the `model_id` is decoded directly from the item ID:
 
 ```python
 class EncryptedContentAffinityCheck(CustomLogger):
-    """
-    Routes follow-up Responses API requests to the deployment that produced
-    the encrypted output items they reference.
-    """
-    
-    async def async_log_success_event(self, kwargs, response_obj, ...):
-        """Track: Extract item IDs from response output, cache item_id → deployment_id"""
-        output = self._get_output_from_response(response_obj)
-        item_ids = self._extract_item_ids_from_output(output)
-        model_id = self._get_model_id_from_kwargs(kwargs)
-        
-        for item_id in item_ids:
-            await self.cache.async_set_cache(
-                f"encrypted_content_affinity:v1:{item_id}",
-                model_id,
-                ttl=86400,  # 24 hours
-            )
-    
     async def async_filter_deployments(self, model, healthy_deployments, ...):
-        """Route: Check if input contains tracked items, pin to originating deployment"""
-        input_item_ids = self._extract_item_ids_from_input(request_kwargs.get("input"))
-        
-        for item_id in input_item_ids:
-            cached_model_id = await self.cache.async_get_cache(f"...:{item_id}")
-            if cached_model_id:
+        """Decode encitem_ IDs in input to extract model_id and pin to that deployment."""
+        for item in request_kwargs.get("input", []):
+            decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item.get("id", ""))
+            if decoded:
                 deployment = self._find_deployment_by_model_id(
-                    healthy_deployments, cached_model_id
+                    healthy_deployments, decoded["model_id"]
                 )
                 if deployment:
-                    # Signal to bypass rate limits (encrypted content must go here)
                     request_kwargs["_encrypted_content_affinity_pinned"] = True
                     return [deployment]
-        
-        return healthy_deployments  # Normal load balancing
+        return healthy_deployments
 ```
 
-**2. Rate Limit Bypass** ([`router.py#L8656-L8660`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router.py#L8656-L8660))
+**3. Rate Limit Bypass** ([`router.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router.py))
 
 When encrypted content requires a specific deployment, RPM/TPM limits are bypassed (the request would fail on any other deployment anyway):
 
@@ -185,9 +197,10 @@ router_settings:
 
 ### Key Benefits
 
-✅ **No quota reduction**: Only pins requests containing tracked encrypted items  
+✅ **No quota reduction**: Only pins requests containing encrypted items  
 ✅ **Bypasses rate limits**: When encrypted content requires a specific deployment, RPM/TPM limits don't block it  
-✅ **No `previous_response_id` required**: Works by tracking item IDs in response output  
+✅ **No `previous_response_id` required**: Works by encoding `model_id` directly into the item ID  
+✅ **No cache required**: `model_id` is decoded on-the-fly from the item ID — no Redis, no TTL  
 ✅ **Globally safe**: Can be enabled for all models; non-Responses-API calls are unaffected  
 ✅ **Surgical precision**: Normal requests continue to load balance freely
 
@@ -197,12 +210,13 @@ router_settings:
 
 | # | Action | Status | Code |
 |---|---|---|---|
-| 1 | Create `EncryptedContentAffinityCheck` class with tracking and routing logic | ✅ Done | [`encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router_utils/pre_call_checks/encrypted_content_affinity_check.py) |
-| 2 | Add `encrypted_content_affinity` to `OptionalPreCallChecks` type | ✅ Done | [`router.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/types/router.py) |
-| 3 | Wire up check in `Router.add_optional_pre_call_checks` | ✅ Done | [`router.py#L8656-L8660`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router.py#L8656-L8660) |
-| 4 | Implement rate limit bypass for affinity-pinned requests | ✅ Done | [`router.py#L8656-L8660`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router.py#L8656-L8660) |
-| 5 | Unit tests: tracking, routing, no-op for non-Responses-API, RPM bypass | ✅ Done | [`test_encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_litellm/router_utils/pre_call_checks/test_encrypted_content_affinity_check.py) |
-| 6 | Documentation: Responses API guide, load balancing guide, config reference | ✅ Done | [Docs](https://docs.litellm.ai/docs/response_api#encrypted-content-affinity-multi-region-load-balancing) |
+| 1 | Encode `model_id` into encrypted-content item IDs on response | ✅ Done | [`responses/utils.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/responses/utils.py) |
+| 2 | Restore original item IDs before forwarding to upstream provider | ✅ Done | [`responses/main.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/responses/main.py) |
+| 3 | `EncryptedContentAffinityCheck`: decode item IDs to route (no cache) | ✅ Done | [`encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router_utils/pre_call_checks/encrypted_content_affinity_check.py) |
+| 4 | Add `encrypted_content_affinity` to `OptionalPreCallChecks` type | ✅ Done | [`types/router.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/types/router.py) |
+| 5 | Implement rate limit bypass for affinity-pinned requests | ✅ Done | [`router.py`](https://github.com/BerriAI/litellm/blob/main/litellm/litellm/router.py) |
+| 6 | Unit tests: encoding/decoding utilities, routing, RPM bypass | ✅ Done | [`test_encrypted_content_affinity_check.py`](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_litellm/router_utils/pre_call_checks/test_encrypted_content_affinity_check.py) |
+| 7 | Documentation: Responses API guide, load balancing guide, config reference | ✅ Done | [Docs](https://docs.litellm.ai/docs/response_api#encrypted-content-affinity-multi-region-load-balancing) |
 
 ---
 

@@ -1011,24 +1011,25 @@ This error occurs when:
 
 ### The Solution: `encrypted_content_affinity`
 
-The `encrypted_content_affinity` pre-call check intelligently tracks encrypted content and routes follow-up requests to the originating deployment **only when necessary**.
+The `encrypted_content_affinity` pre-call check routes follow-up requests containing encrypted items to the originating deployment **only when necessary**
 
 **Key Benefits:**
-- ✅ **No quota reduction**: Unlike `deployment_affinity`, only pins requests that contain tracked encrypted items
+- ✅ **No quota reduction**: Unlike `deployment_affinity`, only pins requests that contain encrypted items
 - ✅ **Bypasses rate limits**: When encrypted content requires a specific deployment, RPM/TPM limits are bypassed (the request would fail on any other deployment anyway)
-- ✅ **No `previous_response_id` required**: Works by tracking item IDs in response output and matching them in request input
+- ✅ **No `previous_response_id` required**: Works by encoding `model_id` directly into item IDs
+- ✅ **No cache required**: `model_id` is decoded on-the-fly — no Redis dependency, no TTL to manage
 - ✅ **Globally safe**: Can be enabled for all models; non-Responses-API calls (chat, embeddings) are unaffected
 
 ### How It Works
 
-1. **Tracking Phase** (after successful response):
-   - Extracts all item IDs from response `output` (e.g., `msg_abc`, `rs_xyz`)
-   - Caches mapping: `item_id` → `deployment_id` (default TTL: 24 hours)
+1. **Encoding Phase** (on response):
+   - For each output item that contains `encrypted_content`, LiteLLM rewrites the item ID to embed the originating `model_id`: `rs_xyz` → `encitem_{base64("litellm:model_id:{model_id};item_id:rs_xyz")}`
+   - The original item ID is restored before forwarding the request to the upstream provider
 
 2. **Routing Phase** (before request):
-   - Scans request `input` for item IDs
-   - If tracked item found → pins to originating deployment, bypasses rate limits
-   - If no tracked items → normal load balancing
+   - Scans request `input` for `encitem_` prefixed IDs
+   - If found → decodes `model_id`, pins to originating deployment, bypasses rate limits
+   - If no encoded items → normal load balancing
 
 ### Configuration
 
@@ -1058,7 +1059,6 @@ router = Router(
         },
     ],
     optional_pre_call_checks=["encrypted_content_affinity"],
-    deployment_affinity_ttl_seconds=86400,  # 24 hours (default)
 )
 
 # Initial request - routes to any deployment
@@ -1104,7 +1104,6 @@ router_settings:
   enable_pre_call_checks: true
   optional_pre_call_checks:
     - encrypted_content_affinity
-  deployment_affinity_ttl_seconds: 86400  # Optional, default is 86400 (24 hours)
 ```
 
 **Start proxy:**
@@ -1123,19 +1122,6 @@ litellm --config config.yaml
 | `responses_api_deployment_check` | When `previous_response_id` is available | Requests with `previous_response_id` | ✅ None |
 | `session_affinity` | Session-based applications | All requests with same `session_id` | ⚠️ Reduces quota by # of sessions |
 | `deployment_affinity` | Simple sticky sessions | All requests from same API key | ❌ Reduces quota by # of users |
-
-### Multi-Instance Deployment (Redis)
-
-For multiple LiteLLM proxy instances, use Redis to share affinity state:
-
-```yaml
-router_settings:
-  optional_pre_call_checks:
-    - encrypted_content_affinity
-  redis_host: redis.example.com
-  redis_port: 6379
-  redis_password: your-password
-```
 
 
 ## Calling non-Responses API endpoints (`/responses` to `/chat/completions` Bridge)
