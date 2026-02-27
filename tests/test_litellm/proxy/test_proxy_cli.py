@@ -428,6 +428,103 @@ class TestProxyInitializationHelpers:
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["limit_max_requests"] == 123
 
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_max_requests_before_restart_auto_enabled_for_multi_worker(
+        self, mock_setup_db, mock_print, mock_uvicorn_run
+    ):
+        """When not explicitly set, multi-worker mode auto-enables worker recycling."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(run_server, ["--local", "--num_workers", "4"])
+
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            mock_uvicorn_run.assert_called_once()
+            call_args = mock_uvicorn_run.call_args
+            assert (
+                call_args[1]["limit_max_requests"]
+                == ProxyInitializationHelpers.DEFAULT_MULTI_WORKER_MAX_REQUESTS_BEFORE_RESTART
+            )
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_max_requests_before_restart_not_set_for_single_worker_default(
+        self, mock_setup_db, mock_print, mock_uvicorn_run
+    ):
+        """Single-worker mode should not auto-set limit_max_requests."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(run_server, ["--local", "--num_workers", "1"])
+
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            mock_uvicorn_run.assert_called_once()
+            call_args = mock_uvicorn_run.call_args
+            assert "limit_max_requests" not in call_args[1]
+
     @patch.dict(os.environ, {}, clear=True)
     def test_construct_database_url_from_env_vars(self):
         """Test the construct_database_url_from_env_vars function with various scenarios"""

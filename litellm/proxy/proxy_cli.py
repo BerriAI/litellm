@@ -56,6 +56,10 @@ def append_query_params(url: Optional[str], params: dict) -> str:
 
 
 class ProxyInitializationHelpers:
+    # Auto-recycle workers in multi-worker mode to cap process RSS growth from
+    # allocator fragmentation / long-lived object accumulation over time.
+    DEFAULT_MULTI_WORKER_MAX_REQUESTS_BEFORE_RESTART = 1000
+
     @staticmethod
     def _echo_litellm_version():
         pkg_version = importlib.metadata.version("litellm")  # type: ignore
@@ -546,7 +550,7 @@ class ProxyInitializationHelpers:
     "--max_requests_before_restart",
     default=None,
     type=int,
-    help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
+    help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests). Auto-enabled in multi-worker mode.",
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
 def run_server(  # noqa: PLR0915
@@ -881,6 +885,25 @@ def run_server(  # noqa: PLR0915
             )
             return
 
+        effective_max_requests_before_restart = max_requests_before_restart
+        if effective_max_requests_before_restart is None and num_workers > 1:
+            effective_max_requests_before_restart = (
+                ProxyInitializationHelpers.DEFAULT_MULTI_WORKER_MAX_REQUESTS_BEFORE_RESTART
+            )
+            print(  # noqa
+                "LiteLLM Proxy: Auto-enabling worker recycling in multi-worker mode: "
+                f"max_requests_before_restart={effective_max_requests_before_restart}. "
+                "Override with --max_requests_before_restart / MAX_REQUESTS_BEFORE_RESTART."
+            )
+        elif (
+            effective_max_requests_before_restart is not None
+            and effective_max_requests_before_restart <= 0
+        ):
+            print(  # noqa
+                "LiteLLM Proxy: max_requests_before_restart must be > 0; disabling worker recycling."
+            )
+            effective_max_requests_before_restart = None
+
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
             port=port,
@@ -888,8 +911,8 @@ def run_server(  # noqa: PLR0915
             keepalive_timeout=keepalive_timeout,
         )
         # Optional: recycle uvicorn workers after N requests
-        if max_requests_before_restart is not None:
-            uvicorn_args["limit_max_requests"] = max_requests_before_restart
+        if effective_max_requests_before_restart is not None:
+            uvicorn_args["limit_max_requests"] = effective_max_requests_before_restart
         if run_gunicorn is False and run_hypercorn is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
@@ -915,7 +938,7 @@ def run_server(  # noqa: PLR0915
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 keepalive_timeout=keepalive_timeout,
-                max_requests_before_restart=max_requests_before_restart,
+                max_requests_before_restart=effective_max_requests_before_restart,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(

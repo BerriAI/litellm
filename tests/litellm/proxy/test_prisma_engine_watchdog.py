@@ -385,9 +385,12 @@ async def test_try_waitpid_watch_handles_already_dead_engine(engine_client) -> N
     waitpid_calls = iter([(1234, 0)])
 
     def mock_waitpid(pid, flags):
-        if pid == -1:
-            raise ChildProcessError
-        return next(waitpid_calls)
+        if pid == 1234:
+            try:
+                return next(waitpid_calls)
+            except StopIteration:
+                raise ChildProcessError
+        raise ChildProcessError
 
     with (
         patch("os.waitpid", side_effect=mock_waitpid),
@@ -399,6 +402,26 @@ async def test_try_waitpid_watch_handles_already_dead_engine(engine_client) -> N
     assert engine_client._engine_confirmed_dead is True
     assert len(created_coros) == 1
     created_coros[0].close()
+
+
+def test_reap_all_zombies_reaps_only_target_engine_pid(engine_client) -> None:
+    """_reap_all_zombies should only wait on the tracked engine PID."""
+    engine_client._engine_pid = 4321
+    with patch("os.waitpid", return_value=(4321, 0)) as mock_waitpid:
+        reaped = engine_client._reap_all_zombies()
+
+    assert reaped == {4321}
+    mock_waitpid.assert_called_once_with(4321, os.WNOHANG)
+
+
+def test_reap_all_zombies_with_explicit_target_pid(engine_client) -> None:
+    """Explicit target PID should be used instead of _engine_pid."""
+    engine_client._engine_pid = 1111
+    with patch("os.waitpid", return_value=(2222, 0)) as mock_waitpid:
+        reaped = engine_client._reap_all_zombies(target_pid=2222)
+
+    assert reaped == {2222}
+    mock_waitpid.assert_called_once_with(2222, os.WNOHANG)
 
 
 @pytest.mark.asyncio

@@ -3567,23 +3567,28 @@ class PrismaClient:
         except (PermissionError, OSError):
             return True
 
-    @staticmethod
-    def _reap_all_zombies() -> set:
-        """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
+    def _reap_all_zombies(self, target_pid: Optional[int] = None) -> set:
+        """Reap a tracked engine child process with waitpid(pid, WNOHANG).
 
-        Returns a set of reaped PIDs.  As PID 1 in Docker (or any
-        process that spawns children), we must reap ALL terminated
-        children to prevent zombie accumulation.
+        Historically this used waitpid(-1, WNOHANG), which can reap unrelated
+        child processes owned by the current worker process. In multi-worker
+        server setups, that may interfere with other child lifecycle handlers.
+        Restricting reaping to the Prisma engine PID avoids that cross-process
+        interference while still cleaning up the expected zombie child.
         """
+        pid_to_reap = target_pid if target_pid is not None else self._engine_pid
         reaped: set = set()
-        while True:
-            try:
-                pid, _ = os.waitpid(-1, os.WNOHANG)
-                if pid == 0:
-                    break
+        if pid_to_reap <= 0:
+            return reaped
+
+        try:
+            pid, _ = os.waitpid(pid_to_reap, os.WNOHANG)
+            if pid == pid_to_reap:
                 reaped.add(pid)
-            except ChildProcessError:
-                break
+        except ChildProcessError:
+            # Child already reaped by another handler.
+            pass
+
         return reaped
 
     def _try_waitpid_watch(self, pid: int) -> bool:
@@ -3609,7 +3614,7 @@ class PrismaClient:
                 "prisma-query-engine PID %s already dead at watch start.", pid,
             )
             self._engine_confirmed_dead = True
-            self._reap_all_zombies()
+            self._reap_all_zombies(pid)
             self._cleanup_engine_watcher()
             asyncio.create_task(
                 self.attempt_db_reconnect(
@@ -3663,7 +3668,7 @@ class PrismaClient:
             dead_pid,
         )
         self._engine_confirmed_dead = True
-        self._reap_all_zombies()
+        self._reap_all_zombies(dead_pid)
         self._cleanup_engine_watcher()
         asyncio.create_task(
             self.attempt_db_reconnect(
@@ -3717,7 +3722,7 @@ class PrismaClient:
             dead_pid,
         )
         self._engine_confirmed_dead = True
-        self._reap_all_zombies()
+        self._reap_all_zombies(dead_pid)
         self._cleanup_engine_watcher()
         asyncio.create_task(
             self.attempt_db_reconnect(
@@ -3740,7 +3745,7 @@ class PrismaClient:
                     self._engine_pid,
                 )
                 self._engine_confirmed_dead = True
-                self._reap_all_zombies()
+                self._reap_all_zombies(self._engine_pid)
                 self._cleanup_engine_watcher()
                 await self.attempt_db_reconnect(
                     reason="engine_process_death",
@@ -3840,7 +3845,7 @@ class PrismaClient:
                 "prisma-query-engine PID %s is dead; reconnecting.",
                 dead_pid,
             )
-            self._reap_all_zombies()
+            self._reap_all_zombies(dead_pid)
             self._cleanup_engine_watcher()
             self._engine_confirmed_dead = False
 
