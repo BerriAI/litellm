@@ -99,6 +99,8 @@ class LiteLLM_Proxy_MCP_Handler:
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: Optional[Iterable[ToolParam]],
         litellm_trace_id: Optional[str] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> tuple[List[MCPTool], List[str]]:
         """
         Get available tools from the MCP server manager.
@@ -106,6 +108,8 @@ class LiteLLM_Proxy_MCP_Handler:
         Args:
             user_api_key_auth: User authentication info for access control
             mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
+            mcp_auth_header: Optional deprecated auth header for MCP servers
+            mcp_server_auth_headers: Optional server-specific auth headers (e.g. from x-mcp-{alias}-*)
 
         Returns:
             List of MCP tools
@@ -126,20 +130,21 @@ class LiteLLM_Proxy_MCP_Handler:
                 server_url = (
                     _tool.get("server_url", "") if isinstance(_tool, dict) else ""
                 )
-                if isinstance(server_url, str) and server_url.startswith(
-                    LITELLM_PROXY_MCP_SERVER_URL_PREFIX
-                ):
-                    mcp_servers.append(server_url.split("/")[-1])
+        if isinstance(server_url, str) and server_url.startswith(
+            LITELLM_PROXY_MCP_SERVER_URL_PREFIX
+        ):
+            mcp_servers.append(server_url.split("/")[-1])
 
         tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=None,
+            mcp_auth_header=mcp_auth_header,
             mcp_servers=mcp_servers,
-            mcp_server_auth_headers=None,
+            mcp_server_auth_headers=mcp_server_auth_headers,
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
         )
+
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
@@ -278,6 +283,8 @@ class LiteLLM_Proxy_MCP_Handler:
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: List[ToolParam],
         litellm_trace_id: Optional[str] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -286,6 +293,8 @@ class LiteLLM_Proxy_MCP_Handler:
         Args:
             user_api_key_auth: User authentication info for access control
             mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
+            mcp_auth_header: Optional deprecated auth header for MCP servers
+            mcp_server_auth_headers: Optional server-specific auth headers (e.g. from x-mcp-{alias}-*)
 
         Returns:
             List of filtered and deduplicated MCP tools in their original format
@@ -301,6 +310,8 @@ class LiteLLM_Proxy_MCP_Handler:
             user_api_key_auth=user_api_key_auth,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             litellm_trace_id=litellm_trace_id,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
