@@ -190,13 +190,8 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             # Set the content in the existing model_response structure
             if hasattr(model_response, 'choices') and len(model_response.choices) > 0:
                 choice = model_response.choices[0]
-                if hasattr(choice, 'message'):
-                    choice.message.content = generated_text
-                    choice.finish_reason = "stop"
-                else:
-                    # Handle streaming choices
-                    choice.delta.content = generated_text
-                    choice.finish_reason = "stop"
+                choice.message.content = generated_text
+                choice.finish_reason = "stop"
             
             # Set usage information if available in response
             if "usage" in response_data:
