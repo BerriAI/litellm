@@ -16,6 +16,30 @@ from litellm.proxy._types import (
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
+@pytest.fixture(autouse=True)
+def cleanup_mcp_global_state():
+    """Clean up MCP global state before and after each test.
+
+    This fixture ensures test isolation when running with pytest-xdist
+    parallel execution. Without this, global_mcp_server_manager state
+    can leak between tests causing mock assertion failures.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        # Clear before test
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+        yield
+        # Clear after test
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.clear()
+    except ImportError:
+        # MCP not available, skip cleanup
+        yield
+
+
 @pytest.mark.asyncio
 async def test_mcp_server_tool_call_body_contains_request_data():
     """Test that proxy_server_request body contains name and arguments"""
@@ -308,7 +332,7 @@ async def test_mcp_get_prompt_success():
         mock_manager.get_prompt_from_server = AsyncMock(return_value=prompt_result)
 
         result = await mcp_get_prompt(
-            name="hello",
+            name="server_a-hello",  # prefixed name since server prefixes are always added
             arguments={"foo": "bar"},
             user_api_key_auth=user_api_key_auth,
         )
@@ -461,6 +485,8 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else failing_server
     )
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -561,6 +587,8 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -752,6 +780,31 @@ async def test_concurrent_initialize_session_managers():
 
 
 @pytest.mark.asyncio
+async def test_streamable_http_session_manager_is_stateless():
+    """
+    Test that the StreamableHTTPSessionManager is initialized with stateless=True.
+
+    Regression test for GitHub issue #20242 / PR #19809.
+    When stateless=False, the mcp library rejects non-initialize requests
+    that lack an mcp-session-id header, breaking clients like MCP Inspector,
+    curl, and any HTTP client without automatic session management.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import session_manager
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # The session manager must be stateless to avoid requiring mcp-session-id
+    # on every request. This was regressed by PR #19809 (stateless=True -> False).
+    assert session_manager.stateless is True, (
+        "StreamableHTTPSessionManager must be initialized with stateless=True. "
+        "stateless=False breaks MCP clients that don't manage session IDs. "
+        "See: https://github.com/BerriAI/litellm/issues/20242"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_parallel
 async def test_mcp_routing_with_conflicting_alias_and_group_name():
     """
     Tests (GH #14536) where an MCP server alias (e.g., "group/id")
@@ -835,6 +888,7 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
 
 
 @pytest.mark.asyncio
+@pytest.mark.no_parallel
 async def test_oauth2_headers_passed_to_mcp_client():
     """Test that OAuth2 headers are properly passed through to the MCP client for OAuth2 servers like github_mcp"""
     try:
@@ -882,7 +936,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
     # This will capture the arguments passed to _create_mcp_client
     captured_client_args = {}
 
-    def mock_create_mcp_client(
+    async def mock_create_mcp_client(
         server,
         mcp_auth_header=None,
         extra_headers=None,
@@ -913,10 +967,9 @@ async def test_oauth2_headers_passed_to_mcp_client():
         global_mcp_server_manager,
         "_fetch_tools_with_timeout",
         side_effect=mock_fetch_tools_with_timeout,
-    ), patch.object(
-        global_mcp_server_manager,
-        "get_allowed_mcp_servers",
-        AsyncMock(return_value=[oauth2_server.server_id]),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        AsyncMock(return_value=[oauth2_server]),
     ):
         # Call _get_tools_from_mcp_servers which should eventually call _create_mcp_client
         await _get_tools_from_mcp_servers(
@@ -953,7 +1006,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
 
 @pytest.mark.asyncio
 async def test_list_tools_single_server_unprefixed_names():
-    """When only one MCP server is allowed, list tools should return unprefixed names."""
+    """When only one MCP server is allowed, list tools should return prefixed names (server prefix is always added)."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _get_tools_from_mcp_servers,
@@ -981,6 +1034,8 @@ async def test_list_tools_single_server_unprefixed_names():
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1008,9 +1063,9 @@ async def test_list_tools_single_server_unprefixed_names():
             mcp_server_auth_headers=None,
         )
 
-    # Should be unprefixed since only one server is allowed
+    # Server prefix is always added regardless of number of allowed servers
     assert len(tools) == 1
-    assert tools[0].name == "toolA"
+    assert tools[0].name == "zapier-toolA"
 
 
 @pytest.mark.asyncio
@@ -1057,6 +1112,8 @@ async def test_list_tools_multiple_servers_prefixed_names():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         server1 if server_id == "server1" else server2
     )
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1096,8 +1153,8 @@ async def test_mcp_manager_allows_public_servers_without_permissions():
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
         from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -1128,8 +1185,8 @@ async def test_mcp_manager_returns_public_when_permission_lookup_fails():
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
         from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -1160,8 +1217,8 @@ async def test_mcp_manager_merges_public_and_restricted_servers():
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
         from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -1306,6 +1363,8 @@ async def test_list_tools_filters_by_key_team_permissions():
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1411,6 +1470,8 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1501,6 +1562,8 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1"])
     mock_manager.get_mcp_server_by_id = lambda server_id: server
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1594,6 +1657,8 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     mock_manager = MagicMock()
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["gitmcp_server"])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
+    # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(
         server,
@@ -1893,7 +1958,9 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     Ensure list-tools logging path calls `async_success_handler` when enabled.
     """
     try:
-        from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+        )
         from litellm.proxy._types import UserAPIKeyAuth
     except ImportError:
         pytest.skip("MCP server not available")

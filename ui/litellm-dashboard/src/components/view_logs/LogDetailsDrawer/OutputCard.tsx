@@ -23,7 +23,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
   const handleCopy = () => {
     if (!message) return;
     
-    const content = JSON.stringify(message, null, 2);
+    const content = message.content || '';
     navigator.clipboard.writeText(content);
     antdMessage.success('Output copied');
   };

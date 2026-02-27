@@ -269,6 +269,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "logprobs",
             "top_logprobs",
             "modalities",
+            "audio",
             "parallel_tool_calls",
             "web_search_options",
         ]
@@ -480,7 +481,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
             # Handle OpenAI-style web_search and web_search_preview tools
             # Transform them to Gemini's googleSearch tool
-            elif "type" in tool and tool["type"] in ("web_search", "web_search_preview"):
+            elif "type" in tool and tool["type"] in (
+                "web_search",
+                "web_search_preview",
+            ):
                 verbose_logger.info(
                     f"Gemini: Transforming OpenAI-style '{tool['type']}' tool to googleSearch"
                 )
@@ -756,6 +760,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "gemini-3-flash-preview" in model.lower()
             or "gemini-3-flash" in model.lower()
         )
+        is_gemini31pro = model and (
+            "gemini-3.1-pro-preview" in model.lower()
+        )
         if reasoning_effort == "minimal":
             if is_gemini3flash:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
@@ -764,14 +771,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            # For gemini-3-flash-preview, medium maps to "medium", otherwise "high"
-            if is_gemini3flash:
+            if is_gemini31pro or is_gemini3flash:
                 return {"thinkingLevel": "medium", "includeThoughts": True}
             else:
-                return {
-                    "thinkingLevel": "high",
-                    "includeThoughts": True,
-                }  # medium is not out yet for other models
+                return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort == "disable":
@@ -1069,7 +1072,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
-            elif param == "web_search_options" and value and isinstance(value, dict):
+            elif param == "web_search_options" and isinstance(value, dict):
                 _tools = self._map_web_search_options(value)
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
@@ -1196,6 +1199,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
             "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
             "IMAGE_SAFETY": "The token generation was stopped as the response was flagged for image safety reasons.",
+            "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
     @staticmethod
@@ -1218,6 +1222,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "SPII": "content_filter",
             "MALFORMED_FUNCTION_CALL": "malformed_function_call",  # openai doesn't have a way of representing this
             "IMAGE_SAFETY": "content_filter",
+            "IMAGE_PROHIBITED_CONTENT": "content_filter",
         }
 
     def translate_exception_str(self, exception_string: str):
@@ -1630,7 +1635,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 completion_image_tokens = response_tokens_details.image_tokens or 0
                 completion_audio_tokens = response_tokens_details.audio_tokens or 0
                 calculated_text_tokens = (
-                    candidates_token_count - completion_image_tokens - completion_audio_tokens
+                    candidates_token_count
+                    - completion_image_tokens
+                    - completion_audio_tokens
                 )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
@@ -1731,6 +1738,52 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return mapped_finish_reason[finish_reason]
         else:
             return "stop"
+
+    @staticmethod
+    def _check_prompt_level_content_filter(
+        processed_chunk: GenerateContentResponseBody,
+        response_id: Optional[str],
+    ) -> Optional["ModelResponseStream"]:
+        """
+        Check if prompt is blocked due to content filtering at the prompt level.
+
+        This handles the case where Vertex AI blocks the prompt before generation begins,
+        indicated by promptFeedback.blockReason being present.
+
+        Args:
+            processed_chunk: The parsed response chunk from Vertex AI
+            response_id: The response ID from the chunk
+
+        Returns:
+            ModelResponseStream with content_filter finish_reason if blocked, None otherwise.
+
+        Note:
+            This is consistent with non-streaming _handle_blocked_response() behavior.
+            Candidate-level content filtering (SAFETY, RECITATION, etc.) is handled
+            separately via _process_candidates() → _check_finish_reason().
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        # Check if prompt is blocked due to content filtering
+        prompt_feedback = processed_chunk.get("promptFeedback")
+        if prompt_feedback and "blockReason" in prompt_feedback:
+            verbose_logger.debug(
+                f"Prompt blocked due to: {prompt_feedback.get('blockReason')} - {prompt_feedback.get('blockReasonMessage')}"
+            )
+
+            # Create a content_filter response (consistent with non-streaming _handle_blocked_response)
+            choice = StreamingChoices(
+                finish_reason="content_filter",
+                index=0,
+                delta=Delta(content=None, role="assistant"),
+                logprobs=None,
+                enhancements=None,
+            )
+
+            model_response = ModelResponseStream(choices=[choice], id=response_id)
+            return model_response
+
+        return None
 
     @staticmethod
     def _calculate_web_search_requests(grounding_metadata: List[dict]) -> Optional[int]:
@@ -2201,6 +2254,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
+
+            ## ADD TRAFFIC TYPE ##
+            traffic_type = completion_response.get("usageMetadata", {}).get(
+                "trafficType"
+            )
+            if traffic_type:
+                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
         except Exception as e:
             raise VertexAIError(
@@ -2813,6 +2873,15 @@ class ModelResponseIterator:
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
             response_id = processed_chunk.get("responseId")
             model_response = ModelResponseStream(choices=[], id=response_id)
+
+            # Check if prompt is blocked due to content filtering
+            blocked_response = VertexGeminiConfig._check_prompt_level_content_filter(
+                processed_chunk=processed_chunk,
+                response_id=response_id,
+            )
+            if blocked_response is not None:
+                model_response = blocked_response
+
             usage: Optional[Usage] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             grounding_metadata: List[dict] = []
@@ -2850,6 +2919,12 @@ class ModelResponseIterator:
                     cast(
                         PromptTokensDetailsWrapper, usage.prompt_tokens_details
                     ).web_search_requests = web_search_requests
+
+                traffic_type = processed_chunk.get("usageMetadata", {}).get(
+                    "trafficType"
+                )
+                if traffic_type:
+                    model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             setattr(model_response, "usage", usage)  # type: ignore
 

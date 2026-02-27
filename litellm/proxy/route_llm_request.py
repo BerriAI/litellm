@@ -12,6 +12,26 @@ else:
     LitellmRouter = Any
 
 
+def _route_user_config_request(data: dict, route_type: str):
+    """Route a request using the user-provided router config."""
+    router_config = data.pop("user_config")
+
+    # Filter router_config to only include valid Router.__init__ arguments
+    # This prevents TypeError when invalid parameters are stored in the database
+    valid_args = litellm.Router.get_valid_args()
+    filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+
+    user_router = litellm.Router(**filtered_config)
+    ret_val = getattr(user_router, f"{route_type}")(**data)
+    user_router.discard()
+    return ret_val
+
+
+def _is_a2a_agent_model(model_name: Any) -> bool:
+    """Check if the model name is for an A2A agent (a2a/ prefix)."""
+    return isinstance(model_name, str) and model_name.startswith("a2a/")
+
+
 ROUTE_ENDPOINT_MAPPING = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -53,6 +73,19 @@ ROUTE_ENDPOINT_MAPPING = {
     "aget_interaction": "/interactions/{interaction_id}",
     "adelete_interaction": "/interactions/{interaction_id}",
     "acancel_interaction": "/interactions/{interaction_id}/cancel",
+    # OpenAI Evals API routes
+    "acreate_eval": "/evals",
+    "alist_evals": "/evals",
+    "aget_eval": "/evals/{eval_id}",
+    "aupdate_eval": "/evals/{eval_id}",
+    "adelete_eval": "/evals/{eval_id}",
+    "acancel_eval": "/evals/{eval_id}/cancel",
+    # OpenAI Evals Runs API routes
+    "acreate_run": "/evals/{eval_id}/runs",
+    "alist_runs": "/evals/{eval_id}/runs",
+    "aget_run": "/evals/{eval_id}/runs/{run_id}",
+    "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
+    "adelete_run": "/evals/{eval_id}/runs/{run_id}",
 }
 
 
@@ -92,16 +125,24 @@ def add_shared_session_to_data(data: dict) -> None:
         data: Dictionary to add the shared session to
     """
     try:
+        from litellm._logging import verbose_proxy_logger
         from litellm.proxy.proxy_server import shared_aiohttp_session
 
         if shared_aiohttp_session is not None and not shared_aiohttp_session.closed:
             data["shared_session"] = shared_aiohttp_session
+            verbose_proxy_logger.info(
+                f"SESSION REUSE: Attached shared aiohttp session to request (ID: {id(shared_aiohttp_session)})"
+            )
+        else:
+            verbose_proxy_logger.info(
+                "SESSION REUSE: No shared session available for this request"
+            )
     except Exception:
         # Silently continue without session reuse if import fails or session unavailable
         pass
 
 
-async def route_request(
+async def route_request(  # noqa: PLR0915 - Complex routing function, refactoring tracked separately
     data: dict,
     llm_router: Optional[LitellmRouter],
     user_model: Optional[str],
@@ -162,6 +203,17 @@ async def route_request(
         "acancel_interaction",
         "acancel_batch",
         "afile_delete",
+        "acreate_eval",
+        "alist_evals",
+        "aget_eval",
+        "aupdate_eval",
+        "adelete_eval",
+        "acancel_eval",
+        "acreate_run",
+        "alist_runs",
+        "aget_run",
+        "acancel_run",
+        "adelete_run",
     ],
 ):
     """
@@ -198,18 +250,71 @@ async def route_request(
             return llm_router.abatch_completion(models=models, **data)
 
     elif "user_config" in data:
-        router_config = data.pop("user_config")
+        return _route_user_config_request(data, route_type)
 
-        # Filter router_config to only include valid Router.__init__ arguments
-        # This prevents TypeError when invalid parameters are stored in the database
-        valid_args = litellm.Router.get_valid_args()
-        filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+    elif "router_settings_override" in data:
+        # Apply per-request router settings overrides from key/team config
+        # Instead of creating a new Router (expensive), merge settings into kwargs
+        # The Router already supports per-request overrides for these settings
+        override_settings = data.pop("router_settings_override")
 
-        user_router = litellm.Router(**filtered_config)
-        ret_val = getattr(user_router, f"{route_type}")(**data)
-        user_router.discard()
-        return ret_val
+        # Settings that the Router accepts as per-request kwargs
+        # These override the global router settings for this specific request
+        per_request_settings = [
+            "fallbacks",
+            "context_window_fallbacks",
+            "content_policy_fallbacks",
+            "num_retries",
+            "timeout",
+            "model_group_retry_policy",
+        ]
+
+        # Merge override settings into data (only if not already set in request)
+        for key in per_request_settings:
+            if key in override_settings and key not in data:
+                data[key] = override_settings[key]
+
+        # Use main router with overridden kwargs
+        if llm_router is not None:
+            return getattr(llm_router, f"{route_type}")(**data)
+        else:
+            return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        # Evals API: always route to litellm directly (not through router)
+        # But extract model credentials if a model is provided
+        if route_type in [
+            "acreate_eval",
+            "alist_evals",
+            "aget_eval",
+            "aupdate_eval",
+            "adelete_eval",
+            "acancel_eval",
+            "acreate_run",
+            "alist_runs",
+            "aget_run",
+            "acancel_run",
+            "adelete_run",
+        ]:
+            # If a model is provided, get its credentials from the router
+            model = data.get("model")
+            if model and llm_router:
+                try:
+                    # Try to get deployment credentials for this model
+                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
+                    if not deployment_creds:
+                        # Try by model group name
+                        deployment = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        if deployment and deployment.litellm_params:
+                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
+
+                    # If we found credentials, merge them into data (but don't override user-provided values)
+                    if deployment_creds:
+                        data.update(deployment_creds)
+                except Exception:
+                    # If we can't get deployment creds, continue without them
+                    pass
+
+            return getattr(litellm, f"{route_type}")(**data)
         # Skip model-based routing for container operations
         if route_type in [
             "acreate_container",
@@ -322,6 +427,15 @@ async def route_request(
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
                     return getattr(litellm, f"{route_type}")(**data)
+            elif _is_a2a_agent_model(data.get("model", "")):
+                from litellm.proxy.agent_endpoints.a2a_routing import (
+                    route_a2a_agent_request,
+                )
+                
+                result = route_a2a_agent_request(data, route_type)
+                if result is not None:
+                    return result
+                # Fall through to raise exception below if result is None
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)

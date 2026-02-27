@@ -15,8 +15,8 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
     let model_info = curr_model?.model_info;
 
     let provider = "";
-    let input_cost = "Undefined";
-    let output_cost = "Undefined";
+    let input_cost: any = null;
+    let output_cost: any = null;
     let max_tokens = "Undefined";
     let max_input_tokens = "Undefined";
     let cleanedLitellmParams = {};
@@ -58,11 +58,11 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
     transformedData[i].litellm_model_name = litellm_model_name;
 
     // Convert Cost in terms of Cost per 1M tokens
-    if (transformedData[i].input_cost) {
+    if (transformedData[i].input_cost != null) {
       transformedData[i].input_cost = (Number(transformedData[i].input_cost) * 1000000).toFixed(2);
     }
 
-    if (transformedData[i].output_cost) {
+    if (transformedData[i].output_cost != null) {
       transformedData[i].output_cost = (Number(transformedData[i].output_cost) * 1000000).toFixed(2);
     }
 

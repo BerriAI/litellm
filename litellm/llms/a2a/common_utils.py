@@ -113,6 +113,8 @@ def extract_text_from_a2a_response(
     # 1. Direct message: {"result": {"kind": "message", "parts": [...]}}
     # 2. Nested message: {"result": {"message": {"parts": [...]}}}
     # 3. Task with artifacts: {"result": {"kind": "task", "artifacts": [{"parts": [...]}]}}
+    # 4. Task with status message: {"result": {"kind": "task", "status": {"message": {"parts": [...]}}}}
+    # 5. Streaming artifact-update: {"result": {"kind": "artifact-update", "artifact": {"parts": [...]}}}
     
     # Check if result itself has parts (direct message)
     if "parts" in result:
@@ -123,7 +125,23 @@ def extract_text_from_a2a_response(
     if message:
         return extract_text_from_a2a_message(message, depth=0, max_depth=max_depth)
     
-    # Handle task result with artifacts
+    # Check for streaming artifact-update (singular artifact)
+    artifact = result.get("artifact")
+    if artifact and isinstance(artifact, dict):
+        return extract_text_from_a2a_message(
+            artifact, depth=0, max_depth=max_depth
+        )
+    
+    # Check for task status message (common in Gemini A2A agents)
+    status = result.get("status", {})
+    if isinstance(status, dict):
+        status_message = status.get("message")
+        if status_message:
+            return extract_text_from_a2a_message(
+                status_message, depth=0, max_depth=max_depth
+            )
+    
+    # Handle task result with artifacts (plural, array)
     artifacts = result.get("artifacts", [])
     if artifacts and len(artifacts) > 0:
         first_artifact = artifacts[0]

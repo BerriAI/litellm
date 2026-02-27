@@ -1,0 +1,64 @@
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+  - model_name: fake-blocked-endpoint
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+
+guardrails:
+  - guardrail_name: "strict-filter"
+    litellm_params:
+      guardrail: pipeline_test_guardrails.StrictFilter
+      mode: "pre_call"
+  - guardrail_name: "permissive-filter"
+    litellm_params:
+      guardrail: pipeline_test_guardrails.PermissiveFilter
+      mode: "pre_call"
+  - guardrail_name: "always-block-filter"
+    litellm_params:
+      guardrail: pipeline_test_guardrails.AlwaysBlockFilter
+      mode: "pre_call"
+
+policies:
+  # Pipeline: strict-filter fails -> escalate to permissive-filter
+  # If strict fails but permissive passes -> allow the request
+  content-safety-permissive:
+    description: "Multi-tier: strict filter with permissive fallback"
+    guardrails:
+      add: [strict-filter, permissive-filter]
+    pipeline:
+      mode: "pre_call"
+      steps:
+        - guardrail: strict-filter
+          on_fail: next       # escalate to permissive
+          on_pass: allow      # clean content proceeds
+        - guardrail: permissive-filter
+          on_fail: block      # hard block
+          on_pass: allow      # permissive says OK
+
+  # Pipeline: strict-filter fails -> escalate to always-block
+  # Both fail -> block
+  content-safety-strict:
+    description: "Multi-tier: strict filter with strict fallback (both block)"
+    guardrails:
+      add: [strict-filter, always-block-filter]
+    pipeline:
+      mode: "pre_call"
+      steps:
+        - guardrail: strict-filter
+          on_fail: next
+          on_pass: allow
+        - guardrail: always-block-filter
+          on_fail: block
+          on_pass: allow
+
+policy_attachments:
+  - policy: content-safety-permissive
+    models: [fake-openai-endpoint]
+  - policy: content-safety-strict
+    models: [fake-blocked-endpoint]

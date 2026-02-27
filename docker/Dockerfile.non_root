@@ -47,7 +47,6 @@ RUN mkdir -p /var/lib/litellm/ui && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
     fi && \
-    rm -f package-lock.json && \
     npm install --legacy-peer-deps && \
     npm run build && \
     cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
@@ -60,7 +59,8 @@ RUN mkdir -p /var/lib/litellm/ui && \
           mkdir -p "$folder_name" && \
           mv "$html_file" "$folder_name/index.html"; \
         fi; \
-      done ) && \
+      done && \
+      touch .litellm_ui_ready ) && \
     cd /app/ui/litellm-dashboard && rm -rf ./out
 
 # Build litellm wheel and place it in wheels dir (replace any PyPI wheels)
@@ -80,7 +80,7 @@ ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     XDG_CACHE_HOME=/app/.cache \
     PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
 
-RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.12.0 \
+RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 \
     && mkdir -p /app/.cache/npm
 
 RUN NPM_CONFIG_CACHE=/app/.cache/npm \
@@ -105,7 +105,25 @@ RUN for i in 1 2 3; do \
   && for i in 1 2 3; do \
     apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
     done \
-  && npm install -g npm@latest tar@latest
+  && apk upgrade --no-cache nodejs \
+  && npm install -g npm@latest tar@7.5.8 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.1 diff@8.0.3 \
+  && GLOBAL="$(npm root -g)" \
+  && find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+     done \
+  && find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+     done \
+  && find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+     done \
+  && find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+     done \
+  && find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
+     done \
+  && npm cache clean --force
 
 # Copy artifacts from builder
 COPY --from=builder /app/requirements.txt /app/requirements.txt
@@ -146,6 +164,26 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
         echo "litellm_proxy_extras wheel not found; skipping local install"; \
       fi; \
     fi
+
+# SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
+# npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
+# Patch every copy of tar, glob, and brace-expansion inside that tree.
+RUN GLOBAL="$(npm root -g)" && \
+    find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find /usr/lib -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find /usr/lib -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    find /usr/lib -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find /usr/lib -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
+    done
 
 # Permissions, cleanup, and Prisma prep
 # Convert Windows line endings to Unix for entrypoint scripts

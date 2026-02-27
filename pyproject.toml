@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.81.7"
+version = "1.81.16"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -34,7 +34,7 @@ pydantic = "^2.5.0"
 jsonschema = ">=4.23.0,<5.0.0"
 numpydoc = {version = "*", optional = true} # used in utils.py
 
-uvicorn = {version = "^0.31.1", optional = true}
+uvicorn = {version = ">=0.32.1,<1.0.0", optional = true}
 uvloop = {version = "^0.21.0", optional = true, markers="sys_platform != 'win32'"}
 gunicorn = {version = "^23.0.0", optional = true}
 fastapi = {version = ">=0.120.1", optional = true}
@@ -61,14 +61,15 @@ boto3 = { version = "1.40.76", optional = true }
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = ">=1.25.0,<2.0.0", optional = true, python = ">=3.10"}
 a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.29", optional = true}
+litellm-proxy-extras = {version = "0.4.49", optional = true}
 rich = {version = "13.7.1", optional = true}
-litellm-enterprise = {version = "0.1.27", optional = true}
+litellm-enterprise = {version = "0.1.32", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = ">=0.1.12", optional = true, python = ">=3.9,<3.14"}
 mlflow = {version = ">3.1.4", optional = true, python = ">=3.10"}
 soundfile = {version = "^0.12.1", optional = true}
+pyroscope-io = {version = "^0.8", optional = true, markers = "sys_platform != 'win32'"}
 # grpcio constraints:
 # - 1.62.3+ required by grpcio-status
 # - 1.68.0-1.68.1 has reconnect bug (https://github.com/grpc/grpc/issues/38290)
@@ -104,6 +105,7 @@ proxy = [
     "rich",
     "polars",
     "soundfile",
+    "pyroscope-io",
 ]
 
 extra_proxy = [
@@ -120,6 +122,8 @@ extra_proxy = [
 utils = [
     "numpydoc",
 ]
+
+
 
 caching = ["diskcache"]
 
@@ -139,17 +143,19 @@ litellm = 'litellm:run_server'
 litellm-proxy = 'litellm.proxy.client.cli:cli'
 
 [tool.poetry.group.dev.dependencies]
+diff-cover = "^9.0"
 flake8 = "^6.1.0"
 black = "^23.12.0"
 mypy = "^1.0"
 pytest = "^7.4.3"
 pytest-mock = "^3.12.0"
 pytest-asyncio = "^0.21.1"
-pytest-retry = "^1.6.3"
+pytest-postgresql = "^6.0.0"
+pytest-xdist = "^3.5.0"
 requests-mock = "^1.12.1"
 responses = "^0.25.7"
 respx = "^0.22.0"
-ruff = "^0.1.0"
+ruff = "^0.2.1"
 types-requests = "*"
 types-setuptools = "*"
 types-redis = "*"
@@ -159,6 +165,8 @@ opentelemetry-sdk = "^1.28.0"
 opentelemetry-exporter-otlp = "^1.28.0"
 langfuse = "^2.45.0"
 fastapi-offline = "^1.7.3"
+fakeredis = "^2.27.1"
+pytest-rerunfailures = "^14.0"
 
 [tool.poetry.group.proxy-dev.dependencies]
 prisma = "0.11.0"
@@ -168,13 +176,14 @@ opentelemetry-api = "^1.28.0"
 opentelemetry-sdk = "^1.28.0"
 opentelemetry-exporter-otlp = "^1.28.0"
 azure-identity = {version = "^1.15.0", python = ">=3.9"}
+a2a-sdk = {version = "^0.3.22", python = ">=3.10"}
 
 [build-system]
 requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.81.7"
+version = "1.81.16"
 version_files = [
     "pyproject.toml:^version"
 ]
@@ -184,8 +193,7 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-retries = 20
-retry_delay = 5
+asyncio_default_fixture_loop_scope = "session"
 markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",

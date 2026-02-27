@@ -3242,7 +3242,7 @@ def vertex_ai_anthropic_thinking_mock_response(*args, **kwargs):
         "id": "msg_vrtx_011pL6Np3MKxXL3R8theMRJW",
         "type": "message",
         "role": "assistant",
-        "model": "claude-3-7-sonnet-20250219",
+        "model": "claude-4-sonnet-20250514",
         "content": [
             {
                 "type": "thinking",
@@ -3714,6 +3714,60 @@ def test_vertex_schema_test():
     print(response)
 
 
+def test_gemini_nullable_object_tool_schema_httpx():
+    """
+    Ensure nullable object tool params preserve nested properties in Vertex schema conversion.
+    """
+    load_vertex_ai_credentials()
+    litellm._turn_on_debug()
+
+
+    tools = [{
+            "type": "function",
+            "strict": True,
+            "function": {
+                "name": "create_support_ticket",
+                "description": "Create a paid user support ticket",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["ticket_id", "customer_context"],
+                    "properties": {
+                        "ticket_id": {
+                            "type": "string",
+                            "description": "Unique identifier for the support ticket"
+                        },
+                        "customer_context": {
+                            "type": ["object", "null"],
+                            "description": "Context about the paid customer, if available",
+                            "additionalProperties": False,
+                            "required": ["user_id", "plan"],
+                            "properties": {
+                                "user_id": {
+                                    "type": "string",
+                                    "description": "Internal user identifier"
+                                },
+                                "plan": {
+                                    "type": "string",
+                                    "description": "Subscription plan name (e.g. pro, enterprise)"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }]
+
+    response = litellm.completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "call the tool"}],
+        tools=tools,
+        tool_choice="required",
+    )
+
+    print(response)
+
+
 def test_vertex_ai_response_id():
     """Test that litellm preserves the response ID from Vertex AI's API for non-streaming responses"""
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -3817,50 +3871,100 @@ def test_vertex_ai_streaming_response_id():
 
 
 def test_vertex_ai_gemini_2_5_pro_streaming():
-    load_vertex_ai_credentials()
-    # litellm._turn_on_debug()
-    response = completion(
-        model="vertex_ai/gemini-2.5-pro",
-        messages=[{"role": "user", "content": "Hi!"}],
-        vertex_location="global",
-        stream=True,
-    )
-    has_real_content = False
-    for chunk in response:
-        print(chunk)
-        if (
-            chunk.choices[0].delta.content is not None
-            and len(chunk.choices[0].delta.content) > 0
-        ):
-            has_real_content = True
-    assert has_real_content
+    try:
+        load_vertex_ai_credentials()
+        # litellm._turn_on_debug()
+        response = completion(
+            model="vertex_ai/gemini-2.5-pro",
+            messages=[{"role": "user", "content": "Hi!"}],
+            vertex_location="global",
+            stream=True,
+        )
+        has_real_content = False
+        for chunk in response:
+            print(chunk)
+            if (
+                chunk.choices[0].delta.content is not None
+                and len(chunk.choices[0].delta.content) > 0
+            ):
+                has_real_content = True
+        assert has_real_content
+    except litellm.RateLimitError:
+        pytest.skip("Skipping due to rate limit error")
 
 
 def test_vertex_ai_gemini_audio_ogg():
-    load_vertex_ai_credentials()
-    litellm._turn_on_debug()
-    response = completion(
-        model="vertex_ai/gemini-2.0-flash",
-        messages=[
+    """
+    Test that OGG audio files are correctly formatted as file_data with audio/ogg mime type
+    in the request sent to Vertex AI. Uses mocked HTTP and auth to avoid flaky external
+    URL fetches and credential requirements.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
             {
-                "content": [
-                    {"text": "generate a transcript of the speech.", "type": "text"}
-                ],
-                "role": "user",
-            },
-            {
-                "content": [
-                    {
-                        "file": {
-                            "file_id": "https://upload.wikimedia.org/wikipedia/commons/5/5f/En-us-public.ogg"
-                        },
-                        "type": "file",
-                    }
-                ],
-                "role": "user",
-            },
+                "content": {
+                    "parts": [{"text": "public domain audio file"}],
+                    "role": "model",
+                },
+                "finishReason": "STOP",
+            }
         ],
-    )
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    client = HTTPHandler()
+    httpx_mock = MagicMock(return_value=mock_response)
+
+    with patch.object(client, "post", new=httpx_mock), patch.object(
+        VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")
+    ):
+        response = completion(
+            model="vertex_ai/gemini-2.0-flash",
+            messages=[
+                {
+                    "content": [
+                        {"text": "generate a transcript of the speech.", "type": "text"}
+                    ],
+                    "role": "user",
+                },
+                {
+                    "content": [
+                        {
+                            "file": {
+                                "file_id": "https://upload.wikimedia.org/wikipedia/commons/5/5f/En-us-public.ogg"
+                            },
+                            "type": "file",
+                        }
+                    ],
+                    "role": "user",
+                },
+            ],
+            client=client,
+        )
+
+    httpx_mock.assert_called_once()
+    request_body = httpx_mock.call_args.kwargs["json"]
+    # Verify OGG file is sent as file_data with correct mime type
+    file_data_parts = [
+        part
+        for content in request_body["contents"]
+        for part in content["parts"]
+        if "file_data" in part
+    ]
+    assert len(file_data_parts) == 1, f"Expected 1 file_data part, got: {file_data_parts}"
+    file_data = file_data_parts[0]["file_data"]
+    assert file_data["mime_type"] == "audio/ogg", f"Expected audio/ogg, got: {file_data['mime_type']}"
+    assert "En-us-public.ogg" in file_data["file_uri"], f"Unexpected file_uri: {file_data['file_uri']}"
     print(response)
 
 

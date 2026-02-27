@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 
 import { Button } from "@tremor/react";
 import BulkEditUserModal from "./BulkEditUsers";
-import CreateUser from "./create_user_button";
+import { CreateUserButton } from "./CreateUserButton";
 import EditUserModal from "./edit_user";
 import {
   getPossibleUserRoles,
@@ -301,7 +301,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
             </>
           ) : userID && accessToken ? (
             <>
-              <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
 
               <Button
                 onClick={handleToggleSelectionMode}

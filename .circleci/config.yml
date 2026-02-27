@@ -21,9 +21,7 @@ commands:
       - run:
           name: "Install local version of litellm-enterprise"
           command: |
-            cd enterprise
-            python -m pip install -e .
-            cd ..
+            pip install --force-reinstall --no-deps -e enterprise/
   setup_litellm_test_deps:
     steps:
       - checkout
@@ -112,6 +110,24 @@ jobs:
             python -m mypy .
             cd ..
           no_output_timeout: 10m
+
+  semgrep:
+    docker:
+      - image: cimg/python:3.12
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Semgrep
+          command: pip install semgrep
+      - run:
+          name: Run Semgrep (custom rules only)
+          command: semgrep scan --config .semgrep/rules . --error
+
   local_testing_part1:
     docker:
       - image: cimg/python:3.12
@@ -1255,7 +1271,15 @@ jobs:
             ls
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
-            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
+            # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
+            IGNORE_DIRS=(
+              "tests/llm_translation/realtime"
+            )
+            IGNORE_ARGS=""
+            for dir in "${IGNORE_DIRS[@]}"; do
+              IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
+            done
+            python -m pytest -vv tests/llm_translation $IGNORE_ARGS --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1271,6 +1295,54 @@ jobs:
           paths:
             - llm_translation_coverage.xml
             - llm_translation_coverage
+  realtime_translation_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "pytest-xdist==3.6.1"
+            pip install "pytest-timeout==2.2.0"
+            pip install "websockets"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run realtime tests
+          command: |
+            pwd
+            ls
+            # Add --timeout to kill hanging tests after 120s (2 min)
+            # Add --durations=20 to show 20 slowest tests for debugging
+            python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml realtime_translation_coverage.xml
+            mv .coverage realtime_translation_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - realtime_translation_coverage.xml
+            - realtime_translation_coverage
   mcp_testing:
     docker:
       - image: cimg/python:3.11
@@ -1316,6 +1388,51 @@ jobs:
           paths:
             - mcp_coverage.xml
             - mcp_coverage
+  agent_testing:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "respx==0.22.0"
+            pip install "pydantic==2.11.0"
+            pip install "a2a-sdk"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml agent_coverage.xml
+            mv .coverage agent_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - agent_coverage.xml
+            - agent_coverage
   guardrails_testing:
     docker:
       - image: cimg/python:3.11
@@ -1339,6 +1456,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
             pip install "boto3==1.36.0"
+            pip install "semantic_router==0.1.10"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1537,7 +1655,7 @@ jobs:
             - search_coverage.xml
             - search_coverage
   # Split litellm_mapped_tests into 3 parallel jobs for 3x faster execution
-  litellm_mapped_tests_proxy:
+  litellm_mapped_tests_proxy_part1:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -1548,23 +1666,53 @@ jobs:
     steps:
       - setup_litellm_test_deps
       - run:
-          name: Run proxy tests
+          name: Run proxy tests part 1 (high-volume directories)
           command: |
             prisma generate
-            python -m pytest tests/test_litellm/proxy --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
-          no_output_timeout: 120m
+            export PYTHONUNBUFFERED=1
+            python -m pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/client tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part1.xml --durations=10 -n 8 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
+          no_output_timeout: 60m
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_proxy_tests_coverage.xml
-            mv .coverage litellm_proxy_tests_coverage
+            mv coverage.xml litellm_proxy_tests_part1_coverage.xml
+            mv .coverage litellm_proxy_tests_part1_coverage
       - store_test_results:
           path: test-results
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_proxy_tests_coverage.xml
-            - litellm_proxy_tests_coverage
+            - litellm_proxy_tests_part1_coverage.xml
+            - litellm_proxy_tests_part1_coverage
+  litellm_mapped_tests_proxy_part2:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: xlarge
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Run proxy tests part 2 (all other tests)
+          command: |
+            prisma generate
+            export PYTHONUNBUFFERED=1
+            python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --cov=litellm --cov-report=xml --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 8 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
+          no_output_timeout: 60m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_proxy_tests_part2_coverage.xml
+            mv .coverage litellm_proxy_tests_part2_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_proxy_tests_part2_coverage.xml
+            - litellm_proxy_tests_part2_coverage
   litellm_mapped_tests_llms:
     docker:
       - image: cimg/python:3.11
@@ -1605,7 +1753,7 @@ jobs:
       - run:
           name: Run core tests
           command: |
-            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --ignore=tests/test_litellm/experimental_mcp_client --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1646,6 +1794,33 @@ jobs:
           paths:
             - litellm_core_utils_tests_coverage.xml
             - litellm_core_utils_tests_coverage
+  litellm_mapped_tests_mcps:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: xlarge
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Run MCP client tests
+          command: |
+            python -m pytest tests/test_litellm/experimental_mcp_client --cov=litellm --cov-report=xml --junitxml=test-results/junit-mcps.xml --durations=10 -n 4 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_mcps_tests_coverage.xml
+            mv .coverage litellm_mcps_tests_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_mcps_tests_coverage.xml
+            - litellm_mcps_tests_coverage
   litellm_mapped_tests_integrations:
     docker:
       - image: cimg/python:3.11
@@ -2176,6 +2351,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
+      - run: python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
       - run: python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
@@ -3477,9 +3653,11 @@ jobs:
               -p 4000:4000 \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME="us-east-1" \
+              -e LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS="True" \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/tests/proxy_e2e_anthropic_messages_tests/test_config.yaml:/app/config.yaml \
@@ -3532,7 +3710,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
+            coverage combine llm_translation_coverage realtime_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3700,7 +3878,6 @@ jobs:
       - run:
           name: Get new version
           command: |
-            cd litellm-proxy-extras
             NEW_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "export NEW_VERSION=$NEW_VERSION" >> $BASH_ENV
 
@@ -3725,7 +3902,6 @@ jobs:
       - run:
           name: Publish to PyPI
           command: |
-            cd litellm-proxy-extras
             echo -e "[pypi]\nusername = $PYPI_PUBLISH_USERNAME\npassword = $PYPI_PUBLISH_PASSWORD" > ~/.pypirc
             python -m pip install --upgrade pip build twine setuptools wheel
             rm -rf build dist
@@ -3832,6 +4008,9 @@ jobs:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
     working_directory: ~/project
+    parameters:
+      browser:
+        type: string
     steps:
       - checkout
       - setup_google_dns
@@ -3861,7 +4040,7 @@ jobs:
             echo "Expires at: $EXPIRES_AT"
             neon branches create \
               --project-id $NEON_PROJECT_ID \
-              --name preview/commit-${CIRCLE_SHA1:0:7} \
+              --name preview/commit-${CIRCLE_SHA1:0:7}-<< parameters.browser >> \
               --expires-at $EXPIRES_AT \
               --parent br-fancy-paper-ad1olsb3 \
               --api-key $NEON_API_KEY || true
@@ -3871,7 +4050,7 @@ jobs:
             E2E_UI_TEST_DATABASE_URL=$(neon connection-string \
               --project-id $NEON_PROJECT_ID \
               --api-key $NEON_API_KEY \
-              --branch preview/commit-${CIRCLE_SHA1:0:7} \
+              --branch preview/commit-${CIRCLE_SHA1:0:7}-<< parameters.browser >> \
               --database-name yuneng-trial-db \
               --role neondb_owner)
             echo $E2E_UI_TEST_DATABASE_URL
@@ -3883,7 +4062,7 @@ jobs:
               -e UI_USERNAME="admin" \
               -e UI_PASSWORD="gm" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              --name litellm-docker-database \
+              --name litellm-docker-database-<< parameters.browser >> \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
@@ -3899,7 +4078,7 @@ jobs:
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
           name: Start outputting logs
-          command: docker logs -f litellm-docker-database
+          command: docker logs -f litellm-docker-database-<< parameters.browser >>
           background: true
       - run:
           name: Wait for app to be ready
@@ -3908,6 +4087,7 @@ jobs:
           name: Run Playwright Tests
           command: |
             npx playwright test \
+              --project << parameters.browser >> \
               --config ui/litellm-dashboard/e2e_tests/playwright.config.ts \
               --reporter=html \
               --output=test-results
@@ -3919,6 +4099,63 @@ jobs:
       - store_artifacts:
           path: playwright-report
           destination: playwright-report
+
+  prisma_schema_sync:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Install Neon CLI
+          command: |
+            npm i -g neonctl
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Sync schema on base e2e database
+          command: |
+            BASE_DATABASE_URL=$(neon connection-string \
+              --project-id $NEON_PROJECT_ID \
+              --api-key $NEON_API_KEY \
+              --branch br-fancy-paper-ad1olsb3 \
+              --database-name yuneng-trial-db \
+              --role neondb_owner)
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$BASE_DATABASE_URL \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              --name schema-sync \
+              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --use_prisma_db_push
+      - run:
+          name: Start outputting logs
+          command: docker logs -f schema-sync
+          background: true
+      - run:
+          name: Wait for proxy to be ready (schema sync complete)
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Stop schema sync container
+          command: docker stop schema-sync
 
   test_nonroot_image:
     machine:
@@ -4009,6 +4246,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - mypy_linting:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - semgrep:
           filters:
             branches:
               only:
@@ -4112,11 +4355,36 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - prisma_schema_sync:
+          context: e2e_ui_tests
+          requires:
+            - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - e2e_ui_testing:
+          name: e2e_ui_testing_chromium
+          browser: chromium
           context: e2e_ui_tests
           requires:
             - ui_build
             - build_docker_database_image
+            - prisma_schema_sync
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - e2e_ui_testing:
+          name: e2e_ui_testing_firefox
+          browser: firefox
+          context: e2e_ui_tests
+          requires:
+            - ui_build
+            - build_docker_database_image
+            - prisma_schema_sync
           filters:
             branches:
               only:
@@ -4196,7 +4464,19 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - realtime_translation_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - mcp_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - agent_testing:
           filters:
             branches:
               only:
@@ -4238,7 +4518,13 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - litellm_mapped_tests_proxy:
+      - litellm_mapped_tests_proxy_part1:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_mapped_tests_proxy_part2:
           filters:
             branches:
               only:
@@ -4251,6 +4537,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - litellm_mapped_tests_core:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_mapped_tests_mcps:
           filters:
             branches:
               only:
@@ -4307,15 +4599,19 @@ workflows:
       - upload-coverage:
           requires:
             - llm_translation_testing
+            - realtime_translation_testing
             - mcp_testing
+            - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
             - llm_responses_api_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests_proxy
+            - litellm_mapped_tests_proxy_part1
+            - litellm_mapped_tests_proxy_part2
             - litellm_mapped_tests_llms
             - litellm_mapped_tests_core
+            - litellm_mapped_tests_mcps
             - litellm_mapped_tests_integrations
             - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
@@ -4378,20 +4674,25 @@ workflows:
       - publish_to_pypi:
           requires:
             - mypy_linting
+            - semgrep
             - local_testing_part1
             - local_testing_part2
             - build_and_test
             - e2e_openai_endpoints
             - test_bad_database_url
             - llm_translation_testing
+            - realtime_translation_testing
             - mcp_testing
+            - agent_testing
             - google_generate_content_endpoint_testing
             - llm_responses_api_testing
             - ocr_testing
             - search_testing
-            - litellm_mapped_tests_proxy
+            - litellm_mapped_tests_proxy_part1
+            - litellm_mapped_tests_proxy_part2
             - litellm_mapped_tests_llms
             - litellm_mapped_tests_core
+            - litellm_mapped_tests_mcps
             - litellm_mapped_tests_integrations
             - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
@@ -4408,7 +4709,8 @@ workflows:
             - litellm_assistants_api_testing
             - auth_ui_unit_tests
             - db_migration_disable_update_check
-            - e2e_ui_testing
+            - e2e_ui_testing_chromium
+            - e2e_ui_testing_firefox
             - litellm_proxy_unit_testing_key_generation
             - litellm_proxy_unit_testing_part1
             - litellm_proxy_unit_testing_part2

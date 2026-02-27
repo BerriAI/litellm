@@ -107,6 +107,11 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params)
 
+        # Map empty location/cluade models to a supported region for count-tokens endpoint
+        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+        if not vertex_location or "claude" in model.lower():
+            vertex_location = "us-central1"
+
         # Get access token and resolved project ID
         access_token, project_id = await self._ensure_access_token_async(
             credentials=vertex_credentials,
@@ -118,7 +123,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         endpoint_url = self._build_count_tokens_endpoint(
             model=model,
             project_id=project_id,
-            vertex_location=vertex_location or "us-central1",
+            vertex_location=vertex_location,
             api_base=litellm_params.get("api_base"),
         )
 

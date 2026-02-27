@@ -1,5 +1,6 @@
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from fastapi import HTTPException, status
 
@@ -16,6 +17,16 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
+
+# Mapping from Prisma accessor names to actual PostgreSQL table names.
+_PRISMA_TO_PG_TABLE: Dict[str, str] = {
+    "litellm_dailyuserspend": "LiteLLM_DailyUserSpend",
+    "litellm_dailyteamspend": "LiteLLM_DailyTeamSpend",
+    "litellm_dailyorganizationspend": "LiteLLM_DailyOrganizationSpend",
+    "litellm_dailyenduserspend": "LiteLLM_DailyEndUserSpend",
+    "litellm_dailyagentspend": "LiteLLM_DailyAgentSpend",
+    "litellm_dailytagspend": "LiteLLM_DailyTagSpend",
+}
 
 
 def update_metrics(existing_metrics: SpendMetrics, record: Any) -> SpendMetrics:
@@ -327,13 +338,84 @@ async def get_api_key_metadata(
     prisma_client: PrismaClient,
     api_keys: Set[str],
 ) -> Dict[str, Dict[str, Any]]:
-    """Update api key metadata for a single record."""
+    """Get api key metadata, falling back to deleted keys table for keys not found in active table.
+
+    This ensures that key_alias and team_id are preserved in historical activity logs
+    even after a key is deleted or regenerated.
+    """
     key_records = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"token": {"in": list(api_keys)}}
     )
-    return {
-        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
+    result = {
+        k.token: {"key_alias": k.key_alias, "team_id": k.team_id}
+        for k in key_records
     }
+
+    # For any keys not found in the active table, check the deleted keys table
+    missing_keys = api_keys - set(result.keys())
+    if missing_keys:
+        try:
+            deleted_key_records = (
+                await prisma_client.db.litellm_deletedverificationtoken.find_many(
+                    where={"token": {"in": list(missing_keys)}},
+                    order={"deleted_at": "desc"},
+                )
+            )
+            # Use the most recent deleted record for each token (ordered by deleted_at desc)
+            for k in deleted_key_records:
+                if k.token not in result:
+                    result[k.token] = {
+                        "key_alias": k.key_alias,
+                        "team_id": k.team_id,
+                    }
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to fetch deleted key metadata for %d missing keys: %s",
+                len(missing_keys),
+                e,
+            )
+
+    return result
+
+
+def _adjust_dates_for_timezone(
+    start_date: str,
+    end_date: str,
+    timezone_offset_minutes: Optional[int],
+) -> Tuple[str, str]:
+    """
+    Adjust date range to account for timezone differences.
+
+    The database stores dates in UTC. When a user in a different timezone
+    selects a local date range, we need to expand the UTC query range to
+    capture all records that fall within their local date range.
+
+    Args:
+        start_date: Start date in YYYY-MM-DD format (user's local date)
+        end_date: End date in YYYY-MM-DD format (user's local date)
+        timezone_offset_minutes: Minutes behind UTC (positive = west of UTC)
+            This matches JavaScript's Date.getTimezoneOffset() convention.
+            For example: PST = +480 (8 hours * 60 = 480 minutes behind UTC)
+
+    Returns:
+        Tuple of (adjusted_start_date, adjusted_end_date) in YYYY-MM-DD format
+    """
+    if timezone_offset_minutes is None or timezone_offset_minutes == 0:
+        return start_date, end_date
+
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    if timezone_offset_minutes > 0:
+        # West of UTC (Americas): local evening extends into next UTC day
+        # e.g., Feb 4 23:59 PST = Feb 5 07:59 UTC
+        end = end + timedelta(days=1)
+    else:
+        # East of UTC (Asia/Europe): local morning starts in previous UTC day
+        # e.g., Feb 4 00:00 IST = Feb 3 18:30 UTC
+        start = start - timedelta(days=1)
+
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
 def _build_where_conditions(
@@ -345,12 +427,18 @@ def _build_where_conditions(
     model: Optional[str],
     api_key: Optional[Union[str, List[str]]],
     exclude_entity_ids: Optional[List[str]] = None,
+    timezone_offset_minutes: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Build prisma where clause for daily activity queries."""
+    # Adjust dates for timezone if provided
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes
+    )
+
     where_conditions: Dict[str, Any] = {
         "date": {
-            "gte": start_date,
-            "lte": end_date,
+            "gte": adjusted_start,
+            "lte": adjusted_end,
         }
     }
 
@@ -376,6 +464,111 @@ def _build_where_conditions(
         where_conditions[entity_id_field] = current
 
     return where_conditions
+
+
+def _build_aggregated_sql_query(
+    *,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: Optional[Union[str, List[str]]],
+    start_date: str,
+    end_date: str,
+    model: Optional[str],
+    api_key: Optional[str],
+    exclude_entity_ids: Optional[List[str]] = None,
+    timezone_offset_minutes: Optional[int] = None,
+) -> Tuple[str, List[Any]]:
+    """Build a parameterized SQL GROUP BY query for aggregated daily activity.
+
+    Groups by (date, api_key, model, model_group, custom_llm_provider,
+    mcp_namespaced_tool_name, endpoint) with SUMs on all metric columns.
+    The entity_id column is intentionally omitted from GROUP BY to collapse
+    rows across entities — this is where the biggest row reduction comes from.
+
+    Returns:
+        Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
+    """
+    pg_table = _PRISMA_TO_PG_TABLE.get(table_name)
+    if pg_table is None:
+        raise ValueError(f"Unknown table name: {table_name}")
+
+    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+        start_date, end_date, timezone_offset_minutes
+    )
+
+    sql_conditions: List[str] = []
+    sql_params: List[Any] = []
+    p = 1  # parameter index (1-based for PostgreSQL $N placeholders)
+
+    # Date range (always present)
+    sql_conditions.append(f"date >= ${p}")
+    sql_params.append(adjusted_start)
+    p += 1
+
+    sql_conditions.append(f"date <= ${p}")
+    sql_params.append(adjusted_end)
+    p += 1
+
+    # Optional entity filter
+    if entity_id is not None:
+        if isinstance(entity_id, list):
+            placeholders = ", ".join(f"${p + i}" for i in range(len(entity_id)))
+            sql_conditions.append(f'"{entity_id_field}" IN ({placeholders})')
+            sql_params.extend(entity_id)
+            p += len(entity_id)
+        else:
+            sql_conditions.append(f'"{entity_id_field}" = ${p}')
+            sql_params.append(entity_id)
+            p += 1
+
+    # Exclude specific entities
+    if exclude_entity_ids:
+        placeholders = ", ".join(
+            f"${p + i}" for i in range(len(exclude_entity_ids))
+        )
+        sql_conditions.append(f'"{entity_id_field}" NOT IN ({placeholders})')
+        sql_params.extend(exclude_entity_ids)
+        p += len(exclude_entity_ids)
+
+    # Optional model filter
+    if model:
+        sql_conditions.append(f"model = ${p}")
+        sql_params.append(model)
+        p += 1
+
+    # Optional api_key filter
+    if api_key:
+        sql_conditions.append(f"api_key = ${p}")
+        sql_params.append(api_key)
+        p += 1
+
+    where_clause = " AND ".join(sql_conditions)
+
+    sql_query = f"""
+        SELECT
+            date,
+            api_key,
+            model,
+            model_group,
+            custom_llm_provider,
+            mcp_namespaced_tool_name,
+            endpoint,
+            SUM(spend)::float AS spend,
+            SUM(prompt_tokens)::bigint AS prompt_tokens,
+            SUM(completion_tokens)::bigint AS completion_tokens,
+            SUM(cache_read_input_tokens)::bigint AS cache_read_input_tokens,
+            SUM(cache_creation_input_tokens)::bigint AS cache_creation_input_tokens,
+            SUM(api_requests)::bigint AS api_requests,
+            SUM(successful_requests)::bigint AS successful_requests,
+            SUM(failed_requests)::bigint AS failed_requests
+        FROM "{pg_table}"
+        WHERE {where_clause}
+        GROUP BY date, api_key, model, model_group, custom_llm_provider,
+                 mcp_namespaced_tool_name, endpoint
+        ORDER BY date DESC
+    """
+
+    return sql_query, sql_params
 
 
 async def _aggregate_spend_records(
@@ -453,6 +646,7 @@ async def get_daily_activity(
     page_size: int,
     exclude_entity_ids: Optional[List[str]] = None,
     metadata_metrics_func: Optional[Callable[[List[Any]], SpendMetrics]] = None,
+    timezone_offset_minutes: Optional[int] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Common function to get daily activity for any entity type."""
 
@@ -477,6 +671,7 @@ async def get_daily_activity(
             model=model,
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
+            timezone_offset_minutes=timezone_offset_minutes,
         )
 
         # Get total count for pagination
@@ -542,8 +737,13 @@ async def get_daily_activity_aggregated(
     model: Optional[str],
     api_key: Optional[str],
     exclude_entity_ids: Optional[List[str]] = None,
+    timezone_offset_minutes: Optional[int] = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
+
+    Uses SQL GROUP BY to aggregate rows in the database rather than fetching
+    all individual rows into Python. This collapses rows across entities
+    (users/teams/orgs), reducing ~150k rows to ~2-3k grouped rows.
 
     Matches the response model of the paginated endpoint so the UI does not need to transform.
     """
@@ -560,7 +760,8 @@ async def get_daily_activity_aggregated(
         )
 
     try:
-        where_conditions = _build_where_conditions(
+        sql_query, sql_params = _build_aggregated_sql_query(
+            table_name=table_name,
             entity_id_field=entity_id_field,
             entity_id=entity_id,
             start_date=start_date,
@@ -568,21 +769,24 @@ async def get_daily_activity_aggregated(
             model=model,
             api_key=api_key,
             exclude_entity_ids=exclude_entity_ids,
+            timezone_offset_minutes=timezone_offset_minutes,
         )
 
-        # Fetch all matching results (no pagination)
-        daily_spend_data = await getattr(prisma_client.db, table_name).find_many(
-            where=where_conditions,
-            order=[
-                {"date": "desc"},
-            ],
-        )
+        # Execute GROUP BY query — returns pre-aggregated dicts
+        rows = await prisma_client.db.query_raw(sql_query, *sql_params)
+        if rows is None:
+            rows = []
 
+        # Convert dicts to objects for compatibility with _aggregate_spend_records
+        records = [SimpleNamespace(**row) for row in rows]
+
+        # entity_id_field=None skips entity breakdown (entity dimension was
+        # collapsed by the GROUP BY, so per-entity data is not available)
         aggregated = await _aggregate_spend_records(
             prisma_client=prisma_client,
-            records=daily_spend_data,
-            entity_id_field=entity_id_field,
-            entity_metadata_field=entity_metadata_field,
+            records=records,
+            entity_id_field=None,
+            entity_metadata_field=None,
         )
 
         return SpendAnalyticsPaginatedResponse(

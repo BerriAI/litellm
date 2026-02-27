@@ -142,6 +142,18 @@ async def custom_sso_handler(userIDPInfo: OpenID) -> SSOUserDefinedValues:
                 f"No ID found for user. userIDPInfo.id is None {userIDPInfo}"
             )
         
+        #################################################
+        # Access extra fields from SSO provider (requires GENERIC_USER_EXTRA_ATTRIBUTES env var)
+        # Example: Set GENERIC_USER_EXTRA_ATTRIBUTES="department,employee_id,groups"
+        extra_fields = getattr(userIDPInfo, 'extra_fields', None) or {}
+        user_department = extra_fields.get("department")
+        employee_id = extra_fields.get("employee_id")
+        user_groups = extra_fields.get("groups", [])
+        
+        print(f"User department: {user_department}")  # noqa
+        print(f"Employee ID: {employee_id}")  # noqa
+        print(f"User groups: {user_groups}")  # noqa
+        #################################################
 
         #################################################
         # Run your custom code / logic here

@@ -299,6 +299,26 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         return ["messages", "metadata", "system", "tool_choice", "tools", "thinking", "output_format"]
 
+    def _is_web_search_tool(self, tool: Dict[str, Any]) -> bool:
+        """
+        Check if a tool is an Anthropic web search tool.
+
+        Anthropic web search tools have:
+        - type starting with "web_search" (e.g., "web_search_20260209")
+        - name = "web_search"
+
+        Args:
+            tool: Tool definition dict
+
+        Returns:
+            True if this is a web search tool
+        """
+        tool_type = tool.get("type", "")
+        tool_name = tool.get("name", "")
+        return (
+            isinstance(tool_type, str) and tool_type.startswith("web_search")
+        ) or tool_name == "web_search"
+
     def translate_anthropic_messages_to_openai(  # noqa: PLR0915
         self,
         messages: List[
@@ -872,10 +892,25 @@ class LiteLLMAnthropicMessagesAdapter:
         if "tools" in anthropic_message_request:
             tools = anthropic_message_request["tools"]
             if tools:
-                new_kwargs["tools"], tool_name_mapping = self.translate_anthropic_tools_to_openai(
-                    tools=cast(List[AllAnthropicToolsValues], tools),
-                    model=new_kwargs.get("model"),
-                )
+                # Separate web search tools from regular tools
+                web_search_tools = []
+                regular_tools = []
+                for tool in tools:
+                    if self._is_web_search_tool(cast(Dict[str, Any], tool)):
+                        web_search_tools.append(tool)
+                    else:
+                        regular_tools.append(tool)
+
+                # If web search tools are present, add web_search_options parameter
+                if web_search_tools:
+                    new_kwargs["web_search_options"] = {}  # type: ignore
+
+                # Only translate regular tools (non-web-search)
+                if regular_tools:
+                    new_kwargs["tools"], tool_name_mapping = self.translate_anthropic_tools_to_openai(
+                        tools=cast(List[AllAnthropicToolsValues], regular_tools),
+                        model=new_kwargs.get("model"),
+                    )
 
         ## CONVERT THINKING
         if "thinking" in anthropic_message_request:
@@ -939,22 +974,8 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         choices: List[Choices],
         tool_name_mapping: Optional[Dict[str, str]] = None,
-    ) -> List[
-        Union[
-            AnthropicResponseContentBlockText,
-            AnthropicResponseContentBlockToolUse,
-            AnthropicResponseContentBlockThinking,
-            AnthropicResponseContentBlockRedactedThinking,
-        ]
-    ]:
-        new_content: List[
-            Union[
-                AnthropicResponseContentBlockText,
-                AnthropicResponseContentBlockToolUse,
-                AnthropicResponseContentBlockThinking,
-                AnthropicResponseContentBlockRedactedThinking,
-            ]
-        ] = []
+    ) -> List[Dict[str, Any]]:
+        new_content: List[Dict[str, Any]] = []
         for choice in choices:
             # Handle thinking blocks first
             if (
@@ -978,7 +999,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                     if signature_value is not None
                                     else None
                                 ),
-                            )
+                            ).model_dump()
                         )
                     elif thinking_block.get("type") == "redacted_thinking":
                         data_value = thinking_block.get("data", "")
@@ -986,7 +1007,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             AnthropicResponseContentBlockRedactedThinking(
                                 type="redacted_thinking",
                                 data=str(data_value) if data_value is not None else "",
-                            )
+                            ).model_dump()
                         )
             # Handle reasoning_content when thinking_blocks is not present
             elif (
@@ -998,7 +1019,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         type="thinking",
                         thinking=str(choice.message.reasoning_content),
                         signature=None,
-                    )
+                    ).model_dump()
                 )
 
             # Handle text content
@@ -1006,7 +1027,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_content.append(
                     AnthropicResponseContentBlockText(
                         type="text", text=choice.message.content
-                    )
+                    ).model_dump()
                 )
             # Handle tool calls (in parallel to text content)
             if (
@@ -1044,7 +1065,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_use_block.provider_specific_fields = (
                             provider_specific_fields
                         )
-                    new_content.append(tool_use_block)
+                    new_content.append(tool_use_block.model_dump())
 
         return new_content
 
@@ -1084,15 +1105,20 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         # extract usage
         usage: Usage = getattr(response, "usage")
+        uncached_input_tokens = usage.prompt_tokens or 0
+        cached_tokens = 0
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+            cached_tokens = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+            uncached_input_tokens -= cached_tokens
+
         anthropic_usage = AnthropicUsage(
-            input_tokens=usage.prompt_tokens or 0,
+            input_tokens=uncached_input_tokens,
             output_tokens=usage.completion_tokens or 0,
         )
-        # Add cache tokens if available (for prompt caching support)
         if hasattr(usage, "_cache_creation_input_tokens") and usage._cache_creation_input_tokens > 0:
             anthropic_usage["cache_creation_input_tokens"] = usage._cache_creation_input_tokens
-        if hasattr(usage, "_cache_read_input_tokens") and usage._cache_read_input_tokens > 0:
-            anthropic_usage["cache_read_input_tokens"] = usage._cache_read_input_tokens
+        if cached_tokens > 0:
+            anthropic_usage["cache_read_input_tokens"] = cached_tokens
 
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
@@ -1244,15 +1270,20 @@ class LiteLLMAnthropicMessagesAdapter:
             else:
                 litellm_usage_chunk = None
             if litellm_usage_chunk is not None:
+                uncached_input_tokens = litellm_usage_chunk.prompt_tokens or 0
+                cached_tokens = 0
+                if hasattr(litellm_usage_chunk, "prompt_tokens_details") and litellm_usage_chunk.prompt_tokens_details:
+                    cached_tokens = getattr(litellm_usage_chunk.prompt_tokens_details, "cached_tokens", 0) or 0
+                    uncached_input_tokens -= cached_tokens
+
                 usage_delta = UsageDelta(
-                    input_tokens=litellm_usage_chunk.prompt_tokens or 0,
+                    input_tokens=uncached_input_tokens,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
                 )
-                # Add cache tokens if available (for prompt caching support)
                 if hasattr(litellm_usage_chunk, "_cache_creation_input_tokens") and litellm_usage_chunk._cache_creation_input_tokens > 0:
                     usage_delta["cache_creation_input_tokens"] = litellm_usage_chunk._cache_creation_input_tokens
-                if hasattr(litellm_usage_chunk, "_cache_read_input_tokens") and litellm_usage_chunk._cache_read_input_tokens > 0:
-                    usage_delta["cache_read_input_tokens"] = litellm_usage_chunk._cache_read_input_tokens
+                if cached_tokens > 0:
+                    usage_delta["cache_read_input_tokens"] = cached_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             return MessageBlockDelta(
