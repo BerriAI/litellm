@@ -31,6 +31,23 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 router = APIRouter()
 
 
+def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    Raises HTTP 403 if the caller does not have permission to create, update,
+    or delete agents.  Only PROXY_ADMIN users are allowed to perform these
+    write operations.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can create, update, or delete agents. Your role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
+        )
+
+
 @router.get(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -163,6 +180,8 @@ async def create_agent(
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -302,6 +321,8 @@ async def update_agent(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    _check_agent_management_permission(user_api_key_dict)
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
@@ -391,6 +412,8 @@ async def patch_agent(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    _check_agent_management_permission(user_api_key_dict)
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
@@ -441,7 +464,10 @@ async def patch_agent(
     tags=["Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def delete_agent(agent_id: str):
+async def delete_agent(
+    agent_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Delete an agent
 
@@ -459,6 +485,8 @@ async def delete_agent(agent_id: str):
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
