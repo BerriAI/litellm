@@ -225,3 +225,11 @@ cd litellm && poetry run ruff check .
 ```
 
 Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.
+
+### UI Dashboard tests
+
+```bash
+cd ui/litellm-dashboard && npx vitest run
+```
+
+The full suite (281 files, ~2800 tests) takes ~5 minutes. Use `npx vitest run src/path/to/file.test.tsx` for a single file.
