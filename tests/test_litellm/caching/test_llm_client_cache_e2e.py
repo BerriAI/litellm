@@ -23,9 +23,11 @@ async def test_evicted_client_is_not_closed():
     one, then verify the first client's transport is still open."""
     client_a = get_async_httpx_client(llm_provider="provider_a")
     # This evicts client_a from cache (capacity=1)
-    get_async_httpx_client(llm_provider="provider_b")
+    client_b = get_async_httpx_client(llm_provider="provider_b")
 
     assert not client_a.client.is_closed
+    await client_a.client.aclose()
+    await client_b.client.aclose()
 
 
 @pytest.mark.asyncio
@@ -42,3 +44,4 @@ async def test_expired_client_is_not_closed():
     cache.evict_cache()
 
     assert not client.client.is_closed
+    await client.client.aclose()
