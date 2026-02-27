@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
@@ -35,6 +36,7 @@ from litellm.proxy.auth.auth_checks import (
     common_checks,
     get_end_user_object,
     get_key_object,
+    get_project_object,
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
@@ -115,6 +117,18 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r"Credential=([^/\s,]+)", api_key)
+            if match:
+                api_key = match.group(1)
 
     return api_key
 
@@ -128,6 +142,20 @@ def _get_bearer_token(
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif api_key.startswith("AWS4-HMAC-SHA256"):
+        # Handle AWS Signature V4 format from LangChain
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Extract the Bearer token from the Credential field
+        match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
+        if match:
+            api_key = match.group(1)
+        else:
+            # If no Bearer token found in Credential, try to extract just the credential value
+            match = re.search(r"Credential=([^/\s,]+)", api_key)
+            if match:
+                api_key = match.group(1)
+            else:
+                api_key = ""
     else:
         api_key = ""
     return api_key
@@ -155,6 +183,9 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
 
+    if budget_info.model_max_budget is not None:
+        end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
+
     verbose_proxy_logger.debug(f"Applied budget limits to end user {end_user_id}")
 
 
@@ -179,6 +210,15 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     # If no Authorization header, try the api-key header
     if not authorization:
         api_key = websocket.headers.get("api-key")
+        if not api_key:
+            # Try extracting from WebSocket subprotocol (browser clients)
+            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(
+                ","
+            ):
+                protocol = protocol.strip()
+                if protocol.startswith("openai-insecure-api-key."):
+                    api_key = protocol[len("openai-insecure-api-key.") :]
+                    break
         if not api_key:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
@@ -206,9 +246,20 @@ def update_valid_token_with_end_user_params(
     valid_token: UserAPIKeyAuth, end_user_params: dict
 ) -> UserAPIKeyAuth:
     valid_token.end_user_id = end_user_params.get("end_user_id")
-    valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
-    valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
-    valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
+    # Only overwrite token fields when the DB-derived value is not None.
+    # This prevents DB lookups (where the budget table has no value set)
+    # from silently clearing values that a custom auth function may have
+    # already set on the token.
+    if end_user_params.get("end_user_tpm_limit") is not None:
+        valid_token.end_user_tpm_limit = end_user_params["end_user_tpm_limit"]
+    if end_user_params.get("end_user_rpm_limit") is not None:
+        valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
+    if end_user_params.get("allowed_model_region") is not None:
+        valid_token.allowed_model_region = end_user_params["allowed_model_region"]
+    if end_user_params.get("end_user_model_max_budget") is not None:
+        valid_token.end_user_model_max_budget = end_user_params[
+            "end_user_model_max_budget"
+        ]
     return valid_token
 
 
@@ -247,7 +298,9 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+    if (
+        litellm.max_budget > 0 and prisma_client is not None
+    ):  # user set proxy max budget
         # Use event-driven coordination to prevent cache stampede
         cache_key = "{}:spend".format(litellm_proxy_admin_name)
         global_proxy_spend = await _fetch_global_spend_with_event_coordination(
@@ -365,10 +418,8 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                     endpoint.get("custom_auth_parser") is not None
                     and endpoint.get("custom_auth_parser") == "langfuse"
                 ):
-                    """
-                    - langfuse returns {'Authorization': 'Basic YW55dGhpbmc6YW55dGhpbmc'}
-                    - check the langfuse public key if it contains the litellm api key
-                    """
+                    # langfuse returns {'Authorization': 'Basic <base64(username:password)>'}
+                    # check the langfuse public key if it contains the litellm api key
                     import base64
 
                     api_key = api_key.replace("Basic ", "").strip()
@@ -453,7 +504,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             parent_otel_span = (
                 open_telemetry_logger.create_litellm_proxy_request_started_span(
                     start_time=start_time,
-                    headers=dict(request.headers),
+                    headers=_safe_get_request_headers(request),
                 )
             )
 
@@ -463,13 +514,29 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 request=request, api_key=api_key, user_custom_auth=user_custom_auth
             )
             if response is not None and isinstance(response, UserAPIKeyAuth):
-                return UserAPIKeyAuth.model_validate(response)
+                validated = UserAPIKeyAuth.model_validate(response)
+                validated = await _run_post_custom_auth_checks(
+                    valid_token=validated,
+                    request=request,
+                    request_data=request_data,
+                    route=route,
+                    parent_otel_span=parent_otel_span,
+                )
+                return validated
             elif response is not None and isinstance(response, str):
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
-            return UserAPIKeyAuth.model_validate(response)
+            validated = UserAPIKeyAuth.model_validate(response)
+            validated = await _run_post_custom_auth_checks(
+                valid_token=validated,
+                request=request,
+                request_data=request_data,
+                route=route,
+                parent_otel_span=parent_otel_span,
+            )
+            return validated
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
         #### IF JWT ####
@@ -532,7 +599,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                     parent_otel_span=parent_otel_span,
-                    request_headers=dict(request.headers),
+                    request_headers=_safe_get_request_headers(request),
                 )
 
                 is_proxy_admin = result["is_proxy_admin"]
@@ -558,7 +625,18 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                 if is_proxy_admin:
                     return UserAPIKeyAuth(
+                        api_key=None,
                         user_role=LitellmUserRoles.PROXY_ADMIN,
+                        user_id=user_id,
+                        team_id=team_id,
+                        team_alias=(
+                            team_object.team_alias if team_object is not None else None
+                        ),
+                        team_metadata=team_object.metadata
+                        if team_object is not None
+                        else None,
+                        org_id=org_id,
+                        end_user_id=end_user_id,
                         parent_otel_span=parent_otel_span,
                     )
 
@@ -604,13 +682,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if team_object is not None
                     else None,
                 )
-                
+
                 # Check if model has zero cost - if so, skip all budget checks
                 model = get_model_from_request(request_data, route)
                 skip_budget_checks = False
                 if model is not None and llm_router is not None:
                     from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                    
+
                     skip_budget_checks = _is_model_cost_zero(
                         model=model, llm_router=llm_router
                     )
@@ -618,7 +696,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         verbose_proxy_logger.info(
                             f"Skipping all budget checks for zero-cost model: {model}"
                         )
-                
+
+                # Fetch project object for JWT path if project_id is set
+                _jwt_project_obj = None
+                if valid_token.project_id is not None:
+                    _jwt_project_obj = await get_project_object(
+                        project_id=valid_token.project_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                    if _jwt_project_obj is not None:
+                        valid_token.project_metadata = _jwt_project_obj.metadata
+
                 # run through common checks
                 _ = await common_checks(
                     request=request,
@@ -633,6 +723,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
                     skip_budget_checks=skip_budget_checks,
+                    project_object=_jwt_project_obj,
                 )
 
                 # return UserAPIKeyAuth object
@@ -655,12 +746,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
                     api_key=api_key,
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_role=LitellmUserRoles.INTERNAL_USER,
                     parent_otel_span=parent_otel_span,
                 )
             else:
                 return UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    user_role=LitellmUserRoles.INTERNAL_USER,
                     parent_otel_span=parent_otel_span,
                 )
         elif api_key is None:  # only require api key if master key is set
@@ -791,6 +882,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token=valid_token, end_user_params=end_user_params
             )
             valid_token.parent_otel_span = parent_otel_span
+            if _end_user_object is not None:
+                valid_token.end_user_object_permission = (
+                    _end_user_object.object_permission
+                )
 
             return valid_token
 
@@ -898,10 +993,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if isinstance(
                 api_key, str
             ):  # if generated token, make sure it starts with sk-.
+                _masked_key = (
+                    "{}****{}".format(api_key[:4], api_key[-4:])
+                    if len(api_key) > 8
+                    else "****"
+                )
                 assert api_key.startswith(
                     "sk-"
                 ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    api_key
+                    _masked_key
                 )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
@@ -1029,7 +1129,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             skip_budget_checks = False
             if model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-                
+
                 skip_budget_checks = _is_model_cost_zero(
                     model=model, llm_router=llm_router
                 )
@@ -1144,25 +1244,62 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         model=current_model,
                     )
 
+                # Check 5b. End-user model max budget
+                end_user_mmb = valid_token.end_user_model_max_budget
+                if (
+                    end_user_mmb is not None
+                    and isinstance(end_user_mmb, dict)
+                    and len(end_user_mmb) > 0
+                    and current_model is not None
+                    and valid_token.end_user_id is not None
+                ):
+                    await model_max_budget_limiter.is_end_user_within_model_budget(
+                        end_user_id=valid_token.end_user_id,
+                        end_user_model_max_budget=end_user_mmb,
+                        model=current_model,
+                    )
+
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
-                _team_obj: Optional[LiteLLM_TeamTable] = LiteLLM_TeamTable(
-                    team_id=valid_token.team_id,
-                    max_budget=valid_token.team_max_budget,
-                    spend=valid_token.team_spend,
-                    tpm_limit=valid_token.team_tpm_limit,
-                    rpm_limit=valid_token.team_rpm_limit,
-                    blocked=valid_token.team_blocked,
-                    models=valid_token.team_models,
-                    metadata=valid_token.team_metadata,
-                    object_permission_id=valid_token.team_object_permission_id,
-                )
+                try:
+                    _team_obj = await get_team_object(
+                        team_id=valid_token.team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                except HTTPException:
+                    _team_obj = LiteLLM_TeamTableCachedObj(
+                        team_id=valid_token.team_id,
+                        max_budget=valid_token.team_max_budget,
+                        soft_budget=valid_token.team_soft_budget,
+                        spend=valid_token.team_spend,
+                        tpm_limit=valid_token.team_tpm_limit,
+                        rpm_limit=valid_token.team_rpm_limit,
+                        blocked=valid_token.team_blocked,
+                        models=valid_token.team_models,
+                        metadata=valid_token.team_metadata,
+                        object_permission_id=valid_token.team_object_permission_id,
+                    )
             else:
                 _team_obj = None
 
             user_api_key_cache.set_cache(
                 key=valid_token.team_id, value=_team_obj
             )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
+
+            # Fetch project object if key belongs to a project
+            _project_obj = None
+            if valid_token.project_id is not None:
+                _project_obj = await get_project_object(
+                    project_id=valid_token.project_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if _project_obj is not None:
+                    valid_token.project_metadata = _project_obj.metadata
 
             global_proxy_spend = None
             if (
@@ -1203,6 +1340,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 proxy_logging_obj=proxy_logging_obj,
                 valid_token=valid_token,
                 skip_budget_checks=skip_budget_checks,
+                project_object=_project_obj,
             )
             # Token passed all checks
             if valid_token is None:
@@ -1226,6 +1364,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
+                valid_token_dict[
+                    "end_user_object_permission"
+                ] = _end_user_object.object_permission
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
@@ -1410,4 +1551,221 @@ def _update_key_budget_with_temp_budget_increase(
         return valid_token
     temp_budget_increase = _get_temp_budget_increase(valid_token) or 0.0
     valid_token.max_budget = valid_token.max_budget + temp_budget_increase
+    return valid_token
+
+
+async def _lookup_end_user_and_apply_budget(
+    valid_token: UserAPIKeyAuth,
+    route: str,
+    parent_otel_span: Optional[Span],
+    prisma_client,
+    user_api_key_cache,
+    proxy_logging_obj,
+):
+    """Look up end_user from DB and apply budget limits to valid_token."""
+    end_user_object = None
+    try:
+        end_user_object = await get_end_user_object(
+            end_user_id=valid_token.end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
+        if end_user_object is not None:
+            end_user_params = {
+                "end_user_id": valid_token.end_user_id,
+                "allowed_model_region": end_user_object.allowed_model_region,
+            }
+            if end_user_object.litellm_budget_table is not None:
+                _apply_budget_limits_to_end_user_params(
+                    end_user_params=end_user_params,
+                    budget_info=end_user_object.litellm_budget_table,
+                    end_user_id=valid_token.end_user_id,
+                )
+            valid_token = update_valid_token_with_end_user_params(
+                valid_token=valid_token, end_user_params=end_user_params
+            )
+        elif litellm.max_end_user_budget_id is not None:
+            from litellm.proxy.auth.auth_checks import get_default_end_user_budget
+
+            default_budget = await get_default_end_user_budget(
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+            )
+            if default_budget is not None:
+                end_user_params = {"end_user_id": valid_token.end_user_id}
+                _apply_budget_limits_to_end_user_params(
+                    end_user_params=end_user_params,
+                    budget_info=default_budget,
+                    end_user_id=valid_token.end_user_id,
+                )
+                valid_token = update_valid_token_with_end_user_params(
+                    valid_token=valid_token, end_user_params=end_user_params
+                )
+    except Exception as e:
+        if isinstance(e, litellm.BudgetExceededError):
+            raise e
+        verbose_proxy_logger.debug(f"Unable to find user in db. Error - {str(e)}")
+    return valid_token, end_user_object
+
+
+async def _run_post_custom_auth_checks(
+    valid_token: UserAPIKeyAuth,
+    request: Request,
+    request_data: dict,
+    route: str,
+    parent_otel_span: Optional[Span],
+) -> UserAPIKeyAuth:
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        user_api_key_cache,
+        proxy_logging_obj,
+        general_settings,
+        llm_router,
+        model_max_budget_limiter,
+    )
+
+    # 1. Look up end_user object from DB if end_user_id is set
+    end_user_object = None
+    if valid_token.end_user_id is not None:
+        valid_token, end_user_object = await _lookup_end_user_and_apply_budget(
+            valid_token=valid_token,
+            route=route,
+            parent_otel_span=parent_otel_span,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    # 2. Check token expiry
+    if valid_token.expires is not None:
+        current_time = datetime.now(timezone.utc)
+        if isinstance(valid_token.expires, datetime):
+            expiry_time = valid_token.expires
+        else:
+            expiry_time = datetime.fromisoformat(valid_token.expires)
+        if (
+            expiry_time.tzinfo is None
+            or expiry_time.tzinfo.utcoffset(expiry_time) is None
+        ):
+            expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+        if expiry_time < current_time:
+            raise ProxyException(
+                message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                type=ProxyErrorTypes.expired_key,
+                code=400,
+                param=abbreviate_api_key(api_key=valid_token.token)
+                if valid_token.token
+                else "",
+            )
+
+    current_model = request_data.get("model", None)
+
+    # 3. Check key-level model_max_budget
+    max_budget_per_model = valid_token.model_max_budget
+    if (
+        max_budget_per_model is not None
+        and isinstance(max_budget_per_model, dict)
+        and len(max_budget_per_model) > 0
+        and current_model is not None
+        and valid_token.token is not None
+    ):
+        await model_max_budget_limiter.is_key_within_model_budget(
+            user_api_key_dict=valid_token,
+            model=current_model,
+        )
+
+    # 4. Check end-user model_max_budget
+    end_user_mmb = valid_token.end_user_model_max_budget
+    if (
+        end_user_mmb is not None
+        and isinstance(end_user_mmb, dict)
+        and len(end_user_mmb) > 0
+        and current_model is not None
+        and valid_token.end_user_id is not None
+    ):
+        await model_max_budget_limiter.is_end_user_within_model_budget(
+            end_user_id=valid_token.end_user_id,
+            end_user_model_max_budget=end_user_mmb,
+            model=current_model,
+        )
+
+    # 5. Look up user object if user_id is set
+    user_object = None
+    if valid_token.user_id is not None:
+        try:
+            user_object = await get_user_object(
+                user_id=valid_token.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception:
+            # If user_role is PROXY_ADMIN on the token, create a synthetic user object
+            # so that admin route checks pass for custom auth
+            if valid_token.user_role == LitellmUserRoles.PROXY_ADMIN:
+                user_object = LiteLLM_UserTable(
+                    user_id=valid_token.user_id,
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                    spend=0.0,
+                )
+
+    # 6. Run common checks
+    if valid_token.team_id is not None:
+        try:
+            _team_obj = await get_team_object(
+                team_id=valid_token.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except HTTPException:
+            _team_obj = LiteLLM_TeamTableCachedObj(
+                team_id=valid_token.team_id,
+                max_budget=valid_token.team_max_budget,
+                soft_budget=valid_token.team_soft_budget,
+                spend=valid_token.team_spend,
+                tpm_limit=valid_token.team_tpm_limit,
+                rpm_limit=valid_token.team_rpm_limit,
+                blocked=valid_token.team_blocked,
+                models=valid_token.team_models,
+                metadata=valid_token.team_metadata,
+                object_permission_id=valid_token.team_object_permission_id,
+            )
+    else:
+        _team_obj = None
+
+    _project_obj = None
+    if valid_token.project_id is not None:
+        _project_obj = await get_project_object(
+            project_id=valid_token.project_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if _project_obj is not None:
+            valid_token.project_metadata = _project_obj.metadata
+
+    _ = await common_checks(
+        request=request,
+        request_body=request_data,
+        team_object=_team_obj,
+        user_object=user_object,
+        end_user_object=end_user_object,
+        general_settings=general_settings,
+        global_proxy_spend=None,
+        route=route,
+        llm_router=llm_router,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+        skip_budget_checks=False,
+        project_object=_project_obj,
+    )
+
     return valid_token

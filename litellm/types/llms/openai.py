@@ -699,7 +699,15 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
     content: Optional[
         Union[
-            str, Iterable[Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]]
+            str,
+            Iterable[
+                Union[
+                    ChatCompletionTextObject,
+                    ChatCompletionThinkingBlock,
+                    ChatCompletionRedactedThinkingBlock,
+                    ChatCompletionImageObject,
+                ]
+            ],
         ]
     ]
     name: Optional[str]
@@ -786,17 +794,19 @@ ValidUserMessageContentTypes = [
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
-# Assistant message content types (text, thinking, redacted_thinking)
+# Assistant message content types (text, thinking, redacted_thinking, image_url)
 ValidAssistantMessageContentTypesLiteral = Literal[
     "text",
     "thinking",
     "redacted_thinking",
+    "image_url",
 ]
 
 ValidAssistantMessageContentTypes = [
     "text",
     "thinking",
     "redacted_thinking",
+    "image_url",
 ]
 
 # Combined valid content types for chat completion messages
@@ -1058,7 +1068,20 @@ class ComputerToolParam(TypedDict, total=False):
     type: Required[Union[Literal["computer_use_preview"], str]]
 
 
-ALL_RESPONSES_API_TOOL_PARAMS = Union[ToolParam, ComputerToolParam]
+class ShellToolParam(TypedDict, total=False):
+    """
+    Shell tool for Responses API: run commands in hosted containers or local runtime.
+    See https://developers.openai.com/api/docs/guides/tools-shell.
+    """
+
+    type: Required[Union[Literal["shell"], str]]
+    """The type of tool. Use ``\"shell\"``."""
+
+    environment: Required[Dict[str, Any]]
+    """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
+
+
+ALL_RESPONSES_API_TOOL_PARAMS = Union[ToolParam, ComputerToolParam, ShellToolParam]
 
 
 class PromptObject(TypedDict, total=False):
@@ -1072,6 +1095,19 @@ class PromptObject(TypedDict, total=False):
 
     version: Optional[str]
     """Optional version of the prompt template."""
+
+
+class ContextManagementEntry(TypedDict, total=False):
+    """
+    Context management configuration entry for a request.
+    See https://developers.openai.com/api/docs/guides/compaction.
+    """
+
+    type: str
+    """The context management entry type. Currently only ``'compaction'`` is supported."""
+
+    compact_threshold: int
+    """Token threshold at which compaction is triggered for this entry. Minimum 1000."""
 
 
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
@@ -1099,11 +1135,14 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     prompt: Optional[PromptObject]
     max_tool_calls: Optional[int]
     prompt_cache_key: Optional[str]
+    prompt_cache_retention: Optional[str]
     stream_options: Optional[dict]
     top_logprobs: Optional[int]
     partial_images: Optional[
         int
     ]  # Number of partial images to generate (1-3) for streaming image generation
+    context_management: Optional[List[ContextManagementEntry]]
+    """Context management configuration. E.g. [{\"type\": \"compaction\", \"compact_threshold\": 200000}] for server-side compaction (minimum 1000)."""
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
@@ -1189,7 +1228,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     top_p: Optional[float] = None
     max_output_tokens: Optional[int] = None
     previous_response_id: Optional[str] = None
-    reasoning: Optional[Reasoning] = None
+    reasoning: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
     text: Optional[Union["ResponseText", Dict[str, Any]]] = None
     truncation: Optional[Literal["auto", "disabled"]] = None
@@ -1198,6 +1237,18 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @field_validator("reasoning", mode="before")
+    @classmethod
+    def validate_reasoning_to_dict(cls, value: Any) -> Optional[Dict[str, Any]]:
+        """Accept API reasoning dict (including effort 'none'/'xhigh'); always store as dict."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        if hasattr(value, "model_dump"):
+            return value.model_dump()
+        return value
 
     @field_validator("usage", mode="before")
     @classmethod
@@ -1306,6 +1357,11 @@ class ResponsesAPIStreamEvents(str, Enum):
 
     # Image generation events
     IMAGE_GENERATION_PARTIAL_IMAGE = "image_generation.partial_image"
+
+    # Shell tool events (Responses API; passthrough via GenericEvent)
+    SHELL_CALL_IN_PROGRESS = "response.shell_call.in_progress"
+    SHELL_CALL_COMPLETED = "response.shell_call.completed"
+    SHELL_CALL_OUTPUT = "response.shell_call_output.done"
 
     # Error event
     ERROR = "error"
@@ -1593,12 +1649,12 @@ class ImageGenerationPartialImageEvent(BaseLiteLLMOpenAIResponseObject):
 
 
 class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
-    """Nested error object within ErrorEvent"""
+    """Nested error object within ErrorEvent."""
 
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: Optional[str]
+    param: Optional[str] = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):

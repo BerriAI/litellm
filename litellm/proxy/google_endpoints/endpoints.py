@@ -1,6 +1,10 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse, StreamingResponse
 
+import litellm
+from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -17,7 +21,8 @@ router = APIRouter(
     dependencies=[Depends(user_api_key_auth)],
 )
 @router.post(
-    "/models/{model_name:path}:generateContent", dependencies=[Depends(user_api_key_auth)]
+    "/models/{model_name:path}:generateContent",
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def google_generate_content(
     request: Request,
@@ -36,12 +41,12 @@ async def google_generate_content(
     data = await _read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
-    
+
     # Extract generationConfig and pass it as config parameter
     generation_config = data.pop("generationConfig", None)
     if generation_config:
         data["config"] = generation_config
-    
+
     # Add user authentication metadata for cost tracking
     data = await add_litellm_data_to_request(
         data=data,
@@ -51,7 +56,19 @@ async def google_generate_content(
         general_settings=general_settings,
         version=version,
     )
-    
+
+    # Create logging object with full request metadata so callbacks (e.g. S3) get user/trace_id
+    data["litellm_call_id"] = request.headers.get(
+        "x-litellm-call-id", str(uuid.uuid4())
+    )
+    logging_obj, data = litellm.utils.function_setup(
+        original_function="agenerate_content",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        **data,
+    )
+    data["litellm_logging_obj"] = logging_obj
+
     # call router
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
@@ -102,6 +119,18 @@ async def google_stream_generate_content(
         general_settings=general_settings,
         version=version,
     )
+
+    # Create logging object with full request metadata so streaming END callbacks (e.g. S3) get user/trace_id
+    data["litellm_call_id"] = request.headers.get(
+        "x-litellm-call-id", str(uuid.uuid4())
+    )
+    logging_obj, data = litellm.utils.function_setup(
+        original_function="agenerate_content_stream",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        **data,
+    )
+    data["litellm_logging_obj"] = logging_obj
 
     # call router
     if llm_router is None:
@@ -247,11 +276,11 @@ async def create_interaction(
     )
 
     data = await _read_request_body(request=request)
-    
+
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -301,7 +330,7 @@ async def get_interaction(
 ):
     """
     Get an interaction by ID.
-    
+
     Per OpenAPI spec: GET /{api_version}/interactions/{interaction_id}
     """
     from litellm.proxy.proxy_server import (
@@ -319,7 +348,7 @@ async def get_interaction(
     )
 
     data = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -369,7 +398,7 @@ async def delete_interaction(
 ):
     """
     Delete an interaction by ID.
-    
+
     Per OpenAPI spec: DELETE /{api_version}/interactions/{interaction_id}
     """
     from litellm.proxy.proxy_server import (
@@ -387,7 +416,7 @@ async def delete_interaction(
     )
 
     data = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -437,7 +466,7 @@ async def cancel_interaction(
 ):
     """
     Cancel an interaction by ID.
-    
+
     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
     """
     from litellm.proxy.proxy_server import (
@@ -455,7 +484,7 @@ async def cancel_interaction(
     )
 
     data = {"interaction_id": interaction_id, "custom_llm_provider": "gemini"}
-    
+
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(

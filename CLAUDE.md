@@ -90,12 +90,17 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 - Pydantic v2 for data validation
 - Async/await patterns throughout
 - Type hints required for all public APIs
+- **Avoid imports within methods** — place all imports at the top of the file (module-level). Inline imports inside functions/methods make dependencies harder to trace and hurt readability. The only exception is avoiding circular imports where absolutely necessary.
 
 ### Testing Strategy
 - Unit tests in `tests/test_litellm/`
 - Integration tests for each provider in `tests/llm_translation/`
 - Proxy tests in `tests/proxy_unit_tests/`
 - Load tests in `tests/load_tests/`
+- **Always add tests when adding new entity types or features** — if the existing test file covers other entity types, add corresponding tests for the new one
+
+### UI / Backend Consistency
+- When wiring a new UI entity type to an existing backend endpoint, verify the backend API contract (single value vs. array, required vs. optional params) and ensure the UI controls match — e.g., use a single-select dropdown when the backend accepts a single value, not a multi-select
 
 ### Database Migrations
 - Prisma handles schema migrations

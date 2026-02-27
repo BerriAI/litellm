@@ -155,6 +155,7 @@ LLM_CONFIG_NAMES = (
     "VertexAIRerankConfig",
     "FireworksAIRerankConfig",
     "VoyageRerankConfig",
+    "IBMWatsonXRerankConfig",
     "ClarifaiConfig",
     "AI21ChatConfig",
     "LlamaAPIConfig",
@@ -226,6 +227,8 @@ LLM_CONFIG_NAMES = (
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
+    "PerplexityResponsesConfig",
+    "DatabricksResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -670,6 +673,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "FireworksAIRerankConfig",
     ),
     "VoyageRerankConfig": (".llms.voyage.rerank.transformation", "VoyageRerankConfig"),
+    "IBMWatsonXRerankConfig": (".llms.watsonx.rerank.transformation", "IBMWatsonXRerankConfig"),
     "ClarifaiConfig": (".llms.clarifai.chat.transformation", "ClarifaiConfig"),
     "AI21ChatConfig": (".llms.ai21.chat.transformation", "AI21ChatConfig"),
     "LlamaAPIConfig": (".llms.meta_llama.chat.transformation", "LlamaAPIConfig"),
@@ -900,6 +904,14 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "ManusResponsesAPIConfig": (
         ".llms.manus.responses.transformation",
         "ManusResponsesAPIConfig",
+    ),
+    "PerplexityResponsesConfig": (
+        ".llms.perplexity.responses.transformation",
+        "PerplexityResponsesConfig",
+    ),
+    "DatabricksResponsesAPIConfig": (
+        ".llms.databricks.responses.transformation",
+        "DatabricksResponsesAPIConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",

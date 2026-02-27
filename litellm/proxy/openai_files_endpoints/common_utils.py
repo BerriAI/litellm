@@ -83,41 +83,49 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
         return file_id.split("generic_response_id:")[1].split(",")[0]
 
 
-def encode_file_id_with_model(file_id: str, model: str) -> str:
+def encode_file_id_with_model(
+    file_id: str, model: str, id_type: Literal["file", "batch"] = "file"
+) -> str:
     """
     Encode a file/batch ID with model routing information.
-    
-    Format: <prefix>-<base64(litellm:<original_id>;model,<model_name>)>
+
+    Format: <prefix><base64(litellm:<original_id>;model,<model_name>)>
     The result preserves the original prefix (file-, batch_, etc.) for OpenAI compliance.
-    
+
     Args:
         file_id: Original file/batch ID from the provider (e.g., "file-abc123", "batch_xyz")
         model: Model name from model_list (e.g., "gpt-4o-litellm")
-    
+        id_type: Type of ID being encoded. Used to determine the correct prefix when
+                 the raw ID lacks a recognizable prefix (e.g., Vertex AI numeric IDs).
+                 Defaults to "file" for backward compatibility.
+
     Returns:
         Encoded ID starting with appropriate prefix and containing routing information
-    
+
     Examples:
         encode_file_id_with_model("file-abc123", "gpt-4o-litellm")
         -> "file-bGl0ZWxsbTpmaWxlLWFiYzEyMzttb2RlbCxncHQtNG8taWZvb2Q"
-        
+
         encode_file_id_with_model("batch_abc123", "gpt-4o-test")
         -> "batch_bGl0ZWxsbTpiYXRjaF9hYmMxMjM7bW9kZWwsZ3B0LTRvLXRlc3Q"
+
+        encode_file_id_with_model("3814889423749775360", "gemini-2.5-pro", id_type="batch")
+        -> "batch_bGl0ZWxsbTozODE0ODg5NDIzNzQ5Nzc1MzYwO21vZGVsLGdlbWluaS0yLjUtcHJv"
     """
     encoded_str = f"litellm:{file_id};model,{model}"
     encoded_bytes = base64.urlsafe_b64encode(encoded_str.encode())
     encoded_b64 = encoded_bytes.decode().rstrip("=")
-    
+
     # Detect the prefix from the original ID (file-, batch_, etc.)
-    # Default to "file-" if no recognizable prefix
+    # For provider-specific IDs without a recognizable prefix (e.g., Vertex AI
+    # numeric batch IDs), fall back to id_type to determine the correct prefix.
     if file_id.startswith("batch_"):
         prefix = "batch_"
     elif file_id.startswith("file-"):
         prefix = "file-"
     else:
-        # Default to file- for backward compatibility
-        prefix = "file-"
-    
+        prefix = "batch_" if id_type == "batch" else "file-"
+
     return f"{prefix}{encoded_b64}"
 
 
@@ -644,6 +652,28 @@ def _extract_model_param(request: "Request", request_body: dict) -> Optional[str
 # ============================================================================
 
 
+async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
+    """
+    If the batch response contains a raw provider input_file_id (not already a
+    unified ID), look up the corresponding unified file ID from the managed file
+    table and replace it in-place.
+    """
+    if (
+        hasattr(response, "input_file_id")
+        and response.input_file_id
+        and not _is_base64_encoded_unified_file_id(response.input_file_id)
+        and prisma_client
+    ):
+        try:
+            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                where={"flat_model_file_ids": {"has": response.input_file_id}}
+            )
+            if managed_file:
+                response.input_file_id = managed_file.unified_file_id
+        except Exception:
+            pass
+
+
 async def get_batch_from_database(
     batch_id: str,
     unified_batch_id: Union[str, Literal[False]],
@@ -687,6 +717,9 @@ async def get_batch_from_database(
         batch_data = json.loads(db_batch_object.file_object) if isinstance(db_batch_object.file_object, str) else db_batch_object.file_object
         response = LiteLLMBatch(**batch_data)
         response.id = batch_id
+
+        # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
+        await resolve_input_file_id_to_unified(response, prisma_client)
         
         verbose_proxy_logger.debug(
             f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"

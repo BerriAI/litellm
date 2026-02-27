@@ -1,6 +1,6 @@
-import copy
 import hashlib
 import json
+import os
 import secrets
 from datetime import datetime
 from datetime import datetime as dt
@@ -11,7 +11,10 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
@@ -29,6 +32,20 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+
+def _get_max_string_length_prompt_in_db() -> int:
+    """
+    Resolve prompt truncation threshold at runtime so values loaded later via
+    proxy config environment_variables are honored.
+    """
+    max_length_str = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
+    if max_length_str is None:
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+    try:
+        return int(max_length_str)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
@@ -68,6 +85,7 @@ def _get_spend_logs_metadata(
             user_api_key=None,
             user_api_key_alias=None,
             user_api_key_team_id=None,
+            user_api_key_project_id=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -86,6 +104,8 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            attempted_retries=None,
+            max_retries=None,
             cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
@@ -96,9 +116,8 @@ def _get_spend_logs_metadata(
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata = SpendLogsMetadata(
         **{  # type: ignore
-            key: metadata[key]
+            key: metadata.get(key)
             for key in SpendLogsMetadata.__annotations__.keys()
-            if key in metadata
         }
     )
     clean_metadata["applied_guardrails"] = applied_guardrails
@@ -353,6 +372,8 @@ def get_logging_payload(  # noqa: PLR0915
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
+            else metadata.get("standard_logging_guardrail_information", None)
+            if metadata is not None
             else None
         ),
         cold_storage_object_key=(
@@ -444,6 +465,7 @@ def get_logging_payload(  # noqa: PLR0915
                 kwargs=kwargs,
                 standard_logging_payload=standard_logging_payload,
             ),
+            request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
@@ -491,6 +513,16 @@ def _get_session_id_for_spend_log(
 
     # Ensure we always have a session id, if none is provided
     return str(uuid.uuid4())
+
+
+def _get_request_duration_ms(
+    start_time: datetime, end_time: datetime
+) -> Optional[int]:
+    """Compute request duration in milliseconds from start and end times."""
+    try:
+        return int((end_time - start_time).total_seconds() * 1000)
+    except Exception:
+        return None
 
 
 def _ensure_datetime_utc(timestamp: datetime) -> datetime:
@@ -579,12 +611,23 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: Optional[StandardLoggingPayload],
     metadata: Optional[dict] = None,
 ) -> str:
+    if _should_store_prompts_and_responses_in_spend_logs():
+        if standard_logging_payload is not None:
+            call_type = standard_logging_payload.get("call_type", "")
+            if call_type == "_arealtime":
+                messages = standard_logging_payload.get("messages")
+                if messages is not None:
+                    try:
+                        return json.dumps(messages, default=str)
+                    except Exception:
+                        return "{}"
     return "{}"
 
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
     visited: Optional[set] = None,
+    max_string_length_prompt_in_db: Optional[int] = None,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -594,6 +637,8 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     if visited is None:
         visited = set()
+    if max_string_length_prompt_in_db is None:
+        max_string_length_prompt_in_db = _get_max_string_length_prompt_in_db()
 
     # Get the object's memory address to track visited objects
     obj_id = id(request_body)
@@ -603,27 +648,29 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     def _sanitize_value(value: Any) -> Any:
         if isinstance(value, dict):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited)
+            return _sanitize_request_body_for_spend_logs_payload(
+                value, visited, max_string_length_prompt_in_db
+            )
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
-            if len(value) > MAX_STRING_LENGTH_PROMPT_IN_DB:
+            if len(value) > max_string_length_prompt_in_db:
                 # Keep 35% from beginning and 65% from end (end is usually more important)
                 # This split ensures we keep more context from the end of conversations
                 start_ratio = 0.35
                 end_ratio = 0.65
 
                 # Calculate character distribution
-                start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * start_ratio)
-                end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * end_ratio)
+                start_chars = int(max_string_length_prompt_in_db * start_ratio)
+                end_chars = int(max_string_length_prompt_in_db * end_ratio)
 
                 # Ensure we don't exceed the total limit
                 total_keep = start_chars + end_chars
-                if total_keep > MAX_STRING_LENGTH_PROMPT_IN_DB:
-                    end_chars = MAX_STRING_LENGTH_PROMPT_IN_DB - start_chars
+                if total_keep > max_string_length_prompt_in_db:
+                    end_chars = max_string_length_prompt_in_db - start_chars
 
                 # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= MAX_STRING_LENGTH_PROMPT_IN_DB:
+                if len(value) <= max_string_length_prompt_in_db:
                     return value
 
                 # Calculate how many characters are being skipped
@@ -642,6 +689,68 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
+def _convert_to_json_serializable_dict(
+    obj: Any, visited: Optional[set] = None, max_depth: int = 20
+) -> Any:
+    """
+    Convert object to JSON-serializable dict, handling Pydantic models safely.
+
+    This avoids pickle-based deepcopy which fails on Pydantic v2 models
+    containing _thread.RLock objects.
+
+    Args:
+        obj: Object to convert (dict, list, Pydantic model, or primitive)
+        visited: Set of object IDs to track circular references
+        max_depth: Maximum recursion depth to prevent infinite recursion
+
+    Returns:
+        JSON-serializable version of the object
+    """
+    if max_depth <= 0:
+        # Return a placeholder if max depth is exceeded
+        return "<max_depth_exceeded>"
+    
+    if visited is None:
+        visited = set()
+    
+    # Get the object's memory address to track visited objects
+    obj_id = id(obj)
+    if obj_id in visited:
+        # Circular reference detected, return placeholder
+        return "<circular_reference>"
+    
+    # Only track mutable objects (dict, list, objects with __dict__)
+    if isinstance(obj, (dict, list)) or hasattr(obj, "__dict__"):
+        visited.add(obj_id)
+    
+    try:
+        if isinstance(obj, BaseModel):
+            # Use Pydantic's model_dump() instead of pickle
+            result = obj.model_dump()
+            # Recursively process the dumped dict
+            return _convert_to_json_serializable_dict(result, visited, max_depth - 1)
+        elif isinstance(obj, dict):
+            return {
+                k: _convert_to_json_serializable_dict(v, visited, max_depth - 1)
+                for k, v in obj.items()
+            }
+        elif isinstance(obj, list):
+            return [
+                _convert_to_json_serializable_dict(item, visited, max_depth - 1)
+                for item in obj
+            ]
+        elif hasattr(obj, "__dict__"):
+            # Handle objects with __dict__ attribute
+            return _convert_to_json_serializable_dict(obj.__dict__, visited, max_depth - 1)
+        else:
+            # Primitives (str, int, float, bool, None) pass through
+            return obj
+    finally:
+        # Remove from visited set when done processing this object
+        if obj_id in visited:
+            visited.remove(obj_id)
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
@@ -649,7 +758,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
-    
+
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
@@ -658,7 +767,13 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
-            
+
+            if kwargs is not None:
+                realtime_tools = kwargs.get("realtime_tools")
+                if realtime_tools:
+                    _request_body = dict(_request_body)
+                    _request_body["tools"] = realtime_tools
+
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
@@ -674,9 +789,9 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     ),
                 }
                 
-                # If redaction is enabled, deep copy request body before redacting
+                # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = copy.deepcopy(_request_body)
+                    _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
             
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
@@ -720,7 +835,13 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
-        
+
+        if kwargs is not None:
+            realtime_tool_calls = kwargs.get("realtime_tool_calls")
+            if realtime_tool_calls and isinstance(response_obj, dict):
+                response_obj = dict(response_obj)
+                response_obj["tool_calls"] = realtime_tool_calls
+
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
@@ -736,9 +857,9 @@ def _get_response_for_spend_logs_payload(
                 ),
             }
             
-            # If redaction is enabled, deep copy response before redacting
+            # If redaction is enabled, convert to serializable dict before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
-                response_obj = copy.deepcopy(response_obj)
+                response_obj = _convert_to_json_serializable_dict(response_obj)
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(

@@ -50,7 +50,24 @@ USER root
 
 # Install runtime dependencies
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
-    npm install -g npm@latest tar@latest
+    npm install -g npm@latest tar@7.5.8 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.1 diff@8.0.3 && \
+    GLOBAL="$(npm root -g)" && \
+    find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
+    done && \
+    npm cache clean --force
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -63,6 +80,26 @@ COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+
+# SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
+# npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
+# Patch every copy of tar, glob, and brace-expansion inside that tree.
+RUN GLOBAL="$(npm root -g)" && \
+    find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find /usr/lib -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find /usr/lib -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    find /usr/lib -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find /usr/lib -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
+    done
 
 # Install semantic_router and aurelio-sdk using script
 # Convert Windows line endings to Unix and make executable

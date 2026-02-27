@@ -506,7 +506,14 @@ Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
 - **Operation IDs**: Each operation should have a unique `operationId` (this becomes the tool name)
 - **Parameters**: Request parameters should be properly documented with types and descriptions
 
-## MCP Oauth
+## MCP OAuth
+
+LiteLLM supports OAuth 2.0 for MCP servers -- both interactive (PKCE) flows for user-facing clients and machine-to-machine (M2M) `client_credentials` for backend services.
+
+See the **[MCP OAuth guide](./mcp_oauth.md)** for setup instructions, sequence diagrams, and a test server.
+
+<details>
+<summary>Detailed OAuth reference (click to expand)</summary>
 
 LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
 
@@ -588,6 +595,8 @@ sequenceDiagram
 
 See the official [MCP Authorization Flow](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-flow-steps) for additional reference.
 
+</details>
+
 
 ## Forwarding Custom Headers to MCP Servers
 
@@ -632,7 +641,7 @@ import asyncio
 config = {
     "mcpServers": {
         "mcp_group": {
-            "url": "http://localhost:4000/mcp",
+            "url": "http://localhost:4000/mcp/",
             "headers": {
                 "x-mcp-servers": "dev_group", # assume this gives access to github, zapier and deepwiki
                 "x-litellm-api-key": "Bearer sk-1234",
@@ -798,6 +807,68 @@ If your stdio MCP server needs per-request credentials, you can map HTTP headers
 ```
 
 In this example, when a client makes a request with the `X-GITHUB_PERSONAL_ACCESS_TOKEN` header, the proxy forwards that value into the stdio process as the `GITHUB_PERSONAL_ACCESS_TOKEN` environment variable.
+
+## Control MCP Access for End Users
+
+Control which MCP servers end users of your AI application can access (e.g. users of an internal chat UI). Pass the customer ID in the `x-litellm-end-user-id` header to:
+- Enforce object permissions (limit which MCP servers they can access)
+- Apply customer-specific budgets
+- Track spend per customer
+
+**FastMCP Client Example:**
+
+```python title="Track customer spend with x-litellm-end-user-id" showLineNumbers
+from fastmcp import Client
+import asyncio
+
+# MCP client configuration with customer tracking
+config = {
+    "mcpServers": {
+        "github": {
+            "url": "http://localhost:4000/github_mcp/mcp",
+            "headers": {
+                "x-litellm-api-key": "Bearer sk-1234",
+                "x-litellm-end-user-id": "customer_123",  # 👈 CUSTOMER ID
+                "Authorization": "Bearer gho_token"
+            }
+        }
+    }
+}
+
+client = Client(config)
+
+async def main():
+    async with client:
+        # All MCP calls will be tracked under customer_123
+        tools = await client.list_tools()
+        result = await client.call_tool(tools[0].name, {})
+        print(f"Tool result: {result}")
+
+asyncio.run(main())
+```
+
+**Cursor IDE Example:**
+
+```json title="Cursor config with customer tracking" showLineNumbers
+{
+  "mcpServers": {
+    "GitHub": {
+      "url": "http://localhost:4000/github_mcp/mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-litellm-end-user-id": "customer_123"
+      }
+    }
+  }
+}
+```
+
+**What happens:**
+- Customer-specific object permissions are enforced (only allowed MCP servers are accessible)
+- Customer budgets are applied
+- All tool calls are tracked under `customer_123`
+
+[Learn more about customer management →](./proxy/customers)
 
 ## Using your MCP with client side credentials
 
@@ -1486,7 +1557,7 @@ async with stdio_client(server_params) as (read, write):
 
 **Q: How do I use OAuth2 client_credentials (machine-to-machine) with MCP servers behind LiteLLM?**
 
-At the moment LiteLLM only forwards whatever `Authorization` header/value you configure for the MCP server; it does not issue OAuth2 tokens by itself. If your MCP requires the Client Credentials grant, obtain the access token directly from the authorization server and set that bearer token as the MCP server’s Authorization header value. LiteLLM does not yet fetch or refresh those machine-to-machine tokens on your behalf, but we plan to add first-class client_credentials support in a future release so the proxy can manage those tokens automatically.
+LiteLLM supports automatic token management for the `client_credentials` grant. Configure `client_id`, `client_secret`, and `token_url` on your MCP server and LiteLLM will fetch, cache, and refresh tokens automatically. See the [MCP OAuth M2M guide](./mcp_oauth.md#machine-to-machine-m2m-auth) for setup instructions.
 
 **Q: When I fetch an OAuth token from the LiteLLM UI, where is it stored?**
 

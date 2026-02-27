@@ -1,6 +1,6 @@
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
@@ -41,10 +41,29 @@ class ChunkProcessor:
     def _sort_chunks(self, chunks: list) -> list:
         if not chunks:
             return []
-        if chunks[0]._hidden_params.get("created_at"):
-            return sorted(
-                chunks, key=lambda x: x._hidden_params.get("created_at", float("inf"))
-            )
+
+        first_chunk = chunks[0]
+        first_hidden_params: Dict[str, Any] = {}
+        if isinstance(first_chunk, dict):
+            candidate = first_chunk.get("_hidden_params", {})
+            if isinstance(candidate, dict):
+                first_hidden_params = candidate
+        else:
+            candidate = getattr(first_chunk, "_hidden_params", {})
+            if isinstance(candidate, dict):
+                first_hidden_params = candidate
+
+        if first_hidden_params.get("created_at"):
+            def _created_at(chunk: Any) -> Union[int, float]:
+                if isinstance(chunk, dict):
+                    params = chunk.get("_hidden_params", {})
+                else:
+                    params = getattr(chunk, "_hidden_params", {})
+                if isinstance(params, dict):
+                    return cast(Union[int, float], params.get("created_at", float("inf")))
+                return float("inf")
+
+            return sorted(chunks, key=_created_at)
         return chunks
 
     def update_model_response_with_hidden_params(
@@ -326,10 +345,22 @@ class ChunkProcessor:
         thinking_blocks: List[
             Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]
         ] = []
-        combined_thinking_text: Optional[str] = None
-        data: Optional[str] = None
-        signature: Optional[str] = None
-        type: Literal["thinking", "redacted_thinking"] = "thinking"
+        current_thinking_text_parts: List[str] = []
+        current_signature: Optional[str] = None
+
+        def _flush_thinking_block() -> None:
+            nonlocal current_thinking_text_parts, current_signature
+            if len(current_thinking_text_parts) > 0 and current_signature:
+                thinking_blocks.append(
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking="".join(current_thinking_text_parts),
+                        signature=current_signature,
+                    )
+                )
+            current_thinking_text_parts = []
+            current_signature = None
+
         for chunk in chunks:
             choices = chunk["choices"]
             for choice in choices:
@@ -339,33 +370,25 @@ class ChunkProcessor:
                     for thinking_block in thinking:
                         thinking_type = thinking_block.get("type", None)
                         if thinking_type and thinking_type == "redacted_thinking":
-                            type = "redacted_thinking"
-                            data = thinking_block.get("data", None)
+                            _flush_thinking_block()
+                            redacted_data = thinking_block.get("data", None)
+                            if redacted_data:
+                                thinking_blocks.append(
+                                    ChatCompletionRedactedThinkingBlock(
+                                        type="redacted_thinking",
+                                        data=redacted_data,
+                                    )
+                                )
                         else:
-                            type = "thinking"
                             thinking_text = thinking_block.get("thinking", None)
                             if thinking_text:
-                                if combined_thinking_text is None:
-                                    combined_thinking_text = ""
-
-                                combined_thinking_text += thinking_text
+                                current_thinking_text_parts.append(thinking_text)
                             signature = thinking_block.get("signature", None)
+                            if signature:
+                                current_signature = signature
+                                _flush_thinking_block()
 
-        if combined_thinking_text and type == "thinking" and signature:
-            thinking_blocks.append(
-                ChatCompletionThinkingBlock(
-                    type=type,
-                    thinking=combined_thinking_text,
-                    signature=signature,
-                )
-            )
-        elif data and type == "redacted_thinking":
-            thinking_blocks.append(
-                ChatCompletionRedactedThinkingBlock(
-                    type=type,
-                    data=data,
-                )
-            )
+        _flush_thinking_block()
 
         if len(thinking_blocks) > 0:
             return thinking_blocks

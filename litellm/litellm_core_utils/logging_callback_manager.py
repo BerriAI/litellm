@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type, Uni
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_CALLBACKS
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
@@ -27,13 +28,28 @@ class LoggingCallbackManager:
     # healthy maximum number of callbacks - unlikely someone needs more than 20
     MAX_CALLBACKS = 30
 
-    def add_litellm_input_callback(self, callback: Union[CustomLogger, str]):
+    def _is_async_callable(self, callback) -> bool:
+        """Check if a callback is async. Used to auto-route callbacks to the correct list."""
+        try:
+            from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
+
+            return coroutine_checker.is_async_callable(callback)
+        except Exception:
+            return False
+
+    def add_litellm_input_callback(self, callback: Union[CustomLogger, str, Callable]):
         """
-        Add a input callback to litellm.input_callback
+        Add a input callback to litellm.input_callback.
+        Auto-routes async callbacks to litellm._async_input_callback.
         """
-        self._safe_add_callback_to_list(
-            callback=callback, parent_list=litellm.input_callback
-        )
+        if not isinstance(callback, str) and self._is_async_callable(callback):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_input_callback
+            )
+        else:
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm.input_callback
+            )
 
     def add_litellm_service_callback(
         self, callback: Union[CustomLogger, str, Callable]
@@ -59,21 +75,38 @@ class LoggingCallbackManager:
         self, callback: Union[CustomLogger, str, Callable]
     ):
         """
-        Add a success callback to `litellm.success_callback`
+        Add a success callback to `litellm.success_callback`.
+        Auto-routes async callbacks to litellm._async_success_callback.
+        Special-cases 'dynamodb' and 'openmeter' as async callbacks.
         """
-        self._safe_add_callback_to_list(
-            callback=callback, parent_list=litellm.success_callback
-        )
+        if isinstance(callback, str) and callback in ("dynamodb", "openmeter"):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_success_callback
+            )
+        elif not isinstance(callback, str) and self._is_async_callable(callback):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_success_callback
+            )
+        else:
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm.success_callback
+            )
 
     def add_litellm_failure_callback(
         self, callback: Union[CustomLogger, str, Callable]
     ):
         """
-        Add a failure callback to `litellm.failure_callback`
+        Add a failure callback to `litellm.failure_callback`.
+        Auto-routes async callbacks to litellm._async_failure_callback.
         """
-        self._safe_add_callback_to_list(
-            callback=callback, parent_list=litellm.failure_callback
-        )
+        if not isinstance(callback, str) and self._is_async_callable(callback):
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm._async_failure_callback
+            )
+        else:
+            self._safe_add_callback_to_list(
+                callback=callback, parent_list=litellm.failure_callback
+            )
 
     def add_litellm_async_success_callback(
         self, callback: Union[CustomLogger, Callable, str]
@@ -155,9 +188,9 @@ class LoggingCallbackManager:
         Check if adding another callback would exceed MAX_CALLBACKS
         Returns True if safe to add, False if would exceed limit
         """
-        if len(parent_list) >= self.MAX_CALLBACKS:
+        if len(parent_list) >= MAX_CALLBACKS:
             verbose_logger.warning(
-                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {self.MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
+                f"Cannot add callback - would exceed MAX_CALLBACKS limit of {MAX_CALLBACKS}. Current callbacks: {len(parent_list)}"
             )
             return False
         return True

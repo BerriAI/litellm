@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { Button } from "@tremor/react";
-import { Modal } from "antd";
-import { getAgentsList, deleteAgentCall } from "./networking";
+import { Modal, Alert } from "antd";
+import { getAgentsList, deleteAgentCall, keyListCall } from "./networking";
 import AddAgentForm from "./agents/add_agent_form";
-import AgentTable from "./agents/agent_table";
+import AgentCardGrid from "./agents/agent_card_grid";
 import { isAdminRole } from "@/utils/roles";
 import AgentInfoView from "./agents/agent_info";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Agent } from "./agents/types";
+import { Agent, AgentKeyInfo } from "./agents/types";
 
 interface AgentsPanelProps {
   accessToken: string | null;
@@ -20,6 +20,7 @@ interface AgentsResponse {
 
 const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
+  const [keyInfoMap, setKeyInfoMap] = useState<Record<string, AgentKeyInfo>>({});
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -36,8 +37,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
     setIsLoading(true);
     try {
       const response: AgentsResponse = await getAgentsList(accessToken);
-      console.log(`agents: ${JSON.stringify(response)}`);
-      setAgentsList(response.agents);
+      setAgentsList(response.agents || []);
     } catch (error) {
       console.error("Error fetching agents:", error);
     } finally {
@@ -45,9 +45,49 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
     }
   };
 
+  const fetchKeysForAgents = async () => {
+    if (!accessToken) return;
+    try {
+      const { keys = [] } = await keyListCall(
+        accessToken,
+        null,
+        null,
+        null,
+        null,
+        null,
+        1,
+        500
+      );
+      const map: Record<string, AgentKeyInfo> = {};
+      for (const key of keys) {
+        const agentId = (key as { agent_id?: string }).agent_id;
+        if (agentId && !map[agentId]) {
+          map[agentId] = {
+            has_key: true,
+            key_alias: (key as { key_alias?: string }).key_alias,
+            token_prefix: (key as { token?: string }).token
+              ? `${(key as { token: string }).token.slice(0, 8)}…`
+              : undefined,
+          };
+        }
+      }
+      setKeyInfoMap(map);
+    } catch (error) {
+      console.error("Error fetching keys for agents:", error);
+    }
+  };
+
   useEffect(() => {
     fetchAgents();
   }, [accessToken]);
+
+  useEffect(() => {
+    if (accessToken && agentsList.length > 0) {
+      fetchKeysForAgents();
+    } else if (agentsList.length === 0) {
+      setKeyInfoMap({});
+    }
+  }, [accessToken, agentsList.length]);
 
   const handleAddAgent = () => {
     if (selectedAgentId) {
@@ -94,6 +134,13 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
       <div className="flex flex-col gap-2 mb-4">
         <h1 className="text-2xl font-bold">Agents</h1>
         <p className="text-sm text-gray-600">List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.</p>
+        <Alert
+          message="Why do agents need keys?"
+          description="Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from the Virtual Keys page."
+          type="info"
+          showIcon
+          className="mb-3"
+        />
         <div className="mt-2">
           <Button onClick={handleAddAgent} disabled={!accessToken}>
             + Add New Agent
@@ -109,8 +156,9 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
           isAdmin={isAdmin}
         />
       ) : (
-        <AgentTable
+        <AgentCardGrid
           agentsList={agentsList}
+          keyInfoMap={keyInfoMap}
           isLoading={isLoading}
           onDeleteClick={handleDeleteClick}
           accessToken={accessToken}

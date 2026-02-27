@@ -40,9 +40,7 @@ jobs:
 
     - name: Setup litellm-enterprise as local package
       run: |
-        cd enterprise
-        python -m pip install -e .
-        cd ..
+        poetry run pip install --force-reinstall --no-deps -e enterprise/
 
     - name: Run MCP tests
       run: |
