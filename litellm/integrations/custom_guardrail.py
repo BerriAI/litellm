@@ -142,7 +142,7 @@ class CustomGuardrail(CustomLogger):
         Optional[List[int]],
     ]:
         """Filter to only the latest message for target_role."""
-        import copy
+        
 
         for index in range(len(messages) - 1, -1, -1):
             if messages[index].get("role") == target_role:
