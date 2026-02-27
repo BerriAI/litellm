@@ -533,13 +533,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return analyze_results
 
         filtered_results: List[PresidioAnalyzeResponseItem] = []
+        deny_list_strings = [
+            x.value if hasattr(x, "value") else str(x)
+            for x in self.presidio_entities_deny_list
+        ]
         for item in analyze_results:
             entity_type = item.get("entity_type")
 
-            deny_list_strings = [
-                x.value if hasattr(x, "value") else str(x)
-                for x in self.presidio_entities_deny_list
-            ]
             str_entity_type = str(
                 entity_type.value if hasattr(entity_type, "value") else entity_type
             )
@@ -921,13 +921,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         if token in content:
                             content = content.replace(token, original_text)
                         # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
-                        elif any(
-                            token.startswith(content[i:])
-                            for i in range(
-                                max(0, len(content) - len(token)), len(content)
-                            )
-                            if len(content[i:]) > 15
-                        ):
+                        else:
                             # If the end of content matches the start of a token, it's likely truncated
                             for i in range(
                                 max(0, len(content) - len(token)), len(content)
@@ -1024,8 +1018,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
         return response
 
-        return response
-
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1085,7 +1077,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
 
         # --- PII unmasking path (output_parse_pii=True) ---
-        # --- PII unmasking path (output_parse_pii=True) ---
         pii_tokens = (
             request_data.get("pii_tokens", self.pii_tokens)
             if request_data
@@ -1119,8 +1110,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if (
                 not hasattr(assembled_model_response, "usage")
                 or not assembled_model_response.usage
-            ) and all_chunks:
-                last_chunk = all_chunks[-1]
+            ) and remaining_chunks:
+                last_chunk = remaining_chunks[-1]
                 if hasattr(last_chunk, "usage") and last_chunk.usage:
                     assembled_model_response.usage = last_chunk.usage
 
