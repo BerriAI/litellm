@@ -1766,6 +1766,7 @@ def convert_function_to_anthropic_tool_invoke(
 def convert_to_anthropic_tool_invoke(
     tool_calls: List[ChatCompletionAssistantToolCall],
     web_search_results: Optional[List[Any]] = None,
+    tool_results: Optional[List[Any]] = None,
 ) -> List[Union[AnthropicMessagesToolUseParam, Dict[str, Any]]]:
     """
     OpenAI tool invokes:
@@ -1840,12 +1841,18 @@ def convert_to_anthropic_tool_invoke(
             }
             anthropic_tool_invoke.append(_anthropic_server_tool_use)
 
-            # Add corresponding web_search_tool_result if available
+            # Add corresponding tool result if available.
+            # Check both web_search_results (web_search_tool_result / web_fetch_tool_result)
+            # and tool_results (bash_code_execution_tool_result, etc.)
+            _all_tool_results: List[Any] = []
             if web_search_results:
-                for result in web_search_results:
-                    if result.get("tool_use_id") == tool_id:
-                        anthropic_tool_invoke.append(result)
-                        break
+                _all_tool_results.extend(web_search_results)
+            if tool_results:
+                _all_tool_results.extend(tool_results)
+            for result in _all_tool_results:
+                if result.get("tool_use_id") == tool_id:
+                    anthropic_tool_invoke.append(result)
+                    break
         else:
             # Regular tool_use
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
@@ -2472,9 +2479,10 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     # Pass through as-is since these are Anthropic-native content types
                     elif m.get("type", "") == "server_tool_use":
                         assistant_content.append(m)  # type: ignore
-                    # handle tool_search_tool_result blocks
+                    # handle all *_tool_result blocks (tool_search_tool_result,
+                    # web_search_tool_result, bash_code_execution_tool_result, etc.)
                     # Pass through as-is since these are Anthropic-native content types
-                    elif m.get("type", "") == "tool_search_tool_result":
+                    elif m.get("type", "").endswith("_tool_result"):
                         assistant_content.append(m)  # type: ignore
             elif (
                 "content" in assistant_content_block
@@ -2504,7 +2512,8 @@ def anthropic_messages_pt(  # noqa: PLR0915
             if (
                 assistant_tool_calls is not None
             ):  # support assistant tool invoke conversion
-                # Get web_search_results from provider_specific_fields for server_tool_use reconstruction
+                # Get web_search_results and tool_results from provider_specific_fields
+                # for server_tool_use reconstruction.
                 # Fixes: https://github.com/BerriAI/litellm/issues/17737
                 _provider_specific_fields_raw = assistant_content_block.get(
                     "provider_specific_fields"
@@ -2517,9 +2526,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                 _web_search_results = _provider_specific_fields.get(
                     "web_search_results"
                 )
+                _tool_results = _provider_specific_fields.get("tool_results")
                 tool_invoke_results = convert_to_anthropic_tool_invoke(
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
+                    tool_results=_tool_results,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates

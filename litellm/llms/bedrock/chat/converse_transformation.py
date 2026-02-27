@@ -511,7 +511,6 @@ class AmazonConverseConfig(BaseConfig):
             "response_format",
             "requestMetadata",
             "service_tier",
-            "parallel_tool_calls",
         ]
 
         if (
@@ -914,13 +913,6 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
-            if param == "parallel_tool_calls":
-                disable_parallel = not value
-                optional_params["_parallel_tool_use_config"] = {
-                    "tool_choice": {
-                        "disable_parallel_tool_use": disable_parallel
-                    }
-                }
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
@@ -1217,14 +1209,14 @@ class AmazonConverseConfig(BaseConfig):
 
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
-        if parallel_tool_use_config is not None:
-            # Merge the tool_choice config from parallel_tool_calls into additional_request_params
+        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
             for key, value in parallel_tool_use_config.items():
                 if key in additional_request_params and isinstance(additional_request_params[key], dict) and isinstance(value, dict):
-                    # Merge dictionaries
                     additional_request_params[key].update(value)
                 else:
                     additional_request_params[key] = value
+
+        additional_request_params.pop("parallel_tool_calls", None)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(

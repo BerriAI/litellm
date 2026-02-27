@@ -161,6 +161,7 @@ class CustomStreamWrapper:
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
+        self._last_returned_hidden_params: Optional[dict] = None
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -1835,6 +1836,7 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         response._hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = response._hidden_params
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -1876,6 +1878,24 @@ class CustomStreamWrapper:
                         None,
                         cache_hit,
                     )
+                # Update hidden_params with final usage from
+                # stream_chunk_builder.  Some providers (e.g. OpenRouter)
+                # send usage in a chunk after finish_reason, which arrives
+                # after _hidden_params["usage"] was initially set.  The
+                # _hidden_params dict is the same object the user received
+                # (shared by reference), so mutating it here also corrects
+                # the user's copy.
+                if (
+                    self.stream_options is None
+                    and complete_streaming_response is not None
+                    and self._last_returned_hidden_params is not None
+                ):
+                    final_usage = getattr(
+                        complete_streaming_response, "usage", None
+                    )
+                    if final_usage is not None:
+                        self._last_returned_hidden_params["usage"] = final_usage
+
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response
@@ -2000,6 +2020,7 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk._hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = processed_chunk._hidden_params
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2064,6 +2085,19 @@ class CustomStreamWrapper:
                             cache_hit=cache_hit,
                         )
                     )
+                # Update hidden_params with final usage from
+                # stream_chunk_builder (see sync __next__ for full comment).
+                if (
+                    self.stream_options is None
+                    and complete_streaming_response is not None
+                    and self._last_returned_hidden_params is not None
+                ):
+                    final_usage = getattr(
+                        complete_streaming_response, "usage", None
+                    )
+                    if final_usage is not None:
+                        self._last_returned_hidden_params["usage"] = final_usage
+
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
                     return response

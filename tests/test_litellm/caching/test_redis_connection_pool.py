@@ -1,12 +1,8 @@
-"""
-Regression tests for Redis connection pool leak fixes (RC1-RC5).
+"""Redis connection pool and LLMClientCache eviction tests."""
 
-Tests are pure unit tests — no Redis server required.
-"""
-
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import redis.asyncio as async_redis
 
@@ -131,37 +127,33 @@ async def test_disconnect_idempotent():
     await cache.disconnect()  # should not raise
 
 
+# Regression: cache eviction must not close shared httpx clients (PR #22247)
+
 @pytest.mark.asyncio
-async def test_eviction_calls_aclose():
-    """When an async client is evicted from LLMClientCache, its aclose()
-    should be scheduled via create_task."""
-    cache = LLMClientCache(max_size_in_memory=2, default_ttl=600)
+async def test_httpx_client_survives_capacity_eviction():
+    """Evicting an httpx client from LLMClientCache must NOT close it."""
+    cache = LLMClientCache(max_size_in_memory=1, default_ttl=600)
+    client = httpx.AsyncClient()
 
-    client = AsyncMock()
-    client.aclose = AsyncMock()
+    cache.set_cache("client_1", client)
+    # Exceed capacity — client_1 gets evicted
+    cache.set_cache("client_2", "other")
 
-    cache.set_cache(key="client-0", value=client)
-    cache.set_cache(key="filler", value="x")
-    # Third insert triggers eviction of client-0
-    cache.set_cache(key="trigger", value="y")
-
-    # Let the scheduled task run
-    await asyncio.sleep(0.05)
-
-    assert client.aclose.await_count > 0
+    assert not client.is_closed
+    await client.aclose()
 
 
 @pytest.mark.asyncio
-async def test_eviction_non_closeable_safe():
-    """Evicting plain values (strings, dicts, ints) should not crash."""
-    cache = LLMClientCache(max_size_in_memory=2, default_ttl=600)
+async def test_httpx_client_survives_ttl_eviction():
+    """Evicting an httpx client via TTL expiry must NOT close it."""
+    cache = LLMClientCache(max_size_in_memory=200, default_ttl=600)
+    client = httpx.AsyncClient()
 
-    cache.set_cache(key="str-val", value="hello")
-    cache.set_cache(key="dict-val", value={"foo": "bar"})
-    # This evicts "str-val" — should not raise
-    cache.set_cache(key="int-val", value=42)
+    # TTL=0 so it expires immediately
+    cache.set_cache("client_1", client, ttl=0)
+    cache.evict_cache()
 
-    await asyncio.sleep(0.05)
+    assert not client.is_closed
+    await client.aclose()
 
-    # If we got here without exception, the test passes
-    assert cache.get_cache(key="int-val") == 42
+

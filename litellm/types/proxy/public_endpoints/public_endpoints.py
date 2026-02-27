@@ -54,18 +54,17 @@ class AgentCreateInfo(BaseModel):
     model_template: Optional[str] = None
 
 
-class SupportedEndpointInfo(BaseModel):
-    key: str
-    display_name: str
-    endpoint: str
-
-
-class SupportedProviderInfo(BaseModel):
+class EndpointProvider(BaseModel):
     slug: str
     display_name: str
-    supported: List[str]
+
+
+class SupportedEndpoint(BaseModel):
+    key: str
+    label: str
+    endpoint: str
+    providers: List[EndpointProvider]
 
 
 class SupportedEndpointsResponse(BaseModel):
-    endpoints: List[SupportedEndpointInfo]
-    providers: List[SupportedProviderInfo]
+    endpoints: List[SupportedEndpoint]

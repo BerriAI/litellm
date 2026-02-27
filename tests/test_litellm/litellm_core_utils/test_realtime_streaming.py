@@ -637,9 +637,10 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
     assert streaming._has_realtime_guardrails() is True, (
         "pre_call guardrail should be recognized as a realtime guardrail"
     )
-    # pre_call guardrail should NOT trigger the audio/VAD session.update injection
-    assert streaming._has_audio_transcription_guardrails() is False, (
-        "pre_call guardrail should not trigger audio transcription guardrail path"
+    # pre_call guardrail SHOULD trigger the audio/VAD session.update injection so
+    # that the LLM does not auto-respond before the guardrail can check the transcript.
+    assert streaming._has_audio_transcription_guardrails() is True, (
+        "pre_call guardrail should trigger audio transcription guardrail path"
     )
 
     litellm.callbacks = []  # cleanup
@@ -711,10 +712,11 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_no_injection_for_pre_call_only():
+async def test_realtime_session_created_injects_session_update_for_pre_call_guardrail():
     """
-    Test that when only a pre_call guardrail is configured (no audio transcription),
-    session.created does NOT trigger the session.update injection.
+    Test that when a pre_call guardrail is configured, session.created triggers the
+    session.update injection (create_response: false) so the LLM does not auto-respond
+    before the guardrail can check the voice transcript.
     """
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -751,14 +753,15 @@ async def test_realtime_session_created_no_injection_for_pre_call_only():
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    # No session.update should be injected
+    # session.update SHOULD be injected so the LLM waits for guardrail approval
     sent_to_backend = [
         json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args
     ]
     session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
-    assert len(session_updates) == 0, (
-        f"pre_call guardrail should NOT inject session.update, got: {sent_to_backend}"
+    assert len(session_updates) == 1, (
+        f"pre_call guardrail should inject session.update to gate audio responses, got: {sent_to_backend}"
     )
+    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
 
     litellm.callbacks = []  # cleanup
 

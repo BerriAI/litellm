@@ -1,4 +1,5 @@
 import json
+import ssl
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -4659,6 +4660,8 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -4672,6 +4675,11 @@ class BaseLLMHTTPHandler:
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
+            if url.startswith("wss://") and ssl_context is False:
+                # Keep TLS for wss:// while honoring SSL_VERIFY=False semantics.
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
             async with websockets.connect(  # type: ignore
                 url,
                 additional_headers=headers,
@@ -4686,12 +4694,17 @@ class BaseLLMHTTPHandler:
                     if _session_config:
                         await backend_ws.send(_session_config)
 
+                _request_data: Dict[str, Any] = {}
+                if litellm_metadata:
+                    _request_data["litellm_metadata"] = litellm_metadata
                 realtime_streaming = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     provider_config,
                     model,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_request_data,
                 )
                 if _session_config:
                     realtime_streaming.session_configuration_request = _session_config
