@@ -69,13 +69,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             base_gpt_series_params.remove("tool_choice")
 
         non_supported_params = [
-            "logprobs",
-            "top_p",
             "presence_penalty",
             "frequency_penalty",
-            "top_logprobs",
             "stop",
+            "logit_bias",
+            "modalities",
+            "prediction",
+            "audio",
+            "web_search_options",
         ]
+
+        # gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort="none"
+        if not self.is_model_gpt_5_1_model(model):
+            non_supported_params.extend(["logprobs", "top_p", "top_logprobs"])
 
         return [
             param
@@ -117,6 +123,24 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             optional_params["max_completion_tokens"] = non_default_params.pop(
                 "max_tokens"
             )
+
+        # gpt-5.1/5.2 support logprobs, top_p, top_logprobs only when reasoning_effort="none"
+        if self.is_model_gpt_5_1_model(model):
+            sampling_params = ["logprobs", "top_logprobs", "top_p"]
+            has_sampling = any(p in non_default_params for p in sampling_params)
+            if has_sampling and reasoning_effort not in (None, "none"):
+                if litellm.drop_params or drop_params:
+                    for p in sampling_params:
+                        non_default_params.pop(p, None)
+                else:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            "gpt-5.1/5.2 only support logprobs, top_p, top_logprobs when "
+                            "reasoning_effort='none'. Current reasoning_effort='{}'. "
+                            "To drop unsupported params set `litellm.drop_params = True`"
+                        ).format(reasoning_effort),
+                        status_code=400,
+                    )
 
         if "temperature" in non_default_params:
             temperature_value: Optional[float] = non_default_params.pop("temperature")
