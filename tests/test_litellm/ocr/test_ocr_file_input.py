@@ -343,6 +343,32 @@ class TestBuildDocumentFromUpload:
         b64_data = result["document_url"].split(";base64,")[1]
         assert base64.b64decode(b64_data) == content
 
+    def test_should_strip_mime_parameters_from_content_type(self):
+        """Content-Type with parameters (e.g. charset) should be stripped to the base MIME type."""
+        content = b"%PDF-1.4 test"
+
+        result = self._build(
+            file_content=content,
+            filename="doc.pdf",
+            content_type="application/pdf; charset=utf-8",
+        )
+
+        assert result["type"] == "document_url"
+        assert result["document_url"].startswith("data:application/pdf;base64,")
+
+    def test_should_strip_mime_parameters_with_multiple_params(self):
+        """Content-Type with multiple parameters should still be stripped correctly."""
+        content = b"image data"
+
+        result = self._build(
+            file_content=content,
+            filename="img.png",
+            content_type="image/png; charset=utf-8; boundary=something",
+        )
+
+        assert result["type"] == "image_url"
+        assert result["image_url"].startswith("data:image/png;base64,")
+
 
 class TestProxySecurityGuard:
     """Test that the proxy rejects type='file' documents in JSON requests."""
