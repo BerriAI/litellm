@@ -807,9 +807,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         prom_logger = self._get_prometheus_logger()
         if prom_logger:
             first_model = target_model_names_list[0] if target_model_names_list else None
+            first_provider = ""
+            if responses:
+                first_provider = responses[0]._hidden_params.get("custom_llm_provider") or ""
             prom_logger.record_managed_file_created(
                 model=first_model or "",
-                api_provider="",
+                api_provider=first_provider,
                 user=user_api_key_dict.user_id or "",
                 user_email=getattr(user_api_key_dict, "user_email", None) or "",
                 api_key_alias=user_api_key_dict.key_alias or "",
@@ -820,6 +823,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     purpose=response.purpose or "batch",
                     file_type="input",
                     model=first_model,
+                    api_provider=first_provider,
                     user=user_api_key_dict.user_id,
                 )
 
@@ -995,9 +999,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if original_unified_file_id:
                 prom_logger = self._get_prometheus_logger()
                 if prom_logger:
+                    batch_provider = ""
+                    if model_name and "/" in model_name:
+                        batch_provider = model_name.split("/")[0]
                     prom_logger.record_managed_batch_created(
                         model=model_name or "",
-                        api_provider="",
+                        api_provider=batch_provider,
                         user=user_api_key_dict.user_id or "",
                         user_email=getattr(user_api_key_dict, "user_email", None) or "",
                         api_key_alias=user_api_key_dict.key_alias or "",
