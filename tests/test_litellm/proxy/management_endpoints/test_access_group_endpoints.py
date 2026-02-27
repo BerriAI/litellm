@@ -1169,7 +1169,7 @@ def test_delete_access_group_handles_out_of_sync_assigned_keys(client_and_mocks)
 
 
 def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks):
-    """Update with explicit null for assigned_*_ids clears the list without TypeError."""
+    """Update with explicit null for assigned_*_ids clears the list and writes [] to DB."""
     client, _, mock_table, *_ = client_and_mocks
 
     existing = _make_access_group_record(
@@ -1185,3 +1185,8 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
         json={"assigned_team_ids": None, "assigned_key_ids": None},
     )
     assert resp.status_code == 200
+
+    # Verify the DB update was called with [] (not null) for list fields
+    update_call_kwargs = mock_table.update.call_args.kwargs
+    assert update_call_kwargs["data"]["assigned_team_ids"] == []
+    assert update_call_kwargs["data"]["assigned_key_ids"] == []
