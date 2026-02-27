@@ -209,16 +209,14 @@ class DatadogMetricsLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
+        batch = self.log_queue.copy()
+        payload_data: DatadogMetricsPayload = {"series": batch}
+
         try:
-            # We must only send the current batch, so copy and clear log queue
-            batch = self.log_queue.copy()
-            # Note: CustomBatchLogger clears queue in flush_queue, but we'll manually copy what we need
-
-            payload_data: DatadogMetricsPayload = {"series": batch}
-
             await self._upload_to_datadog(payload_data)
-
         except Exception as e:
+            # Re-insert failed batch so next flush retries
+            self.log_queue.extend(batch)
             verbose_logger.exception(
                 f"Datadog Metrics: Error in async_send_batch: {str(e)}"
             )
