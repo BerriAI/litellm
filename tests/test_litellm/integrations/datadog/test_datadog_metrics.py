@@ -66,7 +66,7 @@ async def test_extract_tags(clean_env):
 @pytest.mark.asyncio
 async def test_extract_tags_no_team(clean_env):
     """Test tag extraction when no team info is present."""
-    logger = DatadogMetricsLogger()
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
 
     payload = StandardLoggingPayload(
         custom_llm_provider="anthropic",
