@@ -4,7 +4,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 
 from litellm._uuid import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 
@@ -70,6 +70,9 @@ class CheckBatchCost:
             get_model_id_from_unified_batch_id,
         )
 
+        from litellm.integrations.prometheus import PrometheusLogger
+        prom_logger = PrometheusLogger.get_instance()
+
         # Look for all batches that have not yet been processed by CheckBatchCost
         jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
             where={
@@ -79,6 +82,16 @@ class CheckBatchCost:
             }
         )
         completed_jobs = []
+        # Track (model, provider) for each successfully processed job
+        processed_models: list[Tuple[Optional[str], Optional[str]]] = []
+
+        # Record batch state distribution gauge
+        if prom_logger:
+            state_counts: dict[str, int] = {}
+            for j in jobs:
+                st = j.status or "unknown"
+                state_counts[st] = state_counts.get(st, 0) + 1
+            prom_logger.record_managed_batches_by_state(state_counts)
 
         for job in jobs:
             # get the model from the job
@@ -90,6 +103,8 @@ class CheckBatchCost:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} because it is not a valid unified object id"
                 )
+                if prom_logger:
+                    prom_logger.record_check_batch_cost_error("invalid_unified_id")
                 continue
             else:
                 unified_object_id = decoded_unified_object_id
@@ -101,6 +116,8 @@ class CheckBatchCost:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} because it is not a valid model id"
                 )
+                if prom_logger:
+                    prom_logger.record_check_batch_cost_error("invalid_model_id")
                 continue
 
             verbose_proxy_logger.info(
@@ -120,6 +137,8 @@ class CheckBatchCost:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
                 )
+                if prom_logger:
+                    prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
@@ -157,11 +176,19 @@ class CheckBatchCost:
                     except (IndexError, AttributeError):
                         pass
 
-                credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
-                _file_content = await afile_content(
-                    file_id=raw_output_file_id,
-                    **credentials,
-                )
+                try:
+                    credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                    _file_content = await afile_content(
+                        file_id=raw_output_file_id,
+                        **credentials,
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.info(
+                        f"Skipping job {unified_object_id}: error fetching output file content: {e}"
+                    )
+                    if prom_logger:
+                        prom_logger.record_check_batch_cost_error("file_content_error")
+                    continue
 
                 # Access content - handle both direct attribute and method call
                 if hasattr(_file_content, 'content'):
@@ -170,6 +197,15 @@ class CheckBatchCost:
                     content_bytes = await _file_content.read()
                 else:
                     content_bytes = _file_content
+
+                # Record output file size
+                if prom_logger and content_bytes:
+                    prom_logger.record_managed_file_size(
+                        size_bytes=len(content_bytes) if content_bytes else 0,
+                        purpose="batch",
+                        file_type="output",
+                        model=model_id,
+                    )
 
                 file_content_as_dict = _get_file_content_as_dictionary(
                     content_bytes
@@ -180,6 +216,8 @@ class CheckBatchCost:
                     verbose_proxy_logger.info(
                         f"Skipping job {unified_object_id} because it is not a valid deployment info"
                     )
+                    if prom_logger:
+                        prom_logger.record_check_batch_cost_error("deployment_not_found")
                     continue
                 custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
                 litellm_model_name = deployment_info.litellm_params.model
@@ -189,17 +227,26 @@ class CheckBatchCost:
                     custom_llm_provider=custom_llm_provider,
                 )
 
-                # Pass deployment model_info so custom batch pricing
-                # (input_cost_per_token_batches etc.) is used for cost calc
-                deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
-                batch_cost, batch_usage, batch_models = (
-                    await calculate_batch_cost_and_usage(
-                        file_content_dictionary=file_content_as_dict,
-                        custom_llm_provider=llm_provider,  # type: ignore
-                        model_name=model_name,
-                        model_info=deployment_model_info,
+                try:
+                    # Pass deployment model_info so custom batch pricing
+                    # (input_cost_per_token_batches etc.) is used for cost calc
+                    deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
+                    batch_cost, batch_usage, batch_models = (
+                        await calculate_batch_cost_and_usage(
+                            file_content_dictionary=file_content_as_dict,
+                            custom_llm_provider=llm_provider,  # type: ignore
+                            model_name=model_name,
+                            model_info=deployment_model_info,
+                        )
                     )
-                )
+                except Exception as e:
+                    verbose_proxy_logger.info(
+                        f"Skipping job {unified_object_id}: error calculating batch cost: {e}"
+                    )
+                    if prom_logger:
+                        prom_logger.record_check_batch_cost_error("cost_calculation_error")
+                    continue
+
                 logging_obj = LiteLLMLogging(
                     model=batch_models[0],
                     messages=[{"role": "user", "content": "<retrieve_batch>"}],
@@ -236,11 +283,30 @@ class CheckBatchCost:
                     batch_models=batch_models,
                 )
 
+                # Record batch duration (completed_at - created_at)
+                if prom_logger and response.completed_at and response.created_at:
+                    duration_seconds = float(response.completed_at - response.created_at)
+                    if duration_seconds >= 0:
+                        prom_logger.record_managed_batch_duration(
+                            duration_seconds=duration_seconds,
+                            model=model_name,
+                            api_provider=str(llm_provider) if llm_provider else None,
+                        )
+
                 # mark the job as complete
                 completed_jobs.append(job)
+                processed_models.append((model_name, str(llm_provider) if llm_provider else None))
 
             if len(completed_jobs) > 0:
                 await self.prisma_client.db.litellm_managedobjecttable.update_many(
                     where={"id": {"in": [job.id for job in completed_jobs]}},
                     data={"batch_processed": True, "status": "complete"},
                 )
+
+        # Record polling run metrics (always, even if nothing was processed)
+        if prom_logger:
+            prom_logger.record_check_batch_cost_run(
+                jobs_polled=len(jobs),
+                jobs_processed=len(completed_jobs),
+                processed_models=processed_models if processed_models else None,
+            )
