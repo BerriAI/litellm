@@ -37,6 +37,7 @@ import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
+import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
 import ToolPolicies from "@/components/ToolPolicies";
 import SpendLogsTable from "@/components/view_logs";
@@ -547,6 +548,8 @@ function CreateKeyPageContent() {
                     <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "access-groups" ? (
                     <AccessGroupsPage />
+                  ) : page == "projects" ? (
+                    <ProjectsPage />
                   ) : page == "vector-stores" ? (
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                   ) : page == "tool-policies" ? (
