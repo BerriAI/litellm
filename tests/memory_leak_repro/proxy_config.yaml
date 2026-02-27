@@ -1,0 +1,10 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_base: http://127.0.0.1:18080/v1
+      api_key: sk-fake
+
+general_settings:
+  master_key: sk-test-master-key
+  disable_reset_budget: true
