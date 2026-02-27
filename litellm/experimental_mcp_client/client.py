@@ -209,6 +209,8 @@ class MCPClient:
                     headers["X-API-Key"] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.authorization:
                     headers["Authorization"] = self._mcp_auth_value
+                elif self.auth_type == MCPAuth.oauth2:
+                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
 

@@ -23,6 +23,7 @@ interface A2AJsonRpcRequest {
   method: string;
   params: {
     message: A2AMessage;
+    metadata?: { guardrails?: string[] };
   };
 }
 
@@ -114,6 +115,7 @@ export const makeA2ASendMessageRequest = async (
   onTotalLatency?: (totalLatency: number) => void,
   onA2AMetadata?: (metadata: A2ATaskMetadata) => void,
   customBaseUrl?: string,
+  guardrails?: string[],
 ): Promise<void> => {
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const url = proxyBaseUrl
@@ -136,6 +138,10 @@ export const makeA2ASendMessageRequest = async (
       },
     },
   };
+
+  if (guardrails && guardrails.length > 0) {
+    jsonRpcRequest.params.metadata = { guardrails };
+  }
 
   const startTime = performance.now();
 

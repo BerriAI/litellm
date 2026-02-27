@@ -10,10 +10,13 @@ Endpoints here:
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 - GET `/v1/mcp/tools - lists all the tools available for a key
 - GET `/v1/mcp/access_groups` - lists all available MCP access groups
+- GET `/v1/mcp/discover` - Returns curated list of well-known MCP servers for discovery UI
 
 """
 
 import importlib
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Literal, Optional
@@ -59,18 +62,18 @@ except ImportError as e:
 
 if MCP_AVAILABLE:
     try:
-        from mcp.shared.tool_name_validation import (  # type: ignore
-            validate_tool_name,
+        from mcp.shared.tool_name_validation import (
+            validate_tool_name,  # pyright: ignore[reportAssignmentType]
         )
     except ImportError:
         from pydantic import BaseModel
 
-        class ToolNameValidationResult(BaseModel):
+        class _ToolNameValidationResult(BaseModel):
             is_valid: bool = True
             warnings: list = []
 
-        def validate_tool_name(name: str) -> ToolNameValidationResult:  # type: ignore[misc]
-            return ToolNameValidationResult()
+        def validate_tool_name(name: str) -> _ToolNameValidationResult:  # type: ignore[misc]
+            return _ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
@@ -262,6 +265,67 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
 
+    def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        """Best-effort detection for route-restricted virtual keys.
+
+        We treat a requestor as a "restricted" virtual key if `allowed_routes`
+        is a non-empty list. This matches the auth gate that blocks routes with
+        the error: "Virtual key is not allowed to call this route...".
+        """
+
+        allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
+        return isinstance(allowed_routes, list) and len(allowed_routes) > 0
+
+    def _sanitize_mcp_server_for_virtual_key(
+        mcp_server: LiteLLM_MCPServerTable,
+    ) -> LiteLLM_MCPServerTable:
+        """Return a minimally sufficient MCP server view for virtual keys.
+
+        Security model:
+        - Virtual keys should be able to *discover* accessible servers.
+        - They should NOT receive sensitive configuration details like upstream
+          URLs, env vars, headers, commands/args, access-group names, or
+          credentials.
+        """
+
+        sanitized = _redact_mcp_credentials(mcp_server)
+
+        # Remove potentially sensitive config + identity fields.
+        sanitized.url = None
+        sanitized.static_headers = None
+        sanitized.env = {}
+        sanitized.command = None
+        sanitized.args = []
+        sanitized.extra_headers = []
+        sanitized.allowed_tools = []
+        sanitized.mcp_access_groups = []
+        sanitized.teams = []
+
+        sanitized.authorization_url = None
+        sanitized.token_url = None
+        sanitized.registration_url = None
+
+        sanitized.health_check_error = None
+        sanitized.last_health_check = None
+
+        sanitized.created_by = None
+        sanitized.updated_by = None
+        sanitized.created_at = None
+        sanitized.updated_at = None
+
+        # `mcp_info` is arbitrary metadata; keep only an explicit safe subset.
+        is_public = False
+        if isinstance(sanitized.mcp_info, dict):
+            is_public = bool(sanitized.mcp_info.get("is_public"))
+        sanitized.mcp_info = {"is_public": True} if is_public else None
+
+        return sanitized
+
+    def _sanitize_mcp_server_list_for_virtual_key(
+        mcp_servers: Iterable[LiteLLM_MCPServerTable],
+    ) -> List[LiteLLM_MCPServerTable]:
+        return [_sanitize_mcp_server_for_virtual_key(server) for server in mcp_servers]
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
@@ -333,6 +397,7 @@ if MCP_AVAILABLE:
             token_url=payload.token_url,
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
+            available_on_public_internet=payload.available_on_public_internet,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -422,6 +487,18 @@ if MCP_AVAILABLE:
         return {"access_groups": access_groups_list}
 
     @router.get(
+        "/network/client-ip",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+        description="Returns the caller's IP address as seen by the proxy.",
+    )
+    async def get_client_ip(request: Request):
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+        return {"ip": client_ip}
+
+    @router.get(
         "/registry.json",
         tags=["mcp"],
         description="MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry",
@@ -433,11 +510,21 @@ if MCP_AVAILABLE:
                 detail="MCP registry is not enabled",
             )
 
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
+        verbose_proxy_logger.debug("MCP registry request from IP=%s", client_ip)
+
         base_url = get_request_base_url(request)
         registry_servers: List[Dict[str, Any]] = []
         registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
 
-        registered_servers = list(global_mcp_server_manager.get_registry().values())
+        # Centralized IP-based filtering: external callers only see public servers
+        registered_servers = list(
+            global_mcp_server_manager.get_filtered_registry(client_ip).values()
+        )
+
         registered_servers.sort(key=_build_mcp_registry_server_name)
 
         for server in registered_servers:
@@ -481,8 +568,11 @@ if MCP_AVAILABLE:
         """
 
         user_mcp_management_mode = _get_user_mcp_management_mode()
+        is_restricted_virtual_key = _is_restricted_virtual_key_request(
+            user_api_key_dict
+        )
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
             servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
         else:
@@ -508,6 +598,11 @@ if MCP_AVAILABLE:
                     if server.mcp_info is None:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
+
+        # Virtual keys only get a sanitized discovery view.
+        if is_restricted_virtual_key:
+            return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
+
         return redacted_mcp_servers
 
     @router.get(
@@ -602,6 +697,34 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server with id {server_id} not found"},
             )
 
+        # Implement authz restriction from requested user
+        is_admin_view = _user_has_admin_view(user_api_key_dict)
+        is_restricted_virtual_key = _is_restricted_virtual_key_request(
+            user_api_key_dict
+        )
+
+        if not is_admin_view:
+            # Perform authz check BEFORE any health check (avoid side-effects for
+            # unauthorized callers).
+            mcp_server_records = await get_all_mcp_servers_for_user(
+                prisma_client, user_api_key_dict
+            )
+            exists = does_mcp_server_exist(mcp_server_records, server_id)
+
+            if not exists:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": (
+                            f"User does not have permission to view mcp server with id {server_id}. "
+                            "You can only view mcp servers that you have access to."
+                        )
+                    },
+                )
+
+        # At this point caller is authorized to view the server.
+        await global_mcp_server_manager.add_server(mcp_server)
+
         # Perform health check on the server using server manager
         try:
             health_result = await global_mcp_server_manager.health_check_server(
@@ -621,26 +744,10 @@ if MCP_AVAILABLE:
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)
 
-        # Implement authz restriction from requested user
-        if _user_has_admin_view(user_api_key_dict):
-            return _redact_mcp_credentials(mcp_server)
-
-        # Perform authz check to filter the mcp servers user has access to
-        mcp_server_records = await get_all_mcp_servers_for_user(
-            prisma_client, user_api_key_dict
-        )
-        exists = does_mcp_server_exist(mcp_server_records, server_id)
-
-        if exists:
-            await global_mcp_server_manager.add_server(mcp_server)
-            return _redact_mcp_credentials(mcp_server)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": f"User does not have permission to view mcp server with id {server_id}. You can only view mcp servers that you have access to."
-                },
-            )
+        redacted = _redact_mcp_credentials(mcp_server)
+        if is_restricted_virtual_key:
+            return _sanitize_mcp_server_for_virtual_key(redacted)
+        return redacted
 
     @router.post(
         "/server",
@@ -1072,3 +1179,88 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_proxy_logger.exception(f"Error making agent public: {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+    # --- MCP Discovery ---
+
+    _MCP_REGISTRY_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "mcp_registry.json",
+    )
+
+    _mcp_registry_cache: Optional[Dict[str, Any]] = None
+
+    def _load_mcp_registry() -> Dict[str, Any]:
+        """Load the curated MCP registry from disk. Cached after first read."""
+        global _mcp_registry_cache
+        if _mcp_registry_cache is not None:
+            return _mcp_registry_cache
+        try:
+            with open(_MCP_REGISTRY_PATH, "r") as f:
+                data: Dict[str, Any] = json.load(f)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to load MCP registry from {_MCP_REGISTRY_PATH}: {e}"
+            )
+            data = {"servers": []}
+        _mcp_registry_cache = data
+        return data
+
+    @router.get(
+        "/discover",
+        description="Returns a curated list of well-known MCP servers for discovery UI",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def discover_mcp_servers(
+        query: Optional[str] = Query(
+            None, description="Search filter for server names and descriptions"
+        ),
+        category: Optional[str] = Query(
+            None, description="Filter by category"
+        ),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Returns a curated list of well-known MCP servers that can be added to the proxy.
+
+        Used by the UI to show a discovery grid when adding new MCP servers.
+        """
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can access MCP discovery. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        registry = _load_mcp_registry()
+        servers = registry.get("servers", [])
+
+        # Apply query filter
+        if query:
+            query_lower = query.lower()
+            servers = [
+                s
+                for s in servers
+                if query_lower in s.get("name", "").lower()
+                or query_lower in s.get("title", "").lower()
+                or query_lower in s.get("description", "").lower()
+            ]
+
+        # Apply category filter
+        if category:
+            servers = [
+                s for s in servers if s.get("category", "") == category
+            ]
+
+        # Extract unique categories from the full list (before filtering)
+        all_servers = registry.get("servers", [])
+        categories = sorted(
+            set(s.get("category", "Other") for s in all_servers)
+        )
+
+        return {
+            "servers": servers,
+            "categories": categories,
+        }

@@ -22,7 +22,7 @@ export function FallbackSelectionForm({
   groups,
   onGroupsChange,
   availableModels,
-  maxFallbacks = 5,
+  maxFallbacks = 10,
   maxGroups = 5,
 }: FallbackSelectionFormProps) {
   const [activeKey, setActiveKey] = useState(groups.length > 0 ? groups[0].id : "1");

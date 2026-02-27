@@ -1,4 +1,6 @@
 import copy
+import datetime
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,6 +13,7 @@ from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
+    _add_dd_apm_tags_for_litellm_call_id,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _override_openai_response_model,
@@ -77,6 +80,110 @@ class TestProxyBaseLLMRequestProcessing:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+        mock_set_active_span_tag = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "set_active_span_tag",
+            mock_set_active_span_tag,
+        )
+
+        _add_dd_apm_tags_for_litellm_call_id("test-call-id")
+
+        mock_set_active_span_tag.assert_called_once_with(
+            "litellm.call_id", "test-call-id"
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_apply_hierarchical_router_settings_as_override(
+        self, monkeypatch
+    ):
+        """
+        Test that hierarchical router settings are stored as router_settings_override
+        instead of creating a full user_config with model_list.
+
+        This approach avoids expensive per-request Router instantiation by passing
+        settings as kwargs overrides to the main router.
+        """
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {}
+
+        async def mock_common_processing_pre_call_logic(
+            user_api_key_dict, data, call_type
+        ):
+            data_copy = copy.deepcopy(data)
+            return data_copy
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=mock_common_processing_pre_call_logic
+        )
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        mock_general_settings = {}
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+
+        mock_router_settings = {
+            "routing_strategy": "least-busy",
+            "timeout": 30.0,
+            "num_retries": 3,
+        }
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(
+            return_value=mock_router_settings
+        )
+
+        mock_llm_router = MagicMock()
+
+        mock_prisma_client = MagicMock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        )
+
+        route_type = "acompletion"
+
+        (
+            returned_data,
+            logging_obj,
+        ) = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings=mock_general_settings,
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type=route_type,
+            llm_router=mock_llm_router,
+        )
+
+        mock_proxy_config._get_hierarchical_router_settings.assert_called_once_with(
+            user_api_key_dict=mock_user_api_key_dict,
+            prisma_client=mock_prisma_client,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+        # get_model_list should NOT be called - we no longer copy model list for per-request routers
+        mock_llm_router.get_model_list.assert_not_called()
+
+        # Settings should be stored as router_settings_override (not user_config)
+        # This allows passing them as kwargs to the main router instead of creating a new one
+        assert "router_settings_override" in returned_data
+        assert "user_config" not in returned_data
+
+        router_settings_override = returned_data["router_settings_override"]
+        assert router_settings_override["routing_strategy"] == "least-busy"
+        assert router_settings_override["timeout"] == 30.0
+        assert router_settings_override["num_retries"] == 3
+        # model_list should NOT be in the override settings
+        assert "model_list" not in router_settings_override
+
     @pytest.mark.asyncio
     async def test_stream_timeout_header_processing(self):
         """
@@ -86,34 +193,39 @@ class TestProxyBaseLLMRequestProcessing:
 
         # Test with stream timeout header
         headers_with_timeout = {"x-litellm-stream-timeout": "30.5"}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_timeout)
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers_with_timeout
+        )
         assert result == 30.5
-        
+
         # Test without stream timeout header
         headers_without_timeout = {}
-        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_without_timeout)
+        result = LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+            headers_without_timeout
+        )
         assert result is None
-        
+
         # Test with invalid header value (should raise ValueError when converting to float)
         headers_with_invalid = {"x-litellm-stream-timeout": "invalid"}
         with pytest.raises(ValueError):
-            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(headers_with_invalid)
+            LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
+                headers_with_invalid
+            )
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
         """
-        Test that x-litellm-stream-timeout header gets processed and added to request data 
+        Test that x-litellm-stream-timeout header gets processed and added to request data
         when calling add_litellm_data_to_request.
         """
-        from litellm.integrations.opentelemetry import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
         # Create test data with a basic completion request
         test_data = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
+
         # Mock request with stream timeout header
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {"x-litellm-stream-timeout": "45.0"}
@@ -121,7 +233,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_request.method = "POST"
         mock_request.query_params = {}
         mock_request.client = None
-        
+
         # Create a minimal mock with just the required attributes
         mock_user_api_key_dict = MagicMock()
         mock_user_api_key_dict.api_key = "test_api_key_hash"
@@ -145,10 +257,10 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.model_max_budget = None
         mock_user_api_key_dict.parent_otel_span = None
         mock_user_api_key_dict.team_model_aliases = None
-        
+
         general_settings = {}
         mock_proxy_config = MagicMock()
-        
+
         # Call the actual function that processes headers and adds data
         result_data = await add_litellm_data_to_request(
             data=test_data,
@@ -158,11 +270,11 @@ class TestProxyBaseLLMRequestProcessing:
             version=None,
             proxy_config=mock_proxy_config,
         )
-        
+
         # Verify that stream_timeout was extracted from header and added to request data
         assert "stream_timeout" in result_data
         assert result_data["stream_timeout"] == 45.0
-        
+
         # Verify that the original test data is preserved
         assert result_data["model"] == "gpt-3.5-turbo"
         assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
@@ -182,7 +294,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.rpm_limit = None
         mock_user_api_key_dict.max_budget = None
         mock_user_api_key_dict.spend = 0
-        
+
         # Create logging object with cost breakdown including discount
         logging_obj = LiteLLMLoggingObj(
             model="vertex_ai/gemini-pro",
@@ -193,7 +305,7 @@ class TestProxyBaseLLMRequestProcessing:
             litellm_call_id="test-call-id",
             function_id="test-function-id",
         )
-        
+
         # Set cost breakdown with discount information
         logging_obj.set_cost_breakdown(
             input_cost=0.00005,
@@ -204,7 +316,7 @@ class TestProxyBaseLLMRequestProcessing:
             discount_percent=0.05,
             discount_amount=0.000005,
         )
-        
+
         # Call get_custom_headers with discount info
         headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=mock_user_api_key_dict,
@@ -212,14 +324,14 @@ class TestProxyBaseLLMRequestProcessing:
             response_cost=0.000095,
             litellm_logging_obj=logging_obj,
         )
-        
+
         # Verify discount headers are present
         assert "x-litellm-response-cost" in headers
         assert float(headers["x-litellm-response-cost"]) == 0.000095
-        
+
         assert "x-litellm-response-cost-original" in headers
         assert float(headers["x-litellm-response-cost-original"]) == 0.0001
-        
+
         assert "x-litellm-response-cost-discount-amount" in headers
         assert float(headers["x-litellm-response-cost-discount-amount"]) == 0.000005
 
@@ -237,7 +349,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.rpm_limit = None
         mock_user_api_key_dict.max_budget = None
         mock_user_api_key_dict.spend = 0
-        
+
         # Create logging object without discount
         logging_obj = LiteLLMLoggingObj(
             model="gpt-3.5-turbo",
@@ -248,7 +360,7 @@ class TestProxyBaseLLMRequestProcessing:
             litellm_call_id="test-call-id",
             function_id="test-function-id",
         )
-        
+
         # Set cost breakdown without discount information
         logging_obj.set_cost_breakdown(
             input_cost=0.00005,
@@ -256,7 +368,7 @@ class TestProxyBaseLLMRequestProcessing:
             total_cost=0.0001,
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
-        
+
         # Call get_custom_headers
         headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=mock_user_api_key_dict,
@@ -264,11 +376,11 @@ class TestProxyBaseLLMRequestProcessing:
             response_cost=0.0001,
             litellm_logging_obj=logging_obj,
         )
-        
+
         # Verify discount headers are NOT present
         assert "x-litellm-response-cost" in headers
         assert float(headers["x-litellm-response-cost"]) == 0.0001
-        
+
         # Discount headers should not be in the final dict
         assert "x-litellm-response-cost-original" not in headers
         assert "x-litellm-response-cost-discount-amount" not in headers
@@ -287,7 +399,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.rpm_limit = None
         mock_user_api_key_dict.max_budget = None
         mock_user_api_key_dict.spend = 0
-        
+
         # Create logging object with margin
         logging_obj = LiteLLMLoggingObj(
             model="gpt-4",
@@ -307,20 +419,20 @@ class TestProxyBaseLLMRequestProcessing:
             margin_percent=0.10,
             margin_total_amount=0.00001,
         )
-        
+
         headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=mock_user_api_key_dict,
             response_cost=0.00011,
             litellm_logging_obj=logging_obj,
         )
-        
+
         # Verify margin headers are present
         assert "x-litellm-response-cost" in headers
         assert float(headers["x-litellm-response-cost"]) == 0.00011
-        
+
         assert "x-litellm-response-cost-margin-amount" in headers
         assert float(headers["x-litellm-response-cost-margin-amount"]) == 0.00001
-        
+
         assert "x-litellm-response-cost-margin-percent" in headers
         assert float(headers["x-litellm-response-cost-margin-percent"]) == 0.10
 
@@ -338,7 +450,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_user_api_key_dict.rpm_limit = None
         mock_user_api_key_dict.max_budget = None
         mock_user_api_key_dict.spend = 0
-        
+
         # Create logging object without margin
         logging_obj = LiteLLMLoggingObj(
             model="gpt-4",
@@ -355,13 +467,13 @@ class TestProxyBaseLLMRequestProcessing:
             total_cost=0.0001,
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
-        
+
         headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=mock_user_api_key_dict,
             response_cost=0.0001,
             litellm_logging_obj=logging_obj,
         )
-        
+
         # Verify margin headers are not present
         assert "x-litellm-response-cost-margin-amount" not in headers
         assert "x-litellm-response-cost-margin-percent" not in headers
@@ -393,13 +505,18 @@ class TestProxyBaseLLMRequestProcessing:
             discount_percent=0.05,
             discount_amount=0.000005,
         )
-        
-        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj)
+
+        (
+            original_cost,
+            discount_amount,
+            margin_total_amount,
+            margin_percent,
+        ) = _get_cost_breakdown_from_logging_obj(logging_obj)
         assert original_cost == 0.0001
         assert discount_amount == 0.000005
         assert margin_total_amount is None
         assert margin_percent is None
-        
+
         # Test with margin info
         logging_obj_with_margin = LiteLLMLoggingObj(
             model="gpt-4",
@@ -419,13 +536,18 @@ class TestProxyBaseLLMRequestProcessing:
             margin_percent=0.10,
             margin_total_amount=0.00001,
         )
-        
-        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
+
+        (
+            original_cost,
+            discount_amount,
+            margin_total_amount,
+            margin_percent,
+        ) = _get_cost_breakdown_from_logging_obj(logging_obj_with_margin)
         assert original_cost == 0.0001
         assert discount_amount is None
         assert margin_total_amount == 0.00001
         assert margin_percent == 0.10
-        
+
         # Test with no discount or margin info
         logging_obj_no_discount = LiteLLMLoggingObj(
             model="gpt-3.5-turbo",
@@ -442,15 +564,25 @@ class TestProxyBaseLLMRequestProcessing:
             total_cost=0.0001,
             cost_for_built_in_tools_cost_usd_dollar=0.0,
         )
-        
-        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
+
+        (
+            original_cost,
+            discount_amount,
+            margin_total_amount,
+            margin_percent,
+        ) = _get_cost_breakdown_from_logging_obj(logging_obj_no_discount)
         assert original_cost is None
         assert discount_amount is None
         assert margin_total_amount is None
         assert margin_percent is None
-        
+
         # Test with None logging object
-        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(None)
+        (
+            original_cost,
+            discount_amount,
+            margin_total_amount,
+            margin_percent,
+        ) = _get_cost_breakdown_from_logging_obj(None)
         assert original_cost is None
         assert discount_amount is None
         assert margin_total_amount is None
@@ -459,7 +591,7 @@ class TestProxyBaseLLMRequestProcessing:
     def test_get_custom_headers_key_spend_includes_response_cost(self):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost.
-        
+
         This ensures that the spend header reflects the updated spend including the current
         request, even though spend tracking updates happen asynchronously after the response.
         """
@@ -477,10 +609,12 @@ class TestProxyBaseLLMRequestProcessing:
             call_id="test-call-id-1",
             response_cost=response_cost_1,
         )
-        
+
         assert "x-litellm-key-spend" in headers_1
         expected_spend_1 = 0.001 + 0.0005  # Initial spend + current request cost
-        assert float(headers_1["x-litellm-key-spend"]) == pytest.approx(expected_spend_1, abs=1e-10)
+        assert float(headers_1["x-litellm-key-spend"]) == pytest.approx(
+            expected_spend_1, abs=1e-10
+        )
         assert float(headers_1["x-litellm-response-cost"]) == response_cost_1
 
         # Test case 2: response_cost is provided as string
@@ -490,10 +624,12 @@ class TestProxyBaseLLMRequestProcessing:
             call_id="test-call-id-2",
             response_cost=response_cost_2,
         )
-        
+
         assert "x-litellm-key-spend" in headers_2
         expected_spend_2 = 0.001 + 0.0003  # Initial spend + current request cost
-        assert float(headers_2["x-litellm-key-spend"]) == pytest.approx(expected_spend_2, abs=1e-10)
+        assert float(headers_2["x-litellm-key-spend"]) == pytest.approx(
+            expected_spend_2, abs=1e-10
+        )
 
         # Test case 3: response_cost is None (should use original spend)
         headers_3 = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -501,9 +637,11 @@ class TestProxyBaseLLMRequestProcessing:
             call_id="test-call-id-3",
             response_cost=None,
         )
-        
+
         assert "x-litellm-key-spend" in headers_3
-        assert float(headers_3["x-litellm-key-spend"]) == 0.001  # Should use original spend
+        assert (
+            float(headers_3["x-litellm-key-spend"]) == 0.001
+        )  # Should use original spend
 
         # Test case 4: response_cost is 0 (should not change spend)
         headers_4 = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -511,9 +649,11 @@ class TestProxyBaseLLMRequestProcessing:
             call_id="test-call-id-4",
             response_cost=0.0,
         )
-        
+
         assert "x-litellm-key-spend" in headers_4
-        assert float(headers_4["x-litellm-key-spend"]) == 0.001  # Should remain unchanged for 0 cost
+        assert (
+            float(headers_4["x-litellm-key-spend"]) == 0.001
+        )  # Should remain unchanged for 0 cost
 
         # Test case 5: user_api_key_dict.spend is None (should default to 0.0)
         mock_user_api_key_dict.spend = None
@@ -522,7 +662,7 @@ class TestProxyBaseLLMRequestProcessing:
             call_id="test-call-id-5",
             response_cost=0.0002,
         )
-        
+
         assert "x-litellm-key-spend" in headers_5
         assert float(headers_5["x-litellm-key-spend"]) == 0.0002  # 0.0 + 0.0002
 
@@ -533,9 +673,11 @@ class TestProxyBaseLLMRequestProcessing:
             call_id="test-call-id-6",
             response_cost=-0.0001,  # Negative cost (should not be added)
         )
-        
+
         assert "x-litellm-key-spend" in headers_6
-        assert float(headers_6["x-litellm-key-spend"]) == 0.001  # Should use original spend
+        assert (
+            float(headers_6["x-litellm-key-spend"]) == 0.001
+        )  # Should use original spend
 
         # Test case 7: response_cost is invalid string (should fallback to original spend)
         headers_7 = ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -543,9 +685,77 @@ class TestProxyBaseLLMRequestProcessing:
             call_id="test-call-id-7",
             response_cost="invalid",  # Invalid string
         )
-        
+
         assert "x-litellm-key-spend" in headers_7
-        assert float(headers_7["x-litellm-key-spend"]) == 0.001  # Should use original spend on error
+        assert (
+            float(headers_7["x-litellm-key-spend"]) == 0.001
+        )  # Should use original spend on error
+
+    @pytest.mark.asyncio
+    async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
+        """
+        Test that queue_time_seconds is correctly calculated and stored in metadata
+        after add_litellm_data_to_request populates arrival_time.
+
+        This verifies the fix for the bug where queue_time_seconds was always None
+        because arrival_time was read BEFORE add_litellm_data_to_request set it.
+        """
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            data = kwargs.get("data", args[0] if args else {})
+            # Simulate what add_litellm_data_to_request does: set arrival_time
+            import time
+
+            data["proxy_server_request"] = {
+                "url": "/v1/chat/completions",
+                "method": "POST",
+                "headers": {},
+                "body": {},
+                "arrival_time": time.time() - 0.5,  # Simulate request arrived 0.5s ago
+            }
+            data["metadata"] = data.get("metadata", {})
+            return data
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        mock_general_settings = {}
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        route_type = "acompletion"
+
+        (
+            returned_data,
+            logging_obj,
+        ) = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings=mock_general_settings,
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type=route_type,
+        )
+
+        # Verify queue_time_seconds is set and non-negative
+        metadata = returned_data.get("metadata", {})
+        assert (
+            "queue_time_seconds" in metadata
+        ), "queue_time_seconds should be set in metadata"
+        assert (
+            metadata["queue_time_seconds"] >= 0.5
+        ), f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
 
 
 @pytest.mark.asyncio
@@ -608,19 +818,19 @@ class TestCommonRequestProcessingHelpers:
         Test that when the first chunk is an error, a JSON error response is returned
         instead of an SSE streaming response
         """
+
         async def mock_generator():
             yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
             yield 'data: {"content": "more data"}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_response(
-            mock_generator(), "text/event-stream", {}
-        )
+        response = await create_response(mock_generator(), "text/event-stream", {})
         # Should return JSONResponse instead of StreamingResponse
         assert isinstance(response, JSONResponse)
         assert response.status_code == status.HTTP_403_FORBIDDEN
         # Verify the response is in standard JSON error format
         import json
+
         body = json.loads(response.body.decode())
         assert "error" in body
         assert body["error"]["code"] == 403
@@ -632,9 +842,7 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "second part"}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_response(
-            mock_generator(), "text/event-stream", {}
-        )
+        response = await create_response(mock_generator(), "text/event-stream", {})
         assert response.status_code == status.HTTP_200_OK
         content = await self.consume_stream(response)
         assert content == [
@@ -649,9 +857,7 @@ class TestCommonRequestProcessingHelpers:
                 yield
             # Implicitly raises StopAsyncIteration
 
-        response = await create_response(
-            mock_generator(), "text/event-stream", {}
-        )
+        response = await create_response(mock_generator(), "text/event-stream", {})
         assert response.status_code == status.HTTP_200_OK
         content = await self.consume_stream(response)
         assert content == []
@@ -693,17 +899,17 @@ class TestCommonRequestProcessingHelpers:
         """
         Test that when the first chunk contains a string error code, a JSON error response is returned
         """
+
         async def mock_generator():
             yield 'data: {"error": {"code": "429", "message": "too many requests"}}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_response(
-            mock_generator(), "text/event-stream", {}
-        )
+        response = await create_response(mock_generator(), "text/event-stream", {})
         assert isinstance(response, JSONResponse)
         assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
         # Verify the response is in standard JSON error format
         import json
+
         body = json.loads(response.body.decode())
         assert "error" in body
         assert body["error"]["code"] == "429"
@@ -742,9 +948,7 @@ class TestCommonRequestProcessingHelpers:
         async def mock_generator():
             yield "data: [DONE]\n\n"
 
-        response = await create_response(
-            mock_generator(), "text/event-stream", {}
-        )
+        response = await create_response(mock_generator(), "text/event-stream", {})
         assert response.status_code == status.HTTP_200_OK  # Default status
         content = await self.consume_stream(response)
         assert content == ["data: [DONE]\n\n"]
@@ -755,9 +959,7 @@ class TestCommonRequestProcessingHelpers:
             yield 'data: {"content": "actual data"}\n\n'
             yield "data: [DONE]\n\n"
 
-        response = await create_response(
-            mock_generator(), "text/event-stream", {}
-        )
+        response = await create_response(mock_generator(), "text/event-stream", {})
         assert response.status_code == status.HTTP_200_OK  # Default status
         content = await self.consume_stream(response)
         assert content == [
@@ -768,7 +970,6 @@ class TestCommonRequestProcessingHelpers:
 
     async def test_create_streaming_response_all_chunks_have_dd_trace(self):
         """Test that all stream chunks are wrapped with dd trace at the streaming generator level"""
-        import json
         from unittest.mock import patch
 
         # Create a mock tracer
@@ -786,9 +987,7 @@ class TestCommonRequestProcessingHelpers:
 
         # Patch the tracer in the common_request_processing module
         with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
-            response = await create_response(
-                mock_generator(), "text/event-stream", {}
-            )
+            response = await create_response(mock_generator(), "text/event-stream", {})
 
             assert response.status_code == 200
 
@@ -843,9 +1042,7 @@ class TestCommonRequestProcessingHelpers:
 
         # Patch the tracer in the common_request_processing module
         with patch("litellm.proxy.common_request_processing.tracer", mock_tracer):
-            response = await create_response(
-                mock_generator(), "text/event-stream", {}
-            )
+            response = await create_response(mock_generator(), "text/event-stream", {})
 
             # Should return JSONResponse instead of StreamingResponse
             assert isinstance(response, JSONResponse)
@@ -853,6 +1050,7 @@ class TestCommonRequestProcessingHelpers:
 
             # Verify the response is in standard JSON error format
             import json
+
             body = json.loads(response.body.decode())
             assert "error" in body
             assert body["error"]["code"] == 400
@@ -913,7 +1111,7 @@ class TestExtractErrorFromSSEChunk:
 
     def test_extract_error_from_sse_chunk_with_invalid_json(self):
         """Test invalid JSON should return default error"""
-        chunk = 'data: {invalid json}\n\n'
+        chunk = "data: {invalid json}\n\n"
         error = _extract_error_from_sse_chunk(chunk)
 
         assert error["message"] == "Unknown error"
@@ -950,35 +1148,35 @@ class TestExtractErrorFromSSEChunk:
 class TestOverrideOpenAIResponseModel:
     """Tests for _override_openai_response_model function"""
 
-    def test_override_model_preserves_fallback_model_when_fallback_occurred_object(self):
+    def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
+        self,
+    ):
         """
         Test that when a fallback occurred (x-litellm-attempted-fallbacks > 0),
         the actual model used (fallback model) is preserved instead of being
         overridden with the requested model.
-        
+
         This is the regression test to ensure the model being called is properly
         displayed when a fallback happens.
         """
         requested_model = "gpt-4"
         fallback_model = "gpt-3.5-turbo"
-        
+
         # Create a mock object response with fallback model
         # _hidden_params is an attribute (not a dict key) accessed via getattr
         response_obj = MagicMock()
         response_obj.model = fallback_model
         response_obj._hidden_params = {
-            "additional_headers": {
-                "x-litellm-attempted-fallbacks": 1
-            }
+            "additional_headers": {"x-litellm-attempted-fallbacks": 1}
         }
-        
+
         # Call the function - should preserve fallback model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
+
         # Verify the model was NOT overridden - should still be the fallback model
         assert response_obj.model == fallback_model
         assert response_obj.model != requested_model
@@ -990,7 +1188,7 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "gpt-4"
         fallback_model = "claude-haiku-4-5-20251001"
-        
+
         # Create a mock object response with fallback model
         response_obj = MagicMock()
         response_obj.model = fallback_model
@@ -999,14 +1197,14 @@ class TestOverrideOpenAIResponseModel:
                 "x-litellm-attempted-fallbacks": 2  # Multiple fallbacks
             }
         }
-        
+
         # Call the function - should preserve fallback model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
+
         # Verify the model was NOT overridden - should still be the fallback model
         assert response_obj.model == fallback_model
         assert response_obj.model != requested_model
@@ -1018,19 +1216,19 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "gpt-4"
         downstream_model = "gpt-3.5-turbo"
-        
+
         # Create a dict response without fallback
         # For dict responses, _hidden_params won't be found via getattr,
         # so the fallback check won't trigger and model will be overridden
         response_obj = {"model": downstream_model}
-        
+
         # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
+
         # Verify the model WAS overridden to requested model
         assert response_obj["model"] == requested_model
 
@@ -1041,21 +1239,21 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "gpt-4"
         downstream_model = "gpt-3.5-turbo"
-        
+
         # Create a mock object response without fallback
         response_obj = MagicMock()
         response_obj.model = downstream_model
         response_obj._hidden_params = {
             "additional_headers": {}  # No attempted_fallbacks header
         }
-        
+
         # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
+
         # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
 
@@ -1066,7 +1264,7 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "gpt-4"
         downstream_model = "gpt-3.5-turbo"
-        
+
         # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = downstream_model
@@ -1075,14 +1273,14 @@ class TestOverrideOpenAIResponseModel:
                 "x-litellm-attempted-fallbacks": 0  # Zero means no fallback occurred
             }
         }
-        
+
         # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
+
         # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
 
@@ -1093,23 +1291,21 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "gpt-4"
         downstream_model = "gpt-3.5-turbo"
-        
+
         # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = downstream_model
         response_obj._hidden_params = {
-            "additional_headers": {
-                "x-litellm-attempted-fallbacks": None
-            }
+            "additional_headers": {"x-litellm-attempted-fallbacks": None}
         }
-        
+
         # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
+
         # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
 
@@ -1120,19 +1316,19 @@ class TestOverrideOpenAIResponseModel:
         """
         requested_model = "gpt-4"
         downstream_model = "gpt-3.5-turbo"
-        
+
         # Create a mock object response without _hidden_params
         response_obj = MagicMock()
         response_obj.model = downstream_model
         # Don't set _hidden_params - getattr will return {}
-        
+
         # Call the function - should override to requested model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
         )
-        
+
         # Verify the model WAS overridden to requested model
         assert response_obj.model == requested_model
 
@@ -1142,34 +1338,229 @@ class TestOverrideOpenAIResponseModel:
         without modifying the response.
         """
         fallback_model = "gpt-3.5-turbo"
-        
+
         # Create a mock object response
         response_obj = MagicMock()
         response_obj.model = fallback_model
         response_obj._hidden_params = {
-            "additional_headers": {
-                "x-litellm-attempted-fallbacks": 1
-            }
+            "additional_headers": {"x-litellm-attempted-fallbacks": 1}
         }
-        
+
         # Call the function with None requested_model
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model=None,
             log_context="test_context",
         )
-        
+
         # Verify the model was not changed
         assert response_obj.model == fallback_model
-        
+
         # Call with empty string
         _override_openai_response_model(
             response_obj=response_obj,
             requested_model="",
             log_context="test_context",
         )
-        
+
         # Verify the model was not changed
         assert response_obj.model == fallback_model
 
 
+class TestStreamingOverheadHeader:
+    """
+    Tests that x-litellm-overhead-duration-ms is emitted in streaming responses.
+
+    Regression tests for: streaming requests not including overhead header.
+    """
+
+    def test_get_custom_headers_includes_overhead_when_set(self):
+        """
+        get_custom_headers() returns x-litellm-overhead-duration-ms
+        when litellm_overhead_time_ms is in hidden_params.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        hidden_params = {
+            "litellm_overhead_time_ms": 42.5,
+            "_response_ms": 500.0,
+            "model_id": "test-model-id",
+            "api_base": "https://api.openai.com",
+        }
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            model_id="test-model-id",
+            cache_key="",
+            api_base="https://api.openai.com",
+            version="1.0.0",
+            response_cost=0.001,
+            model_region="",
+            hidden_params=hidden_params,
+        )
+
+        assert "x-litellm-overhead-duration-ms" in headers
+        assert headers["x-litellm-overhead-duration-ms"] == "42.5"
+
+    def test_get_custom_headers_omits_overhead_when_none(self):
+        """
+        get_custom_headers() omits x-litellm-overhead-duration-ms
+        when litellm_overhead_time_ms is not in hidden_params.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        hidden_params = {
+            "_response_ms": 500.0,
+            "model_id": "test-model-id",
+        }
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            model_id="test-model-id",
+            cache_key="",
+            api_base="https://api.openai.com",
+            version="1.0.0",
+            response_cost=0.001,
+            model_region="",
+            hidden_params=hidden_params,
+        )
+
+        # Should be absent (None gets filtered by exclude_values)
+        assert "x-litellm-overhead-duration-ms" not in headers
+
+    def test_update_response_metadata_sets_overhead_on_stream_wrapper(self):
+        """
+        update_response_metadata() sets litellm_overhead_time_ms on
+        a streaming response's _hidden_params when llm_api_duration_ms is available.
+        """
+        from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
+            update_response_metadata,
+        )
+
+        # Mock the logging object with llm_api_duration_ms set
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {
+            "llm_api_duration_ms": 200.0,
+            "litellm_params": {},
+        }
+        mock_logging_obj.caching_details = None
+        mock_logging_obj.callback_duration_ms = None
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        mock_logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+
+        # Simulate a streaming result object with _hidden_params (like CustomStreamWrapper)
+        stream_result = MagicMock()
+        stream_result._hidden_params = {
+            "model_id": "test-model-id",
+            "api_base": "https://api.openai.com",
+            "additional_headers": {},
+        }
+
+        start_time = datetime.datetime.now() - datetime.timedelta(milliseconds=300)
+        end_time = datetime.datetime.now()
+
+        update_response_metadata(
+            result=stream_result,
+            logging_obj=mock_logging_obj,
+            model="gpt-4o",
+            kwargs={},
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+        assert "litellm_overhead_time_ms" in stream_result._hidden_params
+        overhead = stream_result._hidden_params["litellm_overhead_time_ms"]
+        assert overhead is not None
+        assert isinstance(overhead, float)
+        # overhead = total_response_ms (~300ms) - llm_api_duration_ms (200ms) = ~100ms
+        assert overhead > 0
+
+    @pytest.mark.asyncio
+    async def test_streaming_response_includes_overhead_header(self):
+        """
+        StreamingResponse returned by create_response() includes
+        x-litellm-overhead-duration-ms in its headers.
+        """
+
+        async def mock_generator() -> AsyncGenerator[str, None]:
+            yield 'data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"hi"}}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        headers = {
+            "x-litellm-overhead-duration-ms": "42.5",
+            "x-litellm-call-id": "test-call-id",
+            "x-litellm-model-id": "test-model-id",
+        }
+
+        response = await create_response(
+            generator=mock_generator(),
+            media_type="text/event-stream",
+            headers=headers,
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.headers.get("x-litellm-overhead-duration-ms") == "42.5"
+
+    def test_streaming_overhead_header_in_custom_headers_from_stream_hidden_params(
+        self,
+    ):
+        """
+        Verifies that when get_custom_headers() is called with a streaming
+        response's hidden_params (containing litellm_overhead_time_ms),
+        the x-litellm-overhead-duration-ms header is correctly populated.
+
+        This tests the critical path: update_response_metadata sets the value
+        → get_custom_headers reads it → StreamingResponse header is set.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        # This is what CustomStreamWrapper._hidden_params looks like after
+        # update_response_metadata() has been called on it
+        hidden_params = {
+            "model_id": "openai-gpt4o-deployment",
+            "api_base": "https://api.openai.com",
+            "additional_headers": {},
+            "litellm_overhead_time_ms": 55.3,  # set by update_response_metadata
+            "_response_ms": 280.0,
+            "litellm_call_id": "test-call-id",
+            "response_cost": 0.002,
+            "cache_key": None,
+            "fastest_response_batch_completion": None,
+            "callback_duration_ms": None,
+        }
+
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            model_id=hidden_params.get("model_id"),
+            cache_key=hidden_params.get("cache_key") or "",
+            api_base=hidden_params.get("api_base") or "",
+            version="1.0.0",
+            response_cost=hidden_params.get("response_cost"),
+            model_region="",
+            hidden_params=hidden_params,
+        )
+
+        # The overhead header must be present and correct
+        assert "x-litellm-overhead-duration-ms" in custom_headers, (
+            "x-litellm-overhead-duration-ms header must be emitted during streaming. "
+            "It was missing — this is the streaming overhead header regression."
+        )
+        assert custom_headers["x-litellm-overhead-duration-ms"] == "55.3"

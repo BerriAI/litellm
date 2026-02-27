@@ -2,8 +2,7 @@
 
 import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { isJwtExpired } from "@/utils/jwtUtils";
-import { jwtDecode } from "jwt-decode";
+import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import { useUIConfig } from "./uiConfig/useUIConfig";
@@ -43,44 +42,31 @@ const useAuthorized = () => {
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
-  // Step 1: Check for missing token or expired JWT - kick out immediately (even if UI Config is loading)
+  const decoded = useMemo(() => decodeToken(token), [token]);
+  const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
+  const isLoading = isUIConfigLoading;
+  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
+
+  // Single useEffect for all redirect logic
   useEffect(() => {
-    if (!token || (token && isJwtExpired(token))) {
+    if (isLoading) return;
+
+    if (!isAuthorized) {
       if (token) {
         clearTokenCookies();
       }
       router.replace(`${getProxyBaseUrl()}/ui/login`);
     }
-  }, [token, router]);
-
-  useEffect(() => {
-    if (isUIConfigLoading) {
-      return;
-    }
-    if (uiConfig?.admin_ui_disabled) {
-      router.replace(`${getProxyBaseUrl()}/ui/login`);
-    }
-  }, [router, isUIConfigLoading, uiConfig]);
-
-  // Decode safely
-  const decoded = useMemo(() => {
-    if (!token) return null;
-    try {
-      return jwtDecode(token) as Record<string, any>;
-    } catch {
-      // Bad token in cookie — clear and bounce
-      clearTokenCookies();
-      router.replace(`${getProxyBaseUrl()}/ui/login`);
-      return null;
-    }
-  }, [token, router]);
+  }, [isLoading, isAuthorized, token, router]);
 
   return {
-    token: token,
+    isLoading,
+    isAuthorized,
+    token: isAuthorized ? token : null,
     accessToken: decoded?.key ?? null,
     userId: decoded?.user_id ?? null,
     userEmail: decoded?.user_email ?? null,
-    userRole: formatUserRole(decoded?.user_role ?? null),
+    userRole: formatUserRole(decoded?.user_role),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
     showSSOBanner: decoded?.login_method === "username_password",

@@ -16,6 +16,8 @@ from litellm.exceptions import (
     ContentPolicyViolationError,
     ContextWindowExceededError,
     ImageFetchError,
+    MidStreamFallbackError,
+    RateLimitError,
 )
 
 
@@ -209,6 +211,46 @@ class TestExceptionAttributes:
         assert error.max_retries == 3
         assert error.num_retries == 1
         assert error.status_code == 400
+
+    def test_midstream_fallback_error_status_code_propagation(self):
+        """
+        MidStreamFallbackError should preserve the original status code and keep
+        message/request/response fields consistent after super().__init__().
+        """
+        original_req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        original_resp = httpx.Response(status_code=429, request=original_req)
+
+        rate_limit_error = RateLimitError(
+            message="Rate limit exceeded",
+            llm_provider="openai",
+            model="gpt-4o-mini",
+            response=original_resp,
+        )
+
+        midstream_error = MidStreamFallbackError(
+            message="stream broke",
+            model="gpt-4o-mini",
+            llm_provider="openai",
+            original_exception=rate_limit_error,
+        )
+
+        assert midstream_error.status_code == 429
+        assert midstream_error.response.status_code == 429
+        assert str(midstream_error.response.request.url) == "https://openai.com/v1/"
+        assert midstream_error.message == "litellm.MidStreamFallbackError: stream broke"
+        assert midstream_error.args == ("litellm.MidStreamFallbackError: stream broke",)
+
+        # With no original exception, should default to 503.
+        midstream_fallback = MidStreamFallbackError(
+            message="stream broke without original",
+            model="gpt-4o-mini",
+            llm_provider="openai",
+            original_exception=None,
+        )
+
+        assert midstream_fallback.status_code == 503
+        assert midstream_fallback.response.status_code == 503
+        assert str(midstream_fallback.response.request.url) == "https://openai.com/v1/"
 
 
 class TestProxyHeaderExtraction:
