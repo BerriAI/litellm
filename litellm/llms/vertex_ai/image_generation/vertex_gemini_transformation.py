@@ -43,13 +43,20 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
     
     def get_supported_openai_params(
         self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    ) -> list:
         """
         Gemini image generation supported parameters
+
+        Includes native Gemini imageConfig params (aspectRatio, imageSize)
+        in both camelCase and snake_case variants.
         """
         return [
             "n",
             "size",
+            "aspectRatio",
+            "aspect_ratio",
+            "imageSize",
+            "image_size",
         ]
     
     def map_openai_params(
@@ -71,6 +78,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     elif k == "size":
                         # Map OpenAI size format to Gemini aspectRatio
                         mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                    elif k in ("aspectRatio", "aspect_ratio"):
+                        mapped_params["aspectRatio"] = v
+                    elif k in ("imageSize", "image_size"):
+                        mapped_params["imageSize"] = v
                     else:
                         mapped_params[k] = v
         
