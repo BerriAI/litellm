@@ -1,0 +1,9 @@
+model_list:
+  - model_name: fake-model
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: fake-key
+      api_base: http://127.0.0.1:18080/
+
+general_settings:
+  master_key: sk-repro-test-1234
