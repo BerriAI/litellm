@@ -398,6 +398,9 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    InFlightRequestsMiddleware,
+)
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -1198,6 +1201,7 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+app.add_middleware(InFlightRequestsMiddleware)
 
 
 def mount_swagger_ui():

@@ -238,6 +238,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_tokens_for_model",
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
+    "litellm_in_flight_requests",
 ]
 
 
