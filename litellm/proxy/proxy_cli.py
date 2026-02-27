@@ -192,6 +192,7 @@ class ProxyInitializationHelpers:
         num_workers: int,
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
+        keepalive_timeout: Optional[int] = None,
         max_requests_before_restart: Optional[int] = None,
     ):
         """
@@ -276,6 +277,8 @@ class ProxyInitializationHelpers:
         # Optional: recycle workers after N requests to mitigate memory growth
         if max_requests_before_restart is not None:
             gunicorn_options["max_requests"] = max_requests_before_restart
+        if keepalive_timeout is not None:
+            gunicorn_options["keepalive"] = keepalive_timeout
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(  # noqa
@@ -911,6 +914,7 @@ def run_server(  # noqa: PLR0915
                 num_workers=num_workers,
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
+                keepalive_timeout=keepalive_timeout,
                 max_requests_before_restart=max_requests_before_restart,
             )
         elif run_hypercorn is True:

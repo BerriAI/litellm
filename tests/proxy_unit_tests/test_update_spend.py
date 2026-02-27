@@ -32,6 +32,7 @@ class MockPrismaClient:
         # Add lock for spend_log_transactions (matches real PrismaClient)
         import asyncio
         self._spend_log_transactions_lock = asyncio.Lock()
+        self._last_spend_log_queue_drop_warning_ts = 0.0
 
     def jsonify_object(self, obj):
         return obj
@@ -303,3 +304,50 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_insert_spend_log_queue_cap_drops_new_payload():
+    """When queue is at capacity, _insert_spend_log_to_db should drop new payloads."""
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+
+    writer = DBSpendUpdateWriter()
+    prisma_client = MockPrismaClient()
+    prisma_client.spend_log_transactions = [
+        {"id": "1", "spend": 10},
+        {"id": "2", "spend": 20},
+    ]
+    payload = {"id": "3", "request_id": "req-3", "spend": 30}
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.MAX_SPEND_LOG_QUEUE_SIZE", 2
+    ):
+        await writer._insert_spend_log_to_db(
+            payload=payload,
+            prisma_client=prisma_client,
+        )
+
+    assert len(prisma_client.spend_log_transactions) == 2
+    assert payload not in prisma_client.spend_log_transactions
+
+
+@pytest.mark.asyncio
+async def test_insert_spend_log_queue_cap_allows_append_below_limit():
+    """When queue has capacity, _insert_spend_log_to_db should append payload."""
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+
+    writer = DBSpendUpdateWriter()
+    prisma_client = MockPrismaClient()
+    prisma_client.spend_log_transactions = [{"id": "1", "spend": 10}]
+    payload = {"id": "2", "request_id": "req-2", "spend": 20}
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.MAX_SPEND_LOG_QUEUE_SIZE", 2
+    ):
+        await writer._insert_spend_log_to_db(
+            payload=payload,
+            prisma_client=prisma_client,
+        )
+
+    assert len(prisma_client.spend_log_transactions) == 2
+    assert prisma_client.spend_log_transactions[-1] == payload

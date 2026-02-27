@@ -462,16 +462,14 @@ def get_redis_async_client(
 def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
+    _normalize_max_connections(redis_kwargs=redis_kwargs)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        pool_kwargs = {"timeout": REDIS_CONNECTION_POOL_TIMEOUT, "url": redis_kwargs["url"]}
+        pool_kwargs = {
+            "timeout": REDIS_CONNECTION_POOL_TIMEOUT,
+            "url": redis_kwargs["url"],
+        }
         if "max_connections" in redis_kwargs:
-            try:
-                pool_kwargs["max_connections"] = int(redis_kwargs["max_connections"])
-            except (TypeError, ValueError):
-                verbose_logger.warning(
-                    "REDIS: invalid max_connections value %r, ignoring",
-                    redis_kwargs["max_connections"],
-                )
+            pool_kwargs["max_connections"] = redis_kwargs["max_connections"]
         return async_redis.BlockingConnectionPool.from_url(**pool_kwargs)
     connection_class = async_redis.Connection
     if "ssl" in redis_kwargs:
@@ -482,6 +480,53 @@ def get_redis_connection_pool(**env_overrides):
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )
+
+
+def _normalize_max_connections(redis_kwargs: dict) -> None:
+    """
+    Normalize and clamp max_connections to avoid unbounded connection pools.
+
+    - Invalid values are ignored.
+    - Values <= 0 are ignored.
+    - Very large values are clamped by REDIS_MAX_CONNECTIONS_SOFT_CAP.
+    """
+    if "max_connections" not in redis_kwargs:
+        return
+
+    raw_max_connections = redis_kwargs.get("max_connections")
+    try:
+        max_connections = int(raw_max_connections)
+    except (TypeError, ValueError):
+        verbose_logger.warning(
+            "REDIS: invalid max_connections value %r, ignoring",
+            raw_max_connections,
+        )
+        redis_kwargs.pop("max_connections", None)
+        return
+
+    if max_connections <= 0:
+        verbose_logger.warning(
+            "REDIS: max_connections must be > 0, got %r. Ignoring value.",
+            raw_max_connections,
+        )
+        redis_kwargs.pop("max_connections", None)
+        return
+
+    raw_soft_cap = get_secret("REDIS_MAX_CONNECTIONS_SOFT_CAP", default_value=10000)  # type: ignore
+    try:
+        soft_cap = int(raw_soft_cap)
+    except (TypeError, ValueError):
+        soft_cap = 10000
+
+    if soft_cap > 0 and max_connections > soft_cap:
+        verbose_logger.warning(
+            "REDIS: max_connections=%s exceeds REDIS_MAX_CONNECTIONS_SOFT_CAP=%s. Clamping.",
+            max_connections,
+            soft_cap,
+        )
+        max_connections = soft_cap
+
+    redis_kwargs["max_connections"] = max_connections
 
 def _pretty_print_redis_config(redis_kwargs: dict) -> None:
     """Pretty print the Redis configuration using rich with sensitive data masking"""

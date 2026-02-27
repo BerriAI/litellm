@@ -88,6 +88,36 @@ def test_max_connections_url_config_none_value():
     assert pool.max_connections == 50
 
 
+def test_max_connections_url_config_clamped_by_soft_cap(monkeypatch):
+    """Excessive max_connections values should be clamped by soft cap."""
+    monkeypatch.setenv("REDIS_MAX_CONNECTIONS_SOFT_CAP", "100")
+    with patch("litellm._redis._get_redis_client_logic") as mock_logic:
+        mock_logic.return_value = {
+            "url": "redis://localhost:6379/0",
+            "max_connections": "2147483648",
+        }
+
+        pool = get_redis_connection_pool()
+
+    assert pool.max_connections == 100
+
+
+def test_max_connections_non_url_config_clamped_by_soft_cap(monkeypatch):
+    """Soft cap should apply to non-URL Redis connection pools too."""
+    monkeypatch.setenv("REDIS_MAX_CONNECTIONS_SOFT_CAP", "120")
+    with patch("litellm._redis._get_redis_client_logic") as mock_logic:
+        mock_logic.return_value = {
+            "host": "localhost",
+            "port": 6379,
+            "db": 0,
+            "max_connections": "2000",
+        }
+
+        pool = get_redis_connection_pool()
+
+    assert pool.max_connections == 120
+
+
 def _make_redis_cache():
     """Create a RedisCache with all external I/O mocked out."""
     mock_sync_client = MagicMock()

@@ -329,6 +329,56 @@ class TestProxyInitializationHelpers:
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["timeout_keep_alive"] == 30
 
+    @patch("builtins.print")
+    def test_keepalive_timeout_flag_passed_to_gunicorn(self, mock_print):
+        """Test that keepalive_timeout is passed through to gunicorn path."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with patch.dict(
+            os.environ, clean_env, clear=True,
+        ), patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args, patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._run_gunicorn_server"
+        ) as mock_run_gunicorn:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server, ["--local", "--run_gunicorn", "--keepalive_timeout", "37"]
+            )
+
+            assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+            mock_run_gunicorn.assert_called_once()
+            assert mock_run_gunicorn.call_args.kwargs["keepalive_timeout"] == 37
+
     @patch("uvicorn.run")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")

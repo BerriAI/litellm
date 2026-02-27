@@ -28,7 +28,7 @@ from typing import (
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, MAX_SPEND_LOG_QUEUE_SIZE
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -678,16 +678,35 @@ class DBSpendUpdateWriter:
                 payload.get("request_id"), payload.get("spend")
             )
         )
-        if prisma_client is not None and spend_logs_url is not None:
-            async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
-        elif prisma_client is not None:
-            async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
-        else:
+        if prisma_client is None:
             verbose_proxy_logger.debug(
                 "prisma_client is None. Skipping writing spend logs to db."
             )
+            return prisma_client
+
+        # Keep spend_logs_url behavior unchanged; both paths buffer in memory first.
+        _ = spend_logs_url
+        async with prisma_client._spend_log_transactions_lock:
+            queue_size = len(prisma_client.spend_log_transactions)
+            if queue_size >= MAX_SPEND_LOG_QUEUE_SIZE:
+                now = time.time()
+                last_warn_ts = float(
+                    getattr(prisma_client, "_last_spend_log_queue_drop_warning_ts", 0.0)
+                )
+                # Throttle warning logs to avoid log storms under sustained DB outages.
+                if now - last_warn_ts >= 30:
+                    verbose_proxy_logger.warning(
+                        "Spend tracking queue is full (%s items). "
+                        "Dropping new spend log entry. "
+                        "Set MAX_SPEND_LOG_QUEUE_SIZE to tune this limit.",
+                        MAX_SPEND_LOG_QUEUE_SIZE,
+                    )
+                    setattr(
+                        prisma_client, "_last_spend_log_queue_drop_warning_ts", now
+                    )
+                return prisma_client
+
+            prisma_client.spend_log_transactions.append(payload)
 
         return prisma_client
 
