@@ -4,12 +4,12 @@ Integration tests for RealTimeStreaming guardrails against a live OpenAI backend
 These tests require OPENAI_API_KEY and are skipped if not set.
 
 They verify end-to-end that:
-  1. A text message blocked by a guardrail → error event sent to client, NO AI response.
-  2. A voice transcript blocked by a guardrail → error event sent, response.create NOT sent.
+  1. A text message blocked by a guardrail -> error event sent to client, NO AI response.
+  2. A voice transcript blocked by a guardrail -> error event sent, response.create NOT sent.
   3. A clean text message passes through and triggers a real OpenAI response.
 
 Run with:
-    poetry run pytest tests/test_litellm/litellm_core_utils/test_realtime_guardrails_openai.py -v -s
+    poetry run pytest tests/llm_translation/realtime/test_realtime_guardrails_openai.py -v -s
 """
 
 import asyncio
@@ -32,7 +32,7 @@ OPENAI_REALTIME_URL = (
 
 pytestmark = pytest.mark.skipif(
     not OPENAI_API_KEY,
-    reason="OPENAI_API_KEY not set — skipping OpenAI realtime integration tests",
+    reason="OPENAI_API_KEY not set - skipping OpenAI realtime integration tests",
 )
 
 # A unique phrase guaranteed NOT to appear in normal assistant output.
@@ -48,7 +48,7 @@ class PhraseBlockingGuardrail(CustomGuardrail):
         for text in inputs.get("texts", []):
             if BLOCKED_PHRASE in text:
                 raise ValueError(
-                    f"Content blocked: contains forbidden test phrase."
+                    "Content blocked: contains forbidden test phrase."
                 )
         return inputs
 
@@ -128,11 +128,11 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
         ) as backend_ws:
             streaming, input_queue = await _build_streaming(client_events, backend_ws)
 
-            # Start backend → client forwarding
+            # Start backend -> client forwarding
             backend_task = asyncio.create_task(
                 streaming.backend_to_client_send_messages()
             )
-            # Start client → backend forwarding (reads from input_queue)
+            # Start client -> backend forwarding (reads from input_queue)
             client_task = asyncio.create_task(streaming.client_ack_messages())
 
             try:
@@ -169,7 +169,6 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
 
         # --- Assertions ---
         event_types = [e.get("type") for e in client_events]
-        print(f"\n[test] client events received: {event_types}")
 
         # 1. Must have received guardrail error
         error_events = [e for e in client_events if e.get("type") == "error"]
@@ -190,7 +189,7 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             f"Expected guardrail message in transcript delta, got: {event_types}"
         )
 
-        # 3. No real AI response should have been generated — response.done would only
+        # 3. No real AI response should have been generated - response.done would only
         #    appear if we sent a response.create and OpenAI replied. We allow it in the
         #    synthetic form (empty output=[]) but NOT with actual AI content.
         done_events = [e for e in client_events if e.get("type") == "response.done"]
@@ -214,7 +213,7 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
 async def test_voice_transcript_blocked_by_guardrail():
     """
     Simulate a backend-side voice transcription event containing the blocked phrase.
-    Guardrail must block it — no response.create sent to OpenAI.
+    Guardrail must block it - no response.create sent to OpenAI.
     """
     from websockets.exceptions import ConnectionClosed
 
@@ -247,7 +246,6 @@ async def test_voice_transcript_blocked_by_guardrail():
         await streaming.backend_to_client_send_messages()
 
         event_types = [e.get("type") for e in client_events]
-        print(f"\n[test] client events received: {event_types}")
 
         # 1. Error event must be sent to client
         error_events = [e for e in client_events if e.get("type") == "error"]

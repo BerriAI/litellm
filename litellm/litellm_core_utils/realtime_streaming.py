@@ -269,25 +269,7 @@ class RealTimeStreaming:
         any guardrail that would actually check the transcript also disables
         auto-response before the transcript arrives.
         """
-        from litellm.integrations.custom_guardrail import CustomGuardrail
-        from litellm.types.guardrails import GuardrailEventHooks
-
-        _realtime_event_types = [
-            GuardrailEventHooks.realtime_input_transcription,
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
-        return any(
-            isinstance(cb, CustomGuardrail)
-            and any(
-                cb.should_run_guardrail(
-                    data=self.request_data,
-                    event_type=et,
-                )
-                for et in _realtime_event_types
-            )
-            for cb in litellm.callbacks
-        )
+        return self._has_realtime_guardrails()
 
     async def run_realtime_guardrails(
         self,

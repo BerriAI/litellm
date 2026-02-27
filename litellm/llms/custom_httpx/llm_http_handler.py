@@ -1,4 +1,5 @@
 import json
+import ssl
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -4675,7 +4676,10 @@ class BaseLLMHTTPHandler:
         try:
             ssl_context = get_shared_realtime_ssl_context()
             if url.startswith("wss://") and ssl_context is False:
-                ssl_context = True
+                # Keep TLS for wss:// while honoring SSL_VERIFY=False semantics.
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
             async with websockets.connect(  # type: ignore
                 url,
                 additional_headers=headers,
