@@ -20960,6 +20960,38 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "gpt-realtime-1.5": {
+        "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_token_cost": 4e-07,
+        "input_cost_per_audio_token": 3.2e-05,
+        "input_cost_per_image": 5e-06,
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 32000,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_audio_token": 6.4e-05,
+        "output_cost_per_token": 1.6e-05,
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "gpt-realtime-mini": {
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
