@@ -23,6 +23,10 @@ from typing import (
 import httpx
 
 import litellm
+
+# Pre-compiled pattern for validating OpenAI-compatible tool call IDs.
+# Strict providers (e.g. Mistral) reject IDs that don't match this.
+_VALID_TOOL_CALL_ID_RE = re.compile(r"^[a-zA-Z0-9]{1,64}$")
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
@@ -460,6 +464,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
         )
+        transformed_messages = self._normalize_tool_call_ids(transformed_messages)
         transformed_messages, tools = (
             self.remove_cache_control_flag_from_messages_and_tools(
                 model=model,
@@ -504,8 +509,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         IDs that already satisfy ``^[a-zA-Z0-9]{1,64}$`` are left unchanged so
         there is zero overhead for well-behaved providers.
         """
-        _VALID_TOOL_CALL_ID = re.compile(r"^[a-zA-Z0-9]{1,64}$")
-
         def _remap_id(original: str, mapping: Dict[str, str]) -> str:
             if original not in mapping:
                 digest = hashlib.md5(original.encode()).hexdigest()[:9]
@@ -523,7 +526,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         tc_id = (
                             tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                         )
-                        if tc_id and not _VALID_TOOL_CALL_ID.match(tc_id):
+                        if tc_id and not _VALID_TOOL_CALL_ID_RE.match(tc_id):
                             _remap_id(tc_id, id_mapping)
 
         if not id_mapping:
