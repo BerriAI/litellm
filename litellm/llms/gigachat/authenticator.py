@@ -91,7 +91,7 @@ def get_access_token(
     auth_url = auth_url or _get_auth_url()
 
     # Check cache
-    cache_key = f"gigachat_token:{credentials[:16]}"
+    cache_key = f"gigachat_token:{credentials[:16]}:{scope}:{auth_url}"
     cached = _token_cache.get_cache(cache_key)
     if cached:
         token, expires_at = cached
@@ -128,7 +128,8 @@ async def get_access_token_async(
     auth_url = auth_url or _get_auth_url()
 
     # Check cache
-    cache_key = f"gigachat_token:{credentials[:16]}"
+    cache_key = f"gigachat_token:{credentials[:16]}:{scope}:{auth_url}"
+
     cached = _token_cache.get_cache(cache_key)
     if cached:
         token, expires_at = cached
