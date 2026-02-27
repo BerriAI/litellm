@@ -91,6 +91,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
+              if ("litellm_credential_name" in litellmExtraParams) {
+                delete litellmExtraParams.litellm_credential_name;
+              }
             } catch (error) {
               NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
