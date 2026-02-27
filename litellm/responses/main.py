@@ -728,6 +728,11 @@ def responses(
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
+        input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
+            input
+        )
+
         # Call the handler with _is_async flag instead of directly calling the async handler
         response = base_llm_http_handler.response_api_handler(
             model=model,
@@ -1598,6 +1603,12 @@ def compact_responses(
                 "litellm_call_id": litellm_call_id,
             },
             custom_llm_provider=custom_llm_provider,
+        )
+
+        # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
+        # before forwarding to the upstream provider.
+        input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
+            input
         )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
