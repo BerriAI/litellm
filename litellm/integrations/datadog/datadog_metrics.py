@@ -215,11 +215,10 @@ class DatadogMetricsLogger(CustomBatchLogger):
         try:
             await self._upload_to_datadog(payload_data)
         except Exception as e:
-            # Re-insert failed batch so next flush retries
-            self.log_queue.extend(batch)
             verbose_logger.exception(
                 f"Datadog Metrics: Error in async_send_batch: {str(e)}"
             )
+            raise
 
     async def _upload_to_datadog(self, payload: DatadogMetricsPayload):
         if not self.dd_api_key:
