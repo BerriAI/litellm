@@ -643,6 +643,65 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_validate_mcp_object_permission_rejects_unauthorized_servers():
+    """
+    With view_all mode, non-admin users see all MCP servers but must not be able to
+    assign servers they lack access to. validate_mcp_object_permission_for_key
+    should raise 403 when a user with no MCP access tries to assign mcp_servers.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_helpers.object_permission_utils import (
+        validate_mcp_object_permission_for_key,
+    )
+
+    # Non-admin user with no team - has no MCP access
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-user-key",
+        user_id="test_user",
+        team_id=None,
+    )
+
+    mock_prisma = MagicMock()
+    mock_user_cache = MagicMock()
+
+    # build_effective_auth_contexts returns single context (no teams)
+    # get_allowed_mcp_servers returns [] for user with no team/key MCP access
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=[])
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.ui_session_utils.build_effective_auth_contexts",
+            AsyncMock(return_value=[mock_user]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+            mock_user_cache,
+        ),
+    ):
+
+        with pytest.raises(HTTPException) as exc_info:
+            await validate_mcp_object_permission_for_key(
+                user_api_key_dict=mock_user,
+                object_permission={"mcp_servers": ["sensitive_server"]},
+                prisma_client=mock_prisma,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "sensitive_server" in str(exc_info.value.detail)
+        assert "do not have access" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
 async def test_key_update_object_permissions_existing_permission(monkeypatch):
     """
     Test updating object permissions when a key already has an existing object_permission_id.
