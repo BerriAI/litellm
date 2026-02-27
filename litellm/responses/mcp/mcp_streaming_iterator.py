@@ -284,6 +284,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             mcp_events  # Store the initial MCP events for backward compatibility
         )
         self.tool_server_map = tool_server_map
+        self._sync_response_created_emitted = False
 
         # Iterator references
         self.base_iterator: Optional[
@@ -725,19 +726,39 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     def __next__(self) -> ResponsesAPIStreamingResponse:
-        # First, emit any queued MCP events
+        if self.is_async:
+            raise RuntimeError("Cannot use sync iteration on async iterator")
+
+        # Emit response.created first (OpenAI SDK expects it before other events)
+        if not self._sync_response_created_emitted:
+            self._ensure_sync_base_iterator()
+            if self.base_iterator and hasattr(self.base_iterator, "__next__"):
+                try:
+                    first_chunk = next(cast(Any, self.base_iterator))  # type: ignore[arg-type]
+                    self._sync_response_created_emitted = True
+                    return first_chunk
+                except StopIteration:
+                    self.finished = True
+                    raise
+            self._sync_response_created_emitted = True
+
+        # Then emit MCP discovery events
         if self.mcp_events:  # type: ignore[attr-defined]
             return self.mcp_events.pop(0)  # type: ignore[attr-defined]
 
         # Then delegate to the base iterator
-        if not self.is_async:
-            try:
-                if self.base_iterator and hasattr(self.base_iterator, "__next__"):
-                    return next(cast(Any, self.base_iterator))  # type: ignore[arg-type]
-                else:
-                    raise StopIteration
-            except StopIteration:
-                self.finished = True
-                raise
-        else:
-            raise RuntimeError("Cannot use sync iteration on async iterator")
+        try:
+            if self.base_iterator and hasattr(self.base_iterator, "__next__"):
+                return next(cast(Any, self.base_iterator))  # type: ignore[arg-type]
+            raise StopIteration
+        except StopIteration:
+            self.finished = True
+            raise
+
+    def _ensure_sync_base_iterator(self) -> None:
+        """Create base iterator synchronously when needed (for sync __next__ path)."""
+        if self.base_iterator is not None:
+            return
+        from litellm.litellm_core_utils.asyncify import run_async_function
+
+        run_async_function(self._create_initial_response_iterator)

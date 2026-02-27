@@ -562,6 +562,96 @@ async def test_sse_event_ordering_response_created_first():
     )
 
 
+def test_sse_event_ordering_sync_response_created_first():
+    """
+    Test that sync __next__ emits response.created before mcp_list_tools events.
+    """
+    from unittest.mock import patch
+    from litellm.types.llms.openai import (
+        ResponsesAPIStreamEvents,
+        ResponseCreatedEvent,
+        ResponsesAPIResponse,
+    )
+    from litellm.responses.mcp.mcp_streaming_iterator import (
+        MCPEnhancedStreamingIterator,
+        create_mcp_list_tools_events,
+    )
+
+    mock_mcp_tools = [
+        type("MCPTool", (), {
+            "name": "test_tool",
+            "description": "Test",
+            "inputSchema": {"type": "object", "properties": {}},
+        })(),
+    ]
+
+    import asyncio
+    mcp_events = asyncio.run(
+        create_mcp_list_tools_events(
+            mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/test"}],
+            user_api_key_auth=None,
+            base_item_id="mcp_test123",
+            pre_processed_mcp_tools=mock_mcp_tools,
+        )
+    )
+
+    def mock_stream():
+        yield ResponseCreatedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            response=ResponsesAPIResponse(
+                id="resp_123",
+                object="response",
+                created_at=1234567890,
+                status="in_progress",
+                error=None,
+                incomplete_details=None,
+                instructions=None,
+                max_output_tokens=None,
+                model="gpt-4o-mini",
+                output=[],
+                parallel_tool_calls=True,
+                previous_response_id=None,
+                reasoning=None,
+                store=True,
+                temperature=1.0,
+                text={"format": {"type": "text"}},
+                tool_choice="auto",
+                tools=[],
+                top_p=1.0,
+                truncation="disabled",
+                usage=None,
+                user=None,
+                metadata={},
+            ),
+        )
+
+    iterator = MCPEnhancedStreamingIterator(
+        base_iterator=mock_stream(),
+        mcp_events=mcp_events,
+        tool_server_map={"test": "test_server"},
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy"}],
+        user_api_key_auth=None,
+        original_request_params={
+            "model": "gpt-4o-mini",
+            "stream": True,
+            "tools": [{"type": "mcp", "server_url": "litellm_proxy"}],
+        },
+    )
+    iterator.is_async = False
+
+    event_types = []
+    for chunk in iterator:
+        event_types.append(getattr(chunk, "type", "unknown"))
+        if len(event_types) >= 5:
+            break
+
+    assert len(event_types) >= 1, "Should have at least one event"
+    assert event_types[0] == ResponsesAPIStreamEvents.RESPONSE_CREATED, (
+        f"Sync path: first event must be response.created, got {event_types[0]}. "
+        f"Order: {event_types}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_streaming_mcp_events_validation():
     """
