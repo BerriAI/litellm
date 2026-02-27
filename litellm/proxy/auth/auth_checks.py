@@ -363,6 +363,7 @@ async def common_checks(
             await _check_end_user_budget(
                 end_user_obj=end_user_object,
                 route=route,
+                valid_token=valid_token,
                 proxy_logging_obj=proxy_logging_obj,
             )
 
@@ -774,6 +775,7 @@ async def _apply_default_budget_to_end_user(
 async def _check_end_user_budget(
     end_user_obj: LiteLLM_EndUserTable,
     route: str,
+    valid_token: Optional[UserAPIKeyAuth] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> None:
     """
@@ -786,6 +788,7 @@ async def _check_end_user_budget(
     Args:
         end_user_obj: The end user object to check
         route: The request route
+        valid_token: Optional token for the current request
         proxy_logging_obj: Optional proxy logging object for budget alerts
 
     Raises:
@@ -803,8 +806,9 @@ async def _check_end_user_budget(
 
     # Max budget check — alert + block
     if end_user_budget is not None and end_user_obj.spend > end_user_budget:
-        if proxy_logging_obj is not None:
+        if proxy_logging_obj is not None and valid_token is not None:
             call_info = CallInfo(
+                token=valid_token.token,
                 spend=end_user_obj.spend,
                 max_budget=end_user_budget,
                 soft_budget=end_user_soft_budget,
@@ -828,8 +832,10 @@ async def _check_end_user_budget(
         end_user_soft_budget is not None
         and end_user_obj.spend >= end_user_soft_budget
         and proxy_logging_obj is not None
+        and valid_token is not None
     ):
         call_info = CallInfo(
+            token=valid_token.token,
             spend=end_user_obj.spend,
             max_budget=end_user_budget,
             soft_budget=end_user_soft_budget,
