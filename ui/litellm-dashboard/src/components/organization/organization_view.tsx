@@ -1,31 +1,21 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { createTeamAliasMap } from "@/utils/teamUtils";
-import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import {
   Badge,
   Card,
   Grid,
-  Icon,
-  Tab,
-  TabGroup,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  TabList,
-  TabPanel,
-  TabPanels,
   Text,
   TextInput,
   Title,
   Button as TremorButton,
 } from "@tremor/react";
-import { Button, Form, Input, Select } from "antd";
+import { Button, Form, Input, Select, Tabs, Typography } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
+import MemberTable from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
@@ -224,6 +214,41 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     }
   };
 
+  const orgExtraColumns: ColumnsType<Member> = [
+    {
+      title: "Spend (USD)",
+      key: "spend",
+      render: (_: unknown, record: Member) => {
+        const orgMember =
+          record.user_id != null
+            ? (orgData.members || []).find((m) => m.user_id === record.user_id)
+            : undefined;
+        return (
+          <Typography.Text>
+            ${formatNumberWithCommas(orgMember?.spend ?? 0, 4)}
+          </Typography.Text>
+        );
+      },
+    },
+    {
+      title: "Created At",
+      key: "created_at",
+      render: (_: unknown, record: Member) => {
+        const orgMember =
+          record.user_id != null
+            ? (orgData.members || []).find((m) => m.user_id === record.user_id)
+            : undefined;
+        return (
+          <Typography.Text>
+            {orgMember?.created_at
+              ? new Date(orgMember.created_at).toLocaleString()
+              : "-"}
+          </Typography.Text>
+        );
+      },
+    },
+  ];
+
   return (
     <div className="w-full h-screen p-4 bg-white">
       <div className="flex justify-between items-center mb-6">
@@ -248,325 +273,272 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         </div>
       </div>
 
-      <TabGroup defaultIndex={editOrg ? 2 : 0}>
-        <TabList className="mb-4">
-          <Tab>Overview</Tab>
-          <Tab>Members</Tab>
-          <Tab>Settings</Tab>
-        </TabList>
+      <Tabs
+        defaultActiveKey={editOrg ? "settings" : "overview"}
+        className="mb-4"
+        items={[
+          {
+            key: "overview",
+            label: "Overview",
+            children: (
+              <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
+                <Card>
+                  <Text>Organization Details</Text>
+                  <div className="mt-2">
+                    <Text>Created: {new Date(orgData.created_at).toLocaleDateString()}</Text>
+                    <Text>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</Text>
+                    <Text>Created By: {orgData.created_by}</Text>
+                  </div>
+                </Card>
 
-        <TabPanels>
-          {/* Overview Panel */}
-          <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
-                <Text>Organization Details</Text>
-                <div className="mt-2">
-                  <Text>Created: {new Date(orgData.created_at).toLocaleDateString()}</Text>
-                  <Text>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</Text>
-                  <Text>Created By: {orgData.created_by}</Text>
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Budget Status</Text>
-                <div className="mt-2">
-                  <Title>${formatNumberWithCommas(orgData.spend, 4)}</Title>
-                  <Text>
-                    of{" "}
-                    {orgData.litellm_budget_table.max_budget === null
-                      ? "Unlimited"
-                      : `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`}
-                  </Text>
-                  {orgData.litellm_budget_table.budget_duration && (
-                    <Text className="text-gray-500">Reset: {orgData.litellm_budget_table.budget_duration}</Text>
-                  )}
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Rate Limits</Text>
-                <div className="mt-2">
-                  <Text>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</Text>
-                  <Text>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</Text>
-                  {orgData.litellm_budget_table.max_parallel_requests && (
-                    <Text>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</Text>
-                  )}
-                </div>
-              </Card>
-
-              <Card>
-                <Text>Models</Text>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {orgData.models.length === 0 ? (
-                    <Badge color="red">All proxy models</Badge>
-                  ) : (
-                    orgData.models.map((model, index) => (
-                      <Badge key={index} color="red">
-                        {model}
-                      </Badge>
-                    ))
-                  )}
-                </div>
-              </Card>
-              <Card>
-                <Text>Teams</Text>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {orgData.teams?.map((team, index) => (
-                    <Badge key={index} color="red">
-                      {teamAliasMap[team.team_id] || team.team_id}
-                    </Badge>
-                  ))}
-                </div>
-              </Card>
-
-              <ObjectPermissionsView
-                objectPermission={orgData.object_permission}
-                variant="card"
-                accessToken={accessToken}
-              />
-            </Grid>
-          </TabPanel>
-
-          <TabPanel>
-            <div className="space-y-4">
-              <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[75vh]">
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>User ID</TableHeaderCell>
-                      <TableHeaderCell>Role</TableHeaderCell>
-                      <TableHeaderCell>Spend</TableHeaderCell>
-                      <TableHeaderCell>Created At</TableHeaderCell>
-                      <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
-
-                  <TableBody>
-                    {orgData.members && orgData.members.length > 0 ? (
-                      orgData.members.map((member, index) => (
-                        <TableRow key={index}>
-                          <TableCell>
-                            <Text className="font-mono">{member.user_id}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <Text className="font-mono">{member.user_role}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <Text>${formatNumberWithCommas(member.spend, 4)}</Text>
-                          </TableCell>
-                          <TableCell>
-                            <Text>{new Date(member.created_at).toLocaleString()}</Text>
-                          </TableCell>
-                          <TableCell>
-                            {canEditOrg && (
-                              <>
-                                <Icon
-                                  icon={PencilAltIcon}
-                                  size="sm"
-                                  onClick={() => {
-                                    setSelectedEditMember({
-                                      role: member.user_role,
-                                      user_email: member.user_email,
-                                      user_id: member.user_id,
-                                    });
-                                    setIsEditMemberModalVisible(true);
-                                  }}
-                                />
-                                <Icon
-                                  icon={TrashIcon}
-                                  size="sm"
-                                  onClick={() => {
-                                    handleMemberDelete(member);
-                                  }}
-                                />
-                              </>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={5} className="text-center py-8">
-                          <Text className="text-gray-500">No members found</Text>
-                        </TableCell>
-                      </TableRow>
+                <Card>
+                  <Text>Budget Status</Text>
+                  <div className="mt-2">
+                    <Title>${formatNumberWithCommas(orgData.spend, 4)}</Title>
+                    <Text>
+                      of{" "}
+                      {orgData.litellm_budget_table.max_budget === null
+                        ? "Unlimited"
+                        : `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`}
+                    </Text>
+                    {orgData.litellm_budget_table.budget_duration && (
+                      <Text className="text-gray-500">Reset: {orgData.litellm_budget_table.budget_duration}</Text>
                     )}
-                  </TableBody>
-                </Table>
-              </Card>
-              {canEditOrg && (
-                <TremorButton
-                  onClick={() => {
-                    setIsAddMemberModalVisible(true);
-                  }}
-                >
-                  Add Member
-                </TremorButton>
-              )}
-            </div>
-          </TabPanel>
-
-          {/* Settings Panel */}
-          <TabPanel>
-            <Card className="overflow-y-auto max-h-[65vh]">
-              <div className="flex justify-between items-center mb-4">
-                <Title>Organization Settings</Title>
-                {canEditOrg && !isEditing && (
-                  <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
-                )}
-              </div>
-
-              {isEditing ? (
-                <Form
-                  form={form}
-                  onFinish={handleOrgUpdate}
-                  initialValues={{
-                    organization_alias: orgData.organization_alias,
-                    models: orgData.models,
-                    tpm_limit: orgData.litellm_budget_table.tpm_limit,
-                    rpm_limit: orgData.litellm_budget_table.rpm_limit,
-                    max_budget: orgData.litellm_budget_table.max_budget,
-                    budget_duration: orgData.litellm_budget_table.budget_duration,
-                    metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
-                    vector_stores: orgData.object_permission?.vector_stores || [],
-                    mcp_servers_and_groups: {
-                      servers: orgData.object_permission?.mcp_servers || [],
-                      accessGroups: orgData.object_permission?.mcp_access_groups || [],
-                    },
-                  }}
-                  layout="vertical"
-                >
-                  <Form.Item
-                    label="Organization Name"
-                    name="organization_alias"
-                    rules={[
-                      {
-                        required: true,
-                        message: "Please input an organization name",
-                      },
-                    ]}
-                  >
-                    <TextInput />
-                  </Form.Item>
-
-                  <Form.Item label="Models" name="models">
-                    <ModelSelect
-                      value={form.getFieldValue("models")}
-                      onChange={(values) => form.setFieldValue("models", values)}
-                      context="organization"
-                      options={{
-                        includeSpecialOptions: true,
-                        showAllProxyModelsOverride: true,
-                      }}
-                    />
-                  </Form.Item>
-
-                  <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Reset Budget" name="budget_duration">
-                    <Select placeholder="n/a">
-                      <Select.Option value="24h">daily</Select.Option>
-                      <Select.Option value="7d">weekly</Select.Option>
-                      <Select.Option value="30d">monthly</Select.Option>
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                    <NumericalInput step={1} style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                    <NumericalInput step={1} style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Vector Stores" name="vector_stores">
-                    <VectorStoreSelector
-                      onChange={(values) => form.setFieldValue("vector_stores", values)}
-                      value={form.getFieldValue("vector_stores")}
-                      accessToken={accessToken || ""}
-                      placeholder="Select vector stores"
-                    />
-                  </Form.Item>
-
-                  <Form.Item label="MCP Servers & Access Groups" name="mcp_servers_and_groups">
-                    <MCPServerSelector
-                      onChange={(values) => form.setFieldValue("mcp_servers_and_groups", values)}
-                      value={form.getFieldValue("mcp_servers_and_groups")}
-                      accessToken={accessToken || ""}
-                      placeholder="Select MCP servers and access groups"
-                    />
-                  </Form.Item>
-
-                  <Form.Item label="Metadata" name="metadata">
-                    <Input.TextArea rows={4} />
-                  </Form.Item>
-
-                  <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
-                    <div className="flex justify-end items-center gap-2">
-                      <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isOrgSaving}>
-                        Cancel
-                      </TremorButton>
-                      <TremorButton type="submit" loading={isOrgSaving}>
-                        Save Changes
-                      </TremorButton>
-                    </div>
                   </div>
-                </Form>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">Organization Name</Text>
-                    <div>{orgData.organization_alias}</div>
+                </Card>
+
+                <Card>
+                  <Text>Rate Limits</Text>
+                  <div className="mt-2">
+                    <Text>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</Text>
+                    <Text>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</Text>
+                    {orgData.litellm_budget_table.max_parallel_requests && (
+                      <Text>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</Text>
+                    )}
                   </div>
-                  <div>
-                    <Text className="font-medium">Organization ID</Text>
-                    <div className="font-mono">{orgData.organization_id}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Created At</Text>
-                    <div>{new Date(orgData.created_at).toLocaleString()}</div>
-                  </div>
-                  <div>
-                    <Text className="font-medium">Models</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {orgData.models.map((model, index) => (
+                </Card>
+
+                <Card>
+                  <Text>Models</Text>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {orgData.models.length === 0 ? (
+                      <Badge color="red">All proxy models</Badge>
+                    ) : (
+                      orgData.models.map((model, index) => (
                         <Badge key={index} color="red">
                           {model}
                         </Badge>
-                      ))}
-                    </div>
+                      ))
+                    )}
                   </div>
-                  <div>
-                    <Text className="font-medium">Rate Limits</Text>
-                    <div>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</div>
-                    <div>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</div>
+                </Card>
+                <Card>
+                  <Text>Teams</Text>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {orgData.teams?.map((team, index) => (
+                      <Badge key={index} color="red">
+                        {teamAliasMap[team.team_id] || team.team_id}
+                      </Badge>
+                    ))}
                   </div>
-                  <div>
-                    <Text className="font-medium">Budget</Text>
-                    <div>
-                      Max:{" "}
-                      {orgData.litellm_budget_table.max_budget !== null
-                        ? `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`
-                        : "No Limit"}
-                    </div>
-                    <div>Reset: {orgData.litellm_budget_table.budget_duration || "Never"}</div>
-                  </div>
+                </Card>
 
-                  <ObjectPermissionsView
-                    objectPermission={orgData.object_permission}
-                    variant="inline"
-                    className="pt-4 border-t border-gray-200"
-                    accessToken={accessToken}
-                  />
+                <ObjectPermissionsView
+                  objectPermission={orgData.object_permission}
+                  variant="card"
+                  accessToken={accessToken}
+                />
+              </Grid>
+            ),
+          },
+          {
+            key: "members",
+            label: "Members",
+            children: (
+              <div className="space-y-4">
+                <MemberTable
+                  members={(orgData.members || []).map((m) => ({
+                    role: m.user_role || "",
+                    user_id: m.user_id,
+                    user_email: m.user_email,
+                  }))}
+                  canEdit={canEditOrg}
+                  onEdit={(member) => {
+                    setSelectedEditMember(member);
+                    setIsEditMemberModalVisible(true);
+                  }}
+                  onDelete={(member) => handleMemberDelete(member)}
+                  onAddMember={() => setIsAddMemberModalVisible(true)}
+                  roleColumnTitle="Organization Role"
+                  extraColumns={orgExtraColumns}
+                  emptyText="No members found"
+                />
+              </div>
+            ),
+          },
+          {
+            key: "settings",
+            label: "Settings",
+            children: (
+              <Card className="overflow-y-auto max-h-[65vh]">
+                <div className="flex justify-between items-center mb-4">
+                  <Title>Organization Settings</Title>
+                  {canEditOrg && !isEditing && (
+                    <TremorButton onClick={() => setIsEditing(true)}>Edit Settings</TremorButton>
+                  )}
                 </div>
-              )}
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+
+                {isEditing ? (
+                  <Form
+                    form={form}
+                    onFinish={handleOrgUpdate}
+                    initialValues={{
+                      organization_alias: orgData.organization_alias,
+                      models: orgData.models,
+                      tpm_limit: orgData.litellm_budget_table.tpm_limit,
+                      rpm_limit: orgData.litellm_budget_table.rpm_limit,
+                      max_budget: orgData.litellm_budget_table.max_budget,
+                      budget_duration: orgData.litellm_budget_table.budget_duration,
+                      metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
+                      vector_stores: orgData.object_permission?.vector_stores || [],
+                      mcp_servers_and_groups: {
+                        servers: orgData.object_permission?.mcp_servers || [],
+                        accessGroups: orgData.object_permission?.mcp_access_groups || [],
+                      },
+                    }}
+                    layout="vertical"
+                  >
+                    <Form.Item
+                      label="Organization Name"
+                      name="organization_alias"
+                      rules={[
+                        {
+                          required: true,
+                          message: "Please input an organization name",
+                        },
+                      ]}
+                    >
+                      <TextInput />
+                    </Form.Item>
+
+                    <Form.Item label="Models" name="models">
+                      <ModelSelect
+                        value={form.getFieldValue("models")}
+                        onChange={(values) => form.setFieldValue("models", values)}
+                        context="organization"
+                        options={{
+                          includeSpecialOptions: true,
+                          showAllProxyModelsOverride: true,
+                        }}
+                      />
+                    </Form.Item>
+
+                    <Form.Item label="Max Budget (USD)" name="max_budget">
+                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                    </Form.Item>
+
+                    <Form.Item label="Reset Budget" name="budget_duration">
+                      <Select placeholder="n/a">
+                        <Select.Option value="24h">daily</Select.Option>
+                        <Select.Option value="7d">weekly</Select.Option>
+                        <Select.Option value="30d">monthly</Select.Option>
+                      </Select>
+                    </Form.Item>
+
+                    <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
+                      <NumericalInput step={1} style={{ width: "100%" }} />
+                    </Form.Item>
+
+                    <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
+                      <NumericalInput step={1} style={{ width: "100%" }} />
+                    </Form.Item>
+
+                    <Form.Item label="Vector Stores" name="vector_stores">
+                      <VectorStoreSelector
+                        onChange={(values) => form.setFieldValue("vector_stores", values)}
+                        value={form.getFieldValue("vector_stores")}
+                        accessToken={accessToken || ""}
+                        placeholder="Select vector stores"
+                      />
+                    </Form.Item>
+
+                    <Form.Item label="MCP Servers & Access Groups" name="mcp_servers_and_groups">
+                      <MCPServerSelector
+                        onChange={(values) => form.setFieldValue("mcp_servers_and_groups", values)}
+                        value={form.getFieldValue("mcp_servers_and_groups")}
+                        accessToken={accessToken || ""}
+                        placeholder="Select MCP servers and access groups"
+                      />
+                    </Form.Item>
+
+                    <Form.Item label="Metadata" name="metadata">
+                      <Input.TextArea rows={4} />
+                    </Form.Item>
+
+                    <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+                      <div className="flex justify-end items-center gap-2">
+                        <TremorButton variant="secondary" onClick={() => setIsEditing(false)} disabled={isOrgSaving}>
+                          Cancel
+                        </TremorButton>
+                        <TremorButton type="submit" loading={isOrgSaving}>
+                          Save Changes
+                        </TremorButton>
+                      </div>
+                    </div>
+                  </Form>
+                ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <Text className="font-medium">Organization Name</Text>
+                      <div>{orgData.organization_alias}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Organization ID</Text>
+                      <div className="font-mono">{orgData.organization_id}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Created At</Text>
+                      <div>{new Date(orgData.created_at).toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Models</Text>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {orgData.models.map((model, index) => (
+                          <Badge key={index} color="red">
+                            {model}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Rate Limits</Text>
+                      <div>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</div>
+                      <div>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Budget</Text>
+                      <div>
+                        Max:{" "}
+                        {orgData.litellm_budget_table.max_budget !== null
+                          ? `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`
+                          : "No Limit"}
+                      </div>
+                      <div>Reset: {orgData.litellm_budget_table.budget_duration || "Never"}</div>
+                    </div>
+
+                    <ObjectPermissionsView
+                      objectPermission={orgData.object_permission}
+                      variant="inline"
+                      className="pt-4 border-t border-gray-200"
+                      accessToken={accessToken}
+                    />
+                  </div>
+                )}
+              </Card>
+            ),
+          },
+        ]}
+      />
       <UserSearchModal
         isVisible={isAddMemberModalVisible}
         onCancel={() => setIsAddMemberModalVisible(false)}

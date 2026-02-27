@@ -70,6 +70,7 @@ class SlackAlerting(CustomBatchLogger):
         ] = None,  # if user wants to separate alerts to diff channels
         alerting_args={},
         default_webhook_url: Optional[str] = None,
+        alert_type_config: Optional[Dict[str, dict]] = None,
         **kwargs,
     ):
         if alerting_threshold is None:
@@ -92,6 +93,12 @@ class SlackAlerting(CustomBatchLogger):
         self.hanging_request_check = AlertingHangingRequestCheck(
             slack_alerting_object=self,
         )
+        self.alert_type_config: Dict[str, AlertTypeConfig] = {}
+        if alert_type_config:
+            for key, val in alert_type_config.items():
+                self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
+        self.digest_buckets: Dict[str, DigestEntry] = {}
+        self.digest_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
@@ -102,6 +109,7 @@ class SlackAlerting(CustomBatchLogger):
         alert_to_webhook_url: Optional[Dict[AlertType, Union[List[str], str]]] = None,
         alerting_args: Optional[Dict] = None,
         llm_router: Optional[Router] = None,
+        alert_type_config: Optional[Dict[str, dict]] = None,
     ):
         if alerting is not None:
             self.alerting = alerting
@@ -116,6 +124,9 @@ class SlackAlerting(CustomBatchLogger):
             if not self.periodic_started:
                 asyncio.create_task(self.periodic_flush())
                 self.periodic_started = True
+        if alert_type_config is not None:
+            for key, val in alert_type_config.items():
+                self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
 
         if alert_to_webhook_url is not None:
             # update the dict
@@ -284,6 +295,8 @@ class SlackAlerting(CustomBatchLogger):
                 level="Low",
                 alert_type=AlertType.llm_too_slow,
                 alerting_metadata=alerting_metadata,
+                request_model=model,
+                api_base=api_base,
             )
 
     async def async_update_daily_reports(
@@ -1354,13 +1367,15 @@ Model Info:
 
         return False
 
-    async def send_alert(
+    async def send_alert( # noqa: PLR0915
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],
         alert_type: AlertType,
         alerting_metadata: dict,
         user_info: Optional[WebhookEvent] = None,
+        request_model: Optional[str] = None,
+        api_base: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -1376,6 +1391,8 @@ Model Info:
         Parameters:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
+            request_model: Optional[str] - model name for digest grouping
+            api_base: Optional[str] - api base for digest grouping
         """
         if self.alerting is None:
             return
@@ -1412,6 +1429,44 @@ Model Info:
             return
 
         from datetime import datetime
+
+        # Check if digest mode is enabled for this alert type
+        alert_type_name_str = getattr(alert_type, "value", str(alert_type))
+        _atc = self.alert_type_config.get(alert_type_name_str)
+        if _atc is not None and _atc.digest:
+            # Resolve webhook URL for this alert type (needed for digest entry)
+            if (
+                self.alert_to_webhook_url is not None
+                and alert_type in self.alert_to_webhook_url
+            ):
+                _digest_webhook: Optional[Union[str, List[str]]] = self.alert_to_webhook_url[alert_type]
+            elif self.default_webhook_url is not None:
+                _digest_webhook = self.default_webhook_url
+            else:
+                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL", None)
+            if _digest_webhook is None:
+                raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+
+            digest_key = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
+
+            async with self.digest_lock:
+                now = datetime.now()
+                if digest_key in self.digest_buckets:
+                    self.digest_buckets[digest_key]["count"] += 1
+                    self.digest_buckets[digest_key]["last_time"] = now
+                else:
+                    self.digest_buckets[digest_key] = DigestEntry(
+                        alert_type=alert_type_name_str,
+                        request_model=request_model or "",
+                        api_base=api_base or "",
+                        first_message=message,
+                        level=level,
+                        count=1,
+                        start_time=now,
+                        last_time=now,
+                        webhook_url=_digest_webhook,
+                    )
+            return  # Suppress immediate alert; will be emitted by _flush_digest_buckets
 
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
@@ -1487,6 +1542,72 @@ Model Info:
         ]
         await asyncio.gather(*tasks)
         self.log_queue.clear()
+
+    async def _flush_digest_buckets(self):
+        """Flush any digest buckets whose interval has expired.
+
+        For each expired bucket, formats a digest summary message and
+        appends it to the log_queue for delivery via the normal batching path.
+        """
+        from datetime import datetime
+
+        now = datetime.now()
+        flushed_keys: List[str] = []
+
+        async with self.digest_lock:
+            for key, entry in self.digest_buckets.items():
+                alert_type_name = entry["alert_type"]
+                _atc = self.alert_type_config.get(alert_type_name)
+                if _atc is None:
+                    continue
+                elapsed = (now - entry["start_time"]).total_seconds()
+                if elapsed < _atc.digest_interval:
+                    continue
+
+                # Build digest summary message
+                start_ts = entry["start_time"].strftime("%H:%M:%S")
+                end_ts = entry["last_time"].strftime("%H:%M:%S")
+                start_date = entry["start_time"].strftime("%Y-%m-%d")
+                end_date = entry["last_time"].strftime("%Y-%m-%d")
+                formatted_message = (
+                    f"Alert type: `{alert_type_name}` (Digest)\n"
+                    f"Level: `{entry['level']}`\n"
+                    f"Start: `{start_date} {start_ts}`\n"
+                    f"End: `{end_date} {end_ts}`\n"
+                    f"Count: `{entry['count']}`\n\n"
+                    f"Message: {entry['first_message']}"
+                )
+                _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+                if _proxy_base_url is not None:
+                    formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
+
+                payload = {"text": formatted_message}
+                headers = {"Content-type": "application/json"}
+                webhook_url = entry["webhook_url"]
+
+                if isinstance(webhook_url, list):
+                    for url in webhook_url:
+                        self.log_queue.append(
+                            {"url": url, "headers": headers, "payload": payload, "alert_type": alert_type_name}
+                        )
+                else:
+                    self.log_queue.append(
+                        {"url": webhook_url, "headers": headers, "payload": payload, "alert_type": alert_type_name}
+                    )
+                flushed_keys.append(key)
+
+            for key in flushed_keys:
+                del self.digest_buckets[key]
+
+    async def periodic_flush(self):
+        """Override base periodic_flush to also flush digest buckets."""
+        while True:
+            await asyncio.sleep(self.flush_interval)
+            try:
+                await self._flush_digest_buckets()
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error flushing digest buckets: {str(e)}")
+            await self.flush_queue()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""

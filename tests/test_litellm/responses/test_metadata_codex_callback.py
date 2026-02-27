@@ -44,11 +44,13 @@ class MetadataCaptureCallback(CustomLogger):
 
     def __init__(self):
         self.captured_kwargs: Optional[dict] = None
+        self.event = asyncio.Event()
 
     async def async_log_success_event(
         self, kwargs, response_obj, start_time, end_time
     ):
         self.captured_kwargs = kwargs
+        self.event.set()
 
 
 @pytest.mark.asyncio
@@ -104,7 +106,7 @@ async def test_metadata_passed_to_custom_callback_codex_models():
             metadata=test_metadata,
         )
 
-    await asyncio.sleep(1)
+    await asyncio.wait_for(callback.event.wait(), timeout=5.0)
 
     assert callback.captured_kwargs is not None, "Callback should have been invoked"
 
@@ -165,7 +167,7 @@ async def test_metadata_passed_via_litellm_metadata_responses_api():
             litellm_metadata=test_metadata,
         )
 
-    await asyncio.sleep(1)
+    await asyncio.wait_for(callback.event.wait(), timeout=5.0)
 
     assert callback.captured_kwargs is not None
 

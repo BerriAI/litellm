@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -50,6 +51,9 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
 
         # Call the method
         await db_writer.update_database(**test_data)
+
+        # Let the single batched task run
+        await asyncio.sleep(0)
 
         # Verify that _insert_spend_log_to_db was NOT called (since disable_spend_logs is True)
         db_writer._insert_spend_log_to_db.assert_not_called()
@@ -115,7 +119,9 @@ async def test_update_daily_spend_with_null_entity_id():
 
     # Verify the where clause contains null entity_id
     call_args = mock_table.upsert.call_args[1]
-    where_clause = call_args["where"]["user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"]
+    where_clause = call_args["where"][
+        "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
+    ]
     assert where_clause["user_id"] is None
     assert where_clause["date"] == "2024-01-01"
     assert where_clause["api_key"] == "test-api-key"
@@ -161,7 +167,7 @@ async def test_update_daily_spend_sorting():
     upsert_calls = []
     for i in range(50):
         daily_spend_transactions[f"test_key_{i}"] = {
-            "user_id": f"user{60-i}", # user60 ... user11, reverse order
+            "user_id": f"user{60-i}",  # user60 ... user11, reverse order
             "date": "2024-01-01",
             "api_key": "test-api-key",
             "model": "gpt-4",
@@ -173,46 +179,48 @@ async def test_update_daily_spend_sorting():
             "successful_requests": 1,
             "failed_requests": 0,
         }
-        upsert_calls.append(call(
-            where={
-                "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
-                    "user_id": f"user{i+11}", # user11 ... user60, sorted order
-                    "date": "2024-01-01",
-                    "api_key": "test-api-key",
-                    "model": "gpt-4",
-                    "custom_llm_provider": "openai",
-                    "mcp_namespaced_tool_name": "",
-                    "endpoint": "",
-                }
-            },
-            data={
-                "create": {
-                    "user_id": f"user{i+11}",
-                    "date": "2024-01-01",
-                    "api_key": "test-api-key",
-                    "model": "gpt-4",
-                    "model_group": None,
-                    "mcp_namespaced_tool_name": "",
-                    "custom_llm_provider": "openai",
-                    "endpoint": "",
-                    "prompt_tokens": 10,
-                    "completion_tokens": 20,
-                    "spend": 0.1,
-                    "api_requests": 1,
-                    "successful_requests": 1,
-                    "failed_requests": 0,
+        upsert_calls.append(
+            call(
+                where={
+                    "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
+                        "user_id": f"user{i+11}",  # user11 ... user60, sorted order
+                        "date": "2024-01-01",
+                        "api_key": "test-api-key",
+                        "model": "gpt-4",
+                        "custom_llm_provider": "openai",
+                        "mcp_namespaced_tool_name": "",
+                        "endpoint": "",
+                    }
                 },
-                "update": {
-                    "prompt_tokens": {"increment": 10},
-                    "completion_tokens": {"increment": 20},
-                    "spend": {"increment": 0.1},
-                    "api_requests": {"increment": 1},
-                    "successful_requests": {"increment": 1},
-                    "failed_requests": {"increment": 0},
-                    "endpoint": "",
+                data={
+                    "create": {
+                        "user_id": f"user{i+11}",
+                        "date": "2024-01-01",
+                        "api_key": "test-api-key",
+                        "model": "gpt-4",
+                        "model_group": None,
+                        "mcp_namespaced_tool_name": "",
+                        "custom_llm_provider": "openai",
+                        "endpoint": "",
+                        "prompt_tokens": 10,
+                        "completion_tokens": 20,
+                        "spend": 0.1,
+                        "api_requests": 1,
+                        "successful_requests": 1,
+                        "failed_requests": 0,
+                    },
+                    "update": {
+                        "prompt_tokens": {"increment": 10},
+                        "completion_tokens": {"increment": 20},
+                        "spend": {"increment": 0.1},
+                        "api_requests": {"increment": 1},
+                        "successful_requests": {"increment": 1},
+                        "failed_requests": {"increment": 0},
+                        "endpoint": "",
+                    },
                 },
-            },
-        ))
+            )
+        )
 
     # Call the method
     await DBSpendUpdateWriter._update_daily_spend(
@@ -275,7 +283,7 @@ async def test_update_daily_spend_tag_with_request_id():
 
     # Verify that table.upsert was called
     mock_table.upsert.assert_called_once()
-    
+
     # Verify request_id is in update_data
     call_args = mock_table.upsert.call_args[1]
     update_data = call_args["data"]["update"]
@@ -283,15 +291,13 @@ async def test_update_daily_spend_tag_with_request_id():
     assert update_data["request_id"] == "test-request-id-123"
 
 
-
-
 @pytest.mark.asyncio
 async def test_update_daily_spend_with_none_values_in_sorting_fields():
     """
     Test that _update_daily_spend handles None values in sorting fields correctly.
-    
+
     This test ensures that when fields like date, api_key, model, or custom_llm_provider
-    are None, the sorting doesn't crash with TypeError: '<' not supported between 
+    are None, the sorting doesn't crash with TypeError: '<' not supported between
     instances of 'NoneType' and 'str'.
     """
     # Setup
@@ -509,6 +515,7 @@ async def test_update_tag_db_without_prisma_client():
 
     assert writer.spend_update_queue.add_update.call_count == 0
 
+
 @pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_id():
     """
@@ -518,7 +525,7 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
     writer = DBSpendUpdateWriter()
     mock_prisma = MagicMock()
     mock_prisma.get_request_status = MagicMock(return_value="success")
-    
+
     request_id = "test-request-id-123"
     payload = {
         "request_id": request_id,
@@ -546,13 +553,15 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
 
     # Should be called twice (once for each tag)
     assert writer.daily_tag_spend_update_queue.add_update.call_count == 2
-    
+
     # Check that request_id is included in both transactions
     for call in writer.daily_tag_spend_update_queue.add_update.call_args_list:
         transaction_dict = call[1]["update"]
         # Each transaction should have one key with the format tag_date_api_key_model_provider
         for key, transaction in transaction_dict.items():
-            assert transaction["request_id"] == request_id, f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            assert (
+                transaction["request_id"] == request_id
+            ), f"request_id should be {request_id} but got {transaction.get('request_id')}"
 
 
 @pytest.mark.asyncio
@@ -866,11 +875,11 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
     call_args = writer.daily_spend_update_queue.add_update.call_args[1]
     update_dict = call_args["update"]
     assert len(update_dict) == 1
-    
+
     for key, transaction in update_dict.items():
         # Verify endpoint is included in the key
         assert key == f"test-user_2024-01-01_test-key_gpt-4_openai_/chat/completions"
-        
+
         # Verify endpoint is set in the transaction
         assert transaction["endpoint"] == "/chat/completions"
         assert transaction["user_id"] == "test-user"
@@ -887,7 +896,7 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     This ensures proper debugging information is available for issues like unique constraint violations.
     """
     from litellm._logging import verbose_proxy_logger
-    
+
     # Setup
     mock_prisma_client = MagicMock()
     mock_batcher = MagicMock()
@@ -895,13 +904,13 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     mock_batch_context = MagicMock()
     mock_batch_context.__aenter__ = AsyncMock(return_value=mock_batcher)
     mock_batcher.litellm_dailyuserspend = mock_table
-    
+
     # Make the batch context manager's exit raise an exception
     # This simulates a batch commit failure (e.g., unique constraint violation)
     test_exception = Exception("Unique constraint violation")
     mock_batch_context.__aexit__ = AsyncMock(side_effect=test_exception)
     mock_prisma_client.db.batch_.return_value = mock_batch_context
-    
+
     # Create a transaction
     daily_spend_transactions = {
         "test_key": {
@@ -918,13 +927,13 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
             "failed_requests": 0,
         }
     }
-    
+
     # Create a mock proxy_logging_obj with failure_handler as AsyncMock
     mock_proxy_logging = MagicMock()
     mock_proxy_logging.failure_handler = AsyncMock()
-    
+
     # Mock the logger to capture exception calls
-    with patch.object(verbose_proxy_logger, 'exception') as mock_exception_logger:
+    with patch.object(verbose_proxy_logger, "exception") as mock_exception_logger:
         # Call the method and expect it to raise the exception
         with pytest.raises(Exception, match="Unique constraint violation"):
             await DBSpendUpdateWriter._update_daily_spend(
@@ -937,13 +946,16 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
                 table_name="litellm_dailyuserspend",
                 unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
             )
-        
+
         # Verify that exception was logged with detailed information
         assert mock_exception_logger.called
         call_args = mock_exception_logger.call_args[0][0]
         assert "Daily user spend batch upsert failed" in call_args
         assert "Table: litellm_dailyuserspend" in call_args
-        assert "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint" in call_args
+        assert (
+            "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
+            in call_args
+        )
         assert "Batch size: 1" in call_args
         assert "Unique constraint violation" in call_args
 
@@ -961,7 +973,7 @@ async def test_update_daily_spend_re_raises_exception_after_logging():
     mock_batch_context = MagicMock()
     mock_batch_context.__aenter__ = AsyncMock(return_value=mock_batcher)
     mock_batcher.litellm_dailyuserspend = mock_table
-    
+
     # Create a transaction
     daily_spend_transactions = {
         "test_key": {
@@ -978,16 +990,16 @@ async def test_update_daily_spend_re_raises_exception_after_logging():
             "failed_requests": 0,
         }
     }
-    
+
     # Create a custom exception to verify it's re-raised
     custom_exception = ValueError("Database connection lost")
     mock_batch_context.__aexit__ = AsyncMock(side_effect=custom_exception)
     mock_prisma_client.db.batch_.return_value = mock_batch_context
-    
+
     # Create a mock proxy_logging_obj with failure_handler as AsyncMock
     mock_proxy_logging = MagicMock()
     mock_proxy_logging.failure_handler = AsyncMock()
-    
+
     # Verify the exception is re-raised
     with pytest.raises(ValueError, match="Database connection lost"):
         await DBSpendUpdateWriter._update_daily_spend(
@@ -1018,10 +1030,12 @@ async def test_commit_key_spend_updates_includes_last_active():
     mock_transaction = AsyncMock()
     mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
     mock_transaction.__aexit__ = AsyncMock(return_value=False)
-    mock_transaction.batch_ = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=mock_batcher),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
@@ -1049,9 +1063,7 @@ async def test_commit_key_spend_updates_includes_last_active():
 
     before_call = datetime.now(timezone.utc)
 
-    with patch(
-        "litellm.proxy.utils._raise_failed_update_spend_exception"
-    ):
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
         await db_writer._commit_spend_updates_to_db(
             prisma_client=mock_prisma_client,
             n_retry_times=0,
@@ -1076,3 +1088,212 @@ async def test_commit_key_spend_updates_includes_last_active():
     last_active = call_kwargs["data"]["last_active"]
     assert isinstance(last_active, datetime)
     assert before_call <= last_active <= after_call
+
+
+@pytest.mark.asyncio
+async def test_update_database_creates_single_task():
+    """
+    Test that update_database() fires exactly 1 asyncio.create_task() call
+    (the batched task) instead of the previous 11.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    # Mock all helpers so nothing real runs
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.disable_spend_logs", False), patch(
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+    ), patch(
+        "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
+    ) as mock_create_task:
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id="test-end-user",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            team_id="test-team",
+            org_id="test-org",
+            completion_response=MagicMock(),
+            response_cost=0.1,
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai"},
+        )
+
+        # Exactly 1 create_task call (the batch), not 11
+        assert mock_create_task.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_isolation_on_failure():
+    """
+    Test that if one helper inside _batch_database_updates raises,
+    all other helpers still execute.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    # Make _update_key_db raise
+    db_writer._update_key_db = AsyncMock(side_effect=RuntimeError("key db boom"))
+
+    # All other helpers are normal mocks
+    db_writer._update_user_db = AsyncMock()
+    db_writer._update_team_db = AsyncMock()
+    db_writer._update_org_db = AsyncMock()
+    db_writer._update_tag_db = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
+
+    await db_writer._batch_database_updates(
+        response_cost=0.1,
+        user_id="u1",
+        hashed_token="t1",
+        team_id="team1",
+        org_id="org1",
+        end_user_id="eu1",
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        litellm_proxy_budget_name="budget",
+        payload_copy={"key": "value"},
+        request_tags=None,
+    )
+
+    # _update_key_db raised, but all others should still have been called
+    db_writer._update_user_db.assert_awaited_once()
+    db_writer._update_key_db.assert_awaited_once()
+    db_writer._update_team_db.assert_awaited_once()
+    db_writer._update_org_db.assert_awaited_once()
+    db_writer._update_tag_db.assert_awaited_once()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction.assert_awaited_once()
+    db_writer.add_spend_log_transaction_to_daily_end_user_transaction.assert_awaited_once()
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction.assert_awaited_once()
+    db_writer.add_spend_log_transaction_to_daily_team_transaction.assert_awaited_once()
+    db_writer.add_spend_log_transaction_to_daily_org_transaction.assert_awaited_once()
+    db_writer.add_spend_log_transaction_to_daily_tag_transaction.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_daily_agent_receives_deepcopied_payload():
+    """
+    Test that the daily agent handler receives a deepcopied payload (not the original).
+
+    Previously, add_spend_log_transaction_to_daily_agent_transaction received the raw
+    payload without a deepcopy, which was a mutation bug. This test goes through
+    update_database() to verify the production deepcopy path.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    # Capture the payload object that get_logging_payload returns (the "original")
+    # and the payload the agent handler receives (should be a deepcopy)
+    original_payload_ref = {}
+    captured_agent_payloads = []
+
+    async def capture_agent_payload(**kwargs):
+        captured_agent_payloads.append(kwargs.get("payload"))
+
+    # Mock all helpers
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._update_user_db = AsyncMock()
+    db_writer._update_key_db = AsyncMock()
+    db_writer._update_team_db = AsyncMock()
+    db_writer._update_org_db = AsyncMock()
+    db_writer._update_tag_db = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(
+        side_effect=capture_agent_payload
+    )
+    db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
+
+    # Mock get_logging_payload to return a known dict and capture its identity
+    fake_payload = {
+        "startTime": "2024-01-01T00:00:00",
+        "endTime": "2024-01-01T00:01:00",
+        "model": "gpt-4",
+        "custom_llm_provider": "openai",
+        "spend": 0.0,
+        "nested": {"a": 1},
+    }
+    original_payload_ref["obj"] = fake_payload  # store reference to the original
+
+    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+    ), patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+        return_value=fake_payload,
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id="test-end-user",
+            team_id="test-team",
+            org_id="test-org",
+            kwargs={"model": "gpt-4", "custom_llm_provider": "openai"},
+            completion_response=MagicMock(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.1,
+        )
+
+        # Let the single batched task run
+        await asyncio.sleep(0)
+
+    # The agent handler should have been called
+    assert len(captured_agent_payloads) == 1
+    # The payload must NOT be the same object as the original (deepcopy occurred)
+    assert captured_agent_payloads[0] is not original_payload_ref["obj"]
+    # But it should have equivalent content
+    assert captured_agent_payloads[0]["model"] == "gpt-4"
+    assert captured_agent_payloads[0]["spend"] == 0.1
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_uses_pipeline():
+    """
+    Verify that _commit_spend_updates_to_db_with_redis uses
+    get_all_transactions_from_redis_buffer_pipeline instead of 7 individual calls.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
+    # Return all-None tuple (no data to commit)
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, None)
+    )
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=mock_prisma_client,
+        n_retry_times=1,
+        proxy_logging_obj=mock_proxy_logging,
+    )
+
+    # Pipeline method should be called once
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline.assert_called_once()
+
+    # Individual methods should NOT be called
+    mock_redis_update_buffer.get_all_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_team_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_org_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()

@@ -215,3 +215,36 @@ def test_both_compact_and_context_management_headers_added():
             f"anthropic-beta should contain 'compact-2026-01-12', got: {updated_headers['anthropic-beta']}"
         assert "context-management-2025-06-27" in updated_headers["anthropic-beta"], \
             f"anthropic-beta should contain 'context-management-2025-06-27', got: {updated_headers['anthropic-beta']}"
+
+def test_validate_environment_with_authorization_header_calculates_api_base():
+    """Test that api_base is calculated even when Authorization header is already present"""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    # Simulate scenario where Authorization is already in headers (e.g., from cached extra_headers)
+    headers = {"Authorization": "Bearer existing-token"}
+    litellm_params = {
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+    }
+    optional_params = {}
+
+    with patch.object(
+        config, "get_complete_vertex_url", return_value="https://mock-vertex-url"
+    ) as mock_get_url:
+        updated_headers, api_base = config.validate_anthropic_messages_environment(
+            headers=headers,
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_base=None,
+        )
+        
+        # Verify that api_base was calculated even though Authorization was already present
+        assert api_base == "https://mock-vertex-url", \
+            f"api_base should be calculated even with Authorization header. Got: {api_base}"
+        assert mock_get_url.called, "get_complete_vertex_url should be called"
+        
+        # Verify Authorization header is still present
+        assert "Authorization" in updated_headers, \
+            "Authorization header should be preserved"
