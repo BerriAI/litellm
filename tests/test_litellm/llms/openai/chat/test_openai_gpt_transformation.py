@@ -324,3 +324,134 @@ class TestPromptCacheParams:
         )
         assert optional_params.get("prompt_cache_key") == "my-cache-key"
         assert optional_params.get("prompt_cache_retention") == "24h"
+
+
+class TestNormalizeToolCallIds:
+    """
+    Tests for OpenAIGPTConfig._normalize_tool_call_ids().
+
+    Regression tests for: https://github.com/BerriAI/litellm/issues/22317
+    Some OpenAI-compatible providers (e.g. MiniMax via OpenRouter) return tool
+    call IDs like ``call_function_jlv0n7uyomle_1`` which contain underscores and
+    exceed OpenAI's 9-character limit.  When those IDs are forwarded in a
+    subsequent request to a strict provider (e.g. Mistral) the request is
+    rejected with a 400 BadRequestError.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def test_compliant_ids_unchanged(self):
+        """IDs that already satisfy ^[a-zA-Z0-9]{1,64}$ must not be modified."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "abc123xyz", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "abc123xyz", "content": "result"},
+        ]
+        result = self.config._normalize_tool_call_ids(messages)
+        assert result[0]["tool_calls"][0]["id"] == "abc123xyz"
+        assert result[1]["tool_call_id"] == "abc123xyz"
+
+    def test_non_compliant_id_is_remapped(self):
+        """IDs with underscores/hyphens or wrong length must be remapped."""
+        bad_id = "call_function_jlv0n7uyomle_1"
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": bad_id, "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": bad_id, "content": "result"},
+        ]
+        result = self.config._normalize_tool_call_ids(messages)
+        new_id = result[0]["tool_calls"][0]["id"]
+        assert new_id != bad_id
+        # Must satisfy the strict format
+        import re
+        assert re.match(r"^[a-zA-Z0-9]{1,64}$", new_id)
+        # Assistant and tool messages must use the same new ID
+        assert result[1]["tool_call_id"] == new_id
+
+    def test_remapping_is_deterministic(self):
+        """The same original ID must always produce the same normalised ID."""
+        bad_id = "call_function_jlv0n7uyomle_1"
+        messages = lambda: [  # noqa: E731
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": bad_id, "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": bad_id, "content": "result"},
+        ]
+        id_first = self.config._normalize_tool_call_ids(messages())[0]["tool_calls"][0]["id"]
+        id_second = self.config._normalize_tool_call_ids(messages())[0]["tool_calls"][0]["id"]
+        assert id_first == id_second
+
+    def test_multiple_tool_calls_each_remapped_consistently(self):
+        """Each distinct non-compliant ID gets its own deterministic mapping."""
+        bad_id_1 = "call_function_aaaa_1"
+        bad_id_2 = "call_function_bbbb_2"
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": bad_id_1, "type": "function", "function": {"name": "f1", "arguments": "{}"}},
+                    {"id": bad_id_2, "type": "function", "function": {"name": "f2", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": bad_id_1, "content": "result1"},
+            {"role": "tool", "tool_call_id": bad_id_2, "content": "result2"},
+        ]
+        result = self.config._normalize_tool_call_ids(messages)
+        new_id_1 = result[0]["tool_calls"][0]["id"]
+        new_id_2 = result[0]["tool_calls"][1]["id"]
+        assert new_id_1 != bad_id_1
+        assert new_id_2 != bad_id_2
+        assert new_id_1 != new_id_2
+        assert result[1]["tool_call_id"] == new_id_1
+        assert result[2]["tool_call_id"] == new_id_2
+
+    def test_messages_without_tool_calls_unaffected(self):
+        """Plain user/assistant messages must pass through unchanged."""
+        messages = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+        ]
+        result = self.config._normalize_tool_call_ids(messages)
+        assert result == messages
+
+    def test_transform_request_normalizes_ids(self):
+        """transform_request must normalise non-compliant IDs end-to-end."""
+        bad_id = "call_function_jlv0n7uyomle_1"
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": bad_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": bad_id, "content": "sunny"},
+        ]
+        result = self.config.transform_request(
+            model="gpt-4o",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        out_messages = result["messages"]
+        new_id = out_messages[0]["tool_calls"][0]["id"]
+        import re
+        assert re.match(r"^[a-zA-Z0-9]{1,64}$", new_id)
+        assert out_messages[1]["tool_call_id"] == new_id
