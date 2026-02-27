@@ -4,8 +4,10 @@ organizations, teams, and keys.
 """
 
 import json
-from litellm._uuid import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+from fastapi import HTTPException, status
+from litellm._uuid import uuid
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -220,15 +222,19 @@ async def get_allowed_mcp_access_groups_for_user(
 
     for auth_context in auth_contexts:
         if auth_context.team_id:
-            team_obj = await get_team_object(
-                team_id=auth_context.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=getattr(
-                    user_api_key_dict, "parent_otel_span", None
-                ),
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            try:
+                team_obj = await get_team_object(
+                    team_id=auth_context.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=getattr(
+                        user_api_key_dict, "parent_otel_span", None
+                    ),
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except HTTPException:
+                # Team not found (e.g. deleted) - skip gracefully
+                continue
             if team_obj and team_obj.object_permission:
                 groups = team_obj.object_permission.mcp_access_groups or []
                 allowed_access_group_ids.update(groups)
@@ -254,8 +260,6 @@ async def validate_mcp_object_permission_for_key(
         HTTPException: 403 if user tries to assign MCP servers or access groups
             they do not have access to.
     """
-    from fastapi import HTTPException, status
-
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
     if object_permission is None:
