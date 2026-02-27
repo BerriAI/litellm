@@ -58,7 +58,19 @@ _ENDPOINT_METADATA: Dict[str, Dict[str, str]] = {
     "image_edits": {"label": "Image Edits", "endpoint": "/images/edits"},
     "vector_stores_create": {"label": "Vector Stores (Create)", "endpoint": "/vector_stores"},
     "vector_stores_search": {"label": "Vector Stores (Search)", "endpoint": "/vector_stores/{id}/search"},
+    "vector_store_files": {"label": "Vector Store Files", "endpoint": "/vector_stores/{id}/files"},
     "video_generations": {"label": "Video Generations", "endpoint": "/videos/generations"},
+    "assistants": {"label": "Assistants", "endpoint": "/assistants"},
+    "fine_tuning": {"label": "Fine Tuning", "endpoint": "/fine_tuning/jobs"},
+    "text_completion": {"label": "Text Completion", "endpoint": "/completions"},
+    "realtime": {"label": "Realtime", "endpoint": "/realtime"},
+    "count_tokens": {"label": "Count Tokens", "endpoint": "/utils/token_counter"},
+    "image_variations": {"label": "Image Variations", "endpoint": "/images/variations"},
+    "generateContent": {"label": "Generate Content", "endpoint": "/generateContent"},
+    "bedrock_invoke": {"label": "Bedrock Invoke", "endpoint": "/bedrock/invoke"},
+    "bedrock_converse": {"label": "Bedrock Converse", "endpoint": "/bedrock/converse"},
+    "rag_ingest": {"label": "RAG Ingest", "endpoint": "/rag/ingest"},
+    "rag_query": {"label": "RAG Query", "endpoint": "/rag/query"},
 }
 
 _SLUG_SUFFIX_RE = re.compile(r"\s*\(`[^`]+`\)\s*$")
