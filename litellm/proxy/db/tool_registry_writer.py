@@ -10,17 +10,15 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
-from litellm.constants import TOOL_POLICY_CACHE_TTL_SECONDS
 from litellm.proxy._types import ToolDiscoveryQueueItem
-from litellm.types.tool_management import (LiteLLM_ToolTableRow,
-                                           ToolCallPolicy,
-                                           ToolPolicyOverrideRow)
+from litellm.types.tool_management import (
+    LiteLLM_ToolTableRow,
+    ToolCallPolicy,
+    ToolPolicyOverrideRow,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
-
-TOOL_POLICY_CACHE_KEY_PREFIX = "tool_policy:"
 
 
 def _row_to_model(row: Union[dict, Any]) -> LiteLLM_ToolTableRow:
@@ -267,67 +265,6 @@ async def list_overrides_for_tool(
         return []
 
 
-async def _get_merged_blocked_tools(
-    prisma_client: "PrismaClient",
-    object_permission_id: Optional[str],
-    team_object_permission_id: Optional[str],
-) -> set:
-    """Return union of blocked_tools from key and team object permissions."""
-    blocked: set = set()
-    for op_id in (object_permission_id, team_object_permission_id):
-        if not op_id or not op_id.strip():
-            continue
-        try:
-            row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": op_id.strip()},
-            )
-            if row is not None and getattr(row, "blocked_tools", None):
-                blocked.update(row.blocked_tools)
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "tool_registry_writer _get_merged_blocked_tools error for %s: %s",
-                op_id,
-                e,
-            )
-    return blocked
-
-
-async def get_effective_policies(
-    prisma_client: "PrismaClient",
-    tool_names: List[str],
-    object_permission_id: Optional[str] = None,
-    team_object_permission_id: Optional[str] = None,
-) -> Dict[str, str]:
-    """
-    Return effective call_policy per tool: if tool is in key/team object permission
-    blocked_tools then "blocked", otherwise global policy from LiteLLM_ToolTable.
-    """
-    if not tool_names:
-        return {}
-    try:
-        blocked = await _get_merged_blocked_tools(
-            prisma_client=prisma_client,
-            object_permission_id=object_permission_id,
-            team_object_permission_id=team_object_permission_id,
-        )
-        result: Dict[str, str] = {}
-        for name in tool_names:
-            if name in blocked:
-                result[name] = "blocked"
-        missing = [n for n in tool_names if n not in result]
-        if missing:
-            global_map = await get_tools_by_names(
-                prisma_client=prisma_client, tool_names=missing
-            )
-            result.update(global_map)
-        return result
-    except Exception as e:
-        verbose_proxy_logger.error(
-            "tool_registry_writer get_effective_policies error: %s", e
-        )
-        return {}
-
-
 class ToolPolicyRegistry:
     """
     In-memory registry of tool policies synced from DB.
@@ -405,69 +342,6 @@ def get_tool_policy_registry() -> ToolPolicyRegistry:
     if _tool_policy_registry is None:
         _tool_policy_registry = ToolPolicyRegistry()
     return _tool_policy_registry
-
-
-def _effective_cache_suffix(
-    object_permission_id: Optional[str],
-    team_object_permission_id: Optional[str],
-) -> str:
-    """Cache key suffix so different request contexts get correct policies."""
-    return f":{object_permission_id or ''}:{team_object_permission_id or ''}"
-
-
-async def get_tool_policies_cached(
-    tool_names: List[str],
-    cache: DualCache,
-    prisma_client: Optional["PrismaClient"],
-    object_permission_id: Optional[str] = None,
-    team_object_permission_id: Optional[str] = None,
-) -> Dict[str, str]:
-    """
-    Return effective call_policy per tool (blocked if in object permission blocked_tools,
-    else global). Cache-first; cache key includes object_permission_id(s).
-    """
-    if not tool_names:
-        return {}
-    suffix = _effective_cache_suffix(object_permission_id, team_object_permission_id)
-    result: Dict[str, str] = {}
-    cache_misses: List[str] = []
-    for name in tool_names:
-        key = f"{TOOL_POLICY_CACHE_KEY_PREFIX}{name}{suffix}"
-        cached = await cache.async_get_cache(key=key)
-        if cached is not None and isinstance(cached, str):
-            result[name] = cached
-        else:
-            cache_misses.append(name)
-    if cache_misses and prisma_client is not None:
-        try:
-            if object_permission_id or team_object_permission_id:
-                fetched = await get_effective_policies(
-                    prisma_client=prisma_client,
-                    tool_names=cache_misses,
-                    object_permission_id=object_permission_id,
-                    team_object_permission_id=team_object_permission_id,
-                )
-            else:
-                fetched = await get_tools_by_names(
-                    prisma_client=prisma_client, tool_names=cache_misses
-                )
-            for name, policy in fetched.items():
-                result[name] = policy
-                await cache.async_set_cache(
-                    key=f"{TOOL_POLICY_CACHE_KEY_PREFIX}{name}{suffix}",
-                    value=policy,
-                    ttl=TOOL_POLICY_CACHE_TTL_SECONDS,
-                )
-            verbose_proxy_logger.debug(
-                "get_tool_policies_cached: fetched %d from DB (hits: %d)",
-                len(cache_misses),
-                len(tool_names) - len(cache_misses),
-            )
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "tool_registry_writer get_tool_policies_cached error: %s", e
-            )
-    return result
 
 
 async def add_tool_to_object_permission_blocked(

@@ -19,13 +19,16 @@ if TYPE_CHECKING:
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.tool_management import (LiteLLM_ToolTableRow,
-                                           ToolCallPolicy, ToolDetailResponse,
-                                           ToolListResponse,
-                                           ToolPolicyUpdateRequest,
-                                           ToolPolicyUpdateResponse,
-                                           ToolUsageLogEntry,
-                                           ToolUsageLogsResponse)
+from litellm.types.tool_management import (
+    LiteLLM_ToolTableRow,
+    ToolCallPolicy,
+    ToolDetailResponse,
+    ToolListResponse,
+    ToolPolicyUpdateRequest,
+    ToolPolicyUpdateResponse,
+    ToolUsageLogEntry,
+    ToolUsageLogsResponse,
+)
 
 router = APIRouter()
 
@@ -46,8 +49,7 @@ async def list_tools(
     Parameters:
     - call_policy: Optional filter — one of "trusted", "untrusted", "dual_llm", "blocked"
     """
-    from litellm.proxy.db.tool_registry_writer import \
-        list_tools as db_list_tools
+    from litellm.proxy.db.tool_registry_writer import list_tools as db_list_tools
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -377,9 +379,12 @@ async def update_tool_policy(
     """
     from litellm.proxy.db.tool_registry_writer import (
         add_tool_to_object_permission_blocked,
-        remove_tool_from_object_permission_blocked)
-    from litellm.proxy.db.tool_registry_writer import \
-        update_tool_policy as db_update_tool_policy
+        get_tool_policy_registry,
+        remove_tool_from_object_permission_blocked,
+    )
+    from litellm.proxy.db.tool_registry_writer import (
+        update_tool_policy as db_update_tool_policy,
+    )
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -424,6 +429,9 @@ async def update_tool_policy(
                     status_code=500,
                     detail=f"Failed to update policy override for tool '{data.tool_name}'",
                 )
+            registry = get_tool_policy_registry()
+            if registry.is_initialized():
+                await registry.sync_tool_policy_from_db(prisma_client)
             return ToolPolicyUpdateResponse(
                 tool_name=data.tool_name,
                 call_policy=data.call_policy,
@@ -442,6 +450,9 @@ async def update_tool_policy(
                 status_code=500,
                 detail=f"Failed to update policy for tool '{data.tool_name}'",
             )
+        registry = get_tool_policy_registry()
+        if registry.is_initialized():
+            await registry.sync_tool_policy_from_db(prisma_client)
         return ToolPolicyUpdateResponse(
             tool_name=updated.tool_name,
             call_policy=updated.call_policy,
@@ -473,8 +484,10 @@ async def delete_tool_policy_override(
     Remove a policy override for a tool. Specify the override by team_id or key_hash
     (exactly one required).
     """
-    from litellm.proxy.db.tool_registry_writer import \
-        remove_tool_from_object_permission_blocked
+    from litellm.proxy.db.tool_registry_writer import (
+        get_tool_policy_registry,
+        remove_tool_from_object_permission_blocked,
+    )
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -515,6 +528,9 @@ async def delete_tool_policy_override(
                 status_code=404,
                 detail=f"No override found for tool '{tool_name}' with the given scope",
             )
+        registry = get_tool_policy_registry()
+        if registry.is_initialized():
+            await registry.sync_tool_policy_from_db(prisma_client)
         return {"deleted": True, "tool_name": tool_name}
     except HTTPException:
         raise
