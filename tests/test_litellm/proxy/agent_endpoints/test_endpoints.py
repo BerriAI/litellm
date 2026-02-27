@@ -294,9 +294,10 @@ class TestAgentRBACInternalUser:
         self.mock_registry.get_agent_by_id = MagicMock(
             return_value=_sample_agent_response()
         )
-        resp = self.internal_client.get(
-            "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
-        )
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            resp = self.internal_client.get(
+                "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
+            )
         assert resp.status_code == 200
 
     def test_should_block_internal_user_from_creating_agent(self):
