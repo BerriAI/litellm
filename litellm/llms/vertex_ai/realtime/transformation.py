@@ -124,6 +124,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     "silenceDurationMs": 800,
                 }
             },
+            # Return input transcript so guardrails can inspect user speech.
+            "inputAudioTranscription": {},
             # Return output transcript so clients can read what the model said.
             "outputAudioTranscription": {},
         }

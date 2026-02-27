@@ -212,10 +212,12 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
         api_key = websocket.headers.get("api-key")
         if not api_key:
             # Try extracting from WebSocket subprotocol (browser clients)
-            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(
+                ","
+            ):
                 protocol = protocol.strip()
                 if protocol.startswith("openai-insecure-api-key."):
-                    api_key = protocol[len("openai-insecure-api-key."):]
+                    api_key = protocol[len("openai-insecure-api-key.") :]
                     break
         if not api_key:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -704,6 +706,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         user_api_key_cache=user_api_key_cache,
                         proxy_logging_obj=proxy_logging_obj,
                     )
+                    if _jwt_project_obj is not None:
+                        valid_token.project_metadata = _jwt_project_obj.metadata
 
                 # run through common checks
                 _ = await common_checks(
@@ -1294,6 +1298,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+                if _project_obj is not None:
+                    valid_token.project_metadata = _project_obj.metadata
 
             global_proxy_spend = None
             if (
@@ -1743,6 +1749,8 @@ async def _run_post_custom_auth_checks(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if _project_obj is not None:
+            valid_token.project_metadata = _project_obj.metadata
 
     _ = await common_checks(
         request=request,

@@ -284,6 +284,7 @@ async def new_project(
     - model_tpm_limit: *Optional[dict]* - TPM limits per model. Example: {"gpt-4": 50000, "gpt-3.5-turbo": 100000}
     - budget_duration: *Optional[str]* - Frequency of reseting project budget
     - metadata: *Optional[dict]* - Metadata for project, store information for project. Example metadata - {"use_case_id": "SNOW-12345", "responsible_ai_id": "RAI-67890"}
+    - tags: *Optional[list]* - Tags for the project. Example: ["production", "api"]
     - blocked: *bool* - Flag indicating if the project is blocked or not - will stop all calls from keys with this project_id.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - project-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
 
@@ -339,6 +340,15 @@ async def new_project(
     )
 
     try:
+        if getattr(data, "tags", None) is not None and not premium_user:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only premium users can add tags to projects. "
+                    + CommonProxyErrors.not_premium_user.value
+                },
+            )
+
         if not premium_user:
             raise HTTPException(
                 status_code=403,
@@ -347,6 +357,16 @@ async def new_project(
                     + CommonProxyErrors.not_premium_user.value
                 },
             )
+
+        # ADD METADATA FIELDS
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+                delattr(data, field)
 
         if prisma_client is None:
             raise HTTPException(
@@ -463,7 +483,7 @@ async def new_project(
     response_model=LiteLLM_ProjectTable,
 )
 @management_endpoint_wrapper
-async def update_project(
+async def update_project(  # noqa: PLR0915
     data: UpdateProjectRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -485,6 +505,7 @@ async def update_project(
     - model_rpm_limit: *Optional[dict]* - Updated RPM limits per model
     - model_tpm_limit: *Optional[dict]* - Updated TPM limits per model
     - budget_duration: *Optional[str]* - Updated budget duration
+    - tags: *Optional[list]* - Updated list of tags for the project
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Updated object permission
 
     Example:
@@ -514,6 +535,15 @@ async def update_project(
     )
 
     try:
+        if getattr(data, "tags", None) is not None and not premium_user:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only premium users can add tags to projects. "
+                    + CommonProxyErrors.not_premium_user.value
+                },
+            )
+
         if not premium_user:
             raise HTTPException(
                 status_code=403,
@@ -522,6 +552,16 @@ async def update_project(
                     + CommonProxyErrors.not_premium_user.value
                 },
             )
+
+        # ADD METADATA FIELDS
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+                delattr(data, field)
 
         if prisma_client is None:
             raise HTTPException(

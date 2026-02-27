@@ -390,6 +390,7 @@ model LiteLLM_DeletedVerificationToken {
     config                  Json     @default("{}")
     user_id                 String?
     team_id                 String?
+    agent_id   String?
     project_id              String?
     permissions             Json     @default("{}")
     max_parallel_requests   Int?
@@ -504,6 +505,7 @@ model LiteLLM_SpendLogs {
   agent_id            String?
   proxy_server_request Json?     @default("{}")
   @@index([startTime])
+  @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
 }
