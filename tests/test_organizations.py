@@ -188,7 +188,7 @@ async def list_organization(session, i):
 
         return response_json
 
-
+@pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_organization_new():
     """

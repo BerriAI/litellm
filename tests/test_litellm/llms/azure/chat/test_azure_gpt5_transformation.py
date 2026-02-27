@@ -16,6 +16,17 @@ def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
     )
 
 
+def test_azure_gpt5_allows_tool_choice_for_deployment_names():
+    supported_params = litellm.get_supported_openai_params(
+        model="gpt-5-chat-2025-08-07", custom_llm_provider="azure"
+    )
+    assert supported_params is not None
+    assert "tool_choice" in supported_params
+    # gpt-5-chat* should not be treated as a GPT-5 reasoning model
+    assert "reasoning_effort" not in supported_params
+    assert "temperature" in supported_params
+
+
 def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
     params = config.map_openai_params(
         non_default_params={"max_tokens": 5},

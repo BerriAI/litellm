@@ -982,6 +982,8 @@ OTEL_ENDPOINT="http:/0.0.0.0:4317"
 OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
 ```
 
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+
 Add `otel` as a callback on your `litellm_config.yaml`
 
 ```shell
@@ -1107,7 +1109,7 @@ Log LLM Logs to [Google Cloud Storage Buckets](https://cloud.google.com/storage?
 
 :::info
 
-✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 
@@ -1192,7 +1194,7 @@ Log LLM Logs/SpendLogs to [Google Cloud Storage PubSub Topic](https://cloud.goog
 
 :::info
 
-✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 
@@ -1336,6 +1338,7 @@ litellm_settings:
     s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
     s3_path: my-test-path # [OPTIONAL] set path in bucket you want to write logs to
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
+    s3_use_virtual_hosted_style: false # [OPTIONAL] use virtual-hosted-style URLs (bucket.endpoint/key) instead of path-style (endpoint/bucket/key). Useful for S3-compatible services like MinIO
     s3_strip_base64_files: false # [OPTIONAL] remove base64 files before storing in s3
 ```
 
@@ -1494,7 +1497,7 @@ Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azur
 
 :::info
 
-✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
 
 :::
 
@@ -1826,6 +1829,64 @@ This approach allows you to:
 - Centrally manage callback files across multiple proxy instances
 - Share callbacks across different environments
 - Version control callback files in cloud storage
+
+#### Step 2c - Mounting Custom Callbacks in Helm/Kubernetes (Alternative)
+
+When deploying with Helm or Kubernetes, you can mount custom callback Python files alongside your `config.yaml` using `subPath` to avoid overwriting the config directory.
+
+**The Problem:**
+Mounting a volume to a directory (e.g., `/app/`) would normally hide all existing files in that directory, including your `config.yaml`.
+
+**The Solution:**
+Use `subPath` in your `volumeMounts` to mount individual files without overwriting the entire directory.
+
+**Example - Helm values.yaml:**
+
+```yaml
+# values.yaml
+volumes:
+  - name: callback-files
+    configMap:
+      name: litellm-callback-files
+
+volumeMounts:
+  - name: callback-files
+    mountPath: /app/custom_callbacks.py  # Mount to specific FILE path
+    subPath: custom_callbacks.py         # Required to avoid overwriting directory
+```
+
+**Create the ConfigMap with your callback file:**
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-callback-files
+data:
+  custom_callbacks.py: |
+    from litellm.integrations.custom_logger import CustomLogger
+    
+    class MyCustomHandler(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            print(f"Success! Model: {kwargs.get('model')}")
+    
+    proxy_handler_instance = MyCustomHandler()
+```
+
+**Reference in your config.yaml:**
+
+```yaml
+litellm_settings:
+  callbacks: custom_callbacks.proxy_handler_instance
+```
+
+**How it works:**
+1. The `subPath` parameter tells Kubernetes to mount only the specific file
+2. This places `custom_callbacks.py` in `/app/` alongside your existing `config.yaml`
+3. LiteLLM automatically finds the callback file in the same directory as the config
+4. No files are overwritten or hidden
+
+**Note:** You can mount multiple callback files by adding more `volumeMounts` entries, each with its own `subPath`.
 
 #### Step 3 - Start proxy + test request
 

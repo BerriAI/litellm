@@ -1,5 +1,5 @@
 ---
-title: "v1.80.11 - Google Interactions API"
+title: "v1.80.11-stable - Google Interactions API"
 slug: "v1-80-11"
 date: 2025-12-20T10:00:00
 authors:

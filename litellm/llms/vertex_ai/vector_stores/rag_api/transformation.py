@@ -115,8 +115,13 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params)
 
-        # Construct full rag corpus path
-        full_rag_corpus = f"projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{vector_store_id}"
+        # Handle both full corpus path and just corpus ID
+        if vector_store_id.startswith("projects/"):
+            # Already a full path
+            full_rag_corpus = vector_store_id
+        else:
+            # Just the corpus ID, construct full path
+            full_rag_corpus = f"projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{vector_store_id}"
 
         # Build the request body for Vertex AI RAG API
         request_body: Dict[str, Any] = {

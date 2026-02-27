@@ -1,5 +1,6 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
+import logging
 import time
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
@@ -23,7 +24,11 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
+    _get_service_tier_cost_key,
+    _parse_prompt_tokens_details,
+    calculate_cost_component,
     generic_cost_per_token,
+    get_billable_input_tokens,
     select_cost_metric_for_model,
 )
 from litellm.llms.anthropic.cost_calculation import (
@@ -31,6 +36,9 @@ from litellm.llms.anthropic.cost_calculation import (
 )
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
+)
+from litellm.llms.azure_ai.cost_calculator import (
+    cost_per_token as azure_ai_cost_per_token,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
@@ -66,6 +74,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -110,6 +119,42 @@ if TYPE_CHECKING:
 else:
     LitellmLoggingObject = Any
 
+# Pre-resolved CallTypes enum values for fast membership checks
+_A2A_CALL_TYPES = frozenset({
+    CallTypes.asend_message.value,
+    CallTypes.send_message.value,
+})
+
+_VIDEO_CALL_TYPES = frozenset({
+    CallTypes.create_video.value,
+    CallTypes.acreate_video.value,
+    CallTypes.video_remix.value,
+    CallTypes.avideo_remix.value,
+})
+
+_SPEECH_CALL_TYPES = frozenset({
+    CallTypes.speech.value,
+    CallTypes.aspeech.value,
+})
+
+_TRANSCRIPTION_CALL_TYPES = frozenset({
+    CallTypes.atranscription.value,
+    CallTypes.transcription.value,
+})
+
+_RERANK_CALL_TYPES = frozenset({
+    CallTypes.rerank.value,
+    CallTypes.arerank.value,
+})
+
+_SEARCH_CALL_TYPES = frozenset({
+    CallTypes.search.value,
+    CallTypes.asearch.value,
+})
+
+_AREALTIME_CALL_TYPE = CallTypes.arealtime.value
+_MCP_CALL_TYPE = CallTypes.call_mcp_tool.value
+
 
 def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
@@ -130,6 +175,52 @@ def _cost_per_token_custom_pricing_helper(
     elif custom_cost_per_second is not None:
         output_cost = custom_cost_per_second * response_time_ms / 1000  # type: ignore
         return 0, output_cost
+
+    return None
+
+
+def _get_additional_costs(
+    model: str,
+    custom_llm_provider: Optional[str],
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> Optional[dict]:
+    """
+    Calculate additional costs beyond standard token costs.
+
+    This function delegates to provider-specific config classes to calculate
+    any additional costs like routing fees, infrastructure costs, etc.
+
+    Args:
+        model: The model name
+        custom_llm_provider: The provider name (optional)
+        prompt_tokens: Number of prompt tokens
+        completion_tokens: Number of completion tokens
+
+    Returns:
+        Optional dictionary with cost names and amounts, or None if no additional costs
+    """
+    if not custom_llm_provider:
+        return None
+
+    try:
+        config_class = None
+        if custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
+            config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
+        # Add more providers here as needed
+        # elif custom_llm_provider == "other_provider":
+        #     config_class = get_other_provider_config(model)
+
+        if config_class and hasattr(config_class, "calculate_additional_costs"):
+            return config_class.calculate_additional_costs(
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+    except Exception as e:
+        verbose_logger.debug(f"Error calculating additional costs: {e}")
 
     return None
 
@@ -389,11 +480,14 @@ def cost_per_token(  # noqa: PLR0915
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage_block,
+                service_tier=service_tier,
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "bedrock":
-        return bedrock_cost_per_token(model=model, usage=usage_block)
+        return bedrock_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(
             model=model, usage=usage_block, service_tier=service_tier
@@ -407,7 +501,9 @@ def cost_per_token(  # noqa: PLR0915
             model=model, usage=usage_block, response_time_ms=response_time_ms
         )
     elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(model=model, usage=usage_block)
+        return gemini_cost_per_token(
+            model=model, usage=usage_block, service_tier=service_tier
+        )
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "perplexity":
@@ -422,17 +518,27 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "azure_ai":
+        return azure_ai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
+        )
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        if model_info["input_cost_per_token"] > 0:
-            ## COST PER TOKEN ##
-            prompt_tokens_cost_usd_dollar = (
-                model_info["input_cost_per_token"] * prompt_tokens
+        if (
+            model_info.get("input_cost_per_token", 0) > 0
+            or model_info.get("output_cost_per_token", 0) > 0
+        ):
+            return generic_cost_per_token(
+                model=model,
+                usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
             )
-        elif (
+
+        if (
             model_info.get("input_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
@@ -447,11 +553,7 @@ def cost_per_token(  # noqa: PLR0915
                 model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
             )
 
-        if model_info["output_cost_per_token"] > 0:
-            completion_tokens_cost_usd_dollar = (
-                model_info["output_cost_per_token"] * completion_tokens
-            )
-        elif (
+        if (
             model_info.get("output_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
@@ -587,6 +689,54 @@ def _model_contains_known_llm_provider(model: str) -> bool:
     return _provider_prefix in LlmProvidersSet
 
 
+def _get_response_model(completion_response: Any) -> Optional[str]:
+    """
+    Extract the model name from a completion response object.
+
+    Used as a fallback for cost calculation when the input model name
+    doesn't exist in model_cost (e.g., Azure Model Router).
+    """
+    if completion_response is None:
+        return None
+
+    if isinstance(completion_response, BaseModel):
+        return getattr(completion_response, "model", None)
+    elif isinstance(completion_response, dict):
+        return completion_response.get("model", None)
+
+    return None
+
+
+_GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: dict = {
+    # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
+    "ON_DEMAND_PRIORITY": "priority",
+    # FLEX / BATCH maps to "flex" — selects input_cost_per_token_flex, etc.
+    "FLEX": "flex",
+    "BATCH": "flex",
+    # ON_DEMAND is standard pricing — no service_tier suffix applied
+    "ON_DEMAND": None,
+}
+
+
+def _map_traffic_type_to_service_tier(traffic_type: Optional[str]) -> Optional[str]:
+    """
+    Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
+
+    This allows the same `_priority` / `_flex` cost-key suffix logic used for
+    OpenAI/Azure to work for Gemini and Vertex AI models.
+
+    trafficType values seen in practice
+    ------------------------------------
+    ON_DEMAND          -> standard pricing  (service_tier = None)
+    ON_DEMAND_PRIORITY -> priority pricing  (service_tier = "priority")
+    FLEX / BATCH       -> batch/flex pricing (service_tier = "flex")
+    """
+    if traffic_type is None:
+        return None
+    service_tier = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(traffic_type.upper())
+    return service_tier
+
+
 def _get_usage_object(
     completion_response: Any,
 ) -> Optional[Usage]:
@@ -671,6 +821,8 @@ def _infer_call_type(
         return "image_generation"
     elif isinstance(completion_response, TextCompletionResponse):
         return "text_completion"
+    elif isinstance(completion_response, LiteLLMSendMessageResponse):
+        return "send_message"
 
     return call_type
 
@@ -698,10 +850,11 @@ def _apply_cost_discount(
         discount_amount = original_cost * discount_percent
         final_cost = original_cost - discount_amount
 
-        verbose_logger.debug(
-            f"Applied {discount_percent*100}% discount to {custom_llm_provider}: "
-            f"${original_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"Applied {discount_percent*100}% discount to {custom_llm_provider}: "
+                f"${original_cost:.6f} -> ${final_cost:.6f} (saved ${discount_amount:.6f})"
+            )
 
         return final_cost, discount_percent, discount_amount
 
@@ -731,17 +884,20 @@ def _apply_cost_margin(
     margin_config = None
     if custom_llm_provider and custom_llm_provider in litellm.cost_margin_config:
         margin_config = litellm.cost_margin_config[custom_llm_provider]
-        verbose_logger.debug(
-            f"Found provider-specific margin config for {custom_llm_provider}: {margin_config}"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"Found provider-specific margin config for {custom_llm_provider}: {margin_config}"
+            )
     elif "global" in litellm.cost_margin_config:
         margin_config = litellm.cost_margin_config["global"]
-        verbose_logger.debug(f"Using global margin config: {margin_config}")
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(f"Using global margin config: {margin_config}")
     else:
-        verbose_logger.debug(
-            f"No margin config found. Provider: {custom_llm_provider}, "
-            f"Available configs: {list(litellm.cost_margin_config.keys())}"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"No margin config found. Provider: {custom_llm_provider}, "
+                f"Available configs: {list(litellm.cost_margin_config.keys())}"
+            )
 
     if margin_config is not None:
         # Handle different margin config formats
@@ -760,11 +916,12 @@ def _apply_cost_margin(
 
         final_cost = original_cost + margin_total_amount
 
-        verbose_logger.debug(
-            f"Applied margin to {custom_llm_provider or 'global'}: "
-            f"${original_cost:.6f} -> ${final_cost:.6f} "
-            f"(margin: {margin_percent*100 if margin_percent > 0 else 0}% + ${margin_fixed_amount:.6f} = ${margin_total_amount:.6f})"
-        )
+        if verbose_logger.isEnabledFor(logging.DEBUG):
+            verbose_logger.debug(
+                f"Applied margin to {custom_llm_provider or 'global'}: "
+                f"${original_cost:.6f} -> ${final_cost:.6f} "
+                f"(margin: {margin_percent*100 if margin_percent > 0 else 0}% + ${margin_fixed_amount:.6f} = ${margin_total_amount:.6f})"
+            )
 
         return final_cost, margin_percent, margin_fixed_amount, margin_total_amount
 
@@ -777,6 +934,7 @@ def _store_cost_breakdown_in_logging_obj(
     completion_tokens_cost_usd_dollar: float,
     cost_for_built_in_tools_cost_usd_dollar: float,
     total_cost_usd_dollar: float,
+    additional_costs: Optional[dict] = None,
     original_cost: Optional[float] = None,
     discount_percent: Optional[float] = None,
     discount_amount: Optional[float] = None,
@@ -793,6 +951,7 @@ def _store_cost_breakdown_in_logging_obj(
         completion_tokens_cost_usd_dollar: Cost of completion tokens (includes reasoning if applicable)
         cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
         total_cost_usd_dollar: Total cost of request
+        additional_costs: Free-form additional costs dict (e.g., {"azure_model_router_flat_cost": 0.00014})
         original_cost: Cost before discount
         discount_percent: Discount percentage applied (0.05 = 5%)
         discount_amount: Discount amount in USD
@@ -810,6 +969,7 @@ def _store_cost_breakdown_in_logging_obj(
             output_cost=completion_tokens_cost_usd_dollar,
             total_cost=total_cost_usd_dollar,
             cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
+            additional_costs=additional_costs,
             original_cost=original_cost,
             discount_percent=discount_percent,
             discount_amount=discount_amount,
@@ -933,24 +1093,28 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
-        potential_model_names = [selected_model]
+        potential_model_names = [
+            selected_model,
+            _get_response_model(completion_response),
+        ]
         if model is not None:
             potential_model_names.append(model)
 
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.debug(
-                    f"selected model name for cost calculation: {model}"
-                )
+                if verbose_logger.isEnabledFor(logging.DEBUG):
+                    verbose_logger.debug(
+                        f"selected model name for cost calculation: {model}"
+                    )
 
                 if completion_response is not None and (
                     isinstance(completion_response, BaseModel)
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1014,6 +1178,20 @@ def completion_cost(  # noqa: PLR0915
                             "custom_llm_provider", custom_llm_provider or None
                         )
                         region_name = hidden_params.get("region_name", region_name)
+
+                        # For Gemini/Vertex AI responses, trafficType is stored in
+                        # provider_specific_fields.  Map it to the service_tier used
+                        # by the cost key lookup (_priority / _flex suffixes) so that
+                        # ON_DEMAND_PRIORITY requests are billed at priority prices.
+                        if service_tier is None:
+                            provider_specific = (
+                                hidden_params.get("provider_specific_fields") or {}
+                            )
+                            raw_traffic_type = provider_specific.get("traffic_type")
+                            if raw_traffic_type:
+                                service_tier = _map_traffic_type_to_service_tier(
+                                    raw_traffic_type
+                                )
                 else:
                     if model is None:
                         raise ValueError(
@@ -1026,10 +1204,7 @@ def completion_cost(  # noqa: PLR0915
                     completion_tokens = token_counter(model=model, text=completion)
 
                 # Handle A2A calls before model check - A2A doesn't require a model
-                if call_type in (
-                    CallTypes.asend_message.value,
-                    CallTypes.send_message.value,
-                ):
+                if call_type in _A2A_CALL_TYPES:
                     from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 
                     return A2ACostCalculator.calculate_a2a_cost(
@@ -1065,13 +1240,18 @@ def completion_cost(  # noqa: PLR0915
                         optional_params=optional_params,
                         call_type=call_type,
                     )
-                elif (
-                    call_type == CallTypes.create_video.value
-                    or call_type == CallTypes.acreate_video.value
-                    or call_type == CallTypes.video_remix.value
-                    or call_type == CallTypes.avideo_remix.value
-                ):
+                elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
+                    # Extract custom model_info for deployment-specific pricing
+                    _video_model_info: Optional[ModelInfo] = None
+                    if custom_pricing and litellm_logging_obj is not None:
+                        _litellm_params = getattr(
+                            litellm_logging_obj, "litellm_params", None
+                        )
+                        if _litellm_params is not None:
+                            _metadata = _litellm_params.get("metadata", {}) or {}
+                            _video_model_info = _metadata.get("model_info", None)
+
                     usage_obj = getattr(completion_response, "usage", None)
                     if completion_response is not None and usage_obj:
                         # Handle both dict and Pydantic Usage object
@@ -1092,29 +1272,22 @@ def completion_cost(  # noqa: PLR0915
                                 model=model,
                                 duration_seconds=duration_seconds,
                                 custom_llm_provider=custom_llm_provider,
+                                model_info=_video_model_info,
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
                         model=model,
                         duration_seconds=0.0,  # Default to 0 if no duration available
                         custom_llm_provider=custom_llm_provider,
+                        model_info=_video_model_info,
                     )
-                elif (
-                    call_type == CallTypes.speech.value
-                    or call_type == CallTypes.aspeech.value
-                ):
+                elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
-                elif (
-                    call_type == CallTypes.atranscription.value
-                    or call_type == CallTypes.transcription.value
-                ):
+                elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     audio_transcription_file_duration = getattr(
                         completion_response, "duration", 0.0
                     )
-                elif (
-                    call_type == CallTypes.rerank.value
-                    or call_type == CallTypes.arerank.value
-                ):
+                elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(
                         completion_response, RerankResponse
                     ):
@@ -1133,10 +1306,7 @@ def completion_cost(  # noqa: PLR0915
                             billed_units.get("search_units") or 1
                         )  # cohere charges per request by default.
                         completion_tokens = search_units
-                elif (
-                    call_type == CallTypes.search.value
-                    or call_type == CallTypes.asearch.value
-                ):
+                elif call_type in _SEARCH_CALL_TYPES:
                     from litellm.search import search_provider_cost_per_query
 
                     # Extract number_of_queries from optional_params or default to 1
@@ -1205,7 +1375,7 @@ def completion_cost(  # noqa: PLR0915
                     )
 
                     return _final_cost
-                elif call_type == CallTypes.arealtime.value and isinstance(
+                elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
                     if (
@@ -1224,7 +1394,7 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                     )
-                elif call_type == CallTypes.call_mcp_tool.value:
+                elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
@@ -1298,12 +1468,26 @@ def completion_cost(  # noqa: PLR0915
                     cache_creation_input_tokens=cache_creation_input_tokens,
                     cache_read_input_tokens=cache_read_input_tokens,
                     usage_object=cost_per_token_usage_object,
-                    call_type=cast(CallTypesLiteral, call_type),
+                    call_type=call_type,
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
                     response=completion_response,
                 )
+
+                # Get additional costs from provider (e.g., routing fees, infrastructure costs)
+                # Only azure_ai implements additional costs
+                if custom_llm_provider == "azure_ai":
+                    additional_costs = _get_additional_costs(
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
+                else:
+                    additional_costs = None
+
+
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
@@ -1320,36 +1504,47 @@ def completion_cost(  # noqa: PLR0915
 
                 # Apply discount from module-level config if configured
                 original_cost = _final_cost
-                _final_cost, discount_percent, discount_amount = _apply_cost_discount(
-                    base_cost=_final_cost,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if litellm.cost_discount_config:
+                    _final_cost, discount_percent, discount_amount = _apply_cost_discount(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                else:
+                    discount_percent = 0.0
+                    discount_amount = 0.0
 
                 # Apply margin from module-level config if configured
-                (
-                    _final_cost,
-                    margin_percent,
-                    margin_fixed_amount,
-                    margin_total_amount,
-                ) = _apply_cost_margin(
-                    base_cost=_final_cost,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if litellm.cost_margin_config:
+                    (
+                        _final_cost,
+                        margin_percent,
+                        margin_fixed_amount,
+                        margin_total_amount,
+                    ) = _apply_cost_margin(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                else:
+                    margin_percent = 0.0
+                    margin_fixed_amount = 0.0
+                    margin_total_amount = 0.0
 
                 # Store cost breakdown in logging object if available
-                _store_cost_breakdown_in_logging_obj(
-                    litellm_logging_obj=litellm_logging_obj,
-                    prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
-                    completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
-                    cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
-                    total_cost_usd_dollar=_final_cost,
-                    original_cost=original_cost,
-                    discount_percent=discount_percent,
-                    discount_amount=discount_amount,
-                    margin_percent=margin_percent,
-                    margin_fixed_amount=margin_fixed_amount,
-                    margin_total_amount=margin_total_amount,
-                )
+                if litellm_logging_obj is not None:
+                    _store_cost_breakdown_in_logging_obj(
+                        litellm_logging_obj=litellm_logging_obj,
+                        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+                        completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+                        cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
+                        total_cost_usd_dollar=_final_cost,
+                        original_cost=original_cost,
+                        additional_costs=additional_costs,
+                        discount_percent=discount_percent,
+                        discount_amount=discount_amount,
+                        margin_percent=margin_percent,
+                        margin_fixed_amount=margin_fixed_amount,
+                        margin_total_amount=margin_total_amount,
+                    )
 
                 return _final_cost
             except Exception as e:
@@ -1688,10 +1883,16 @@ def default_image_cost_calculator(
         )
 
     # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
-    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
+    if (
+        "input_cost_per_image" in cost_info
+        and cost_info["input_cost_per_image"] is not None
+    ):
         return cost_info["input_cost_per_image"] * n
     # Priority 2: Fall back to per-pixel pricing for backward compatibility
-    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
+    elif (
+        "input_cost_per_pixel" in cost_info
+        and cost_info["input_cost_per_pixel"] is not None
+    ):
         return cost_info["input_cost_per_pixel"] * height * width * n
     else:
         raise Exception(
@@ -1703,6 +1904,7 @@ def default_video_cost_calculator(
     model: str,
     duration_seconds: float,
     custom_llm_provider: Optional[str] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -1711,6 +1913,9 @@ def default_video_cost_calculator(
         model (str): Model name
         duration_seconds (float): Duration of the generated video in seconds
         custom_llm_provider (Optional[str]): Custom LLM provider
+        model_info (Optional[ModelInfo]): Deployment-level model info containing
+            custom video pricing. When provided, used before falling back to
+            the global litellm.model_cost lookup.
 
     Returns:
         float: Cost in USD for the video generation
@@ -1718,42 +1923,47 @@ def default_video_cost_calculator(
     Raises:
         Exception: If model pricing not found in cost map
     """
-    # Build model names for cost lookup
-    base_model_name = model
-    model_name_without_custom_llm_provider: Optional[str] = None
-    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
-        model_name_without_custom_llm_provider = model.replace(
-            f"{custom_llm_provider}/", ""
-        )
-        base_model_name = (
-            f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
-        )
-
-    verbose_logger.debug(f"Looking up cost for video model: {base_model_name}")
-
-    model_without_provider = model.split("/")[-1]
-
-    # Try model with provider first, fall back to base model name
+    # Use custom model_info pricing if provided (deployment-specific pricing)
     cost_info: Optional[dict] = None
-    models_to_check: List[Optional[str]] = [
-        base_model_name,
-        model,
-        model_without_provider,
-        model_name_without_custom_llm_provider,
-    ]
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
-            break
+    if model_info is not None:
+        cost_info = dict(model_info)
+    else:
+        # Build model names for cost lookup
+        base_model_name = model
+        model_name_without_custom_llm_provider: Optional[str] = None
+        if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+            model_name_without_custom_llm_provider = model.replace(
+                f"{custom_llm_provider}/", ""
+            )
+            base_model_name = (
+                f"{custom_llm_provider}/{model_name_without_custom_llm_provider}"
+            )
 
-    # If still not found, try with custom_llm_provider prefix
-    if cost_info is None and custom_llm_provider:
-        prefixed_model = f"{custom_llm_provider}/{model}"
-        if prefixed_model in litellm.model_cost:
-            cost_info = litellm.model_cost[prefixed_model]
+        verbose_logger.debug(f"Looking up cost for video model: {base_model_name}")
+
+        model_without_provider = model.split("/")[-1]
+
+        # Try model with provider first, fall back to base model name
+        models_to_check: List[Optional[str]] = [
+            base_model_name,
+            model,
+            model_without_provider,
+            model_name_without_custom_llm_provider,
+        ]
+        for _model in models_to_check:
+            if _model is not None and _model in litellm.model_cost:
+                cost_info = litellm.model_cost[_model]
+                break
+
+        # If still not found, try with custom_llm_provider prefix
+        if cost_info is None and custom_llm_provider:
+            prefixed_model = f"{custom_llm_provider}/{model}"
+            if prefixed_model in litellm.model_cost:
+                cost_info = litellm.model_cost[prefixed_model]
+
     if cost_info is None:
         raise Exception(
-            f"Model not found in cost map. Tried checking {models_to_check}"
+            f"Model not found in cost map for model={model}"
         )
 
     # Check for video-specific cost per second first
@@ -1777,9 +1987,16 @@ def batch_cost_calculator(
     usage: Usage,
     model: str,
     custom_llm_provider: Optional[str] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> Tuple[float, float]:
     """
-    Calculate the cost of a batch job
+    Calculate the cost of a batch job.
+
+    Args:
+        model_info: Optional deployment-level model info containing custom
+            batch pricing (e.g. input_cost_per_token_batches). When provided,
+            skips the global litellm.get_model_info() lookup so that
+            deployment-specific pricing is used.
     """
 
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1792,12 +2009,13 @@ def batch_cost_calculator(
         custom_llm_provider,
     )
 
-    try:
-        model_info: Optional[ModelInfo] = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-    except Exception:
-        model_info = None
+    if model_info is None:
+        try:
+            model_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception:
+            model_info = None
 
     if not model_info:
         return 0.0, 0.0
@@ -1811,9 +2029,22 @@ def batch_cost_calculator(
     if input_cost_per_token_batches:
         total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
+        # Subtract cached tokens from prompt_tokens before calculating cost
+        # Fixes issue where cached tokens are being charged again
         total_prompt_cost = (
-            usage.prompt_tokens * (input_cost_per_token) / 2
+            get_billable_input_tokens(usage) * (input_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
+
+        # Add cache read cost if applicable
+        details = _parse_prompt_tokens_details(usage)
+        cache_read_tokens = details["cache_hit_tokens"]
+        cache_read_cost_key = _get_service_tier_cost_key(
+            "cache_read_input_token_cost", None
+        )
+        total_prompt_cost += (
+            calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens)
+            / 2
+        )
     if output_cost_per_token_batches:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
     elif output_cost_per_token:
@@ -2005,3 +2236,4 @@ def handle_realtime_stream_cost_calculation(
     total_cost = input_cost_per_token + output_cost_per_token
 
     return total_cost
+

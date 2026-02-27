@@ -12,6 +12,7 @@ sys.path.insert(
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     exception_type,
+    extract_and_raise_litellm_exception,
 )
 
 # Test cases for is_error_str_context_window_exceeded
@@ -76,6 +77,15 @@ context_window_test_cases = [
     ("Rate limit reached for requests.", False),
     ("The context is large, but acceptable.", False),
     ("", False),  # Empty string
+    # OpenAI user param length validation - not a context window error
+    (
+        "Invalid 'user': string too long. Expected a string with maximum length 64, but got a string with length 123 instead.",
+        False,
+    ),
+    (
+        '{"error": {"message": "Invalid \'user\': string too long.", "code": "string_above_max_length"}}',
+        False,
+    ),
 ]
 
 
@@ -269,3 +279,79 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
                 original_exception=original_exception,
                 custom_llm_provider=custom_llm_provider,
             )
+
+
+class TestExtractAndRaiseLitellmException:
+    """Tests for extract_and_raise_litellm_exception function"""
+
+    def test_extract_and_raise_api_connection_error_without_response(self):
+        """
+        Test that APIConnectionError can be raised without response parameter.
+        
+        This is a regression test for the bug where extract_and_raise_litellm_exception
+        would fail with TypeError when trying to raise APIConnectionError with a
+        response parameter, since APIConnectionError doesn't accept that parameter.
+        
+        Relevant Issue: https://github.com/BerriAI/litellm/issues/XXXXX
+        """
+        error_str = "litellm.APIConnectionError: GeminiException - some error message"
+        
+        with pytest.raises(litellm.APIConnectionError) as excinfo:
+            extract_and_raise_litellm_exception(
+                response=None,
+                error_str=error_str,
+                model="gemini/gemini-3-pro-preview",
+                custom_llm_provider="gemini",
+            )
+        
+        assert "APIConnectionError" in str(excinfo.value)
+
+    def test_extract_and_raise_bad_request_error_with_response(self):
+        """
+        Test that BadRequestError can be raised with response parameter.
+        
+        BadRequestError does accept the response parameter, so this should work.
+        """
+        error_str = "litellm.BadRequestError: Invalid request format"
+        
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            extract_and_raise_litellm_exception(
+                response=None,
+                error_str=error_str,
+                model="gpt-4",
+                custom_llm_provider="openai",
+            )
+        
+        assert "BadRequestError" in str(excinfo.value)
+
+    def test_extract_and_raise_context_window_exceeded_error(self):
+        """
+        Test that ContextWindowExceededError can be raised.
+        """
+        error_str = "litellm.ContextWindowExceededError: Token limit exceeded"
+        
+        with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+            extract_and_raise_litellm_exception(
+                response=None,
+                error_str=error_str,
+                model="gpt-4",
+                custom_llm_provider="openai",
+            )
+        
+        assert "ContextWindowExceededError" in str(excinfo.value)
+
+    def test_no_exception_raised_for_non_litellm_error(self):
+        """
+        Test that no exception is raised for non-litellm error strings.
+        """
+        error_str = "Some generic error that is not a litellm exception"
+        
+        # Should not raise any exception
+        result = extract_and_raise_litellm_exception(
+            response=None,
+            error_str=error_str,
+            model="gpt-4",
+            custom_llm_provider="openai",
+        )
+        
+        assert result is None

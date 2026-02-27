@@ -52,3 +52,19 @@ class AgentCreateInfo(BaseModel):
     credential_fields: List[AgentCredentialField]
     litellm_params_template: Optional[Dict[str, str]] = None
     model_template: Optional[str] = None
+
+
+class EndpointProvider(BaseModel):
+    slug: str
+    display_name: str
+
+
+class SupportedEndpoint(BaseModel):
+    key: str
+    label: str
+    endpoint: str
+    providers: List[EndpointProvider]
+
+
+class SupportedEndpointsResponse(BaseModel):
+    endpoints: List[SupportedEndpoint]

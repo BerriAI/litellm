@@ -20,7 +20,7 @@
   "apscheduler:3.10.4": "MIT",
   "fastapi-sso:0.16.0": "MIT",
   "pyjwt:2.9.0": "MIT",
-  "python-multipart:0.0.18": "Apache-2.0",
+  "python-multipart:0.0.22": "Apache-2.0",
   "Pillow:11.0.0": "MIT-CMU",
   "azure-ai-contentsafety:1.0.0": "MIT License",
   "azure-identity:1.16.1": "MIT License",

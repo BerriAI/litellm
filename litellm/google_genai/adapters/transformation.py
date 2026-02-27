@@ -2,7 +2,6 @@ import json
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union, cast
 
 from litellm import verbose_logger
-
 from litellm.litellm_core_utils.json_validation_rule import normalize_tool_schema
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -771,6 +770,8 @@ class GoogleGenAIAdapter:
             "content_filter": "SAFETY",
             "tool_calls": "STOP",
             "function_call": "STOP",
+            "finish_reason_unspecified": "FINISH_REASON_UNSPECIFIED",
+            "malformed_function_call": "MALFORMED_FUNCTION_CALL",
         }
 
         return mapping.get(finish_reason, "STOP")

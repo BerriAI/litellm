@@ -69,6 +69,67 @@ router_settings:
   redis_port: 1992
 ```
 
+## Enforce Model Rate Limits
+
+Strictly enforce RPM/TPM limits set on deployments. When limits are exceeded, requests are blocked **before** reaching the LLM provider with a `429 Too Many Requests` error.
+
+:::info
+By default, `rpm` and `tpm` values are only used for **routing decisions** (picking deployments with capacity). With `enforce_model_rate_limits`, they become **hard limits**.
+:::
+
+### Quick Start
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 60     # 60 requests per minute
+    tpm: 90000  # 90k tokens per minute
+
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits  # 👈 Enables strict enforcement
+```
+
+### How It Works
+
+| Limit Type | Enforcement | Accuracy |
+|------------|-------------|----------|
+| **RPM** | Hard limit - blocked at exact threshold | 100% accurate |
+| **TPM** | Best-effort - may slightly exceed | Blocked when already over limit |
+
+**Why TPM is best-effort:** Token count is unknown until the LLM responds. TPM is checked before each request (blocks if already over), and tracked after (adds actual tokens used).
+
+### Error Response
+
+```json
+{
+  "error": {
+    "message": "Model rate limit exceeded. RPM limit=60, current usage=60",
+    "type": "rate_limit_error",
+    "code": 429
+  }
+}
+```
+
+Response includes `retry-after: 60` header.
+
+### Multi-Instance Deployment
+
+For multiple LiteLLM proxy instances, add Redis to share rate limit state:
+
+```yaml
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits
+  redis_host: redis.example.com
+  redis_port: 6379
+  redis_password: your-password
+```
+
+
 :::info
 Detailed information about [routing strategies can be found here](../routing)
 :::

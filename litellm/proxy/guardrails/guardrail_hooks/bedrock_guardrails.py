@@ -464,12 +464,37 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 data=prepared_request.body,  # type: ignore
                 headers=prepared_request.headers,  # type: ignore
             )
+        except HTTPException:
+            # Propagate HTTPException (e.g. from non-200 path) as-is
+            raise
         except Exception as e:
+            # If this is an HTTP error with a response body (e.g. httpx.HTTPStatusError),
+            # extract the AWS error message and propagate it
+            response = getattr(e, "response", None)
+            if isinstance(response, httpx.Response):
+                try:
+                    status_code, detail_message = (
+                        self._parse_bedrock_guardrail_error_response(response)
+                    )
+                    self.add_standard_logging_guardrail_information_to_request_data(
+                        guardrail_provider=self.guardrail_provider,
+                        guardrail_json_response={"error": detail_message},
+                        request_data=request_data or {},
+                        guardrail_status="guardrail_failed_to_respond",
+                        start_time=start_time.timestamp(),
+                        end_time=datetime.now().timestamp(),
+                        duration=(datetime.now() - start_time).total_seconds(),
+                        event_type=event_type,
+                    )
+                    raise HTTPException(
+                        status_code=status_code, detail=detail_message
+                    ) from e
+                except HTTPException:
+                    raise
             # Endpoint down, timeout, or other HTTP/network errors
             verbose_proxy_logger.error(
                 "Bedrock AI: failed to make guardrail request: %s", str(e)
             )
-            # Add guardrail information with failure status
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": str(e)},
@@ -480,7 +505,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
             )
-            # Re-raise the exception to maintain existing behavior
             raise
 
         #########################################################
@@ -512,11 +536,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     bedrock_guardrail_response
                 )
         else:
+            status_code, detail_message = self._parse_bedrock_guardrail_error_response(
+                httpx_response
+            )
             verbose_proxy_logger.error(
                 "Bedrock AI: error in response. Status code: %s, response: %s",
                 httpx_response.status_code,
                 httpx_response.text,
             )
+            raise HTTPException(status_code=status_code, detail=detail_message)
 
         return bedrock_guardrail_response
 
@@ -581,6 +609,34 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             return "success"
         return "guardrail_failed_to_respond"
+
+    def _parse_bedrock_guardrail_error_response(
+        self, response: httpx.Response
+    ) -> Tuple[int, str]:
+        """
+        Parse AWS Bedrock guardrail error response body to extract status code and message.
+
+        AWS may return shapes like {"message": "..."} or {"error": {"message": "..."}}.
+        Returns (status_code, message) for use in HTTPException.
+        """
+        status_code = response.status_code
+        message = "Bedrock guardrail request failed"
+        try:
+            body = response.json()
+        except Exception:
+            text = getattr(response, "text", None) or ""
+            if isinstance(text, str) and text.strip():
+                return (status_code, text.strip())
+            return (status_code, message)
+        if isinstance(body, dict):
+            if isinstance(body.get("message"), str):
+                return (status_code, body["message"])
+            err = body.get("error")
+            if isinstance(err, dict) and isinstance(err.get("message"), str):
+                return (status_code, err["message"])
+            if isinstance(err, str):
+                return (status_code, err)
+        return (status_code, message)
 
     def _get_http_exception_for_blocked_guardrail(
         self, response: BedrockGuardrailResponse
@@ -742,9 +798,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -814,9 +870,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -896,15 +952,53 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return
 
         #########################################################
-        ########## 1. Make parallel Bedrock API requests ##########
+        ########## 1. Make Bedrock API requests ##########
         #########################################################
+        # Import asyncio for parallel execution
+        import asyncio
+
+        # Determine if INPUT validation is needed in post_call
+        # Skip INPUT validation if pre_call or during_call is already enabled
+        # (to avoid redundant validation - those hooks would have already validated INPUT)
+        should_validate_input = not (
+            self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
+            or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
+        )
+
         output_content_bedrock: Optional[Union[BedrockGuardrailResponse, str]] = None
-        try:
-            output_content_bedrock = await self.make_bedrock_api_request(
+
+        if should_validate_input:
+            # Prepare input messages (with optional filtering for latest role message)
+            input_filter = self._prepare_guardrail_messages_for_role(
+                messages=new_messages
+            )
+            input_messages = input_filter.payload_messages or new_messages
+
+            # Create tasks for parallel execution of both INPUT and OUTPUT validation
+            input_task = self.make_bedrock_api_request(
+                source="INPUT",
+                messages=input_messages,
+                request_data=data,
+            )
+            output_task = self.make_bedrock_api_request(
                 source="OUTPUT", response=response, request_data=data
             )
-        except GuardrailInterventionNormalStringError as e:
-            output_content_bedrock = e.message
+
+            # Execute both requests in parallel
+            try:
+                _, output_content_bedrock = await asyncio.gather(
+                    input_task, output_task
+                )
+            except GuardrailInterventionNormalStringError as e:
+                output_content_bedrock = e.message
+        else:
+            # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
+            try:
+                output_content_bedrock = await self.make_bedrock_api_request(
+                    source="OUTPUT", response=response, request_data=data
+                )
+            except GuardrailInterventionNormalStringError as e:
+                output_content_bedrock = e.message
 
         #########################################################
         ########## 2. Apply masking to response with output guardrail response ##########
@@ -913,7 +1007,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             response = self.create_guardrail_blocked_response(
                 response=output_content_bedrock
             )
-        else:
+        elif output_content_bedrock is not None:
             self._apply_masking_to_response(
                 response=response,
                 bedrock_guardrail_response=output_content_bedrock,
@@ -1000,36 +1094,54 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         if isinstance(assembled_model_response, ModelResponse):
             ####################################################################
-            ########## 1. Make parallel Bedrock Apply Guardrail API requests ##########
+            ########## 1. Make Bedrock Apply Guardrail API requests ##########
 
             # Bedrock will raise an exception if this violates the guardrail policy
             ###################################################################
-            # Create tasks for parallel execution
-            input_filter = self._prepare_guardrail_messages_for_role(
-                messages=request_data.get("messages")
+            # Determine if INPUT validation is needed in post_call
+            # Skip INPUT validation if pre_call or during_call is already enabled
+            # (to avoid redundant validation - those hooks would have already validated INPUT)
+            should_validate_input = not (
+                self._event_hook_is_event_type(GuardrailEventHooks.pre_call)
+                or self._event_hook_is_event_type(GuardrailEventHooks.during_call)
             )
-            input_messages = input_filter.payload_messages or request_data.get(
-                "messages"
-            )
-            input_task = self.make_bedrock_api_request(
-                source="INPUT",
-                messages=input_messages,
-                request_data=request_data,
-            )  # Only input messages
+
             output_guardrail_response: Optional[
                 Union[BedrockGuardrailResponse, str]
             ] = None
-            output_task = self.make_bedrock_api_request(
-                source="OUTPUT", response=assembled_model_response
-            )  # Only response
 
-            # Execute both requests in parallel
-            try:
-                _, output_guardrail_response = await asyncio.gather(
-                    input_task, output_task
+            if should_validate_input:
+                # Create tasks for parallel execution
+                input_filter = self._prepare_guardrail_messages_for_role(
+                    messages=request_data.get("messages")
                 )
-            except GuardrailInterventionNormalStringError as e:
-                output_guardrail_response = e.message
+                input_messages = input_filter.payload_messages or request_data.get(
+                    "messages"
+                )
+                input_task = self.make_bedrock_api_request(
+                    source="INPUT",
+                    messages=input_messages,
+                    request_data=request_data,
+                )  # Only input messages
+                output_task = self.make_bedrock_api_request(
+                    source="OUTPUT", response=assembled_model_response
+                )  # Only response
+
+                # Execute both requests in parallel
+                try:
+                    _, output_guardrail_response = await asyncio.gather(
+                        input_task, output_task
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_guardrail_response = e.message
+            else:
+                # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
+                try:
+                    output_guardrail_response = await self.make_bedrock_api_request(
+                        source="OUTPUT", response=assembled_model_response
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_guardrail_response = e.message
 
             #########################################################################
             ########## 2. Apply masking to response with output guardrail response ##########
@@ -1308,7 +1420,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
 
                 # Apply any masking that was applied by the guardrail
-
                 output_list = bedrock_response.get("output")
                 if output_list:
                     # If the guardrail returned modified content, use that
@@ -1339,6 +1450,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             inputs["texts"] = masked_texts
             return inputs
 
+        except (HTTPException, GuardrailInterventionNormalStringError):
+            # Let guardrail blocking exceptions propagate as-is so the proxy
+            # can return the correct HTTP status (400) or handle the
+            # GuardrailInterventionNormalStringError for disable_exception_on_block mode.
+            # Without this, the generic except below wraps them into a plain
+            # Exception, losing the HTTP semantics and preventing the proxy
+            # from properly blocking the call.
+            raise
         except Exception as e:
             verbose_proxy_logger.error(
                 "Bedrock Guardrail: Failed to apply guardrail: %s", str(e)

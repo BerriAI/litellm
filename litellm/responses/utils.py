@@ -462,17 +462,24 @@ class ResponseAPILoggingUtils:
         completion_tokens: int = response_api_usage.output_tokens or 0
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if response_api_usage.input_tokens_details:
-            prompt_tokens_details = PromptTokensDetailsWrapper(
-                cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
-                audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
-                text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
-                image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
-            )
+            if isinstance(response_api_usage.input_tokens_details, dict):
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    **response_api_usage.input_tokens_details
+                )
+            else:
+                prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
+                    audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
+                    text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
+                    image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
+                )
         completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
         output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
         if output_tokens_details:
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None)
+                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None),
+                image_tokens=getattr(output_tokens_details, "image_tokens", None),
+                text_tokens=getattr(output_tokens_details, "text_tokens", None),
             )
             
         chat_usage = Usage(

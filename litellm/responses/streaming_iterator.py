@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import traceback
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -7,7 +8,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 import litellm
-from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.constants import LITELLM_MAX_STREAMING_DURATION_SECONDS, STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -55,6 +56,8 @@ class BaseResponsesAPIStreamingIterator:
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
+        self._failure_handled = False  # Track if failure handler has been called
+        self._stream_created_time: float = time.time()
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -80,6 +83,18 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+
+    def _check_max_streaming_duration(self) -> None:
+        """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
+        if LITELLM_MAX_STREAMING_DURATION_SECONDS is None:
+            return
+        elapsed = time.time() - self._stream_created_time
+        if elapsed > LITELLM_MAX_STREAMING_DURATION_SECONDS:
+            raise litellm.Timeout(
+                message=f"Stream exceeded max streaming duration of {LITELLM_MAX_STREAMING_DURATION_SECONDS}s (elapsed {elapsed:.1f}s)",
+                model=self.model or "",
+                llm_provider=self.custom_llm_provider or "",
+            )
 
     def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
         """Process a single chunk of data from the stream"""
@@ -122,12 +137,6 @@ class BaseResponsesAPIStreamingIterator:
                     )
                     setattr(openai_responses_api_chunk, "response", response)
 
-                # Allow callbacks to modify chunk before returning
-                openai_responses_api_chunk = run_async_function(
-                    async_function=self._call_post_streaming_deployment_hook,
-                    chunk=openai_responses_api_chunk,
-                )
-
                 # Store the completed response
                 if (
                     openai_responses_api_chunk
@@ -169,7 +178,8 @@ class BaseResponsesAPIStreamingIterator:
             # If we can't parse the chunk, continue
             return None
         except Exception as e:
-            # Ensure failures trigger failure hooks
+            # Trigger failure hooks before re-raising
+            # This ensures failures are logged even when _process_chunk is called directly
             self._handle_failure(e)
             raise
 
@@ -287,7 +297,13 @@ class BaseResponsesAPIStreamingIterator:
     def _handle_failure(self, exception: Exception):
         """
         Trigger failure handlers before bubbling the exception.
+        Only calls handlers once even if called multiple times.
         """
+        # Prevent double-calling failure handlers
+        if self._failure_handled:
+            return
+        self._failure_handled = True
+        
         traceback_exception = traceback.format_exc()
         try:
             run_async_function(
@@ -355,6 +371,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
         try:
+            self._check_max_streaming_duration()
             while True:
                 # Get the next chunk from the stream
                 try:
@@ -363,14 +380,23 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.finished = True
                     raise StopAsyncIteration
 
+                self._check_max_streaming_duration()
                 result = self._process_chunk(chunk)
 
                 if self.finished:
                     raise StopAsyncIteration
                 elif result is not None:
+                    # Await hook directly instead of run_async_function
+                    # (which spawns a thread + event loop per call)
+                    result = await self._call_post_streaming_deployment_hook(
+                        chunk=result,
+                    )
                     return result
                 # If result is None, continue the loop to get the next chunk
 
+        except StopAsyncIteration:
+            # Normal end of stream - don't log as failure
+            raise
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -383,11 +409,20 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context"""
-        # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
+        # Create a copy for logging to avoid modifying the response object that will be returned to the user
         # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        import copy
-        logging_response = copy.deepcopy(self.completed_response)
+        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
+        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
+        logging_response = self.completed_response
+        if self.completed_response is not None and hasattr(self.completed_response, 'model_dump'):
+            try:
+                logging_response = type(self.completed_response).model_validate(
+                    self.completed_response.model_dump()
+                )
+            except Exception:
+                # Fallback to original if serialization fails
+                pass
 
         asyncio.create_task(
             self.logging_obj.async_success_handler(
@@ -441,6 +476,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __next__(self):
         try:
+            self._check_max_streaming_duration()
             while True:
                 # Get the next chunk from the stream
                 try:
@@ -449,14 +485,23 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.finished = True
                     raise StopIteration
 
+                self._check_max_streaming_duration()
                 result = self._process_chunk(chunk)
 
                 if self.finished:
                     raise StopIteration
                 elif result is not None:
+                    # Sync path: use run_async_function for the hook
+                    result = run_async_function(
+                        async_function=self._call_post_streaming_deployment_hook,
+                        chunk=result,
+                    )
                     return result
                 # If result is None, continue the loop to get the next chunk
 
+        except StopIteration:
+            # Normal end of stream - don't log as failure
+            raise
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -469,11 +514,20 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in sync context"""
-        # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
+        # Create a copy for logging to avoid modifying the response object that will be returned to the user
         # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        import copy
-        logging_response = copy.deepcopy(self.completed_response)
+        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
+        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
+        logging_response = self.completed_response
+        if self.completed_response is not None and hasattr(self.completed_response, 'model_dump'):
+            try:
+                logging_response = type(self.completed_response).model_validate(
+                    self.completed_response.model_dump()
+                )
+            except Exception:
+                # Fallback to original if serialization fails
+                pass
 
         run_async_function(
             async_function=self.logging_obj.async_success_handler,

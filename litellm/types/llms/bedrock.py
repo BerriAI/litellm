@@ -8,6 +8,7 @@ from .openai import ChatCompletionToolCallChunk
 
 class CachePointBlock(TypedDict, total=False):
     type: Literal["default"]
+    ttl: str
 
 
 class SystemContentBlock(TypedDict, total=False):
@@ -93,6 +94,67 @@ class GuardrailConverseContentBlock(TypedDict, total=False):
     text: GuardrailConverseTextBlock
 
 
+class CitationWebLocationBlock(TypedDict, total=False):
+    """
+    Web location block for Nova grounding citations.
+    Contains the URL and domain from web search results.
+
+    Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+    """
+
+    url: str
+    domain: str
+
+
+class CitationLocationBlock(TypedDict, total=False):
+    """
+    Location block containing the web location for a citation.
+    """
+
+    web: CitationWebLocationBlock
+
+
+class CitationReferenceBlock(TypedDict, total=False):
+    """
+    Citation reference block containing a single citation with its location.
+
+    Each citation contains:
+    - location.web.url: The URL of the source
+    - location.web.domain: The domain of the source
+    """
+
+    location: CitationLocationBlock
+
+
+class CitationsContentBlock(TypedDict, total=False):
+    """
+    Citations content block returned by Nova grounding (web search) tool.
+
+    When Nova grounding is enabled via systemTool, the model may return
+    citationsContent blocks containing web search citation references.
+
+    Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+
+    Example response structure:
+        {
+            "citationsContent": {
+                "citations": [
+                    {
+                        "location": {
+                            "web": {
+                                "url": "https://example.com/article",
+                                "domain": "example.com"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    """
+
+    citations: List[CitationReferenceBlock]
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
@@ -103,6 +165,7 @@ class ContentBlock(TypedDict, total=False):
     cachePoint: CachePointBlock
     reasoningContent: BedrockConverseReasoningContentBlock
     guardContent: GuardrailConverseContentBlock
+    citationsContent: CitationsContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -159,8 +222,24 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
+class SystemToolBlock(TypedDict, total=False):
+    """
+    System tool block for Nova grounding and other built-in tools.
+
+    Example:
+        {
+            "systemTool": {
+                "name": "nova_grounding"
+            }
+        }
+    """
+
+    name: Required[str]
+
+
 class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]
     cachePoint: Optional[CachePointBlock]
 
 
@@ -210,15 +289,44 @@ class ContentBlockStartEvent(TypedDict, total=False):
 class ContentBlockDeltaEvent(TypedDict, total=False):
     """
     Either 'text' or 'toolUse' will be specified for Converse API streaming response.
+    May also include 'citationsContent' when Nova grounding is enabled.
     """
 
     text: str
     toolUse: ToolBlockDeltaEvent
     reasoningContent: BedrockConverseReasoningContentBlockDelta
+    citationsContent: CitationsContentBlock
 
 
 class PerformanceConfigBlock(TypedDict):
     latency: Literal["optimized", "throughput"]
+
+
+class JsonSchemaDefinition(TypedDict, total=False):
+    """JSON schema structured output format options for Bedrock Converse API."""
+
+    schema: Required[str]  # JSON string, not dict
+    name: str
+    description: str
+
+
+class OutputFormatStructure(TypedDict, total=False):
+    """The structure that the model's output must adhere to (union type)."""
+
+    jsonSchema: Required[JsonSchemaDefinition]
+
+
+class OutputFormat(TypedDict):
+    """Structured output parameters to control the model's response."""
+
+    type: Literal["json_schema"]
+    structure: OutputFormatStructure
+
+
+class OutputConfigBlock(TypedDict, total=False):
+    """Output configuration for a model response in Converse/ConverseStream."""
+
+    textFormat: OutputFormat
 
 
 class CommonRequestObject(
@@ -233,6 +341,7 @@ class CommonRequestObject(
     performanceConfig: Optional[PerformanceConfigBlock]
     serviceTier: Optional[ServiceTierBlock]
     requestMetadata: Optional[Dict[str, str]]
+    outputConfig: Optional[OutputConfigBlock]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -317,6 +426,7 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+    output_dimension: int
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
@@ -879,3 +989,9 @@ class BedrockGetBatchResponse(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
+
+
+class BedrockToolBlock(TypedDict, total=False):
+    toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]  # For Nova grounding
+    cachePoint: Optional[CachePointBlock]

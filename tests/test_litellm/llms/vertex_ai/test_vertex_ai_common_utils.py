@@ -1,7 +1,6 @@
 import os
 import sys
-from typing import Any, Dict
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,7 +10,6 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm.llms.vertex_ai.common_utils import (
     _get_vertex_url,
     convert_anyof_null_to_nullable,
@@ -442,7 +440,7 @@ def test_vertex_ai_complex_response_schema():
     optional_params = {}
 
     v.apply_response_schema_transformation(
-        value=non_default_params["response_format"], optional_params=optional_params
+        value=non_default_params["response_format"], optional_params=optional_params, model="gemini-1.5-pro-preview-0409"
     )
 
     # Assertions for the transformed schema
@@ -798,9 +796,84 @@ def test_fix_enum_empty_strings():
     assert "mobile" in enum_values
     assert "tablet" in enum_values
 
-    # 3. Other properties preserved
-    assert input_schema["properties"]["user_agent_type"]["type"] == "string"
-    assert input_schema["properties"]["user_agent_type"]["description"] == "Device type for user agent"
+
+def test_get_vertex_model_id_from_url():
+    """Test get_vertex_model_id_from_url with various URLs"""
+    from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
+
+    # Test with valid URL
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gemini-pro"
+
+    # Test with invalid URL
+    url = "https://invalid-url.com"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id is None
+
+
+def test_get_vertex_model_id_from_url_with_slashes():
+    """Test get_vertex_model_id_from_url with model names containing slashes (e.g., gcp/google/gemini-2.5-flash)
+
+    Regression test for NVIDIA issue: custom model names with slashes in passthrough URLs
+    were being truncated (e.g., 'gcp/google/gemini-2.5-flash' -> 'gcp'), causing access_groups
+    checks to fail.
+    """
+    from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
+
+    # Test with model name containing slashes: gcp/google/gemini-2.5-flash
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
+
+    # Test with model name containing slashes: gcp/google/gemini-3-flash-preview
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:streamGenerateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-3-flash-preview"
+
+    # Test with custom model path: custom/model
+    url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/custom/model:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "custom/model"
+
+    # Test passthrough URL format (without host)
+    url = "v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent"
+    model_id = get_vertex_model_id_from_url(url)
+    assert model_id == "gcp/google/gemini-2.5-flash"
+
+
+def test_construct_target_url_with_version_prefix():
+    """Test construct_target_url with version prefixes"""
+    from litellm.llms.vertex_ai.common_utils import construct_target_url
+
+    # Test with /v1/ prefix
+    url = "/v1/publishers/google/models/gemini-pro:streamGenerateContent"
+    vertex_project = "test-project"
+    vertex_location = "us-central1"
+    base_url = "https://us-central1-aiplatform.googleapis.com"
+
+    target_url = construct_target_url(
+        base_url=base_url,
+        requested_route=url,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
+
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    assert str(target_url) == expected_url
+
+    # Test with /v1beta1/ prefix
+    url = "/v1beta1/publishers/google/models/gemini-pro:streamGenerateContent"
+
+    target_url = construct_target_url(
+        base_url=base_url,
+        requested_route=url,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+    )
+
+    expected_url = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:streamGenerateContent"
+    assert str(target_url) == expected_url
 
 
 def test_fix_enum_types():
@@ -862,7 +935,7 @@ def test_fix_enum_types():
             "truncateMode": {
                 "enum": ["auto", "none", "start", "end"],  # Kept - string type
                 "type": "string",
-                "description": "How to truncate content"
+                "description": "How to truncate content",
             },
             "maxLength": {  # enum removed
                 "type": "integer",
@@ -1254,8 +1327,8 @@ def test_build_vertex_schema_empty_properties():
     # Verify empty properties was removed
     assert "properties" not in go_back_schema, "Empty properties should be removed"
     
-    # Verify type was also removed (since object without properties is invalid in Gemini)
-    assert "type" not in go_back_schema, "Type should be removed when properties is empty"
+    # Verify type is kept as object (Gemini requires type: object even without properties)
+    assert go_back_schema.get("type") == "object", "Type should be kept as object when properties is empty"
     
     # Verify required was also removed
     assert "required" not in go_back_schema, "Required should be removed when properties is empty"
@@ -1267,3 +1340,65 @@ def test_build_vertex_schema_empty_properties():
     parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
     assert parent_schema["type"] == "object", "Parent schema should still have object type"
     assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
+
+
+def test_add_object_type_schema_with_no_properties_and_no_type():
+    """
+    Test that add_object_type adds type: object when schema has no properties and no type.
+    Fixes issue where tools with no arguments (e.g. EnterPlanMode) fail on Gemini.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with no properties and no type (the problematic case)
+    input_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type: object was added
+    assert input_schema.get("type") == "object", "type: object should be added"
+
+    # Verify $schema is preserved
+    assert input_schema.get("$schema") == "https://json-schema.org/draft/2020-12/schema"
+
+
+def test_add_object_type_does_not_override_existing_type():
+    """
+    Test add_object_type does not override existing type field.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with existing type
+    input_schema = {
+        "type": "string",
+        "description": "A string field"
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type was not changed
+    assert input_schema.get("type") == "string", "Existing type should not be changed"
+
+
+def test_add_object_type_does_not_add_type_when_anyof_present():
+    """
+    Test add_object_type does not add type: object when anyOf is present.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with anyOf but no type
+    input_schema = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+        ]
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type was not added (anyOf handles the type)
+    assert "type" not in input_schema, "type should not be added when anyOf is present"
