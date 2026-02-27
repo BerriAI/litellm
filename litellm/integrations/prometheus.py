@@ -2905,6 +2905,8 @@ class PrometheusLogger(CustomLogger):
 
         if user_info:
             user_object.budget_reset_at = user_info.budget_reset_at
+            if user_object.max_budget is None and user_info.max_budget is not None:
+                user_object.max_budget = user_info.max_budget
 
         return user_object
 
