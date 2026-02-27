@@ -867,6 +867,52 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         returned_message: List[OpenAIRealtimeEvents] = []
 
+        # Handle transcription events that arrive independently from model
+        # content.  Gemini sends inputTranscription / outputTranscription
+        # inside serverContent, separately from modelTurn / turnComplete.
+        server_content = json_message.get("serverContent")
+        if isinstance(server_content, dict):
+            input_tx = server_content.get("inputTranscription")
+            if isinstance(input_tx, dict) and input_tx.get("text"):
+                returned_message.append(
+                    cast(OpenAIRealtimeEvents, {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "event_id": "event_{}".format(uuid.uuid4()),
+                        "transcript": input_tx["text"],
+                        "item_id": "item_{}".format(uuid.uuid4()),
+                        "content_index": 0,
+                    })
+                )
+
+            output_tx = server_content.get("outputTranscription")
+            if isinstance(output_tx, dict) and output_tx.get("text"):
+                returned_message.append(
+                    cast(OpenAIRealtimeEvents, {
+                        "type": "response.audio_transcript.delta",
+                        "event_id": "event_{}".format(uuid.uuid4()),
+                        "delta": output_tx["text"],
+                        "item_id": current_output_item_id or "item_{}".format(uuid.uuid4()),
+                        "response_id": current_response_id or "resp_{}".format(uuid.uuid4()),
+                        "output_index": 0,
+                        "content_index": 0,
+                    })
+                )
+
+            # If serverContent only contained transcription(s) and no model
+            # content, return early — the main loop would fail on unknown keys.
+            _model_content_keys = {"modelTurn", "turnComplete", "interrupted", "generationComplete"}
+            if not any(k in server_content for k in _model_content_keys):
+                return {
+                    "response": returned_message,
+                    "current_output_item_id": current_output_item_id,
+                    "current_response_id": current_response_id,
+                    "current_delta_chunks": current_delta_chunks,
+                    "current_conversation_id": current_conversation_id,
+                    "current_item_chunks": current_item_chunks,
+                    "current_delta_type": current_delta_type,
+                    "session_configuration_request": session_configuration_request,
+                }
+
         for key, value in json_message.items():
             # Check if this key or any nested key matches our mapping
             openai_event = self.map_openai_event(
@@ -974,6 +1020,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         setup_config: BidiGenerateContentSetup = {
             "model": f"models/{model}",
             "generationConfig": {"responseModalities": response_modalities},
+            # Return input transcript so guardrails can inspect user speech.
+            "inputAudioTranscription": {},
         }
         if output_audio_transcription:
             setup_config["outputAudioTranscription"] = {}
