@@ -1960,6 +1960,25 @@ async def update_key_fn(
                     prisma_client=prisma_client,
                 )
 
+        # Step 6d: Key update validation against effective models
+        if data.models is not None and (data.team_id or existing_key_row.team_id):
+            team_id_to_check = data.team_id or existing_key_row.team_id
+            if team_obj is None or team_obj.team_id != team_id_to_check:
+                team_obj = await get_team_object(
+                    team_id=team_id_to_check,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+            if team_obj is not None:
+                await _validate_key_models_against_effective_team_models(
+                    team_id=team_id_to_check,
+                    user_id=data.user_id or existing_key_row.user_id,
+                    data=data,
+                    team_table=team_obj,
+                    prisma_client=prisma_client,
+                )
+
         # Validate key against project limits if project_id is being set
         _project_id_to_check = getattr(data, "project_id", None) or getattr(
             existing_key_row, "project_id", None

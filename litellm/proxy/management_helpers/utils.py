@@ -221,7 +221,7 @@ async def add_new_member(
     else:
         _budget_id = default_team_budget_id
 
-    if returned_user is not None and returned_user.user_id is not None:
+    if (_budget_id or models) and returned_user is not None and returned_user.user_id is not None:
         create_data: Dict[str, Any] = {
             "team_id": team_id,
             "user_id": returned_user.user_id,
