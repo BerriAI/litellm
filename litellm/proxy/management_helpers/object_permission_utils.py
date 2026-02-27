@@ -293,7 +293,15 @@ async def validate_mcp_object_permission_for_key(
         )
 
     if prisma_client is None or user_api_key_cache is None:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "MCP object permission validation is unavailable (missing dependencies). "
+                    "Cannot assign mcp_servers or mcp_access_groups to this key."
+                )
+            },
+        )
 
     allowed_server_ids: set = set()
     auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
@@ -307,9 +315,11 @@ async def validate_mcp_object_permission_for_key(
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
     )
-    # None is impossible here: admins return early above, and
-    # get_allowed_mcp_access_groups_for_user returns None only for admins.
-    assert allowed_access_group_ids is not None
+    if allowed_access_group_ids is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Unable to determine allowed MCP access groups."},
+        )
 
     # Validate requested mcp_servers
     disallowed_servers = [
