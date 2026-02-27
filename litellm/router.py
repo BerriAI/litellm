@@ -6677,6 +6677,22 @@ class Router:
         # initialize client
         self._add_deployment(deployment=deployment)
 
+        # Register custom pricing in litellm.model_cost.
+        # Mirrors _create_deployment() logic to ensure dynamically-added deployments
+        # (e.g., loaded from DB) also have their custom pricing registered.
+        # Without this, _is_model_cost_zero() cannot detect explicitly-configured
+        # zero-cost models, causing budget checks to block free models.
+        _model_id = deployment.model_info.id
+        if _model_id is not None:
+            _model_info_dict: dict = deployment.model_info.model_dump(
+                exclude_none=True
+            )
+            for field in CustomPricingLiteLLMParams.model_fields.keys():
+                field_value = deployment.litellm_params.get(field)
+                if field_value is not None:
+                    _model_info_dict[field] = field_value
+            litellm.register_model(model_cost={_model_id: _model_info_dict})
+
         # add to model names
         self._add_model_to_list_and_index_map(
             model=_deployment, model_id=deployment.model_info.id
