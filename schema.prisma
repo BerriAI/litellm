@@ -1106,7 +1106,7 @@ model LiteLLM_ClaudeCodePluginTable {
   files_json    String?   @default("{}")
   enabled       Boolean   @default(true)
   created_at    DateTime? @default(now())
-  updated_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now()) @updatedAt
   created_by    String?
 
   @@map("LiteLLM_ClaudeCodePluginTable")
