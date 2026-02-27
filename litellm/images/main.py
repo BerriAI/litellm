@@ -763,6 +763,8 @@ def image_edit(  # noqa: PLR0915
         }  # model-specific params - pass them straight to the model/provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        model_info = kwargs.get("model_info", None)
+        metadata = kwargs.get("metadata", {})
         _is_async = kwargs.pop("async_call", False) is True
 
         # add images / or return a single image
@@ -872,6 +874,8 @@ def image_edit(  # noqa: PLR0915
             optional_params=dict(image_edit_request_params),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "model_info": model_info,
+                "metadata": metadata,
                 **image_edit_request_params,
             },
             custom_llm_provider=custom_llm_provider,
