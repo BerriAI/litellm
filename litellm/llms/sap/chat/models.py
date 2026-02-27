@@ -674,7 +674,7 @@ class GlobalStreamOptions(BaseModel):
 
 
 class OrchestrationConfig(BaseModel):
-    modules: ModuleConfig
+    modules: Union[ModuleConfig, list[ModuleConfig]]
     stream: Optional[GlobalStreamOptions] = None
 
 
