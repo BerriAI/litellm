@@ -185,10 +185,17 @@ async def _set_object_permission(
 async def get_allowed_mcp_access_groups_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     prisma_client: Optional[PrismaClient],
+    auth_contexts: Optional[list] = None,
 ) -> Optional[set]:
     """
     Return the set of MCP access group IDs the user can assign (via teams or key).
     Returns None if user is admin (can assign any) or if MCP modules are unavailable.
+
+    Args:
+        user_api_key_dict: The user's API key auth context.
+        prisma_client: Database client.
+        auth_contexts: Optional pre-resolved auth contexts. If provided, avoids
+            redundant build_effective_auth_contexts call.
     """
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
@@ -208,7 +215,8 @@ async def get_allowed_mcp_access_groups_for_user(
         return set()
 
     allowed_access_group_ids: set = set()
-    auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+    if auth_contexts is None:
+        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
     for auth_context in auth_contexts:
         if auth_context.team_id:
@@ -303,8 +311,8 @@ async def validate_mcp_object_permission_for_key(
             },
         )
 
-    allowed_server_ids: set = set()
     auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+    allowed_server_ids: set = set()
     for auth_context in auth_contexts:
         server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(
             auth_context
@@ -314,6 +322,7 @@ async def validate_mcp_object_permission_for_key(
     allowed_access_group_ids = await get_allowed_mcp_access_groups_for_user(
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
+        auth_contexts=auth_contexts,
     )
     if allowed_access_group_ids is None:
         raise HTTPException(
