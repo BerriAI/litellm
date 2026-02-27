@@ -33056,6 +33056,7 @@
         "supports_web_search": true
     },
     "xai/grok-2-vision-1212": {
+        "deprecation_date": "2026-02-28",
         "input_cost_per_image": 2e-06,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
@@ -33160,6 +33161,7 @@
     },
     "xai/grok-3-mini": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2026-02-28",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -33176,6 +33178,7 @@
     },
     "xai/grok-3-mini-beta": {
         "cache_read_input_token_cost": 7.5e-08,
+        "deprecation_date": "2026-02-28",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
