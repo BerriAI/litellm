@@ -873,10 +873,10 @@ def image_edit(  # noqa: PLR0915
             user=user,
             optional_params=dict(image_edit_request_params),
             litellm_params={
+                **image_edit_request_params,
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
                 "metadata": metadata,
-                **image_edit_request_params,
             },
             custom_llm_provider=custom_llm_provider,
         )
