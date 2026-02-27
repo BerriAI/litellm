@@ -4967,9 +4967,6 @@ class ProxyStartupEvent:
             f"config={mcp_semantic_filter_config}"
         )
 
-        mcp_semantic_filter_config = litellm_settings.get(
-            "mcp_semantic_tool_filter", None
-        )
         verbose_proxy_logger.debug(
             f"Semantic filter config: {mcp_semantic_filter_config}"
         )
