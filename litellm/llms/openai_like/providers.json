@@ -90,5 +90,9 @@
     "headers": {
       "api-subscription-key": "{api_key}"
     }
+  },
+  "ambient": {
+    "base_url": "https://api.ambient.xyz/v1",
+    "api_key_env": "AMBIENT_API_KEY"
   }
 }
