@@ -35,6 +35,7 @@ class PassThroughStreamingHandler:
         start_time: datetime,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
+        kwargs: Optional[dict] = None,
     ):
         """
         - Yields chunks from the response
@@ -83,6 +84,7 @@ class PassThroughStreamingHandler:
                     start_time=start_time,
                     raw_bytes=raw_bytes,
                     end_time=end_time,
+                    kwargs=kwargs,
                 )
             )
         except Exception as e:
@@ -100,6 +102,7 @@ class PassThroughStreamingHandler:
         raw_bytes: List[bytes],
         end_time: datetime,
         model: Optional[str] = None,
+        kwargs: Optional[dict] = None,
     ):
         """
         Route the logging for the collected chunks to the appropriate handler
@@ -115,7 +118,7 @@ class PassThroughStreamingHandler:
         standard_logging_response_object: Optional[
             PassThroughEndpointLoggingResultValues
         ] = None
-        kwargs: dict = {}
+        handler_kwargs: dict = {}
         if endpoint_type == EndpointType.ANTHROPIC:
             anthropic_passthrough_logging_handler_result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
                 litellm_logging_obj=litellm_logging_obj,
@@ -126,11 +129,12 @@ class PassThroughStreamingHandler:
                 start_time=start_time,
                 all_chunks=all_chunks,
                 end_time=end_time,
+                kwargs=kwargs,
             )
             standard_logging_response_object = (
                 anthropic_passthrough_logging_handler_result["result"]
             )
-            kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
+            handler_kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.VERTEX_AI:
             vertex_passthrough_logging_handler_result = (
                 VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
@@ -143,12 +147,13 @@ class PassThroughStreamingHandler:
                     all_chunks=all_chunks,
                     end_time=end_time,
                     model=model,
+                    kwargs=kwargs,
                 )
             )
             standard_logging_response_object = (
                 vertex_passthrough_logging_handler_result["result"]
             )
-            kwargs = vertex_passthrough_logging_handler_result["kwargs"]
+            handler_kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.OPENAI:
             openai_passthrough_logging_handler_result = (
                 OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
@@ -160,12 +165,13 @@ class PassThroughStreamingHandler:
                     start_time=start_time,
                     all_chunks=all_chunks,
                     end_time=end_time,
+                    kwargs=kwargs,
                 )
             )
             standard_logging_response_object = (
                 openai_passthrough_logging_handler_result["result"]
             )
-            kwargs = openai_passthrough_logging_handler_result["kwargs"]
+            handler_kwargs = openai_passthrough_logging_handler_result["kwargs"]
 
         if standard_logging_response_object is None:
             standard_logging_response_object = StandardPassThroughResponseObject(
@@ -176,7 +182,7 @@ class PassThroughStreamingHandler:
             start_time=start_time,
             end_time=end_time,
             cache_hit=False,
-            **kwargs,
+            **handler_kwargs,
         )
         if litellm_logging_obj._should_run_sync_callbacks_for_async_calls() is False:
             return
@@ -187,7 +193,7 @@ class PassThroughStreamingHandler:
             end_time=end_time,
             cache_hit=False,
             start_time=start_time,
-            **kwargs,
+            **handler_kwargs,
         )
 
     @staticmethod
