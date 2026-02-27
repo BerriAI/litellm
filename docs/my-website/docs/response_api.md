@@ -884,7 +884,13 @@ router = litellm.Router(
             },
         },
     ],
-    optional_pre_call_checks=["responses_api_deployment_check"],
+    # `responses_api_deployment_check` ensures Requests with `previous_response_id`
+    # are routed to the same deployment. `deployment_affinity` adds sticky sessions
+    # for requests without `previous_response_id` (useful for implicit caching).
+    # `session_affinity` adds sticky sessions based on `session_id` metadata.
+    optional_pre_call_checks=["responses_api_deployment_check", "deployment_affinity", "session_affinity"],
+    # Optional (default is 3600 seconds / 1 hour)
+    deployment_affinity_ttl_seconds=3600,
 )
 
 # Initial request
@@ -911,7 +917,18 @@ follow_up = await router.aresponses(
 
 #### 1. Setup session continuity on proxy config.yaml
 
-To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
+To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks` in your proxy config.yaml.
+
+- `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
+- `session_affinity`: sticky sessions based on session id (takes priority over `deployment_affinity`)
+- `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
+
+Notes:
+- User-key affinity is keyed on `metadata.user_api_key_hash` (the API key hash). The OpenAI `user` request parameter is an end-user identifier and is intentionally not used for deployment affinity.
+- Session-ID affinity is keyed on `metadata.session_id`. For proxy requests, this can be passed via the `x-litellm-session-id` HTTP header. For Python SDK requests, you can pass it via `litellm_metadata={"session_id": "value"}` in request args.
+- `user_api_key_hash` is already SHA-256, and is used as-is (no double hashing).
+- Affinity is scoped by a stable model identifier (the model-map key, e.g. `model_map_information.model_map_key`) so model aliases map to the same stickiness bucket.
+- The mapping TTL is controlled by `deployment_affinity_ttl_seconds` (configured on Router init / proxy startup).
 
 ```yaml showLineNumbers title="config.yaml with Session Continuity"
 model_list:
@@ -929,7 +946,12 @@ model_list:
       api_base: https://endpoint2.openai.azure.com
 
 router_settings:
-  optional_pre_call_checks: ["responses_api_deployment_check"]
+  optional_pre_call_checks:
+    - responses_api_deployment_check
+    - session_affinity
+    - deployment_affinity
+  # Optional (default is 3600 seconds / 1 hour)
+  deployment_affinity_ttl_seconds: 3600
 ```
 
 #### 2. Use the OpenAI Python SDK to make requests to LiteLLM Proxy
@@ -1022,6 +1044,136 @@ curl http://localhost:4000/v1/responses \
 
 
 
+
+## Server-side compaction
+
+For long-running conversations, you can enable **server-side compaction** so that when the rendered context size crosses a threshold, the server automatically runs compaction in-stream and emits a compaction item—no separate `POST /v1/responses/compact` call is required.
+
+Supported on the OpenAI Responses API when using the `openai` or `azure` provider. Pass `context_management` with a compaction entry and `compact_threshold` (token count; minimum 1000). When the context crosses the threshold, the server compacts in-stream and continues. Chain turns with `previous_response_id` or by appending output items to your next input array. See [OpenAI Compaction guide](https://developers.openai.com/api/docs/guides/compaction) for details.
+
+> **Note:** You can use openai `context_management` format with Anthropic models via LiteLLM via responses API. LiteLLM will automatically translate this format for Anthropic and handle context management for you.
+
+For explicit control over when compaction runs, use the standalone compact endpoint (`POST /v1/responses/compact`) instead.
+
+### Python SDK
+
+```python showLineNumbers title="Server-side compaction with LiteLLM Python SDK"
+import litellm
+
+# Non-streaming: enable compaction when context exceeds 200k tokens
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+
+# Streaming: same context_management, compaction runs in-stream if threshold is crossed
+stream = litellm.responses(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    stream=True,
+)
+for event in stream:
+    print(event)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `context_management` to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Server-side compaction via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",  # LiteLLM Proxy (AI Gateway)
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-4o",
+    input="Your conversation input...",
+    context_management=[{"type": "compaction", "compact_threshold": 200000}],
+    max_output_tokens=1024,
+)
+print(response)
+```
+
+**curl (proxy):**
+
+```bash title="Server-side compaction via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "input": "Your conversation input...",
+    "context_management": [{"type": "compaction", "compact_threshold": 200000}],
+    "max_output_tokens": 1024
+  }'
+```
+
+## Shell tool
+
+The **Shell tool** lets the model run commands in a hosted container or local runtime (OpenAI Responses API). You pass `tools=[{"type": "shell", "environment": {...}}]`; the `environment` object configures the runtime (e.g. `type: "container_auto"` for auto-provisioned containers). See [OpenAI Shell tool guide](https://developers.openai.com/api/docs/guides/tools-shell) for full options.
+
+Supported when using the `openai` or `azure` provider with a model that supports the Shell tool.
+
+### Python SDK
+
+```python showLineNumbers title="Shell tool with LiteLLM Python SDK"
+import litellm
+
+response = litellm.responses(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data and run python --version.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+### LiteLLM Proxy (AI Gateway)
+
+Use the OpenAI SDK with your proxy as `base_url`, or call the proxy with curl. The proxy forwards `tools` (including `type: "shell"`) to the provider.
+
+**OpenAI Python SDK (proxy as base_url):**
+
+```python showLineNumbers title="Shell tool via LiteLLM Proxy"
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-proxy-api-key",
+)
+
+response = client.responses.create(
+    model="openai/gpt-5.2",
+    input="List files in /mnt/data.",
+    tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
+    tool_choice="auto",
+    max_output_tokens=1024,
+)
+```
+
+**curl:**
+
+```bash title="Shell tool via curl to LiteLLM Proxy"
+curl -X POST "http://localhost:4000/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-proxy-api-key" \
+  -d '{
+    "model": "openai/gpt-5.2",
+    "input": "List files in /mnt/data.",
+    "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
+    "tool_choice": "auto",
+    "max_output_tokens": 1024
+  }'
+```
 
 ## Session Management
 
@@ -1220,11 +1372,6 @@ Response:
   }]
 }
 ```
-
-
-
-
-
 
 
 

@@ -310,10 +310,11 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request for RunwayML API.
-        
+
         RunwayML doesn't have a separate content download endpoint.
         The video URL is returned in the task output field.
         We'll retrieve the task and extract the video URL.

@@ -41,13 +41,16 @@ const McpOAuthCallbackContent = () => {
     }
 
     try {
+      // Store in both sessionStorage and localStorage for redundancy
       window.sessionStorage.setItem(RESULT_STORAGE_KEY, JSON.stringify(payload));
+      window.localStorage.setItem(RESULT_STORAGE_KEY, JSON.stringify(payload));
     } catch (err) {
-      console.error("Failed to persist OAuth callback payload", err);
+      // Silently ignore storage errors
     }
 
-    const returnUrl = window.sessionStorage.getItem(RETURN_URL_STORAGE_KEY);
-    console.info("[MCP OAuth callback] returnUrl", returnUrl);
+    // Check both sessionStorage and localStorage for return URL
+    const returnUrl = window.sessionStorage.getItem(RETURN_URL_STORAGE_KEY) || 
+                      window.localStorage.getItem(RETURN_URL_STORAGE_KEY);
     const destination = returnUrl || resolveDefaultRedirect();
     window.location.replace(destination);
   }, [payload]);

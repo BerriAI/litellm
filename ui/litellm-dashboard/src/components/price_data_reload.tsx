@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card } from "antd";
-import { ReloadOutlined, ClockCircleOutlined, StopOutlined } from "@ant-design/icons";
+import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card, Tooltip, Divider } from "antd";
+import { ReloadOutlined, ClockCircleOutlined, StopOutlined, CloudOutlined, DatabaseOutlined, InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
 import {
   reloadModelCostMap,
   scheduleModelCostMapReload,
   cancelModelCostMapReload,
   getModelCostMapReloadStatus,
+  getModelCostMapSource,
 } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
@@ -16,6 +17,14 @@ interface ReloadStatus {
   interval_hours: number | null;
   last_run: string | null;
   next_run: string | null;
+}
+
+interface CostMapSourceInfo {
+  source: "local" | "remote";
+  url: string | null;
+  is_env_forced: boolean;
+  fallback_reason: string | null;
+  model_count: number;
 }
 
 interface PriceDataReloadProps {
@@ -44,14 +53,18 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   const [hours, setHours] = useState<number>(6);
   const [reloadStatus, setReloadStatus] = useState<ReloadStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
+  const [sourceInfo, setSourceInfo] = useState<CostMapSourceInfo | null>(null);
+  const [loadingSource, setLoadingSource] = useState(false);
 
   // Fetch status on component mount and periodically
   useEffect(() => {
     fetchReloadStatus();
+    fetchSourceInfo();
 
     // Refresh status every 30 seconds to keep it up to date
     const interval = setInterval(() => {
       fetchReloadStatus();
+      fetchSourceInfo();
     }, 30000);
 
     return () => clearInterval(interval);
@@ -80,6 +93,20 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
     }
   };
 
+  const fetchSourceInfo = async () => {
+    if (!accessToken) return;
+
+    setLoadingSource(true);
+    try {
+      const info = await getModelCostMapSource(accessToken);
+      setSourceInfo(info);
+    } catch (error) {
+      console.error("Failed to fetch cost map source info:", error);
+    } finally {
+      setLoadingSource(false);
+    }
+  };
+
   const handleHardRefresh = async () => {
     if (!accessToken) {
       NotificationsManager.fromBackend("No access token available");
@@ -93,8 +120,9 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       if (response.status === "success") {
         NotificationsManager.success(`Price data reloaded successfully! ${response.models_count || 0} models updated.`);
         onReloadSuccess?.();
-        // Refresh status after successful reload
+        // Refresh status and source info after successful reload
         await fetchReloadStatus();
+        await fetchSourceInfo();
       } else {
         NotificationsManager.fromBackend("Failed to reload price data");
       }
@@ -284,7 +312,108 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         )}
       </Space>
 
-      {/* Status Card */}
+      {/* Cost Map Source Info Card */}
+      {sourceInfo && (
+        <Card
+          size="small"
+          style={{
+            backgroundColor: sourceInfo.source === "remote" ? "#f0f7ff" : "#fff8f0",
+            border: `1px solid ${sourceInfo.source === "remote" ? "#bae0ff" : "#ffd591"}`,
+            borderRadius: 8,
+            marginBottom: 12,
+          }}
+        >
+          <Space direction="vertical" size="small" style={{ width: "100%" }}>
+            {/* Header row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {sourceInfo.source === "remote" ? (
+                <CloudOutlined style={{ color: "#1677ff", fontSize: 16 }} />
+              ) : (
+                <DatabaseOutlined style={{ color: "#fa8c16", fontSize: 16 }} />
+              )}
+              <Text strong style={{ fontSize: "13px" }}>
+                Pricing Data Source
+              </Text>
+              <Tag
+                color={sourceInfo.source === "remote" ? "blue" : "orange"}
+                style={{ marginLeft: "auto", fontWeight: 600, textTransform: "uppercase", fontSize: "11px" }}
+              >
+                {sourceInfo.source === "remote" ? "Remote" : "Local"}
+              </Tag>
+            </div>
+
+            <Divider style={{ margin: "6px 0" }} />
+
+            {/* Model count */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Text type="secondary" style={{ fontSize: "12px" }}>
+                Models loaded:
+              </Text>
+              <Text strong style={{ fontSize: "12px" }}>
+                {sourceInfo.model_count.toLocaleString()}
+              </Text>
+            </div>
+
+            {/* URL (when remote or attempted) */}
+            {sourceInfo.url && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <Text type="secondary" style={{ fontSize: "12px", whiteSpace: "nowrap" }}>
+                  {sourceInfo.source === "remote" ? "Loaded from:" : "Attempted URL:"}
+                </Text>
+                <Tooltip title={sourceInfo.url}>
+                  <Text
+                    style={{
+                      fontSize: "11px",
+                      maxWidth: 240,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      display: "block",
+                      color: "#1677ff",
+                      cursor: "default",
+                    }}
+                  >
+                    {sourceInfo.url}
+                  </Text>
+                </Tooltip>
+              </div>
+            )}
+
+            {/* Env forced notice */}
+            {sourceInfo.is_env_forced && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                <InfoCircleOutlined style={{ color: "#fa8c16", fontSize: 12 }} />
+                <Text type="secondary" style={{ fontSize: "11px" }}>
+                  Local mode forced via <code>LITELLM_LOCAL_MODEL_COST_MAP=True</code>
+                </Text>
+              </div>
+            )}
+
+            {/* Fallback reason */}
+            {sourceInfo.fallback_reason && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 6,
+                  backgroundColor: "#fff7e6",
+                  border: "1px solid #ffd591",
+                  borderRadius: 4,
+                  padding: "4px 8px",
+                  marginTop: 2,
+                }}
+              >
+                <WarningOutlined style={{ color: "#fa8c16", fontSize: 12, marginTop: 2 }} />
+                <Text style={{ fontSize: "11px", color: "#614700" }}>
+                  Fell back to local: {sourceInfo.fallback_reason}
+                </Text>
+              </div>
+            )}
+          </Space>
+        </Card>
+      )}
+
+      {/* Reload Schedule Status Card */}
       {reloadStatus && (
         <Card
           size="small"

@@ -14,6 +14,7 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
+import anyio
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -70,7 +71,9 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import SEP_986_URL
+    from mcp.shared.tool_name_validation import (
+        SEP_986_URL,
+    )
 except ImportError:
     from pydantic import BaseModel
 
@@ -155,13 +158,13 @@ class MCPServerManager:
         [
             "server-1": {
                 "name": "zapier_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
                 "transport": "sse",
                 "auth_type": "api_key"
             },
             "uuid-2": {
                 "name": "google_drive_mcp_server",
-                "url": "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+                "url": "https://actions.zapier.com/mcp/<your-api-key>/sse"
             }
         ]
         """
@@ -387,8 +390,7 @@ class MCPServerManager:
 
             # Use base_url from config if provided, otherwise extract from spec
             if not base_url:
-                base_url = get_openapi_base_url(spec)
-
+                base_url = get_openapi_base_url(spec, spec_path)
             verbose_logger.info(
                 f"Registering OpenAPI tools for server {server.name} with base URL: {base_url}"
             )
@@ -607,6 +609,7 @@ class MCPServerManager:
             alias=getattr(mcp_server, "alias", None),
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
+            spec_path=getattr(mcp_server, "spec_path", None),
             transport=cast(MCPTransportType, mcp_server.transport),
             auth_type=auth_type,
             authentication_token=auth_value,
@@ -637,11 +640,25 @@ class MCPServerManager:
         )
         return new_server
 
+    async def _maybe_register_openapi_tools(self, server: MCPServer):
+        """Register OpenAPI tools if the server has a spec_path configured."""
+        if server.spec_path:
+            verbose_logger.info(
+                f"Loading OpenAPI spec from {server.spec_path} for server {server.name}"
+            )
+            await self._register_openapi_tools(
+                spec_path=server.spec_path,
+                server=server,
+                base_url=server.url or "",
+            )
+            self.initialize_tool_name_to_mcp_server_name_mapping()
+
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -653,6 +670,7 @@ class MCPServerManager:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
                 self.registry[mcp_server.server_id] = new_server
+                await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
         except Exception as e:
@@ -738,14 +756,30 @@ class MCPServerManager:
 
         Returns server_ids unchanged when client_ip is None (no filtering).
         """
+        filtered, _ = self.filter_server_ids_by_ip_with_info(server_ids, client_ip)
+        return filtered
+
+    def filter_server_ids_by_ip_with_info(
+        self, server_ids: List[str], client_ip: Optional[str]
+    ) -> Tuple[List[str], int]:
+        """
+        Filter server IDs by client IP — external callers only see public servers.
+
+        Returns (filtered_ids, ip_blocked_count) where ip_blocked_count is the number
+        of servers that were blocked because the client IP is not allowed to access them.
+        Returns server_ids unchanged (with 0 blocked) when client_ip is None.
+        """
         if client_ip is None:
-            return server_ids
-        return [
-            sid
-            for sid in server_ids
-            if (s := self.get_mcp_server_by_id(sid)) is not None
-            and self._is_server_accessible_from_ip(s, client_ip)
-        ]
+            return server_ids, 0
+        allowed = []
+        blocked = 0
+        for sid in server_ids:
+            s = self.get_mcp_server_by_id(sid)
+            if s is not None and self._is_server_accessible_from_ip(s, client_ip):
+                allowed.append(sid)
+            elif s is not None:
+                blocked += 1
+        return allowed, blocked
 
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
@@ -887,8 +921,15 @@ class MCPServerManager:
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
-            # For stdio, we need to get the stdio config from the server
-            resolved_env = stdio_env if stdio_env is not None else server.env or {}
+            resolved_env = stdio_env if stdio_env is not None else dict(server.env or {})
+
+            # Ensure npm-based STDIO MCP servers have a writable cache dir.
+            # In containers the default (~/.npm or /app/.npm) may not exist
+            # or be read-only, causing npx to fail with ENOENT.
+            if "NPM_CONFIG_CACHE" not in resolved_env:
+                from litellm.constants import MCP_NPM_CACHE_DIR
+
+                resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -1437,6 +1478,9 @@ class MCPServerManager:
         """
         Fetch tools from MCP client with timeout and error handling.
 
+        Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
+        with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
@@ -1444,24 +1488,12 @@ class MCPServerManager:
         Returns:
             List of tools from the server
         """
-
-        async def _list_tools_task():
-            try:
+        try:
+            with anyio.fail_after(30.0):
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Client operation cancelled for {server_name}")
-                return []
-            except Exception as e:
-                verbose_logger.warning(
-                    f"Client operation failed for {server_name}: {str(e)}"
-                )
-                return []
-
-        try:
-            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
         except asyncio.CancelledError:
@@ -2243,9 +2275,9 @@ class MCPServerManager:
             verbose_logger.debug(
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
-            new_registry[server.server_id] = await self.build_mcp_server_from_table(
-                server
-            )
+            new_server = await self.build_mcp_server_from_table(server)
+            new_registry[server.server_id] = new_server
+            await self._maybe_register_openapi_tools(new_server)
 
         self.registry = new_registry
 
@@ -2447,8 +2479,8 @@ class MCPServerManager:
         # Check if we should skip health check based on auth configuration
         should_skip_health_check = False
 
-        # Skip if auth_type is oauth2
-        if server.needs_user_oauth_token:
+        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
+        if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
         elif (
@@ -2481,6 +2513,9 @@ class MCPServerManager:
             except asyncio.TimeoutError:
                 health_check_error = "Health check timed out after 10 seconds"
                 status = "unhealthy"
+            except asyncio.CancelledError:
+                health_check_error = "Health check was cancelled"
+                status = "unknown"
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
@@ -2585,6 +2620,7 @@ class MCPServerManager:
                 server.mcp_info.get("description") if server.mcp_info else None
             ),
             url=server.url,
+            spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
             created_at=datetime.now(),

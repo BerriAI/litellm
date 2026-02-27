@@ -25,7 +25,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
   }, [tools, onToolsLoaded]);
 
   // Don't show anything if required fields aren't filled
-  if (!canFetchTools && !formValues.url) {
+  if (!canFetchTools && !formValues.url && !formValues.spec_path) {
     return null;
   }
 
@@ -37,7 +37,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
           <Title>Connection Status</Title>
         </div>
 
-        {!canFetchTools && formValues.url && (
+        {!canFetchTools && (formValues.url || formValues.spec_path) && (
           <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
             <ToolOutlined className="text-2xl mb-2" />
             <Text>Complete required fields to test connection</Text>
@@ -60,7 +60,7 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({ accessToken, 
                         : "Ready to test connection"}
                 </Text>
                 <br />
-                <Text className="text-gray-500 text-sm">Server: {formValues.url}</Text>
+                <Text className="text-gray-500 text-sm">Server: {formValues.url || formValues.spec_path}</Text>
               </div>
 
               {isLoadingTools && (

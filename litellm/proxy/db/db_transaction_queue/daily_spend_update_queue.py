@@ -86,6 +86,11 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
     ) -> Dict[str, BaseDailySpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key. Works for both user and team spend updates."""
         updates = await self.flush_all_updates_from_in_memory_queue()
+        if len(updates) > 0:
+            verbose_proxy_logger.info(
+                "Spend tracking - flushed %d daily spend update items from in-memory queue",
+                len(updates),
+            )
         aggregated_daily_spend_update_transactions = (
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
                 updates

@@ -106,6 +106,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     patterns: any[];
     blockedWords: any[];
     categories: any[];
+    competitorIntentEnabled?: boolean;
+    competitorIntentConfig?: any;
   }>({
     patterns: [],
     blockedWords: [],
@@ -113,9 +115,24 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   });
 
   // Memoize onDataChange callback to prevent unnecessary re-renders
-  const handleContentFilterDataChange = useCallback((patterns: any[], blockedWords: any[], categories: any[]) => {
-    contentFilterDataRef.current = { patterns, blockedWords, categories: categories || [] };
-  }, []);
+  const handleContentFilterDataChange = useCallback(
+    (
+      patterns: any[],
+      blockedWords: any[],
+      categories: any[],
+      competitorIntentEnabled?: boolean,
+      competitorIntentConfig?: any
+    ) => {
+      contentFilterDataRef.current = {
+        patterns,
+        blockedWords,
+        categories: categories || [],
+        competitorIntentEnabled,
+        competitorIntentConfig,
+      };
+    },
+    []
+  );
 
   const fetchGuardrailInfo = async () => {
     try {
@@ -287,11 +304,15 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
           contentFilterDataRef.current.patterns || [],
           contentFilterDataRef.current.blockedWords || [],
           contentFilterDataRef.current.categories || [],
+          contentFilterDataRef.current.competitorIntentEnabled,
+          contentFilterDataRef.current.competitorIntentConfig
         );
 
         updateData.litellm_params.patterns = formattedData.patterns;
         updateData.litellm_params.blocked_words = formattedData.blocked_words;
         updateData.litellm_params.categories = formattedData.categories;
+        updateData.litellm_params.competitor_intent_config =
+          formattedData.competitor_intent_config ?? null;
       }
 
       if (guardrailData.litellm_params?.guardrail === "tool_permission") {

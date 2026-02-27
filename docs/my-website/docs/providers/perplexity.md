@@ -120,7 +120,7 @@ All models listed here https://docs.perplexity.ai/docs/model-cards are supported
 
 
 
-## Agentic Research API (Responses API)
+## Agent API (Responses API)
 
 Requires v1.72.6+
 
@@ -196,7 +196,7 @@ import os
 os.environ['PERPLEXITY_API_KEY'] = ""
 
 response = responses(
-    model="perplexity/openai/gpt-4o",
+    model="perplexity/openai/gpt-5.2",
     input="Explain quantum computing in simple terms",
     custom_llm_provider="perplexity",
     max_output_tokens=500,
@@ -215,7 +215,7 @@ import os
 os.environ['PERPLEXITY_API_KEY'] = ""
 
 response = responses(
-    model="perplexity/anthropic/claude-3-5-sonnet-20241022",
+    model="perplexity/anthropic/claude-sonnet-4-5",
     input="Write a short story about a robot learning to paint",
     custom_llm_provider="perplexity",
     max_output_tokens=500,
@@ -234,7 +234,7 @@ import os
 os.environ['PERPLEXITY_API_KEY'] = ""
 
 response = responses(
-    model="perplexity/google/gemini-2.0-flash-exp",
+    model="perplexity/google/gemini-2.5-flash",
     input="Explain the concept of neural networks",
     custom_llm_provider="perplexity",
     max_output_tokens=500,
@@ -253,7 +253,7 @@ import os
 os.environ['PERPLEXITY_API_KEY'] = ""
 
 response = responses(
-    model="perplexity/xai/grok-2-1212",
+    model="perplexity/xai/grok-4-1-fast-non-reasoning",
     input="What makes a good AI assistant?",
     custom_llm_provider="perplexity",
     max_output_tokens=500,
@@ -276,11 +276,83 @@ import os
 os.environ['PERPLEXITY_API_KEY'] = ""
 
 response = responses(
-    model="perplexity/openai/gpt-4o",
+    model="perplexity/openai/gpt-5.2",
     input="What's the weather in San Francisco today?",
     custom_llm_provider="perplexity",
     tools=[{"type": "web_search"}],
     instructions="You have access to a web_search tool. Use it for questions about current events.",
+)
+
+print(response.output)
+```
+
+### Function Calling
+
+The Agent API supports custom function tools. Pass function tools through unchanged:
+
+```python
+from litellm import responses
+import os
+
+os.environ['PERPLEXITY_API_KEY'] = ""
+
+response = responses(
+    model="perplexity/openai/gpt-5.2",
+    input="What's the weather in San Francisco?",
+    custom_llm_provider="perplexity",
+    tools=[
+        {"type": "web_search"},
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                },
+            },
+        },
+    ],
+    instructions="Use tools when appropriate.",
+)
+
+print(response.output)
+```
+
+### Structured Outputs
+
+Request JSON schema structured outputs via the `text` parameter:
+
+```python
+from litellm import responses
+import os
+
+os.environ['PERPLEXITY_API_KEY'] = ""
+
+response = responses(
+    model="perplexity/preset/pro-search",
+    input="Extract key facts about the Eiffel Tower",
+    custom_llm_provider="perplexity",
+    text={
+        "format": {
+            "type": "json_schema",
+            "name": "facts",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "height_meters": {"type": "number"},
+                    "year_built": {"type": "integer"},
+                },
+                "required": ["name", "height_meters", "year_built"],
+            },
+            "strict": True,
+        }
+    },
 )
 
 print(response.output)
@@ -319,7 +391,7 @@ import os
 os.environ['PERPLEXITY_API_KEY'] = ""
 
 response = responses(
-    model="perplexity/anthropic/claude-3-5-sonnet-20241022",
+    model="perplexity/anthropic/claude-sonnet-4-5",
     input=[
         {"type": "message", "role": "system", "content": "You are a helpful assistant."},
         {"type": "message", "role": "user", "content": "What are the latest AI developments?"},
@@ -343,7 +415,7 @@ import os
 os.environ['PERPLEXITY_API_KEY'] = ""
 
 response = responses(
-    model="perplexity/openai/gpt-4o",
+    model="perplexity/openai/gpt-5.2",
     input="Tell me a story about space exploration",
     custom_llm_provider="perplexity",
     stream=True,
@@ -360,23 +432,28 @@ for chunk in response:
 
 | Provider | Model Name | Function Call |
 |----------|------------|---------------|
-| OpenAI | gpt-4o | `responses(model="perplexity/openai/gpt-4o", ...)` |
-| OpenAI | gpt-4o-mini | `responses(model="perplexity/openai/gpt-4o-mini", ...)` |
 | OpenAI | gpt-5.2 | `responses(model="perplexity/openai/gpt-5.2", ...)` |
-| Anthropic | claude-3-5-sonnet-20241022 | `responses(model="perplexity/anthropic/claude-3-5-sonnet-20241022", ...)` |
-| Anthropic | claude-3-5-haiku-20241022 | `responses(model="perplexity/anthropic/claude-3-5-haiku-20241022", ...)` |
-| Google | gemini-2.0-flash-exp | `responses(model="perplexity/google/gemini-2.0-flash-exp", ...)` |
-| Google | gemini-2.0-flash-thinking-exp | `responses(model="perplexity/google/gemini-2.0-flash-thinking-exp", ...)` |
-| xAI | grok-2-1212 | `responses(model="perplexity/xai/grok-2-1212", ...)` |
-| xAI | grok-2-vision-1212 | `responses(model="perplexity/xai/grok-2-vision-1212", ...)` |
+| OpenAI | gpt-5.1 | `responses(model="perplexity/openai/gpt-5.1", ...)` |
+| OpenAI | gpt-5-mini | `responses(model="perplexity/openai/gpt-5-mini", ...)` |
+| Anthropic | claude-opus-4-6 | `responses(model="perplexity/anthropic/claude-opus-4-6", ...)` |
+| Anthropic | claude-opus-4-5 | `responses(model="perplexity/anthropic/claude-opus-4-5", ...)` |
+| Anthropic | claude-sonnet-4-5 | `responses(model="perplexity/anthropic/claude-sonnet-4-5", ...)` |
+| Anthropic | claude-haiku-4-5 | `responses(model="perplexity/anthropic/claude-haiku-4-5", ...)` |
+| Google | gemini-3-pro-preview | `responses(model="perplexity/google/gemini-3-pro-preview", ...)` |
+| Google | gemini-3-flash-preview | `responses(model="perplexity/google/gemini-3-flash-preview", ...)` |
+| Google | gemini-2.5-pro | `responses(model="perplexity/google/gemini-2.5-pro", ...)` |
+| Google | gemini-2.5-flash | `responses(model="perplexity/google/gemini-2.5-flash", ...)` |
+| xAI | grok-4-1-fast-non-reasoning | `responses(model="perplexity/xai/grok-4-1-fast-non-reasoning", ...)` |
+| Perplexity | sonar | `responses(model="perplexity/perplexity/sonar", ...)` |
 
 ### Available Presets
 
-| Preset Name    | Function Call                                           |
-|----------------|--------------------------------------------------------|
-| fast-search    | `responses(model="perplexity/preset/fast-search", ...)`|
-| pro-search     | `responses(model="perplexity/preset/pro-search", ...)` |
-| deep-research  | `responses(model="perplexity/preset/deep-research", ...)`|
+| Preset Name | Function Call |
+|-------------|---------------|
+| fast-search | `responses(model="perplexity/preset/fast-search", ...)` |
+| pro-search | `responses(model="perplexity/preset/pro-search", ...)` |
+| deep-research | `responses(model="perplexity/preset/deep-research", ...)` |
+| advanced-deep-research | `responses(model="perplexity/preset/advanced-deep-research", ...)` |
 
 ### Complete Example
 
@@ -388,7 +465,7 @@ os.environ['PERPLEXITY_API_KEY'] = ""
 
 # Comprehensive example with multiple features
 response = responses(
-    model="perplexity/openai/gpt-4o",
+    model="perplexity/openai/gpt-5.2",
     input="Research the latest developments in quantum computing and provide sources",
     custom_llm_provider="perplexity",
     tools=[

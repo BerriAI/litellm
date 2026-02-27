@@ -131,9 +131,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
     def is_model_o_series_model(self, model: str) -> bool:
         model = model.split("/")[-1]  # could be "openai/o3" or "o3"
-        return model in litellm.open_ai_chat_completion_models and any(
-            model.startswith(pfx) for pfx in ("o1", "o3", "o4")
-        )
+        return model.startswith(("o1", "o3", "o4")) and model in litellm.open_ai_chat_completion_models
 
     @overload
     def _transform_messages(

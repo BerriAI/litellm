@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.auth.auth_checks import get_key_object, get_team_object, log_db_metrics
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -60,6 +60,7 @@ class _ProxyDBLogger(CustomLogger):
                 user_api_key_user_id=user_api_key_dict.user_id,
                 user_api_key_team_id=user_api_key_dict.team_id,
                 user_api_key_org_id=user_api_key_dict.org_id,
+                user_api_key_project_id=user_api_key_dict.project_id,
                 user_api_key_team_alias=user_api_key_dict.team_alias,
                 user_api_key_end_user_id=user_api_key_dict.end_user_id,
                 user_api_key_request_route=user_api_key_dict.request_route,
@@ -68,11 +69,15 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata["error_information"] = (
-            StandardLoggingPayloadSetup.get_error_information(
-                original_exception=original_exception,
-                traceback_str=traceback_str,
-            )
+        _metadata[
+            "error_information"
+        ] = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+            traceback_str=traceback_str,
+        )
+
+        _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
+            metadata=_metadata,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -80,25 +85,31 @@ class _ProxyDBLogger(CustomLogger):
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
-        
+
         existing_litellm_params = request_data.get("litellm_params", {})
         existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
-        
+
         # Preserve tags from existing metadata
         if existing_litellm_metadata.get("tags"):
             existing_metadata["tags"] = existing_litellm_metadata.get("tags")
-        
+
         request_data["litellm_params"]["proxy_server_request"] = (
-            request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
+            request_data.get("proxy_server_request")
+            or existing_litellm_params.get("proxy_server_request")
+            or {}
         )
         request_data["litellm_params"]["metadata"] = existing_metadata
-        
+
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:
-            request_data["model"] = existing_litellm_params.get("model") or request_data.get("model", "")
+            request_data["model"] = existing_litellm_params.get(
+                "model"
+            ) or request_data.get("model", "")
         if "custom_llm_provider" not in request_data:
-            request_data["custom_llm_provider"] = existing_litellm_params.get("custom_llm_provider") or request_data.get("custom_llm_provider", "")
-        
+            request_data["custom_llm_provider"] = existing_litellm_params.get(
+                "custom_llm_provider"
+            ) or request_data.get("custom_llm_provider", "")
+
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
@@ -202,8 +213,17 @@ class _ProxyDBLogger(CustomLogger):
                         max_budget=end_user_max_budget,
                     )
             else:
-                if kwargs["stream"] is not True or (
-                    kwargs["stream"] is True and "complete_streaming_response" in kwargs
+                # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
+                # Use .get() for "stream" to avoid KeyError on health checks.
+                if sl_object is None and not kwargs.get("model"):
+                    verbose_proxy_logger.warning(
+                        "Cost tracking - skipping, no standard_logging_object and no model for call_type=%s",
+                        kwargs.get("call_type", "unknown"),
+                    )
+                    return
+                if kwargs.get("stream") is not True or (
+                    kwargs.get("stream") is True
+                    and "complete_streaming_response" in kwargs
                 ):
                     if sl_object is not None:
                         cost_tracking_failure_debug_info: Union[dict, str] = (
@@ -238,6 +258,72 @@ class _ProxyDBLogger(CustomLogger):
             verbose_proxy_logger.exception(
                 "Error in tracking cost callback - %s", str(e)
             )
+
+    @staticmethod
+    async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
+        """
+        Enriches failure spend log metadata by looking up the key object (and team object)
+        from cache/DB when key fields are missing.
+
+        This handles two scenarios:
+        1. Auth errors (401): UserAPIKeyAuth is created with only api_key set, all other
+           fields are null. We look up the full key object to fill in alias, user_id,
+           team_id, etc.
+        2. Post-auth failures (provider errors, rate limits): key fields are populated
+           but team_alias is missing because LiteLLM_VerificationTokenView SQL view
+           doesn't include it. We look up the team object to fill in team_alias.
+        """
+        api_key_hash = metadata.get("user_api_key")
+        if not api_key_hash:
+            return metadata
+
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        # Step 1: If key fields are missing, look up the full key object
+        if metadata.get("user_api_key_alias") is None:
+            try:
+                key_obj = await get_key_object(
+                    hashed_token=api_key_hash,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if metadata.get("user_api_key_alias") is None:
+                    metadata["user_api_key_alias"] = key_obj.key_alias
+                if metadata.get("user_api_key_user_id") is None:
+                    metadata["user_api_key_user_id"] = key_obj.user_id
+                if metadata.get("user_api_key_team_id") is None:
+                    metadata["user_api_key_team_id"] = key_obj.team_id
+                if metadata.get("user_api_key_org_id") is None:
+                    metadata["user_api_key_org_id"] = key_obj.org_id
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Failed to enrich failure metadata with key info for api_key=%s",
+                    api_key_hash,
+                )
+
+        # Step 2: If team_id is known but team_alias is missing, look up the team object
+        team_id = metadata.get("user_api_key_team_id")
+        if team_id and metadata.get("user_api_key_team_alias") is None:
+            try:
+                team_obj = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if team_obj.team_alias is not None:
+                    metadata["user_api_key_team_alias"] = team_obj.team_alias
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Failed to enrich failure metadata with team_alias for team_id=%s",
+                    team_id,
+                )
+        return metadata
 
     @staticmethod
     def _should_track_errors_in_db():
