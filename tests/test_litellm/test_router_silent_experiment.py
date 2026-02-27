@@ -1,10 +1,70 @@
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm.router import Router
+
+
+def test_get_silent_experiment_kwargs():
+    """
+    Test _get_silent_experiment_kwargs returns isolated kwargs with silent experiment metadata.
+    Direct call for router code coverage.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    kwargs = {"metadata": {"foo": "bar"}, "litellm_call_id": "call-123"}
+    result = router._get_silent_experiment_kwargs(**kwargs)
+    assert result["metadata"]["is_silent_experiment"] is True
+    assert result["metadata"]["foo"] == "bar"
+    assert "litellm_call_id" not in result
+
+
+def test_silent_experiment_completion_direct():
+    """
+    Test _silent_experiment_completion directly (for router code coverage).
+    Mocks router.completion to avoid real API call.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    messages = [{"role": "user", "content": "hi"}]
+    with patch.object(router, "completion", return_value=None):
+        router._silent_experiment_completion(
+            silent_model="gpt-3.5-turbo",
+            messages=messages,
+        )
+
+
+@pytest.mark.asyncio
+async def test_silent_experiment_acompletion_direct():
+    """
+    Test _silent_experiment_acompletion directly (for router code coverage).
+    Mocks router.acompletion to avoid real API call.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    messages = [{"role": "user", "content": "hi"}]
+    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None):
+        await router._silent_experiment_acompletion(
+            silent_model="gpt-3.5-turbo",
+            messages=messages,
+        )
 
 
 @pytest.mark.asyncio
@@ -33,15 +93,12 @@ async def test_router_silent_experiment_acompletion():
 
     router = Router(model_list=model_list)
 
-    # Mock litellm.acompletion
-    mock_acompletion = MagicMock()
-    # Create a future that resolves to a ModelResponse
+    # Use AsyncMock for async function mocking
     mock_response = litellm.ModelResponse(choices=[{"message": {"content": "hello"}}])
-    future = asyncio.Future()
-    future.set_result(mock_response)
-    mock_acompletion.return_value = future
+    mock_acompletion = AsyncMock(return_value=mock_response)
 
-    with patch("litellm.acompletion", mock_acompletion):
+    # Patch at the litellm.router module level where it's imported and used
+    with patch.object(litellm, "acompletion", mock_acompletion):
         response = await router.acompletion(
             model="primary-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -117,11 +174,11 @@ def test_router_silent_experiment_completion():
     router = Router(model_list=model_list)
 
     # Mock litellm.completion
-    mock_completion = MagicMock()
     mock_response = litellm.ModelResponse(choices=[{"message": {"content": "hello"}}])
-    mock_completion.return_value = mock_response
+    mock_completion = MagicMock(return_value=mock_response)
 
-    with patch("litellm.completion", mock_completion):
+    # Patch at the litellm module level
+    with patch.object(litellm, "completion", mock_completion):
         response = router.completion(
             model="primary-model",
             messages=[{"role": "user", "content": "hi"}],

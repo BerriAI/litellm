@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { Dropdown } from "antd";
+import { DownOutlined, PlusOutlined, CodeOutlined } from "@ant-design/icons";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
@@ -10,6 +12,8 @@ import NotificationsManager from "./molecules/notifications_manager";
 import { Guardrail, GuardrailDefinitionLocation } from "./guardrails/types";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
+import { CustomCodeModal } from "./guardrails/custom_code";
+import GuardrailGarden from "./guardrails/guardrail_garden";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -37,6 +41,7 @@ interface GuardrailsResponse {
 const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [isCustomCodeModalVisible, setIsCustomCodeModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<Guardrail | null>(null);
@@ -74,8 +79,19 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setIsAddModalVisible(true);
   };
 
+  const handleAddCustomCodeGuardrail = () => {
+    if (selectedGuardrailId) {
+      setSelectedGuardrailId(null);
+    }
+    setIsCustomCodeModalVisible(true);
+  };
+
   const handleCloseModal = () => {
     setIsAddModalVisible(false);
+  };
+
+  const handleCloseCustomCodeModal = () => {
+    setIsCustomCodeModalVisible(false);
   };
 
   const handleSuccess = () => {
@@ -91,12 +107,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const handleDeleteConfirm = async () => {
     if (!guardrailToDelete || !accessToken) return;
 
-    // Log removed to maintain clean production code
     setIsDeleting(true);
     try {
       await deleteGuardrailCall(accessToken, guardrailToDelete.guardrail_id);
       NotificationsManager.success(`Guardrail "${guardrailToDelete.guardrail_name}" deleted successfully`);
-      await fetchGuardrails(); // Refresh the list
+      await fetchGuardrails();
     } catch (error) {
       console.error("Error deleting guardrail:", error);
       NotificationsManager.fromBackend("Failed to delete guardrail");
@@ -121,16 +136,47 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <TabGroup index={activeTab} onIndexChange={setActiveTab}>
         <TabList className="mb-4">
+          <Tab>Guardrail Garden</Tab>
           <Tab>Guardrails</Tab>
           <Tab disabled={!accessToken || guardrailsList.length === 0}>Test Playground</Tab>
         </TabList>
 
         <TabPanels>
+          {/* Guardrail Garden Tab */}
+          <TabPanel>
+            <GuardrailGarden
+              accessToken={accessToken}
+              onGuardrailCreated={handleSuccess}
+            />
+          </TabPanel>
+
+          {/* Existing Guardrails Tab */}
           <TabPanel>
             <div className="flex justify-between items-center mb-4">
-              <Button onClick={handleAddGuardrail} disabled={!accessToken}>
-                + Add New Guardrail
-              </Button>
+              <Dropdown
+                menu={{
+                  items: [
+                    {
+                      key: "provider",
+                      icon: <PlusOutlined />,
+                      label: "Add Provider Guardrail",
+                      onClick: handleAddGuardrail,
+                    },
+                    {
+                      key: "custom_code",
+                      icon: <CodeOutlined />,
+                      label: "Create Custom Code Guardrail",
+                      onClick: handleAddCustomCodeGuardrail,
+                    },
+                  ],
+                }}
+                trigger={["click"]}
+                disabled={!accessToken}
+              >
+                <Button disabled={!accessToken}>
+                  + Add New Guardrail <DownOutlined className="ml-2" />
+                </Button>
+              </Dropdown>
             </div>
 
             {selectedGuardrailId ? (
@@ -159,6 +205,13 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               onSuccess={handleSuccess}
             />
 
+            <CustomCodeModal
+              visible={isCustomCodeModalVisible}
+              onClose={handleCloseCustomCodeModal}
+              accessToken={accessToken}
+              onSuccess={handleSuccess}
+            />
+
             <DeleteResourceModal
               isOpen={isDeleteModalOpen}
               title="Delete Guardrail"
@@ -180,6 +233,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
             />
           </TabPanel>
 
+          {/* Test Playground Tab */}
           <TabPanel>
             <GuardrailTestPlayground
               guardrailsList={guardrailsList}

@@ -93,6 +93,12 @@ Implement `POST /beta/litellm_basic_guardrail_api`
     "user_api_key_end_user_id": "end user id associated with the litellm virtual key used",
     "user_api_key_org_id": "org id associated with the litellm virtual key used"
   },
+  "request_headers": {  // optional: inbound request headers (allowlist). Allowed headers show their value; all others show "[present]" to indicate the header existed.
+    "User-Agent": "OpenAI/Python 2.17.0",
+    "Content-Type": "application/json",
+    "X-Request-Id": "[present]"
+  },
+  "litellm_version": "1.x.y",  // optional: LiteLLM library version running this proxy
   "input_type": "request",  // "request" or "response"
   "litellm_call_id": "unique_call_id",  // the call id of the individual LLM call
   "litellm_trace_id": "trace_id",  // the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
@@ -231,6 +237,7 @@ litellm_settings:
         mode: pre_call  # or post_call, during_call
         api_base: https://your-guardrail-api.com
         api_key: os.environ/YOUR_GUARDRAIL_API_KEY  # optional
+        unreachable_fallback: fail_closed  # default: fail_closed. Set to fail_open to proceed if the guardrail endpoint is unreachable (network errors, or HTTP 502/503/504 from an upstream proxy/LB).
         additional_provider_specific_params:
           # your custom parameters
           threshold: 0.8

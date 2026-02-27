@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 import os
 import time
-import uuid
+import uuid as uuid_module
 from functools import partial
 from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
@@ -451,7 +451,7 @@ def file_retrieve(
                         stream=False,
                         call_type="afile_retrieve" if _is_async else "file_retrieve",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid.uuid4())),
+                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
                         function_id=str(kwargs.get("id") or ""),
                     )
                 
@@ -660,7 +660,7 @@ def file_delete(
                         stream=False,
                         call_type="afile_delete" if _is_async else "file_delete",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid.uuid4())),
+                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
                         function_id=str(kwargs.get("id") or ""),
                     )
                 
@@ -793,7 +793,7 @@ def file_list(
                     stream=False,
                     call_type="afile_list" if _is_async else "file_list",
                     start_time=time.time(),
-                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid.uuid4())),
+                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
                     function_id=str(kwargs.get("id", "")),
                 )
             

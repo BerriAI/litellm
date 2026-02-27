@@ -1,4 +1,5 @@
 import json
+import ssl
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -21,6 +22,9 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import (
+    update_headers_with_filtered_beta,
+)
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -34,6 +38,7 @@ from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
@@ -130,6 +135,16 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.types.llms.openai_evals import (
+        CancelEvalResponse,
+        CancelRunResponse,
+        DeleteEvalResponse,
+        Eval,
+        ListEvalsResponse,
+        ListRunsResponse,
+        Run,
+        RunDeleteResponse,
+    )
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -302,7 +317,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             signed_json_body=signed_json_body,
         )
-        return provider_config.transform_response(
+        initial_response = provider_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
@@ -315,6 +330,20 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=json_mode,
         )
+
+        # Call agentic chat completion hooks
+        final_response = await self._call_agentic_chat_completion_hooks(
+            response=initial_response,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            stream=False,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=litellm_params,
+        )
+
+        return final_response if final_response is not None else initial_response
 
     def completion(
         self,
@@ -411,6 +440,11 @@ class BaseLLMHTTPHandler:
                 "headers": headers,
             },
         )
+
+        # Check if stream was converted for WebSearch interception
+        # This is set by the async_pre_request_hook in WebSearchInterceptionLogger
+        if litellm_params.get("_websearch_interception_converted_stream", False):
+            logging_obj.model_call_details["websearch_interception_converted_stream"] = True
 
         if acompletion is True:
             if stream is True:
@@ -1839,6 +1873,10 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             api_base=api_base,
         )
+        
+        headers = update_headers_with_filtered_beta(
+            headers=headers, provider=custom_llm_provider
+        )
 
         logging_obj.update_environment_variables(
             model=model,
@@ -2977,8 +3015,11 @@ class BaseLLMHTTPHandler:
             raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
         # Store the upload URL in litellm_params for the transformation method
+        # Honour the URL already set by transform_create_file_request (e.g. Bedrock pre-signed S3 uploads),
+        # fall back to api_base for providers that do not set it.
         litellm_params_with_url = dict(litellm_params)
-        litellm_params_with_url["upload_url"] = api_base
+        if "upload_url" not in litellm_params:
+            litellm_params_with_url["upload_url"] = api_base
 
         return provider_config.transform_create_file_response(
             model=None,
@@ -4361,10 +4402,10 @@ class BaseLLMHTTPHandler:
         kwargs: Dict,
     ) -> Optional[Any]:
         """
-        Call agentic completion hooks for all custom loggers.
+        Call agentic completion hooks for all custom loggers (Anthropic Messages API).
 
-        1. Call async_should_run_agentic_completion to check if agentic loop is needed
-        2. If yes, call async_run_agentic_completion to execute the loop
+        1. Call async_should_run_agentic_loop to check if agentic loop is needed
+        2. If yes, call async_run_agentic_loop to execute the loop
 
         Returns the response from agentic loop, or None if no hook runs.
         """
@@ -4453,6 +4494,105 @@ class BaseLLMHTTPHandler:
         
         return None
 
+    async def _call_agentic_chat_completion_hooks(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        optional_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict,
+    ) -> Optional[Any]:
+        """
+        Call agentic chat completion hooks for all custom loggers (Chat Completions API).
+
+        1. Call async_should_run_chat_completion_agentic_loop to check if agentic loop is needed
+        2. If yes, call async_run_chat_completion_agentic_loop to execute the loop
+
+        Returns the response from agentic loop, or None if no hook runs.
+        """
+        from litellm._logging import verbose_logger
+        from litellm.integrations.custom_logger import CustomLogger
+
+        callbacks = litellm.callbacks + (
+            logging_obj.dynamic_success_callbacks or []
+        )
+        tools = optional_params.get("tools", [])
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    # Check if callback has the chat completion agentic loop method
+                    if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
+                        continue
+
+                    # First: Check if agentic loop should run
+                    should_run, tool_calls = (
+                        await callback.async_should_run_chat_completion_agentic_loop(
+                            response=response,
+                            model=model,
+                            messages=messages,
+                            tools=tools,
+                            stream=stream,
+                            custom_llm_provider=custom_llm_provider,
+                            kwargs=kwargs,
+                        )
+                    )
+
+                    if should_run:
+                        # Second: Execute agentic loop
+                        # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
+                        kwargs_with_provider = kwargs.copy() if kwargs else {}
+                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                        agentic_response = await callback.async_run_chat_completion_agentic_loop(
+                            tools=tool_calls,
+                            model=model,
+                            messages=messages,
+                            response=response,
+                            optional_params=optional_params,
+                            logging_obj=logging_obj,
+                            stream=stream,
+                            kwargs=kwargs_with_provider,
+                        )
+                        # First hook that runs agentic loop wins
+                        return agentic_response
+
+            except Exception as e:
+                verbose_logger.exception(
+                    f"LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: {str(e)}"
+                )
+
+        # Check if we need to convert response to fake stream for chat completions
+        # This happens when:
+        # 1. Stream was originally True but converted to False for WebSearch interception
+        # 2. No agentic loop ran (LLM didn't use the tool)
+        # 3. We have a non-streaming response that needs to be converted to streaming
+        websearch_converted_stream = (
+            logging_obj.model_call_details.get("websearch_interception_converted_stream", False)
+            if logging_obj is not None
+            else False
+        )
+        
+        if websearch_converted_stream:
+            from litellm._logging import verbose_logger
+            from litellm.llms.base_llm.base_model_iterator import (
+                convert_model_response_to_streaming,
+            )
+            
+            verbose_logger.debug(
+                "WebSearchInterception: No tool call made, converting non-streaming chat completion to fake stream"
+            )
+            
+            # Convert the non-streaming ModelResponse to a fake stream
+            if hasattr(response, "choices"):
+                # Use the existing converter for ModelResponse
+                fake_stream = convert_model_response_to_streaming(response)
+                return fake_stream
+        
+        return None
+
     def _handle_error(
         self,
         e: Exception,
@@ -4474,6 +4614,7 @@ class BaseLLMHTTPHandler:
             BaseSkillsAPIConfig,
             "BasePassthroughConfig",
             "BaseContainerConfig",
+            BaseEvalsAPIConfig,
         ],
     ):
         status_code = getattr(e, "status_code", 500)
@@ -4519,6 +4660,8 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        user_api_key_dict: Optional[Any] = None,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -4532,19 +4675,39 @@ class BaseLLMHTTPHandler:
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
+            if url.startswith("wss://") and ssl_context is False:
+                # Keep TLS for wss:// while honoring SSL_VERIFY=False semantics.
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
             async with websockets.connect(  # type: ignore
                 url,
                 additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:
+                # Auto-send session setup if the provider requires it
+                # (e.g. Gemini/Vertex AI Live needs a `setup` message before any realtime_input)
+                _session_config: Optional[str] = None
+                if provider_config.requires_session_configuration():
+                    _session_config = provider_config.session_configuration_request(model)
+                    if _session_config:
+                        await backend_ws.send(_session_config)
+
+                _request_data: Dict[str, Any] = {}
+                if litellm_metadata:
+                    _request_data["litellm_metadata"] = litellm_metadata
                 realtime_streaming = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
                     provider_config,
                     model,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_request_data,
                 )
+                if _session_config:
+                    realtime_streaming.session_configuration_request = _session_config
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
@@ -5260,6 +5423,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         _is_async: bool = False,
+        variant: Optional[str] = None,
     ) -> Union[bytes, Coroutine[Any, Any, bytes]]:
         """
         Handle video content download requests.
@@ -5275,6 +5439,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 api_key=api_key,
                 client=client,
+                variant=variant,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -5306,6 +5471,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            variant=variant,
         )
 
         try:
@@ -5348,6 +5514,7 @@ class BaseLLMHTTPHandler:
         extra_headers: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        variant: Optional[str] = None,
     ) -> bytes:
         """
         Async version of the video content download handler.
@@ -5382,6 +5549,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
+            variant=variant,
         )
 
         try:
@@ -5457,7 +5625,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = video_remix_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
         )
@@ -5539,7 +5707,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = video_remix_provider_config.validate_environment(
-            api_key=api_key,
+            api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
         )
@@ -9188,6 +9356,1212 @@ class BaseLLMHTTPHandler:
             )
 
         return skills_api_provider_config.transform_delete_skill_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    # ===================================
+    # Evals API Handlers
+    # ===================================
+
+    def create_eval_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["Eval", Coroutine[Any, Any, "Eval"]]:
+        """Create an eval"""
+        if _is_async:
+            return self.async_create_eval_handler(
+                url=url,
+                request_body=request_body,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input=request_body.get("display_name", ""),
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_create_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_create_eval_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "Eval":
+        """Async create an eval"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input=request_body.get("name", ""),
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_create_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def list_evals_handler(
+        self,
+        url: str,
+        query_params: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["ListEvalsResponse", Coroutine[Any, Any, "ListEvalsResponse"]]:
+        """List evals"""
+        if _is_async:
+            return self.async_list_evals_handler(
+                url=url,
+                query_params=query_params,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": query_params,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url, headers=headers, params=query_params
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_list_evals_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_list_evals_handler(
+        self,
+        url: str,
+        query_params: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "ListEvalsResponse":
+        """Async list evals"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": query_params,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=query_params
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_list_evals_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def get_eval_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["Eval", Coroutine[Any, Any, "Eval"]]:
+        """Get an eval"""
+        if _is_async:
+            return self.async_get_eval_handler(
+                url=url,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers)
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_get_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_get_eval_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "Eval":
+        """Async get an eval"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_get_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def update_eval_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["Eval", Coroutine[Any, Any, "Eval"]]:
+        """Update an eval"""
+        if _is_async:
+            return self.async_update_eval_handler(
+                url=url,
+                request_body=request_body,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input=request_body.get("display_name", ""),
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_update_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_update_eval_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "Eval":
+        """Async update an eval"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input=request_body.get("display_name", ""),
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_update_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def delete_eval_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["DeleteEvalResponse", Coroutine[Any, Any, "DeleteEvalResponse"]]:
+        """Delete an eval"""
+        if _is_async:
+            return self.async_delete_eval_handler(
+                url=url,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.delete(
+                url=url, headers=headers, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_delete_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_delete_eval_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "DeleteEvalResponse":
+        """Async delete an eval"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.delete(
+                url=url, headers=headers, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_delete_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def cancel_eval_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["CancelEvalResponse", Coroutine[Any, Any, "CancelEvalResponse"]]:
+        """Cancel an eval"""
+        if _is_async:
+            return self.async_cancel_eval_handler(
+                url=url,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json={}, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_cancel_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_cancel_eval_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "CancelEvalResponse":
+        """Async cancel an eval"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json={}, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_cancel_eval_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    # ===================================
+    # Eval Runs API Handlers
+    # ===================================
+
+    def create_run_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["Run", Coroutine[Any, Any, "Run"]]:
+        """Create a run"""
+        if _is_async:
+            return self.async_create_run_handler(
+                url=url,
+                request_body=request_body,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input=request_body.get("name", ""),
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_create_run_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_create_run_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "Run":
+        """Async create a run"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input=request_body.get("name", ""),
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_create_run_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def list_runs_handler(
+        self,
+        url: str,
+        query_params: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["ListRunsResponse", Coroutine[Any, Any, "ListRunsResponse"]]:
+        """List runs"""
+        if _is_async:
+            return self.async_list_runs_handler(
+                url=url,
+                query_params=query_params,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": query_params,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url, headers=headers, params=query_params
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_list_runs_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_list_runs_handler(
+        self,
+        url: str,
+        query_params: Dict,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "ListRunsResponse":
+        """Async list runs"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "params": query_params,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=query_params
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_list_runs_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def get_run_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["Run", Coroutine[Any, Any, "Run"]]:
+        """Get a run"""
+        if _is_async:
+            return self.async_get_run_handler(
+                url=url,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers)
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_get_run_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_get_run_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "Run":
+        """Async get a run"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_get_run_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def cancel_run_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["CancelRunResponse", Coroutine[Any, Any, "CancelRunResponse"]]:
+        """Cancel a run"""
+        if _is_async:
+            return self.async_cancel_run_handler(
+                url=url,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json={}, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_cancel_run_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_cancel_run_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "CancelRunResponse":
+        """Async cancel a run"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json={}, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_cancel_run_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def delete_run_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union["RunDeleteResponse", Coroutine[Any, Any, "RunDeleteResponse"]]:
+        """Delete a run"""
+        if _is_async:
+            return self.async_delete_run_handler(
+                url=url,
+                evals_api_provider_config=evals_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.delete(
+                url=url, headers=headers, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_delete_run_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_delete_run_handler(
+        self,
+        url: str,
+        evals_api_provider_config: "BaseEvalsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> "RunDeleteResponse":
+        """Async delete a run"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.delete(
+                url=url, headers=headers, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=evals_api_provider_config,
+            )
+
+        return evals_api_provider_config.transform_delete_run_response(
             raw_response=response,
             logging_obj=logging_obj,
         )

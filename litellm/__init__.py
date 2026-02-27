@@ -98,6 +98,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "openmeter",
     "logfire",
     "literalai",
+    "litellm_agent",
     "dynamic_rate_limiter",
     "dynamic_rate_limiter_v3",
     "langsmith",
@@ -175,6 +176,7 @@ _async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # Custo
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 turn_off_message_logging: Optional[bool] = False
+standard_logging_payload_excluded_fields: Optional[List[str]] = None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -195,6 +197,9 @@ telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+use_chat_completions_url_for_anthropic_messages: bool = bool(
+    os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
+)  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -261,6 +266,8 @@ extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
+# Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
+proxy_auth: Optional[Any] = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -335,6 +342,14 @@ model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
 )
+blog_posts_url: str = os.getenv(
+    "LITELLM_BLOG_POSTS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/blog_posts.json",
+)
+anthropic_beta_headers_url: str = os.getenv(
+    "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
+)
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
@@ -351,7 +366,7 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
-max_ui_session_budget: Optional[float] = 10  # $10 USD budgets for UI Chat sessions
+max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
 internal_user_budget_duration: Optional[str] = None
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
@@ -362,6 +377,7 @@ enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
+prometheus_emit_stream_label: bool = False
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
@@ -397,6 +413,7 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
 disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
@@ -606,8 +623,9 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def add_known_models():
-    for key, value in model_cost.items():
+def add_known_models(model_cost_map: Optional[Dict] = None):
+    _map = model_cost_map if model_cost_map is not None else model_cost
+    for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):
@@ -1145,6 +1163,28 @@ from .skills.main import (
     delete_skill,
     adelete_skill,
 )
+from .evals.main import (
+    create_eval,
+    acreate_eval,
+    list_evals,
+    alist_evals,
+    get_eval,
+    aget_eval,
+    delete_eval,
+    adelete_eval,
+    cancel_eval,
+    acancel_eval,
+    create_run,
+    acreate_run,
+    list_runs,
+    alist_runs,
+    get_run,
+    aget_run,
+    delete_run,
+    adelete_run,
+    cancel_run,
+    acancel_run,
+)
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
@@ -1153,6 +1193,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     NotFoundError,
+    PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     BadGatewayError,
@@ -1325,6 +1366,7 @@ if TYPE_CHECKING:
     from .llms.vertex_ai.rerank.transformation import VertexAIRerankConfig as VertexAIRerankConfig
     from .llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig as FireworksAIRerankConfig
     from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
+    from .llms.watsonx.rerank.transformation import IBMWatsonXRerankConfig as IBMWatsonXRerankConfig
     from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
     from .llms.ai21.chat.transformation import AI21ChatConfig as AI21ChatConfig
     from .llms.meta_llama.chat.transformation import LlamaAPIConfig as LlamaAPIConfig
@@ -1378,6 +1420,7 @@ if TYPE_CHECKING:
     from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
     from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
     from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
+    from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
     from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
     from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
@@ -1390,6 +1433,8 @@ if TYPE_CHECKING:
     from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
     from .llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
+    from .llms.perplexity.responses.transformation import PerplexityResponsesConfig as PerplexityResponsesConfig
+    from .llms.databricks.responses.transformation import DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
@@ -1721,6 +1766,37 @@ def __getattr__(name: str) -> Any:
             import litellm._service_logger
             _globals["_service_logger"] = litellm._service_logger
         return _globals["_service_logger"]
+
+    # Lazy load evals module functions
+    if name in ["acreate_eval", "alist_evals", "aget_eval", "aupdate_eval", "adelete_eval", "acancel_eval",
+                "create_eval", "list_evals", "get_eval", "update_eval", "delete_eval", "cancel_eval",
+                "acreate_run", "alist_runs", "aget_run", "acancel_run", "adelete_run",
+                "create_run", "list_runs", "get_run", "cancel_run", "delete_run"]:
+        from litellm.evals.main import (
+            acreate_eval,
+            alist_evals,
+            aget_eval,
+            aupdate_eval,
+            adelete_eval,
+            acancel_eval,
+            create_eval,
+            list_evals,
+            get_eval,
+            update_eval,
+            delete_eval,
+            cancel_eval,
+            acreate_run,
+            alist_runs,
+            aget_run,
+            acancel_run,
+            adelete_run,
+            create_run,
+            list_runs,
+            get_run,
+            cancel_run,
+            delete_run,
+        )
+        return locals()[name]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

@@ -1,0 +1,494 @@
+/* ── Shared custom properties ── */
+:root {
+  --mw-stage-bg: #f8f9fa;
+  --mw-stage-border: #dee2e6;
+  --mw-stage-active-bg: #e8f4fd;
+  --mw-stage-active-border: #3b82f6;
+  --mw-stage-green-active-bg: #ecfdf5;
+  --mw-stage-green-active-border: #10b981;
+  --mw-dot-color: #3b82f6;
+  --mw-warning-accent: #ef4444;
+  --mw-success-accent: #10b981;
+  --mw-text-primary: #1a1a2e;
+  --mw-text-secondary: #6b7280;
+  --mw-code-bg: #f1f5f9;
+  --mw-panel-bg: #ffffff;
+  --mw-panel-border: #e5e7eb;
+  --mw-bar-bg: #e5e7eb;
+  --mw-arrow-color: #9ca3af;
+  --mw-column-bg: #fafafa;
+  --mw-column-border: #e5e7eb;
+  --mw-layer-bg: #f3f4f6;
+  --mw-layer-border: #d1d5db;
+  --mw-layer-warning-bg: #fef2f2;
+  --mw-layer-warning-border: #fca5a5;
+  --mw-progress-bg: #e5e7eb;
+}
+
+[data-theme='dark'] {
+  --mw-stage-bg: #1e1e2e;
+  --mw-stage-border: #374151;
+  --mw-stage-active-bg: #1e3a5f;
+  --mw-stage-active-border: #60a5fa;
+  --mw-stage-green-active-bg: #064e3b;
+  --mw-stage-green-active-border: #34d399;
+  --mw-dot-color: #60a5fa;
+  --mw-warning-accent: #f87171;
+  --mw-success-accent: #34d399;
+  --mw-text-primary: #e5e7eb;
+  --mw-text-secondary: #9ca3af;
+  --mw-code-bg: #1e293b;
+  --mw-panel-bg: #111827;
+  --mw-panel-border: #374151;
+  --mw-bar-bg: #374151;
+  --mw-arrow-color: #6b7280;
+  --mw-column-bg: #111827;
+  --mw-column-border: #374151;
+  --mw-layer-bg: #1f2937;
+  --mw-layer-border: #4b5563;
+  --mw-layer-warning-bg: #451a1a;
+  --mw-layer-warning-border: #b91c1c;
+  --mw-progress-bg: #374151;
+}
+
+/* ── Pipeline (shared between BaseHTTP and PureASGI) ── */
+.pipelineWrapper {
+  margin: 1.5rem 0;
+}
+
+.pipelineLabel {
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--mw-text-secondary);
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: stretch;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.pipelineTwoCol {
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.stageWrapper {
+  display: flex;
+  align-items: center;
+  width: 160px;
+  flex-shrink: 0;
+}
+
+.pipelineTwoCol .stageWrapper {
+  width: 200px;
+}
+
+.arrow {
+  display: none;
+}
+
+.stage {
+  flex: 1;
+  padding: 0.85rem 0.75rem;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: var(--mw-stage-bg);
+  border: 2px solid var(--mw-stage-border);
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
+  user-select: none;
+}
+
+.stage:hover {
+  border-color: var(--mw-stage-active-border);
+}
+
+.stageActive {
+  background: var(--mw-stage-active-bg);
+  border-color: var(--mw-stage-active-border);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.stageActiveGreen {
+  background: var(--mw-stage-green-active-bg);
+  border-color: var(--mw-stage-green-active-border);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.stageNoClick {
+  cursor: default;
+}
+
+.stageNumber {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--mw-text-secondary);
+  margin-bottom: 0.3rem;
+}
+
+.stageLabel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--mw-text-primary);
+  margin-bottom: 0.25rem;
+  line-height: 1.3;
+}
+
+.stageSubtitle {
+  font-size: 0.72rem;
+  color: var(--mw-text-secondary);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  word-break: break-word;
+  line-height: 1.3;
+}
+
+/* ── Code panel (accordion) ── */
+.codePanel {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease, padding 0.35s ease;
+  background: var(--mw-code-bg);
+  border-radius: 0 0 8px 8px;
+  margin-top: 0.5rem;
+}
+
+.codePanelOpen {
+  max-height: 120px;
+  padding: 0.75rem 1rem;
+}
+
+.codePanelCode {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--mw-text-primary);
+  white-space: pre;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ── Benchmark Visualization ── */
+.benchmarkWrapper {
+  margin: 1.5rem 0;
+}
+
+.benchmarkConfig {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--mw-text-secondary);
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+.benchmarkColumns {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.benchmarkColumn {
+  flex: 1;
+  background: var(--mw-column-bg);
+  border: 1px solid var(--mw-column-border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.columnTitle {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--mw-text-primary);
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.columnTitleBefore {
+  color: var(--mw-warning-accent);
+}
+
+.columnTitleAfter {
+  color: var(--mw-success-accent);
+}
+
+/* ── Request flow stack ── */
+.flowStack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  position: relative;
+  min-height: 280px;
+}
+
+.flowLayer {
+  width: 100%;
+  max-width: 260px;
+  padding: 0.6rem 0.75rem;
+  background: var(--mw-layer-bg);
+  border: 1px solid var(--mw-layer-border);
+  border-radius: 6px;
+  text-align: center;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--mw-text-primary);
+  position: relative;
+  z-index: 1;
+}
+
+.flowLayerWarning {
+  background: var(--mw-layer-warning-bg);
+  border-color: var(--mw-layer-warning-border);
+  font-weight: 700;
+}
+
+.flowArrow {
+  display: flex;
+  justify-content: center;
+  color: var(--mw-arrow-color);
+  font-size: 0.9rem;
+  padding: 0.15rem 0;
+  position: relative;
+  z-index: 0;
+  min-height: 20px;
+}
+
+.overheadTag {
+  font-size: 0.65rem;
+  color: var(--mw-warning-accent);
+  margin-left: 0.4rem;
+}
+
+/* ── Dots layer (canvas for flowing dots) ── */
+.dotsCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mw-dot-color);
+  opacity: 0.8;
+}
+
+.dotSlow {
+  background: var(--mw-warning-accent);
+}
+
+.dotFast {
+  background: var(--mw-success-accent);
+}
+
+/* ── Stats & progress ── */
+.statsRow {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--mw-panel-border);
+}
+
+.stat {
+  text-align: center;
+}
+
+.statValue {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--mw-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.statLabel {
+  font-size: 0.7rem;
+  color: var(--mw-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.progressBar {
+  width: 100%;
+  height: 6px;
+  background: var(--mw-progress-bg);
+  border-radius: 3px;
+  margin-top: 0.75rem;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.progressFillBefore {
+  background: var(--mw-warning-accent);
+}
+
+.progressFillAfter {
+  background: var(--mw-success-accent);
+}
+
+/* ── Summary stats below simulation ── */
+.summaryStats {
+  display: flex;
+  justify-content: center;
+  gap: 2rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.summaryItem {
+  text-align: center;
+  padding: 0.75rem 1.25rem;
+  background: var(--mw-stage-bg);
+  border-radius: 8px;
+  border: 1px solid var(--mw-panel-border);
+}
+
+.summaryValue {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--mw-success-accent);
+}
+
+.summaryLabel {
+  font-size: 0.8rem;
+  color: var(--mw-text-secondary);
+  margin-top: 0.2rem;
+}
+
+/* ── Collapsible table ── */
+.collapsible {
+  margin-top: 1.5rem;
+}
+
+.collapsibleToggle {
+  background: none;
+  border: 1px solid var(--mw-panel-border);
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--mw-text-primary);
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: background 0.2s;
+}
+
+.collapsibleToggle:hover {
+  background: var(--mw-stage-bg);
+}
+
+.collapsibleChevron {
+  transition: transform 0.3s ease;
+  font-size: 0.7rem;
+}
+
+.collapsibleChevronOpen {
+  transform: rotate(90deg);
+}
+
+.collapsibleContent {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease;
+}
+
+.collapsibleContentOpen {
+  max-height: 600px;
+}
+
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.dataTable th,
+.dataTable td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--mw-panel-border);
+}
+
+.dataTable th {
+  font-weight: 600;
+  color: var(--mw-text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dataTable td {
+  color: var(--mw-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Reproduce section ── */
+.reproduceSection {
+  margin-top: 1rem;
+}
+
+/* ── Done badge ── */
+.doneBadge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  margin-left: 0.5rem;
+}
+
+.doneBadgeBefore {
+  color: var(--mw-warning-accent);
+  background: var(--mw-layer-warning-bg);
+}
+
+.doneBadgeAfter {
+  color: var(--mw-success-accent);
+  background: var(--mw-stage-green-active-bg);
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .stageWrapper {
+    width: 140px;
+  }
+
+  .pipelineTwoCol .stageWrapper {
+    width: 160px;
+  }
+
+  .benchmarkColumns {
+    flex-direction: column;
+  }
+
+  .summaryStats {
+    flex-direction: column;
+    align-items: center;
+  }
+}

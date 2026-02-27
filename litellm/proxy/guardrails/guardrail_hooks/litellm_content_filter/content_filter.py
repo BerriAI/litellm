@@ -6,6 +6,7 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import json
 import os
 import re
 from datetime import datetime
@@ -30,11 +31,15 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    GuardrailStatus,
+    GuardrailTracingDetail,
+    ModelResponseStream,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 from litellm.types.guardrails import (
     BlockedWord,
@@ -46,9 +51,16 @@ from litellm.types.guardrails import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     BlockedWordDetection,
     CategoryKeywordDetection,
+    CompetitorIntentDetection,
+    CompetitorIntentResult,
     ContentFilterCategoryConfig,
     ContentFilterDetection,
     PatternDetection,
+)
+
+from .competitor_intent import (
+    AirlineCompetitorIntentChecker,
+    BaseCompetitorIntentChecker,
 )
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
@@ -89,12 +101,37 @@ class CategoryConfig:
         default_action: ContentFilterAction,
         keywords: List[Dict[str, str]],
         exceptions: List[str],
+        identifier_words: Optional[List[str]] = None,
+        always_block_keywords: Optional[List[Dict[str, str]]] = None,
+        inherit_from: Optional[str] = None,
+        additional_block_words: Optional[List[str]] = None,
+        phrase_patterns: Optional[List[str]] = None,
     ):
         self.category_name = category_name
         self.description = description
         self.default_action = default_action
         self.keywords = keywords
         self.exceptions = [e.lower() for e in exceptions]
+        # New fields for conditional child safety logic
+        self.identifier_words = (
+            [w.lower() for w in identifier_words] if identifier_words else []
+        )
+        self.always_block_keywords = always_block_keywords or []
+        self.inherit_from = inherit_from
+        self.additional_block_words = (
+            [w.lower() for w in additional_block_words]
+            if additional_block_words
+            else []
+        )
+        # Phrase patterns: regex patterns for catching paraphrases
+        self.phrase_patterns: List[Tuple[str, Pattern]] = []
+        for p in phrase_patterns or []:
+            try:
+                self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))
+            except re.error:
+                verbose_proxy_logger.warning(
+                    f"Invalid phrase pattern in {category_name}: {p}"
+                )
 
 
 class ContentFilterGuardrail(CustomGuardrail):
@@ -116,6 +153,8 @@ class ContentFilterGuardrail(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
+        guardrail_id: Optional[str] = None,
+        policy_template: Optional[str] = None,
         patterns: Optional[List[ContentFilterPattern]] = None,
         blocked_words: Optional[List[BlockedWord]] = None,
         blocked_words_file: Optional[str] = None,
@@ -129,6 +168,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         severity_threshold: str = "medium",
         llm_router: Optional[Router] = None,
         image_model: Optional[str] = None,
+        competitor_intent_config: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -146,12 +186,14 @@ class ContentFilterGuardrail(CustomGuardrail):
             categories: List of category configurations with enabled/action/severity settings
             severity_threshold: Minimum severity to block ("high", "medium", "low")
         """
+
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=[
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
                 GuardrailEventHooks.during_call,
+                GuardrailEventHooks.realtime_input_transcription,
             ],
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
@@ -159,6 +201,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
         self.guardrail_provider = "litellm_content_filter"
+        self.config_guardrail_id = guardrail_id
+        self.config_policy_template = policy_template
         self.pattern_redaction_format = (
             pattern_redaction_format or self.PATTERN_REDACTION_FORMAT
         )
@@ -168,30 +212,30 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[
+        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
+            {}
+        )  # keyword -> (category, severity, action)
+        # Always-block keywords are checked after exceptions (exceptions take precedence)
+        self.always_block_category_keywords: Dict[
             str, Tuple[str, str, ContentFilterAction]
-        ] = {}  # keyword -> (category, severity, action)
+        ] = {}
+        # Store conditional categories (identifier_words + block_words)
+        self.conditional_categories: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # category_name -> {identifier_words, block_words, action, severity}
+
+        # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
+        self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
+        if competitor_intent_config and isinstance(competitor_intent_config, dict):
+            self._init_competitor_intent_checker(competitor_intent_config)
 
         # Load categories if provided
         if categories:
             self._load_categories(categories)
 
         # Normalize inputs: convert dicts to Pydantic models for consistent handling
-        normalized_patterns: List[ContentFilterPattern] = []
-        if patterns:
-            for pattern_config in patterns:
-                if isinstance(pattern_config, dict):
-                    normalized_patterns.append(ContentFilterPattern(**pattern_config))
-                else:
-                    normalized_patterns.append(pattern_config)
-
-        normalized_blocked_words: List[BlockedWord] = []
-        if blocked_words:
-            for word in blocked_words:
-                if isinstance(word, dict):
-                    normalized_blocked_words.append(BlockedWord(**word))
-                else:
-                    normalized_blocked_words.append(word)
+        normalized_patterns = self._normalize_patterns(patterns)
+        normalized_blocked_words = self._normalize_blocked_words(blocked_words)
 
         # Compile regex patterns
         self.compiled_patterns: List[Dict[str, Any]] = []
@@ -232,6 +276,103 @@ class ContentFilterGuardrail(CustomGuardrail):
             f"{len(self.category_keywords)} keywords"
         )
 
+    def _init_competitor_intent_checker(
+        self, competitor_intent_config: Dict[str, Any]
+    ) -> None:
+        try:
+            competitor_intent_type = competitor_intent_config.get(
+                "competitor_intent_type", "airline"
+            )
+            if competitor_intent_type == "generic":
+                self._competitor_intent_checker = BaseCompetitorIntentChecker(
+                    competitor_intent_config
+                )
+            else:
+                self._competitor_intent_checker = AirlineCompetitorIntentChecker(
+                    competitor_intent_config
+                )
+            verbose_proxy_logger.debug(
+                "ContentFilterGuardrail: competitor intent checker enabled (%s)",
+                competitor_intent_type,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail: failed to init competitor intent checker: %s",
+                e,
+            )
+
+    @staticmethod
+    def _normalize_patterns(
+        patterns: Optional[List[ContentFilterPattern]],
+    ) -> List[ContentFilterPattern]:
+        result: List[ContentFilterPattern] = []
+        if patterns:
+            for pattern_config in patterns:
+                if isinstance(pattern_config, dict):
+                    result.append(ContentFilterPattern(**pattern_config))
+                else:
+                    result.append(pattern_config)
+        return result
+
+    @staticmethod
+    def _normalize_blocked_words(
+        blocked_words: Optional[List[BlockedWord]],
+    ) -> List[BlockedWord]:
+        result: List[BlockedWord] = []
+        if blocked_words:
+            for word in blocked_words:
+                if isinstance(word, dict):
+                    result.append(BlockedWord(**word))
+                else:
+                    result.append(word)
+        return result
+
+    @staticmethod
+    def _resolve_category_file_path(file_path: str) -> str:
+        """
+        Resolve a category file path that may be relative.
+
+        Paths in policy templates (e.g. category_file) are often stored as
+        relative paths like "litellm/proxy/.../policy_templates/file.yaml".
+        These only work when the CWD is the project root. In production
+        (Docker, installed packages, etc.) the CWD is different, so the
+        file isn't found.
+
+        Resolution order:
+        1. Return as-is if absolute or already exists.
+        2. Try joining the full path relative to this module's directory.
+        3. Progressively strip leading path components and try each suffix
+           relative to this module's directory (handles paths like
+           "litellm/proxy/.../policy_templates/file.yaml" by finding the
+           "policy_templates/file.yaml" suffix that exists).
+
+        Args:
+            file_path: The file path to resolve (absolute or relative).
+
+        Returns:
+            The resolved absolute-ish path, or the original path if
+            resolution fails (caller should check existence).
+        """
+        if os.path.isabs(file_path) or os.path.exists(file_path):
+            return file_path
+
+        module_dir = os.path.dirname(__file__)
+
+        # Try the full relative path joined to the module directory
+        candidate = os.path.join(module_dir, file_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        # Progressively strip leading components to find a matching suffix
+        parts = file_path.split("/")
+        for i in range(1, len(parts)):
+            suffix = os.path.join(*parts[i:])
+            candidate = os.path.join(module_dir, suffix)
+            if os.path.exists(candidate):
+                return candidate
+
+        return file_path
+
     def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
         """
         Load content categories from configuration.
@@ -270,11 +411,17 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             # Load category file (custom or default)
             if custom_file:
-                category_file_path = custom_file
+                category_file_path = self._resolve_category_file_path(custom_file)
             else:
-                category_file_path = os.path.join(
-                    categories_dir, f"{category_name}.yaml"
-                )
+                # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
+                yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
+                json_path = os.path.join(categories_dir, f"{category_name}.json")
+                if os.path.exists(yaml_path):
+                    category_file_path = yaml_path
+                elif os.path.exists(json_path):
+                    category_file_path = json_path
+                else:
+                    category_file_path = yaml_path  # will trigger "not found" below
 
             if not os.path.exists(category_file_path):
                 verbose_proxy_logger.warning(
@@ -291,7 +438,32 @@ class ContentFilterGuardrail(CustomGuardrail):
                     action if action else category_config_obj.default_action
                 )
 
-                # Add keywords from this category
+                # Handle conditional categories (with identifier_words + block words)
+                if category_config_obj.identifier_words and (
+                    category_config_obj.inherit_from
+                    or category_config_obj.additional_block_words
+                ):
+                    self._load_conditional_category(
+                        category_name,
+                        category_config_obj,
+                        category_action,
+                        severity_threshold,
+                        categories_dir,
+                    )
+
+                # Add always_block_keywords if present
+                if category_config_obj.always_block_keywords:
+                    for keyword_data in category_config_obj.always_block_keywords:
+                        keyword = keyword_data["keyword"].lower()
+                        severity = keyword_data.get("severity", "high")
+                        if self._should_apply_severity(severity, severity_threshold):
+                            self.always_block_category_keywords[keyword] = (
+                                category_name,
+                                severity,
+                                category_action,
+                            )
+
+                # Add regular keywords from this category
                 for keyword_data in category_config_obj.keywords:
                     keyword = keyword_data["keyword"].lower()
                     severity = keyword_data["severity"]
@@ -306,25 +478,134 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                 verbose_proxy_logger.info(
                     f"Loaded category {category_name}: "
-                    f"{len(category_config_obj.keywords)} keywords"
+                    f"{len(category_config_obj.keywords)} keywords, "
+                    f"{len(category_config_obj.always_block_keywords)} always-block keywords, "
+                    f"conditional: {bool(category_config_obj.identifier_words)}"
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
                     f"Error loading category {category_name}: {e}"
                 )
 
-    def _load_category_file(self, file_path: str) -> CategoryConfig:
+    def _load_conditional_category(
+        self,
+        category_name: str,
+        category_config_obj: CategoryConfig,
+        category_action: ContentFilterAction,
+        severity_threshold: str,
+        categories_dir: str,
+    ) -> None:
         """
-        Load a category definition from a YAML file.
+        Load a conditional category that uses identifier_words + block_words.
+        Block words can come from inherited category or additional_block_words.
 
         Args:
-            file_path: Path to category YAML file
+            category_name: Name of the category
+            category_config_obj: CategoryConfig object with identifier_words
+            category_action: Action to take when match is found
+            severity_threshold: Minimum severity threshold
+            categories_dir: Directory containing category files
+        """
+        try:
+            block_words = []
+            inherit_from = category_config_obj.inherit_from
+
+            # Load inherited block words if specified
+            if inherit_from:
+                # Remove .json or .yaml extension if included
+                inherit_base = inherit_from.replace(".json", "").replace(".yaml", "")
+
+                # Find the inherited category file
+                inherit_yaml_path = os.path.join(categories_dir, f"{inherit_base}.yaml")
+                inherit_json_path = os.path.join(categories_dir, f"{inherit_base}.json")
+
+                inherit_file_path = None
+                if os.path.exists(inherit_yaml_path):
+                    inherit_file_path = inherit_yaml_path
+                elif os.path.exists(inherit_json_path):
+                    inherit_file_path = inherit_json_path
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Category {category_name}: inherit_from '{inherit_from}' file not found at {categories_dir}"
+                    )
+                    verbose_proxy_logger.debug(
+                        f"Tried paths: {inherit_yaml_path}, {inherit_json_path}"
+                    )
+
+                if inherit_file_path:
+                    # Load the inherited category
+                    inherited_category = self._load_category_file(inherit_file_path)
+
+                    # Extract block words from inherited category that meet severity threshold
+                    for keyword_data in inherited_category.keywords:
+                        keyword = keyword_data["keyword"].lower()
+                        severity = keyword_data["severity"]
+                        if self._should_apply_severity(severity, severity_threshold):
+                            block_words.append(keyword)
+                else:
+                    # If inherit file not found, set inherit_from to None for logging
+                    inherit_from = None
+
+            # Add additional block words specific to this category
+            if category_config_obj.additional_block_words:
+                block_words.extend(category_config_obj.additional_block_words)
+
+            # Store the conditional category configuration
+            self.conditional_categories[category_name] = {
+                "identifier_words": category_config_obj.identifier_words,
+                "block_words": block_words,
+                "action": category_action,
+                "severity": "high",  # Combinations are always high severity
+            }
+
+            # Build log message
+            log_msg = (
+                f"Loaded conditional category {category_name}: "
+                f"{len(category_config_obj.identifier_words)} identifiers + "
+                f"{len(block_words)} block words"
+            )
+            if inherit_from and category_config_obj.additional_block_words:
+                inherited_count = len(block_words) - len(
+                    category_config_obj.additional_block_words
+                )
+                log_msg += (
+                    f" ({len(category_config_obj.additional_block_words)} additional + "
+                    f"{inherited_count} from {inherit_from})"
+                )
+            elif inherit_from:
+                log_msg += f" (from {inherit_from})"
+            elif category_config_obj.additional_block_words:
+                log_msg += f" ({len(block_words)} from additional_block_words)"
+
+            verbose_proxy_logger.info(log_msg)
+        except Exception as e:
+            verbose_proxy_logger.error(
+                f"Error loading conditional category for {category_name}: {e}"
+            )
+
+    def _load_category_file(self, file_path: str) -> CategoryConfig:
+        """
+        Load a category definition from a YAML or JSON file.
+
+        YAML format: category_name, description, default_action, keywords (list of
+        {keyword, severity}), exceptions.
+        Optional: identifier_words, always_block_keywords, inherit_from.
+        JSON format: list of {id, match, tags, severity}; match is pipe-separated
+        phrases; severity 1-4 mapped to low/medium/high. Used for harm_toxic_abuse.
+
+        Args:
+            file_path: Path to category YAML or JSON file
 
         Returns:
             CategoryConfig object
         """
+        if file_path.lower().endswith(".json"):
+            return self._load_category_file_json(file_path)
         with open(file_path, "r") as f:
             data = yaml.safe_load(f)
+
+        # Handle always_block_keywords if present
+        always_block = data.get("always_block_keywords", [])
 
         return CategoryConfig(
             category_name=data.get("category_name", "unknown"),
@@ -332,6 +613,49 @@ class ContentFilterGuardrail(CustomGuardrail):
             default_action=ContentFilterAction(data.get("default_action", "BLOCK")),
             keywords=data.get("keywords", []),
             exceptions=data.get("exceptions", []),
+            identifier_words=data.get("identifier_words"),
+            always_block_keywords=always_block,
+            inherit_from=data.get("inherit_from"),
+            additional_block_words=data.get("additional_block_words"),
+            phrase_patterns=data.get("phrase_patterns"),
+        )
+
+    def _load_category_file_json(self, file_path: str) -> CategoryConfig:
+        """
+        Load a category from the harm_toxic_abuse-style JSON format.
+
+        Each entry has: id, match (pipe-separated phrases), tags, severity (1-4).
+        Severity mapping: 4,3 -> high; 2 -> medium; 1 -> low.
+        """
+        with open(file_path, "r") as f:
+            entries = json.load(f)
+        if not isinstance(entries, list):
+            entries = [entries]
+        # Derive category name from filename (e.g. harm_toxic_abuse.json -> harm_toxic_abuse)
+        category_name = os.path.splitext(os.path.basename(file_path))[0]
+        severity_map = {4: "high", 3: "high", 2: "medium", 1: "low"}
+        keywords: List[Dict[str, str]] = []
+        seen = set()
+        for item in entries:
+            if not isinstance(item, dict):
+                continue
+            match_str = item.get("match") or ""
+            raw_severity = item.get("severity", 2)
+            severity = severity_map.get(
+                raw_severity if isinstance(raw_severity, int) else 2, "medium"
+            )
+            for phrase in match_str.split("|"):
+                phrase = phrase.strip().lower()
+                if not phrase or phrase in seen:
+                    continue
+                seen.add(phrase)
+                keywords.append({"keyword": phrase, "severity": severity})
+        return CategoryConfig(
+            category_name=category_name,
+            description="Detects harmful, toxic, or abusive language and content",
+            default_action=ContentFilterAction("BLOCK"),
+            keywords=keywords,
+            exceptions=[],
         )
 
     def _should_apply_severity(self, severity: str, threshold: str) -> bool:
@@ -591,6 +915,145 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (matched_text, pattern_name, action)
         return None
 
+    def _check_conditional_categories(
+        self, text: str, exceptions: List[str]
+    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        """
+        Check text for conditional category matches (identifier + block word in same sentence).
+
+        This implements logic like: if text contains both an identifier word (e.g., "minor")
+        AND a block word (e.g., "romantic"), then block it.
+
+        Args:
+            text: Text to check
+            exceptions: List of exception phrases to ignore
+
+        Returns:
+            Tuple of (matched_phrase, category, severity, action) if match found, None otherwise
+        """
+        text_lower = text.lower()
+
+        # First check if any exception applies
+        for exception in exceptions:
+            if exception in text_lower:
+                return None
+
+        # Split text into sentences for more precise matching
+        # Simple sentence splitting on common terminators
+        sentences = re.split(r"[.!?]+", text)
+
+        for category_name, config in self.conditional_categories.items():
+            identifier_words = config["identifier_words"]
+            block_words = config["block_words"]
+            action = config["action"]
+            severity = config["severity"]
+
+            # Check category-specific exceptions
+            category_obj = self.loaded_categories.get(category_name)
+            if category_obj:
+                exception_found = False
+                for exception in category_obj.exceptions:
+                    if exception in text_lower:
+                        verbose_proxy_logger.debug(
+                            f"Category exception '{exception}' found for {category_name}, skipping"
+                        )
+                        exception_found = True
+                        break
+                if exception_found:
+                    continue
+
+            # Check each sentence for identifier + block word combination
+            for sentence in sentences:
+                sentence_lower = sentence.lower().strip()
+                if not sentence_lower:
+                    continue
+
+                # Check if sentence contains ANY identifier word
+                identifier_found = None
+                for identifier in identifier_words:
+                    if identifier in sentence_lower:
+                        identifier_found = identifier
+                        break
+
+                if not identifier_found:
+                    continue
+
+                # Check if sentence also contains ANY block word
+                block_word_found = None
+                for block_word in block_words:
+                    # Use word boundary for single words to avoid false positives
+                    if " " in block_word:
+                        # Multi-word phrase
+                        if block_word in sentence_lower:
+                            block_word_found = block_word
+                            break
+                    else:
+                        # Single word - use word boundary
+                        pattern = r"\b" + re.escape(block_word) + r"\b"
+                        if re.search(pattern, sentence_lower):
+                            block_word_found = block_word
+                            break
+
+                if block_word_found:
+                    matched_phrase = f"{identifier_found} + {block_word_found}"
+                    verbose_proxy_logger.warning(
+                        f"Conditional match in {category_name}: '{matched_phrase}' in sentence"
+                    )
+                    return (matched_phrase, category_name, severity, action)
+
+        return None
+
+    def _check_phrase_patterns(
+        self, text: str, exceptions: List[str]
+    ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
+        """
+        Check text against phrase patterns from loaded categories.
+
+        Phrase patterns are regex patterns that catch paraphrased requests
+        (e.g., "put my money to make it grow" for financial advice).
+
+        Args:
+            text: Text to check
+            exceptions: List of exception phrases to ignore
+
+        Returns:
+            Tuple of (matched_pattern, category, severity, action) if match found, None otherwise
+        """
+        text_lower = text.lower()
+
+        for exception in exceptions:
+            if exception in text_lower:
+                return None
+
+        for category_name, config in self.loaded_categories.items():
+            if not config.phrase_patterns:
+                continue
+
+            # Check category-specific exceptions
+            for exception in config.exceptions:
+                if exception in text_lower:
+                    break
+            else:
+                # Determine action for this category
+                action = ContentFilterAction(config.default_action)
+                # Check if we have a configured action in conditional_categories
+                if category_name in self.conditional_categories:
+                    action = self.conditional_categories[category_name]["action"]
+
+                for pattern_str, pattern in config.phrase_patterns:
+                    if pattern.search(text):
+                        verbose_proxy_logger.warning(
+                            f"Phrase pattern match in {category_name}: '{pattern_str}'"
+                        )
+                        return (
+                            f"phrase: {pattern_str}",
+                            category_name,
+                            "high",
+                            action,
+                        )
+
+        return None
+
     def _check_category_keywords(
         self, text: str, exceptions: List[str]
     ) -> Optional[Tuple[str, str, str, ContentFilterAction]]:
@@ -606,7 +1069,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         text_lower = text.lower()
 
-        # First check if any exception applies
+        # Check exceptions first — they take precedence over always-block keywords too.
         for exception in exceptions:
             if exception in text_lower:
                 verbose_proxy_logger.debug(
@@ -614,17 +1077,37 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
                 return None
 
+        # Always-block keywords are checked after exceptions.
+        for keyword, (category, severity, action) in self.always_block_category_keywords.items():
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
+            if " " in keyword:
+                keyword_found = bool(re.search(keyword_pattern_str, text_lower))
+            else:
+                keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
+                keyword_found = bool(re.search(keyword_pattern, text_lower))
+            if keyword_found:
+                verbose_proxy_logger.debug(
+                    f"Always-block keyword '{keyword}' found in category '{category}'"
+                )
+                return (keyword, category, severity, action)
+
         # Check category keywords
         for keyword, (category, severity, action) in self.category_keywords.items():
+            # Convert asterisks (*) in keywords to regex wildcards
+            # Asterisks are used in the source data to obfuscate profanity (e.g., "fu*c*k" -> "fuck")
+            # We treat * as a wildcard matching zero or one character
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
+
             # Use word boundary matching for single words to avoid false positives
             # (e.g., "men" should not match "recommend")
             # For multi-word phrases, use substring matching
             if " " in keyword:
-                # Multi-word phrase - use substring matching
-                keyword_found = keyword in text_lower
+                # Multi-word phrase - use substring matching with wildcards
+                keyword_pattern = keyword_pattern_str
+                keyword_found = bool(re.search(keyword_pattern, text_lower))
             else:
                 # Single word - use word boundary matching to match whole words only
-                keyword_pattern = r"\b" + re.escape(keyword) + r"\b"
+                keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
                 keyword_found = bool(re.search(keyword_pattern, text_lower))
 
             if keyword_found:
@@ -689,6 +1172,174 @@ class ContentFilterGuardrail(CustomGuardrail):
                 return (keyword, action, description)
         return None
 
+    def _handle_conditional_match(
+        self,
+        matched_phrase: str,
+        category_name: str,
+        severity: str,
+        action: ContentFilterAction,
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> None:
+        """Handle conditional category match detection and action."""
+        if detections is not None:
+            category_detection: CategoryKeywordDetection = {
+                "type": "category_keyword",
+                "category": category_name,
+                "keyword": matched_phrase,
+                "severity": severity,
+                "action": action.value,
+            }
+            detections.append(category_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = (
+                f"Content blocked: {category_name} conditional match '{matched_phrase}' detected "
+                f"(severity: {severity})"
+            )
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": error_msg,
+                    "category": category_name,
+                    "matched_phrase": matched_phrase,
+                    "severity": severity,
+                },
+            )
+        elif action == ContentFilterAction.MASK:
+            verbose_proxy_logger.warning(
+                f"Conditional match '{matched_phrase}' from {category_name} detected but MASK action not supported for conditional categories"
+            )
+
+    def _handle_category_keyword_match(
+        self,
+        keyword: str,
+        category_name: str,
+        severity: str,
+        action: ContentFilterAction,
+        text: str,
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> str:
+        """Handle category keyword match detection and action."""
+        if detections is not None:
+            category_detection: CategoryKeywordDetection = {
+                "type": "category_keyword",
+                "category": category_name,
+                "keyword": keyword,
+                "severity": severity,
+                "action": action.value,
+            }
+            detections.append(category_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = (
+                f"Content blocked: {category_name} category keyword '{keyword}' detected "
+                f"(severity: {severity})"
+            )
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": error_msg,
+                    "category": category_name,
+                    "keyword": keyword,
+                    "severity": severity,
+                },
+            )
+        elif action == ContentFilterAction.MASK:
+            keyword_pattern_for_masking = self._keyword_to_regex_pattern(keyword)
+            text = re.sub(
+                keyword_pattern_for_masking,
+                self.keyword_redaction_tag,
+                text,
+                flags=re.IGNORECASE,
+            )
+            verbose_proxy_logger.info(
+                f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
+            )
+
+        return text
+
+    def _handle_pattern_match(
+        self,
+        pattern_name: str,
+        action: ContentFilterAction,
+        text: str,
+        spans: List[Tuple[int, int]],
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> str:
+        """Handle regex pattern match detection and action."""
+        if detections is not None:
+            pattern_detection: PatternDetection = {
+                "type": "pattern",
+                "pattern_name": pattern_name,
+                "action": action.value,
+            }
+            detections.append(pattern_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = f"Content blocked: {pattern_name} pattern detected"
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={"error": error_msg, "pattern": pattern_name},
+            )
+        elif action == ContentFilterAction.MASK:
+            redaction_tag = self.pattern_redaction_format.format(
+                pattern_name=pattern_name.upper()
+            )
+            text = self._mask_spans(text, spans, redaction_tag)
+            verbose_proxy_logger.info(f"Masked all {pattern_name} matches in content")
+
+        return text
+
+    def _handle_blocked_word_match(
+        self,
+        keyword: str,
+        action: ContentFilterAction,
+        description: Optional[str],
+        text: str,
+        detections: Optional[List[ContentFilterDetection]],
+    ) -> str:
+        """Handle blocked word match detection and action."""
+        verbose_proxy_logger.debug(
+            f"Blocked word '{keyword}' found with action {action}"
+        )
+
+        if detections is not None:
+            blocked_word_detection: BlockedWordDetection = {
+                "type": "blocked_word",
+                "keyword": keyword,
+                "action": action.value,
+                "description": description,
+            }
+            detections.append(blocked_word_detection)
+
+        if action == ContentFilterAction.BLOCK:
+            error_msg = f"Content blocked: keyword '{keyword}' detected"
+            if description:
+                error_msg += f" ({description})"
+            verbose_proxy_logger.warning(error_msg)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": error_msg,
+                    "keyword": keyword,
+                    "description": description,
+                },
+            )
+        elif action == ContentFilterAction.MASK:
+            keyword_pattern_for_masking = self._keyword_to_regex_pattern(keyword)
+            text = re.sub(
+                keyword_pattern_for_masking,
+                self.keyword_redaction_tag,
+                text,
+                flags=re.IGNORECASE,
+            )
+            verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+
+        return text
+
     def _filter_single_text(
         self, text: str, detections: Optional[List[ContentFilterDetection]] = None
     ) -> str:
@@ -715,125 +1366,62 @@ class ContentFilterGuardrail(CustomGuardrail):
         for category in self.loaded_categories.values():
             all_exceptions.extend(category.exceptions)
 
+        # Check conditional categories first
+        conditional_match = self._check_conditional_categories(text, all_exceptions)
+        if conditional_match:
+            matched_phrase, category_name, severity, action = conditional_match
+            self._handle_conditional_match(
+                matched_phrase, category_name, severity, action, detections
+            )
+
+        # Check phrase patterns (regex-based paraphrase detection)
+        phrase_match = self._check_phrase_patterns(text, all_exceptions)
+        if phrase_match:
+            matched_phrase, category_name, severity, action = phrase_match
+            self._handle_conditional_match(
+                matched_phrase, category_name, severity, action, detections
+            )
+
         # Check category keywords
         category_keyword_match = self._check_category_keywords(text, all_exceptions)
         if category_keyword_match:
             keyword, category_name, severity, action = category_keyword_match
-            if detections is not None:
-                category_detection: CategoryKeywordDetection = {
-                    "type": "category_keyword",
-                    "category": category_name,
-                    "keyword": keyword,
-                    "severity": severity,
-                    "action": action.value,
-                }
-                detections.append(category_detection)
-            if action == ContentFilterAction.BLOCK:
-                error_msg = (
-                    f"Content blocked: {category_name} category keyword '{keyword}' detected "
-                    f"(severity: {severity})"
-                )
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": error_msg,
-                        "category": category_name,
-                        "keyword": keyword,
-                        "severity": severity,
-                    },
-                )
-            elif action == ContentFilterAction.MASK:
-                # Replace keyword with redaction tag
-                text = re.sub(
-                    re.escape(keyword),
-                    self.keyword_redaction_tag,
-                    text,
-                    flags=re.IGNORECASE,
-                )
-                verbose_proxy_logger.info(
-                    f"Masked category keyword '{keyword}' from {category_name} (severity: {severity})"
-                )
+            text = self._handle_category_keyword_match(
+                keyword, category_name, severity, action, text, detections
+            )
 
         # Check regex patterns - process ALL patterns, not just first match
         for pattern_entry in self.compiled_patterns:
             spans = self._find_pattern_spans(text, pattern_entry)
-            if not spans:
-                continue
-
-            pattern_name = pattern_entry["pattern_name"]
-            action = pattern_entry["action"]
-            if detections is not None:
-                # Don't log matched_text to avoid exposing sensitive content (emails, credit cards, etc.)
-                pattern_detection: PatternDetection = {
-                    "type": "pattern",
-                    "pattern_name": pattern_name,
-                    "action": action.value,
-                }
-                detections.append(pattern_detection)
-
-            if action == ContentFilterAction.BLOCK:
-                error_msg = f"Content blocked: {pattern_name} pattern detected"
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=403,
-                    detail={"error": error_msg, "pattern": pattern_name},
-                )
-            elif action == ContentFilterAction.MASK:
-                redaction_tag = self.pattern_redaction_format.format(
-                    pattern_name=pattern_name.upper()
-                )
-                text = self._mask_spans(text, spans, redaction_tag)
-                verbose_proxy_logger.info(
-                    f"Masked all {pattern_name} matches in content"
+            if spans:
+                pattern_name = pattern_entry["pattern_name"]
+                action = pattern_entry["action"]
+                text = self._handle_pattern_match(
+                    pattern_name, action, text, spans, detections
                 )
 
         # Check blocked words - iterate through ALL blocked words
-        # to ensure all matching keywords are processed, not just the first one
         text_lower = text.lower()
         for keyword, (action, description) in self.blocked_words.items():
-            if keyword not in text_lower:
-                continue
-
-            verbose_proxy_logger.debug(
-                f"Blocked word '{keyword}' found with action {action}"
-            )
-
-            if detections is not None:
-                blocked_word_detection: BlockedWordDetection = {
-                    "type": "blocked_word",
-                    "keyword": keyword,
-                    "action": action.value,
-                    "description": description,
-                }
-                detections.append(blocked_word_detection)
-
-            if action == ContentFilterAction.BLOCK:
-                error_msg = f"Content blocked: keyword '{keyword}' detected"
-                if description:
-                    error_msg += f" ({description})"
-                verbose_proxy_logger.warning(error_msg)
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": error_msg,
-                        "keyword": keyword,
-                        "description": description,
-                    },
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
+            if re.search(keyword_pattern_str, text_lower):
+                text = self._handle_blocked_word_match(
+                    keyword, action, description, text, detections
                 )
-            elif action == ContentFilterAction.MASK:
-                # Replace keyword with redaction tag (case-insensitive)
-                text = re.sub(
-                    re.escape(keyword),
-                    self.keyword_redaction_tag,
-                    text,
-                    flags=re.IGNORECASE,
-                )
-                # Update text_lower after masking to avoid re-matching
-                text_lower = text.lower()
-                verbose_proxy_logger.info(f"Masked keyword '{keyword}' in content")
+                text_lower = text.lower()  # Update after masking
 
         return text
+
+    @staticmethod
+    def _keyword_to_regex_pattern(keyword: str) -> str:
+        """
+        Convert a keyword into a safe regex pattern.
+
+        Escape all regex metacharacters to prevent malformed patterns from
+        user/template keywords. Preserve existing '*' wildcard semantics by
+        translating escaped '*' into '.?'.
+        """
+        return re.escape(keyword).replace(r"\*", ".?")
 
     def _mask_content(self, text: str, pattern_name: str) -> str:
         """
@@ -932,7 +1520,9 @@ class ContentFilterGuardrail(CustomGuardrail):
             masked_entity_count: Dictionary to update with counts
         """
         for detection in detections:
-            if detection["action"] == ContentFilterAction.MASK.value:
+            if detection.get("type") == "competitor_intent":
+                continue
+            if detection.get("action") == ContentFilterAction.MASK.value:
                 detection_type = detection["type"]
                 if detection_type == "pattern":
                     pattern_detection = cast(PatternDetection, detection)
@@ -951,6 +1541,168 @@ class ContentFilterGuardrail(CustomGuardrail):
                     masked_entity_count[category] = (
                         masked_entity_count.get(category, 0) + 1
                     )
+
+    def _build_match_details(
+        self, detections: List[ContentFilterDetection]
+    ) -> List[dict]:
+        """Build match_details list from content filter detections."""
+        match_details: List[dict] = []
+        for detection in detections:
+            action_taken = detection.get("action", detection.get("action_hint", ""))
+            detail: dict = {"type": detection["type"], "action_taken": action_taken}
+            if detection["type"] == "pattern":
+                detail["detection_method"] = "regex"
+                detail["snippet"] = cast(PatternDetection, detection).get(
+                    "pattern_name", ""
+                )
+            elif detection["type"] == "blocked_word":
+                detail["detection_method"] = "keyword"
+                detail["snippet"] = cast(BlockedWordDetection, detection).get(
+                    "keyword", ""
+                )
+            elif detection["type"] == "category_keyword":
+                detail["detection_method"] = "keyword"
+                cat_det = cast(CategoryKeywordDetection, detection)
+                detail["snippet"] = cat_det.get("keyword", "")
+                detail["category"] = cat_det.get("category", "")
+            elif detection["type"] == "competitor_intent":
+                detail["detection_method"] = "intent"
+                detail["snippet"] = detection.get("intent", "")
+                detail["confidence"] = detection.get("confidence")
+            match_details.append(detail)
+        return match_details
+
+    def _get_detection_methods(self, detections: List[ContentFilterDetection]) -> str:
+        """Get comma-separated detection methods used."""
+        methods: set = set()
+        for detection in detections:
+            if detection["type"] == "pattern":
+                methods.add("regex")
+            elif detection["type"] == "competitor_intent":
+                methods.add("intent")
+            else:
+                methods.add("keyword")
+        return ",".join(sorted(methods)) if methods else ""
+
+    def _get_patterns_checked_count(self) -> int:
+        """Get total number of patterns and keywords that were evaluated."""
+        return (
+            len(self.compiled_patterns)
+            + len(self.blocked_words)
+            + len(self.category_keywords)
+            + len(self.always_block_category_keywords)
+        )
+
+    def _get_policy_templates(self) -> Optional[str]:
+        """Get comma-separated policy template names from loaded categories."""
+        if not self.loaded_categories:
+            return None
+        names = [
+            cat.description or cat.category_name
+            for cat in self.loaded_categories.values()
+        ]
+        return ", ".join(names) if names else None
+
+    def _compute_risk_score(
+        self,
+        detections: List[ContentFilterDetection],
+        masked_entity_count: Dict[str, int],
+        status: "GuardrailStatus",
+    ) -> float:
+        """
+        Compute a risk score from 0-10 for this guardrail evaluation.
+
+        Factors:
+        - Match ratio: how many patterns matched vs total checked
+        - Number of entities masked
+        - Whether the guardrail blocked the request (max risk)
+        """
+        if status == "guardrail_intervened":
+            return 10.0
+
+        total_masked = sum(masked_entity_count.values()) if masked_entity_count else 0
+        patterns_checked = self._get_patterns_checked_count()
+
+        # Match ratio contribution (0-7 points)
+        match_ratio = total_masked / patterns_checked if patterns_checked > 0 else 0.0
+        ratio_score = match_ratio * 7.0
+
+        # Detection count contribution (0-3 points, capped)
+        detection_score = min(len(detections), 5) * 0.6
+
+        score = ratio_score + detection_score
+
+        # Floor: if anything matched, minimum risk is 2
+        if total_masked > 0 and score < 2.0:
+            score = 2.0
+
+        return round(min(10.0, score), 1)
+
+    def _apply_competitor_intent_policy(
+        self,
+        intent_result: CompetitorIntentResult,
+        request_data: dict,
+        detections: List[ContentFilterDetection],
+    ) -> None:
+        """
+        Apply policy for competitor intent result: refuse (raise), reframe (passthrough), or log_only/allow (return).
+        Appends competitor_intent detection to detections. Never returns for refuse/reframe.
+        """
+        intent_val = intent_result.get("intent", "other")
+        confidence_val = intent_result.get("confidence", 0.0)
+        action_hint_val = intent_result.get("action_hint", "allow")
+        evidence_list = intent_result.get("evidence", [])
+        detection: CompetitorIntentDetection = {
+            "type": "competitor_intent",
+            "intent": intent_val,
+            "confidence": confidence_val,
+            "action_hint": action_hint_val,
+            "entities": intent_result.get("entities", {}),
+            "signals": intent_result.get("signals", []),
+            "evidence": [dict(e) for e in evidence_list],
+        }
+        detections.append(detection)
+
+        if action_hint_val == "refuse":
+            msg = "Content blocked: competitor comparison or ranking intent detected."
+            if self._competitor_intent_checker and getattr(
+                self._competitor_intent_checker, "refuse_message_template", None
+            ):
+                msg = self._competitor_intent_checker.refuse_message_template or msg
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail: competitor intent refuse - %s", intent_val
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": msg,
+                    "intent": intent_val,
+                    "confidence": confidence_val,
+                },
+            )
+        if action_hint_val == "reframe":
+            msg = (
+                "I can help with questions about our products and services. "
+                "Would you like to compare specific features or get more information?"
+            )
+            if self._competitor_intent_checker and getattr(
+                self._competitor_intent_checker, "reframe_message_template", None
+            ):
+                msg = self._competitor_intent_checker.reframe_message_template or msg
+            verbose_proxy_logger.info(
+                "ContentFilterGuardrail: competitor intent reframe - %s", intent_val
+            )
+            self.raise_passthrough_exception(
+                violation_message=msg,
+                request_data=request_data,
+                detection_info=dict(intent_result),
+            )
+        # log_only or allow: just log (detection already appended)
+        verbose_proxy_logger.debug(
+            "ContentFilterGuardrail: competitor intent %s (action_hint=%s)",
+            intent_val,
+            action_hint_val,
+        )
 
     def _log_guardrail_information(
         self,
@@ -983,6 +1735,28 @@ class ContentFilterGuardrail(CustomGuardrail):
                 else [dict(detection) for detection in detections]
             )
 
+        # Competitor intent: add confidence and classification to tracing if present
+        tracing_kw: Dict[str, Any] = {
+            "guardrail_id": self.config_guardrail_id or self.guardrail_name,
+            "policy_template": self.config_policy_template
+            or self._get_policy_templates(),
+            "detection_method": (
+                self._get_detection_methods(detections) if detections else None
+            ),
+            "match_details": (
+                self._build_match_details(detections) if detections else None
+            ),
+            "patterns_checked": self._get_patterns_checked_count(),
+            "risk_score": self._compute_risk_score(
+                detections, masked_entity_count, status
+            ),
+        }
+        for d in detections:
+            if isinstance(d, dict) and d.get("type") == "competitor_intent":
+                tracing_kw["confidence_score"] = d.get("confidence")
+                tracing_kw["classification"] = dict(d)
+                break
+
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=guardrail_json_response,
@@ -992,6 +1766,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             end_time=datetime.now().timestamp(),
             duration=(datetime.now() - start_time).total_seconds(),
             masked_entity_count=masked_entity_count,
+            tracing_detail=GuardrailTracingDetail(**tracing_kw),  # type: ignore[typeddict-item]
         )
 
     async def apply_guardrail(
@@ -1019,8 +1794,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If sensitive content is detected and action is BLOCK
         """
-        from litellm.types.utils import GuardrailStatus
-
         start_time = datetime.now()
         detections: List[ContentFilterDetection] = []
         masked_entity_count: Dict[str, int] = {}
@@ -1041,6 +1814,13 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             processed_texts = []
             for text in texts:
+                # Competitor intent check first (optional; may refuse/reframe)
+                if self._competitor_intent_checker and text:
+                    intent_result = self._competitor_intent_checker.run(text)
+                    if intent_result.get("intent", "other") != "other":
+                        self._apply_competitor_intent_policy(
+                            intent_result, request_data, detections
+                        )
                 filtered_text = self._filter_single_text(text, detections=detections)
                 processed_texts.append(filtered_text)
 
