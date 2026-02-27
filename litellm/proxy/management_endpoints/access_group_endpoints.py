@@ -416,8 +416,8 @@ async def update_access_group(
 
             old_team_ids: Set[str] = set(existing.assigned_team_ids or [])
             old_key_ids: Set[str] = set(existing.assigned_key_ids or [])
-            new_team_ids: Set[str] = set(update_fields["assigned_team_ids"]) if "assigned_team_ids" in update_fields else old_team_ids
-            new_key_ids: Set[str] = set(update_fields["assigned_key_ids"]) if "assigned_key_ids" in update_fields else old_key_ids
+            new_team_ids: Set[str] = set(update_fields["assigned_team_ids"] or []) if "assigned_team_ids" in update_fields else old_team_ids
+            new_key_ids: Set[str] = set(update_fields["assigned_key_ids"] or []) if "assigned_key_ids" in update_fields else old_key_ids
 
             teams_to_add = list(new_team_ids - old_team_ids)
             teams_to_remove = list(old_team_ids - new_team_ids)

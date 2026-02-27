@@ -1166,3 +1166,22 @@ def test_delete_access_group_handles_out_of_sync_assigned_keys(client_and_mocks)
 
     mock_key_table.find_unique.assert_awaited_once_with(where={"token": "token-out-of-sync"})
     mock_key_table.update.assert_not_awaited()
+
+
+def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks):
+    """Update with explicit null for assigned_*_ids clears the list without TypeError."""
+    client, _, mock_table, *_ = client_and_mocks
+
+    existing = _make_access_group_record(
+        access_group_id="ag-update",
+        assigned_team_ids=["team-1"],
+        assigned_key_ids=["key-1"],
+    )
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    # Sending null for assigned_team_ids and assigned_key_ids
+    resp = client.put(
+        "/v1/access_group/ag-update",
+        json={"assigned_team_ids": None, "assigned_key_ids": None},
+    )
+    assert resp.status_code == 200
