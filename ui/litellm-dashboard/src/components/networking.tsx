@@ -194,6 +194,20 @@ export interface Organization {
   };
 }
 
+export interface Customer {
+  user_id: string;
+  alias: string | null;
+  spend: number;
+  allowed_model_region: string | null;
+  default_model: string | null;
+  budget_id: string | null;
+  blocked: boolean;
+  litellm_budget_table?: {
+    max_budget: number | null;
+    budget_duration: string | null;
+  } | null;
+}
+
 export interface CredentialItem {
   credential_name: string;
   credential_values: any;
@@ -2563,6 +2577,97 @@ export const allEndUsersCall = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to fetch end users:", error);
+    throw error;
+  }
+};
+
+export const customerListCall = async (accessToken: string) => {
+  return allEndUsersCall(accessToken);
+};
+
+export const customerCreateCall = async (accessToken: string, data: any) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/customer/new` : `/customer/new`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const responseData = await response.json();
+    console.log("Customer created:", responseData);
+    return responseData;
+  } catch (error) {
+    console.error("Failed to create customer:", error);
+    throw error;
+  }
+};
+
+export const customerUpdateCall = async (accessToken: string, data: any) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/customer/update` : `/customer/update`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const responseData = await response.json();
+    console.log("Customer updated:", responseData);
+    return responseData;
+  } catch (error) {
+    console.error("Failed to update customer:", error);
+    throw error;
+  }
+};
+
+export const customerDeleteCall = async (accessToken: string, userId: string) => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/customer/delete` : `/customer/delete`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ user_ids: [userId] }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const responseData = await response.json();
+    console.log("Customer deleted:", responseData);
+    return responseData;
+  } catch (error) {
+    console.error("Failed to delete customer:", error);
     throw error;
   }
 };
