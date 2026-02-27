@@ -1158,6 +1158,30 @@
         "default_value": "https://gigachat.devices.sberbank.ru/api/v1"
       },
       {
+        "key": "auth_url",
+        "label": "GigaChat Auth URL",
+        "placeholder": "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+      },
+      {
+        "key": "scope",
+        "label": "GigaChat Scope",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "select",
+        "options": [
+          "GIGACHAT_API_PERS",
+          "GIGACHAT_API_B2B",
+          "GIGACHAT_API_CORP"
+        ],
+        "default_value": "GIGACHAT_API_PERS"
+      },
+      {
         "key": "api_key",
         "label": "GigaChat API Key",
         "placeholder": null,

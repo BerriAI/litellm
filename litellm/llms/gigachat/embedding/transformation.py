@@ -12,6 +12,7 @@ import httpx
 
 from litellm import LlmProviders
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
@@ -189,12 +190,38 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        scope: Optional[str] = None,
+        auth_url: Optional[str] = None,
     ) -> dict:
         """
         Set up headers with OAuth token for GigaChat.
         """
-        # Get access token via OAuth
-        access_token = get_access_token(api_key)
+        # Get access token
+        credentials = (
+            api_key
+            or get_secret_str("GIGACHAT_CREDENTIALS")
+            or get_secret_str("GIGACHAT_API_KEY")
+        )
+
+        scope = (
+            scope
+            or optional_params.get("scope")
+            or litellm_params.get("scope")
+            or get_secret_str("GIGACHAT_SCOPE")
+        )
+
+        auth_url = (
+            auth_url
+            or optional_params.get("auth_url")
+            or litellm_params.get("auth_url")
+            or get_secret_str("GIGACHAT_AUTH_URL")
+        )
+
+        access_token = get_access_token(
+            credentials=credentials,
+            scope=scope,
+            auth_url=auth_url,
+        )
 
         default_headers = {
             "Content-Type": "application/json",
