@@ -392,6 +392,8 @@ async def update_access_group(
     update_fields = data.model_dump(exclude_unset=True)
     update_data: dict = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
+        if field in ("assigned_team_ids", "assigned_key_ids") and value is None:
+            value = []
         update_data[field] = value
 
     # Initialize delta lists before the try block so they remain accessible
