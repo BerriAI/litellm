@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cas
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, MAX_SPEND_LOG_QUEUE_SIZE
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -427,11 +427,16 @@ class DBSpendUpdateWriter:
                 payload.get("request_id"), payload.get("spend")
             )
         )
-        if prisma_client is not None and spend_logs_url is not None:
+        if prisma_client is not None:
             async with prisma_client._spend_log_transactions_lock:
-                prisma_client.spend_log_transactions.append(payload)
-        elif prisma_client is not None:
-            async with prisma_client._spend_log_transactions_lock:
+                if len(prisma_client.spend_log_transactions) >= MAX_SPEND_LOG_QUEUE_SIZE:
+                    verbose_proxy_logger.warning(
+                        "spend_log_transactions queue at capacity (%d). "
+                        "Dropping oldest entry. This usually means the DB is "
+                        "unreachable or writes are too slow.",
+                        MAX_SPEND_LOG_QUEUE_SIZE,
+                    )
+                    prisma_client.spend_log_transactions.pop(0)
                 prisma_client.spend_log_transactions.append(payload)
         else:
             verbose_proxy_logger.debug(

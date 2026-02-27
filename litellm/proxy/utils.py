@@ -1,8 +1,10 @@
 import asyncio
+import atexit
 import copy
 import hashlib
 import json
 import os
+import signal
 import smtplib
 import threading
 import time
@@ -2060,7 +2062,82 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
+        atexit.register(self._atexit_kill_engine)
         verbose_proxy_logger.debug("Success - Created Prisma Client")
+
+    def _get_engine_pid(self) -> int:
+        """Return the PID of the Prisma query-engine child process, or 0."""
+        try:
+            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
+            if engine is not None and engine.process is not None:
+                return engine.process.pid
+        except (AttributeError, TypeError):
+            pass
+        return 0
+
+    def _atexit_kill_engine(self) -> None:
+        """Kill the Prisma query-engine child when this worker exits.
+
+        Prevents orphaned query-engine processes from accumulating
+        under PID 1 when uvicorn/gunicorn workers die or restart.
+        """
+        pid = self._get_engine_pid()
+        if pid <= 0:
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+            verbose_proxy_logger.info(
+                "atexit: sent SIGTERM to query-engine PID %d", pid
+            )
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    @staticmethod
+    def cleanup_orphaned_query_engines() -> int:
+        """Kill query-engine processes whose parent is PID 1 (orphaned).
+
+        In multi-worker setups, when a worker dies its query-engine child
+        gets reparented to PID 1. These orphans hold DB connections and
+        consume 30-76 MB each. Call this at worker startup.
+
+        Returns the number of processes killed.
+        """
+        killed = 0
+        try:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit():
+                    continue
+                pid = int(entry)
+                if pid <= 1:
+                    continue
+                try:
+                    with open(f"/proc/{pid}/stat", "r") as f:
+                        stat_line = f.read()
+                    parts = stat_line.rsplit(")", 1)
+                    if len(parts) < 2:
+                        continue
+                    fields = parts[1].split()
+                    ppid = int(fields[1])
+                    if ppid != 1:
+                        continue
+                    with open(f"/proc/{pid}/cmdline", "r") as f:
+                        cmdline = f.read()
+                    if "query-engine" not in cmdline and "prisma" not in cmdline:
+                        continue
+                    os.kill(pid, signal.SIGTERM)
+                    killed += 1
+                    verbose_proxy_logger.warning(
+                        "Killed orphaned query-engine process PID %d", pid
+                    )
+                except (FileNotFoundError, PermissionError, ProcessLookupError, OSError, ValueError):
+                    continue
+        except (FileNotFoundError, PermissionError):
+            pass
+        if killed > 0:
+            verbose_proxy_logger.warning(
+                "Cleaned up %d orphaned query-engine processes", killed
+            )
+        return killed
 
     def get_request_status(
         self, payload: Union[dict, SpendLogsPayload]

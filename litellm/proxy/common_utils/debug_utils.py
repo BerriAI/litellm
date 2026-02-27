@@ -207,6 +207,7 @@ async def get_memory_summary(
     """
     from litellm.proxy.proxy_server import (
         llm_router,
+        prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
@@ -303,6 +304,7 @@ async def get_memory_summary(
             "breakdown": caches,
         },
         "garbage_collector": gc_info,
+        "spend_log_queue": _get_spend_log_queue_info(prisma_client),
     }
 
 
@@ -548,6 +550,24 @@ def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Opt
         return {"pid": worker_pid, "error": str(e)}
 
 
+def _get_spend_log_queue_info(prisma_client) -> Dict[str, Any]:
+    """Get info about the spend_log_transactions queue size."""
+    from litellm.constants import MAX_SPEND_LOG_QUEUE_SIZE
+
+    if prisma_client is None:
+        return {"enabled": False}
+    try:
+        queue_len = len(prisma_client.spend_log_transactions)
+        return {
+            "queue_length": queue_len,
+            "max_queue_size": MAX_SPEND_LOG_QUEUE_SIZE,
+            "usage_percent": round(queue_len / MAX_SPEND_LOG_QUEUE_SIZE * 100, 1) if MAX_SPEND_LOG_QUEUE_SIZE > 0 else 0,
+            "warning": "Queue is filling up - DB writes may be failing" if queue_len > MAX_SPEND_LOG_QUEUE_SIZE * 0.8 else None,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @router.get("/debug/memory/details", include_in_schema=False)
 async def get_memory_details(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -577,6 +597,7 @@ async def get_memory_details(
     """
     from litellm.proxy.proxy_server import (
         llm_router,
+        prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
         redis_usage_cache,
@@ -591,6 +612,7 @@ async def get_memory_details(
     cache_stats = _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache)
     litellm_router_memory = _get_router_memory_stats(llm_router)
     process_info = _get_process_memory_info(worker_pid, include_process_info)
+    spend_queue_info = _get_spend_log_queue_info(prisma_client)
     
     return {
         "worker_pid": worker_pid,
@@ -604,6 +626,7 @@ async def get_memory_details(
         "uncollectable": uncollectable_info,
         "cache_memory": cache_stats,
         "router_memory": litellm_router_memory,
+        "spend_log_queue": spend_queue_info,
     }
 
 

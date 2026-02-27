@@ -816,6 +816,10 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             )
         )
 
+    ### CLEAN UP ORPHANED QUERY-ENGINE PROCESSES FROM PREVIOUS WORKER DEATHS ###
+    if prisma_client is not None:
+        PrismaClient.cleanup_orphaned_query_engines()
+
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     if prisma_client is not None:
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
