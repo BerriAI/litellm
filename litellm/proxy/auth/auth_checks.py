@@ -358,17 +358,12 @@ async def common_checks(
         )
 
         # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
-        if (
-            end_user_object is not None
-            and end_user_object.litellm_budget_table is not None
-        ):
-            end_user_budget = end_user_object.litellm_budget_table.max_budget
-            if end_user_budget is not None and end_user_object.spend > end_user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=end_user_object.spend,
-                    max_budget=end_user_budget,
-                    message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
-                )
+        if end_user_object is not None:
+            await _check_end_user_budget(
+                end_user_obj=end_user_object,
+                route=route,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
@@ -772,19 +767,25 @@ async def _apply_default_budget_to_end_user(
     return end_user_obj
 
 
-def _check_end_user_budget(
+async def _check_end_user_budget(
     end_user_obj: LiteLLM_EndUserTable,
     route: str,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> None:
     """
     Check if end user is within their budget limit.
 
+    Fires a budget alert (via Slack/webhook) when the max or soft budget is
+    crossed, following the same pattern used by ``_team_max_budget_check`` and
+    ``_team_soft_budget_check``.
+
     Args:
         end_user_obj: The end user object to check
         route: The request route
+        proxy_logging_obj: Optional proxy logging object for budget alerts
 
     Raises:
-        litellm.BudgetExceededError: If end user has exceeded their budget
+        litellm.BudgetExceededError: If end user has exceeded their max budget
     """
     if route in LiteLLMRoutes.info_routes.value:
         return
@@ -792,12 +793,50 @@ def _check_end_user_budget(
     if end_user_obj.litellm_budget_table is None:
         return
 
-    end_user_budget = end_user_obj.litellm_budget_table.max_budget
+    budget_table = end_user_obj.litellm_budget_table
+    end_user_budget = budget_table.max_budget
+    end_user_soft_budget = budget_table.soft_budget
+
+    # Max budget check — alert + block
     if end_user_budget is not None and end_user_obj.spend > end_user_budget:
+        if proxy_logging_obj is not None:
+            call_info = CallInfo(
+                spend=end_user_obj.spend,
+                max_budget=end_user_budget,
+                soft_budget=end_user_soft_budget,
+                customer_id=end_user_obj.user_id,
+                event_group=Litellm_EntityType.END_USER,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="end_user_budget",
+                    user_info=call_info,
+                )
+            )
         raise litellm.BudgetExceededError(
             current_cost=end_user_obj.spend,
             max_budget=end_user_budget,
             message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_obj.spend}, Budget={end_user_budget}",
+        )
+
+    # Soft budget check — alert only, does not block
+    if (
+        end_user_soft_budget is not None
+        and end_user_obj.spend >= end_user_soft_budget
+        and proxy_logging_obj is not None
+    ):
+        call_info = CallInfo(
+            spend=end_user_obj.spend,
+            max_budget=end_user_budget,
+            soft_budget=end_user_soft_budget,
+            customer_id=end_user_obj.user_id,
+            event_group=Litellm_EntityType.END_USER,
+        )
+        asyncio.create_task(
+            proxy_logging_obj.budget_alerts(
+                type="end_user_budget",
+                user_info=call_info,
+            )
         )
 
 
@@ -848,9 +887,6 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # Check budget limits
-        _check_end_user_budget(end_user_obj=return_obj, route=route)
-
         return return_obj
 
     # Fetch from database
@@ -878,9 +914,6 @@ async def get_end_user_object(
         await user_api_key_cache.async_set_cache(
             key="end_user_id:{}".format(end_user_id), value=_response.dict()
         )
-
-        # Check budget limits
-        _check_end_user_budget(end_user_obj=_response, route=route)
 
         return _response
 

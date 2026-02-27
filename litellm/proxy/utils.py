@@ -1476,6 +1476,7 @@ class ProxyLogging:
             "proxy_budget",
             "projected_limit_exceeded",
             "project_budget",
+            "end_user_budget",
         ],
         user_info: CallInfo,
     ):
