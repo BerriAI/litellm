@@ -781,11 +781,11 @@ def _transform_anthropic_request_to_openai_format(request_body: dict) -> dict:
                 "function": {
                     "name": t["name"],
                     "description": t.get("description", ""),
-                    "parameters": t.get("input_schema", {})
+                    "parameters": t.get("input_schema", {})  # Anthropic-specific tools (e.g., computer_20241022) lack input_schema
                 }
             }
-            for t in request_body["tools"]
-            if "input_schema" in t  # Skip non-standard tools (computer_use, bash, etc.)
+            for t in request_body.get("tools", [])
+            if "name" in t  # Valid tools should have a name
         ]
 
     return request_body
@@ -836,7 +836,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
             # Transform Anthropic format to OpenAI format if this is an Anthropic request
             _request_uri = _proxy_server_request.get("url") or ""
-            if "/messages" in _request_uri:
+            if "/v1/messages" in _request_uri:
                 _request_body = _transform_anthropic_request_to_openai_format(_request_body)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
