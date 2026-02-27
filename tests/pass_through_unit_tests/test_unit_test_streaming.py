@@ -174,11 +174,12 @@ async def test_chunk_processor_passes_kwargs_to_logging_handler():
 
     # Verify async_success_handler was called with kwargs containing
     # the API key metadata from input_kwargs
-    if litellm_logging_obj.async_success_handler.called:
-        call_kwargs = litellm_logging_obj.async_success_handler.call_args
-        # The handler_kwargs are spread as **kwargs, check they include response_cost
-        # (set by the Anthropic handler) and that litellm_params metadata was preserved
-        assert call_kwargs is not None, "async_success_handler was called but with no args"
+    assert litellm_logging_obj.async_success_handler.called, \
+        "async_success_handler should have been called after streaming completed"
+    call_kwargs = litellm_logging_obj.async_success_handler.call_args
+    # The handler_kwargs are spread as **kwargs, check they include response_cost
+    # (set by the Anthropic handler) and that litellm_params metadata was preserved
+    assert call_kwargs is not None, "async_success_handler was called but with no args"
 
 
 def test_convert_raw_bytes_to_str_lines():
