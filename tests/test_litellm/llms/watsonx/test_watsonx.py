@@ -289,16 +289,28 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     # template is always used regardless of test execution order.
     hf_model = "openai/gpt-oss-120b"
     litellm.known_tokenizer_config[hf_model] = mock_tokenizer_config
-    
+
     # Also create sync mock functions in case the fallback sync path is used
     def mock_get_tokenizer_config(hf_model_name: str):
         return mock_tokenizer_config
 
     def mock_get_chat_template_file(hf_model_name: str):
         return {"status": "failure"}
-    
-    with patch.object(client, "post") as mock_post, patch.object(
-        litellm.module_level_client, "post", return_value=mock_token_response
+
+    # Async mock function for client.post to properly handle async method mocking
+    async def mock_post_func(*args, **kwargs):
+        return mock_completion_response
+
+    # Mock the token generation response to avoid actual API call
+    mock_token_get_response = Mock()
+    mock_token_get_response.json.return_value = {
+        "access_token": "mock_access_token",
+        "expires_in": 3600,
+    }
+    mock_token_get_response.raise_for_status = Mock()
+
+    with patch.object(client, "post", side_effect=mock_post_func) as mock_post, patch.object(
+        litellm.module_level_client, "post", return_value=mock_token_get_response
     ), patch(
         "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_tokenizer_config",
         side_effect=mock_aget_tokenizer_config,
@@ -312,9 +324,6 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
         "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._get_chat_template_file",
         side_effect=mock_get_chat_template_file,
     ):
-        # Set the mock to return the completion response
-        mock_post.return_value = mock_completion_response
-
         try:
             # Call acompletion with messages
             await litellm.acompletion(

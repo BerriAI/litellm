@@ -182,6 +182,76 @@ class TestEnterpriseRouteChecks:
         EnterpriseRouteChecks.should_call_route("/config/update")
 
 
+@patch("litellm.proxy.proxy_server.premium_user", True)
+class TestEnterpriseRouteChecksModelListExemption:
+    """Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS"""
+
+    @patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled")
+    @patch.object(EnterpriseRouteChecks, "is_management_routes_disabled")
+    @patch("litellm.proxy.auth.route_checks.RouteChecks.is_llm_api_route")
+    @patch("litellm.proxy.auth.route_checks.RouteChecks.is_management_route")
+    def test_models_route_allowed_when_llm_api_disabled(
+        self,
+        mock_is_management_route,
+        mock_is_llm_api_route,
+        mock_is_management_disabled,
+        mock_is_llm_api_disabled,
+    ):
+        """Test that /models is allowed even when LLM API routes are disabled"""
+        mock_is_management_route.return_value = False
+        mock_is_llm_api_route.return_value = True
+        mock_is_management_disabled.return_value = False
+        mock_is_llm_api_disabled.return_value = True
+
+        # Should not raise exception for /models
+        EnterpriseRouteChecks.should_call_route("/models")
+
+    @patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled")
+    @patch.object(EnterpriseRouteChecks, "is_management_routes_disabled")
+    @patch("litellm.proxy.auth.route_checks.RouteChecks.is_llm_api_route")
+    @patch("litellm.proxy.auth.route_checks.RouteChecks.is_management_route")
+    def test_v1_models_route_allowed_when_llm_api_disabled(
+        self,
+        mock_is_management_route,
+        mock_is_llm_api_route,
+        mock_is_management_disabled,
+        mock_is_llm_api_disabled,
+    ):
+        """Test that /v1/models is allowed even when LLM API routes are disabled"""
+        mock_is_management_route.return_value = False
+        mock_is_llm_api_route.return_value = True
+        mock_is_management_disabled.return_value = False
+        mock_is_llm_api_disabled.return_value = True
+
+        # Should not raise exception for /v1/models
+        EnterpriseRouteChecks.should_call_route("/v1/models")
+
+    @patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled")
+    @patch.object(EnterpriseRouteChecks, "is_management_routes_disabled")
+    @patch("litellm.proxy.auth.route_checks.RouteChecks.is_llm_api_route")
+    @patch("litellm.proxy.auth.route_checks.RouteChecks.is_management_route")
+    def test_chat_completions_still_blocked_when_llm_api_disabled(
+        self,
+        mock_is_management_route,
+        mock_is_llm_api_route,
+        mock_is_management_disabled,
+        mock_is_llm_api_disabled,
+    ):
+        """Test that non-exempt LLM routes like /v1/chat/completions are still blocked"""
+        mock_is_management_route.return_value = False
+        mock_is_llm_api_route.return_value = True
+        mock_is_management_disabled.return_value = False
+        mock_is_llm_api_disabled.return_value = True
+
+        with pytest.raises(HTTPException) as exc_info:
+            EnterpriseRouteChecks.should_call_route("/v1/chat/completions")
+
+        assert exc_info.value.status_code == 403
+        assert "LLM API routes are disabled for this instance." in str(
+            exc_info.value.detail
+        )
+
+
 class TestEnterpriseRouteChecksErrorMessages:
     """Test that error messages correctly identify which feature requires Enterprise license"""
 

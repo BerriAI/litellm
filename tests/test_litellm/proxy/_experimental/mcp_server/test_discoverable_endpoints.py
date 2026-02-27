@@ -1,7 +1,7 @@
 """Tests for MCP OAuth discoverable endpoints"""
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi import HTTPException
 
 
@@ -26,16 +26,17 @@ def mock_mcp_client_ip():
 async def test_authorize_endpoint_includes_response_type():
     """Test that authorize endpoint includes response_type=code parameter (fixes #15684)"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             authorize,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -92,16 +93,17 @@ async def test_authorize_endpoint_includes_response_type():
 async def test_authorize_endpoint_preserves_existing_query_params():
     """Test that authorize endpoint merges OAuth params with existing query params in authorization_url"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             authorize,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -156,16 +158,17 @@ async def test_authorize_endpoint_preserves_existing_query_params():
 async def test_authorize_endpoint_forwards_pkce_parameters():
     """Test that authorize endpoint forwards PKCE parameters (code_challenge and code_challenge_method)"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             authorize,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -226,17 +229,18 @@ async def test_authorize_endpoint_forwards_pkce_parameters():
 async def test_token_endpoint_forwards_code_verifier():
     """Test that token endpoint forwards code_verifier for PKCE flow"""
     try:
+        import httpx
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             token_endpoint,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
-        import httpx
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -323,13 +327,14 @@ async def test_token_endpoint_forwards_code_verifier():
 @pytest.mark.asyncio
 async def test_register_client_without_mcp_server_name_returns_dummy():
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             register_client,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -355,16 +360,17 @@ async def test_register_client_without_mcp_server_name_returns_dummy():
 @pytest.mark.asyncio
 async def test_register_client_returns_existing_server_credentials():
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             register_client,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -408,16 +414,17 @@ async def test_register_client_returns_existing_server_credentials():
 @pytest.mark.asyncio
 async def test_register_client_remote_registration_success():
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             register_client,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -498,16 +505,17 @@ async def test_register_client_remote_registration_success():
 async def test_authorize_endpoint_respects_x_forwarded_proto():
     """Test that authorize endpoint uses X-Forwarded-Proto header to construct correct redirect_uri"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             authorize,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -564,16 +572,17 @@ async def test_authorize_endpoint_respects_x_forwarded_proto():
 async def test_token_endpoint_respects_x_forwarded_proto():
     """Test that token endpoint uses X-Forwarded-Proto header for redirect_uri"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             token_endpoint,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -642,16 +651,17 @@ async def test_token_endpoint_respects_x_forwarded_proto():
 async def test_oauth_protected_resource_respects_x_forwarded_proto():
     """Test that oauth_protected_resource_mcp uses X-Forwarded-Proto for URLs"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             oauth_protected_resource_mcp,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
     # Clear registry
@@ -695,16 +705,17 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto():
 async def test_oauth_authorization_server_respects_x_forwarded_proto():
     """Test that oauth_authorization_server_mcp uses X-Forwarded-Proto for URLs"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             oauth_authorization_server_mcp,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
     # Clear registry
@@ -749,13 +760,14 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
 async def test_register_client_respects_x_forwarded_proto():
     """Test that register_client uses X-Forwarded-Proto for redirect_uris"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             register_client,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -785,16 +797,17 @@ async def test_register_client_respects_x_forwarded_proto():
 async def test_authorize_endpoint_respects_x_forwarded_host():
     """Test that authorize endpoint uses X-Forwarded-Host and X-Forwarded-Proto to construct correct redirect_uri"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             authorize,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -857,16 +870,17 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
 async def test_token_endpoint_respects_x_forwarded_host():
     """Test that token endpoint uses X-Forwarded-Host and X-Forwarded-Proto for redirect_uri"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             token_endpoint,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._types import MCPTransport
         from litellm.types.mcp import MCPAuth
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
-        from litellm.proxy._types import MCPTransport
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -1058,10 +1072,11 @@ def test_get_request_base_url_comprehensive(
 ):
     """Comprehensive test for get_request_base_url with various header combinations"""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             get_request_base_url,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -1098,6 +1113,118 @@ def test_get_request_base_url_comprehensive(
 
 
 # -------------------------------------------------------------------
+# Tests for scopes_supported when mcp_server.scopes is None
+# -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_returns_empty_scopes_when_none():
+    """
+    When an MCP server exists but has scopes=None (e.g. Atlassian OAuth),
+    scopes_supported should be [] not None.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    # Create an OAuth2 server with scopes=None (like Atlassian)
+    oauth2_server = MCPServer(
+        server_id="atlassian_mcp",
+        name="atlassian_mcp",
+        server_name="atlassian_mcp",
+        alias="atlassian_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="atlassian_client_id",
+        client_secret="atlassian_secret",
+        authorization_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scopes=None,  # Atlassian doesn't set scopes
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="atlassian_mcp",
+            use_standard_pattern=False,
+        )
+        assert response["scopes_supported"] == []
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorization_server_returns_empty_scopes_when_none():
+    """
+    When an MCP server exists but has scopes=None (e.g. Atlassian OAuth),
+    scopes_supported should be [] not None.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    # Create an OAuth2 server with scopes=None
+    oauth2_server = MCPServer(
+        server_id="atlassian_mcp",
+        name="atlassian_mcp",
+        server_name="atlassian_mcp",
+        alias="atlassian_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="atlassian_client_id",
+        client_secret="atlassian_secret",
+        authorization_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scopes=None,
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="atlassian_mcp",
+        )
+        assert response["scopes_supported"] == []
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+# -------------------------------------------------------------------
 # Tests for root-level OAuth endpoint resolution (no server name)
 # -------------------------------------------------------------------
 
@@ -1111,9 +1238,9 @@ def _create_oauth2_server(
     client_secret="test_client_secret",
 ):
     """Helper to create a mock OAuth2 MCPServer."""
+    from litellm.proxy._types import MCPTransport
     from litellm.types.mcp import MCPAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
-    from litellm.proxy._types import MCPTransport
 
     return MCPServer(
         server_id=server_id,
@@ -1134,13 +1261,14 @@ def _create_oauth2_server(
 async def test_authorize_root_resolves_single_oauth2_server():
     """When /authorize is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             authorize,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -1180,13 +1308,14 @@ async def test_authorize_root_resolves_single_oauth2_server():
 async def test_authorize_root_fails_with_multiple_oauth2_servers():
     """When /authorize is hit without server name and multiple OAuth2 servers exist, return 404."""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             authorize,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -1223,13 +1352,14 @@ async def test_authorize_root_fails_with_multiple_oauth2_servers():
 async def test_token_root_resolves_single_oauth2_server():
     """When /token is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             token_endpoint,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -1287,13 +1417,14 @@ async def test_token_root_resolves_single_oauth2_server():
 async def test_register_root_resolves_single_oauth2_server():
     """When /register is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             register_client,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -1323,13 +1454,14 @@ async def test_register_root_resolves_single_oauth2_server():
 async def test_discovery_root_includes_server_name_prefix():
     """When root discovery is hit and exactly 1 OAuth2 server exists, include server name in URLs."""
     try:
+        from fastapi import Request
+
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             _build_oauth_authorization_server_response,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
@@ -1355,3 +1487,182 @@ async def test_discovery_root_includes_server_name_prefix():
         assert response["scopes_supported"] == ["read", "write"]
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_redirects_with_state():
+    """Test OAuth callback endpoint properly decodes state and redirects to client callback URL."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            callback,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Mock the state decoding
+    mock_state_data = {
+        "base_url": "http://localhost:3000/ui/mcp/oauth/callback",
+        "original_state": "test-uuid-state-123",
+        "code_challenge": "test_challenge",
+        "code_challenge_method": "S256",
+        "client_redirect_uri": "http://localhost:3000/ui/mcp/oauth/callback",
+    }
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = mock_state_data
+
+        # Call callback endpoint with code and state
+        response = await callback(
+            code="test_authorization_code_12345",
+            state="encrypted_state_value",
+        )
+
+        # Should redirect to the client callback URL with code and original state
+        assert response.status_code == 302
+        assert "http://localhost:3000/ui/mcp/oauth/callback" in response.headers["location"]
+        assert "code=test_authorization_code_12345" in response.headers["location"]
+        assert "state=test-uuid-state-123" in response.headers["location"]
+
+        # Verify state was decoded
+        mock_decode.assert_called_once_with("encrypted_state_value")
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_handles_invalid_state():
+    """Test OAuth callback returns error page when state decryption fails."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            callback,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Mock state decoding to raise an exception
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.side_effect = Exception("Failed to decrypt state")
+
+        # Call callback endpoint with invalid state
+        response = await callback(
+            code="test_code",
+            state="invalid_encrypted_state",
+        )
+
+        # Should return HTML error page
+        assert response.status_code == 200
+        assert "Authentication incomplete" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorize_includes_scopes_from_server_config():
+    """Test that authorize endpoint includes scopes from server configuration."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Create server with specific scopes (e.g., GitLab requires 'ai_workflows')
+    oauth_server = MCPServer(
+        server_id="gitlab_server",
+        name="gitlab",
+        server_name="gitlab",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://gitlab.com/oauth/authorize",
+        token_url="https://gitlab.com/oauth/token",
+        client_id="test_client",
+        scopes=["api", "read_user", "ai_workflows"],  # GitLab-specific scopes
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.return_value = "encrypted_state"
+
+        # Call authorize without explicit scope parameter
+        response = await authorize_with_server(
+            request=mock_request,
+            mcp_server=oauth_server,
+            client_id="test_client",
+            redirect_uri="http://localhost:3000/callback",
+            state="test_state",
+            code_challenge="test_challenge",
+            code_challenge_method="S256",
+            response_type="code",
+            scope=None,  # No scope in request, should use server's scopes
+        )
+
+        # Should redirect with scopes from server config
+        assert response.status_code in (307, 302)
+        redirect_url = response.headers["location"]
+        assert "scope=api+read_user+ai_workflows" in redirect_url or "scope=api%20read_user%20ai_workflows" in redirect_url
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorize_prefers_request_scope_over_server_config():
+    """Test that explicit scope parameter takes precedence over server configuration."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    oauth_server = MCPServer(
+        server_id="test_server",
+        name="test",
+        server_name="test",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+        client_id="test_client",
+        scopes=["default_scope1", "default_scope2"],
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.return_value = "encrypted_state"
+
+        # Call authorize WITH explicit scope parameter
+        response = await authorize_with_server(
+            request=mock_request,
+            mcp_server=oauth_server,
+            client_id="test_client",
+            redirect_uri="http://localhost:3000/callback",
+            state="test_state",
+            code_challenge="test_challenge",
+            code_challenge_method="S256",
+            response_type="code",
+            scope="custom_scope1 custom_scope2",  # Explicit scope should take precedence
+        )
+
+        # Should use the explicit scope, not server config
+        assert response.status_code in (307, 302)
+        redirect_url = response.headers["location"]
+        assert "scope=custom_scope1+custom_scope2" in redirect_url or "scope=custom_scope1%20custom_scope2" in redirect_url
+        assert "default_scope" not in redirect_url

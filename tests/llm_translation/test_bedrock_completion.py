@@ -3517,7 +3517,7 @@ def test_bedrock_openai_imported_model():
         print(f"URL: {url}")
         assert "bedrock-runtime.us-east-1.amazonaws.com" in url
         assert (
-            "arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy" in url
+            "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy" in url
         )
         assert "/invoke" in url
 
