@@ -2665,6 +2665,8 @@ class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
     object_permission_id: Optional[str] = None
     created_by: str
     updated_by: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
