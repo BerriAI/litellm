@@ -65,7 +65,7 @@ def get_llm_provider_folders() -> Set[str]:
 def load_provider_endpoints_file() -> Dict:
     """Load the provider_endpoints_support.json file."""
     repo_root = get_repo_root()
-    file_path = repo_root / "litellm" / "proxy" / "public_endpoints" / "provider_endpoints_support.json"
+    file_path = repo_root / "provider_endpoints_support.json"
 
     if not file_path.exists():
         print(

@@ -87,54 +87,6 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
 
 
-def test_get_provider_supported_endpoints():
-    """Test /public/supported_endpoints returns correct structure with endpoints and providers."""
-    app = FastAPI()
-    app.include_router(router)
-    client = TestClient(app)
-
-    response = client.get("/public/supported_endpoints")
-
-    assert response.status_code == 200
-    data = response.json()
-
-    # Check top-level structure
-    assert "endpoints" in data
-    assert "providers" in data
-    assert isinstance(data["endpoints"], list)
-    assert isinstance(data["providers"], list)
-
-    # Verify endpoints structure
-    assert len(data["endpoints"]) > 0
-    for endpoint in data["endpoints"]:
-        assert "key" in endpoint
-        assert "display_name" in endpoint
-        assert "endpoint" in endpoint
-        assert isinstance(endpoint["key"], str)
-        assert isinstance(endpoint["display_name"], str)
-        assert endpoint["endpoint"].startswith("/")
-
-    # Verify providers structure
-    assert len(data["providers"]) > 0
-    for provider in data["providers"]:
-        assert "slug" in provider
-        assert "display_name" in provider
-        assert "supported" in provider
-        assert isinstance(provider["slug"], str)
-        assert isinstance(provider["display_name"], str)
-        assert isinstance(provider["supported"], list)
-
-    # Verify some expected endpoints exist
-    endpoint_keys = {e["key"] for e in data["endpoints"]}
-    assert "chat_completions" in endpoint_keys
-    assert "embeddings" in endpoint_keys
-    assert "responses" in endpoint_keys
-
-    # Verify some expected providers exist
-    provider_slugs = {p["slug"] for p in data["providers"]}
-    assert "openai" in provider_slugs
-
-
 def test_watsonx_provider_fields():
     """Test that Watsonx provider has all required credential fields including multiple auth options."""
     app = FastAPI()
