@@ -6777,7 +6777,7 @@ class Router:
                     # No need to update
                     return None
 
-                # if there is a new litellm param -> then update the deployment
+                # if there is a new litellm param or model name -> then update the deployment
                 # remove the previous deployment
                 removal_idx: Optional[int] = None
                 deployment_id = deployment.model_info.id
