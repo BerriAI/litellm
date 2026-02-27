@@ -659,7 +659,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
 client = openai.OpenAI(
     api_key="your_api_key",
-    base_url="http://0.0.0.0:4000"  # Your LiteLLM Proxy URL
+    base_url="${getProxyBaseUrl()}"  # Your LiteLLM Proxy URL
 )
 
 response = client.chat.completions.create(
@@ -997,7 +997,7 @@ import asyncio
 config = {
     "mcpServers": {
         "${selectedMcpServer.server_name}": {
-            "url": "http://localhost:4000/${selectedMcpServer.server_name}/mcp",
+            "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
                 "x-litellm-api-key": "Bearer sk-1234"
             }
@@ -1016,7 +1016,7 @@ async def main():
 
         # Call a tool
         response = await client.call_tool(
-            name="tool_name", 
+            name="tool_name",
             arguments={"arg": "value"}
         )
         print(f"Response: {response}")

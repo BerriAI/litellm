@@ -8,6 +8,7 @@ class SensitiveDataMasker:
     def __init__(
         self,
         sensitive_patterns: Optional[Set[str]] = None,
+        non_sensitive_overrides: Optional[Set[str]] = None,
         visible_prefix: int = 4,
         visible_suffix: int = 4,
         mask_char: str = "*",
@@ -26,6 +27,10 @@ class SensitiveDataMasker:
             "fingerprint",
             "tenancy",
         }
+        # If any key segment matches one of these, the key is not considered sensitive
+        # even if it also matches a sensitive pattern. For example, "input_cost_per_token"
+        # contains "token" but "cost" overrides that — it's a pricing field, not a secret.
+        self.non_sensitive_overrides = non_sensitive_overrides or {"cost"}
 
         self.visible_prefix = visible_prefix
         self.visible_suffix = visible_suffix
@@ -56,6 +61,13 @@ class SensitiveDataMasker:
         # This avoids false positives like "max_tokens" matching "token"
         # but still catches "api_key", "access_token", etc.
         key_segments = key_lower.replace("-", "_").split("_")
+
+        # If any segment matches a non-sensitive override, the key is not sensitive.
+        # For example, "input_cost_per_token" contains "token" but also "cost",
+        # so it should not be masked — it's a pricing field, not a secret.
+        if any(override in key_segments for override in self.non_sensitive_overrides):
+            return False
+
         result = any(pattern in key_segments for pattern in self.sensitive_patterns)
         return result
 

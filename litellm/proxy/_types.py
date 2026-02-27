@@ -22,7 +22,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
-    MCPAuth,
     MCPAuthType,
     MCPCredentials,
     MCPTransport,
@@ -183,6 +182,7 @@ class LitellmTableNames(str, enum.Enum):
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
     MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
+    TOOL_TABLE_NAME = "LiteLLM_ToolTable"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -850,6 +850,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     max_budget: Optional[float] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
+    agent_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
@@ -1077,6 +1078,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
     url: Optional[str] = None
+    spec_path: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
@@ -1103,30 +1105,21 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url"):
-                    raise ValueError("url is required for HTTP/SSE transport")
+                if not values.get("url") and not values.get("spec_path"):
+                    raise ValueError(
+                        "url or spec_path is required for HTTP/SSE transport"
+                    )
         return values
 
     @model_validator(mode="before")
     @classmethod
     def validate_credentials_requirements(cls, values):
-        if not isinstance(values, dict):
-            return values
+        """Validate credentials when provided.
 
-        auth_type = values.get("auth_type")
-        if auth_type in {MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic}:
-            credentials = values.get("credentials")
-            auth_value = None
-            if isinstance(credentials, dict):
-                auth_value = credentials.get("auth_value")
-            elif hasattr(credentials, "get"):
-                auth_value = credentials.get("auth_value")  # type: ignore[attr-defined]
-
-            if not auth_value:
-                raise ValueError(
-                    "auth_value is required when auth_type is api_key, bearer_token, or basic"
-                )
-
+        auth_value is optional — users may configure it dynamically
+        (e.g. via per-request headers or OAuth2 flows) instead of
+        storing a static value at server creation time.
+        """
         return values
 
 
@@ -1139,6 +1132,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
     url: Optional[str] = None
+    spec_path: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
     allowed_tools: Optional[List[str]] = None
@@ -1165,8 +1159,10 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
             elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url"):
-                    raise ValueError("url is required for HTTP/SSE transport")
+                if not values.get("url") and not values.get("spec_path"):
+                    raise ValueError(
+                        "url or spec_path is required for HTTP/SSE transport"
+                    )
         return values
 
 
@@ -1178,6 +1174,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     url: Optional[str] = None
+    spec_path: Optional[str] = None
     transport: MCPTransportType
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
@@ -1416,12 +1413,12 @@ class NewCustomerRequest(BudgetNewRequest):
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
     spend: Optional[float] = None
-    allowed_model_region: Optional[AllowedModelRegion] = (
-        None  # require all user requests to use models in this specific region
-    )
-    default_model: Optional[str] = (
-        None  # if no equivalent model in allowed region - default all requests to this model
-    )
+    allowed_model_region: Optional[
+        AllowedModelRegion
+    ] = None  # require all user requests to use models in this specific region
+    default_model: Optional[
+        str
+    ] = None  # if no equivalent model in allowed region - default all requests to this model
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
     @model_validator(mode="before")
@@ -1444,12 +1441,12 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: Optional[float] = None
     budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    allowed_model_region: Optional[AllowedModelRegion] = (
-        None  # require all user requests to use models in this specific region
-    )
-    default_model: Optional[str] = (
-        None  # if no equivalent model in allowed region - default all requests to this model
-    )
+    allowed_model_region: Optional[
+        AllowedModelRegion
+    ] = None  # require all user requests to use models in this specific region
+    default_model: Optional[
+        str
+    ] = None  # if no equivalent model in allowed region - default all requests to this model
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
@@ -2076,6 +2073,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_interval: int = Field(
         300, description="background health check interval in seconds"
     )
+    health_check_concurrency: Optional[int] = Field(
+        None,
+        description=(
+            "limit concurrent health checks per cycle; when unset, "
+            "health checks run without a concurrency cap"
+        ),
+    )
     alerting: Optional[List] = Field(
         None,
         description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
@@ -2146,6 +2150,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
     )
+    forward_client_headers_to_llm_api: Optional[bool] = Field(
+        None,
+        description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -2186,6 +2194,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     config: Dict = {}
     user_id: Optional[str] = None
     team_id: Optional[str] = None
+    agent_id: Optional[str] = None
     project_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Dict = {}
@@ -2263,12 +2272,16 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpm_limit: Optional[int] = None
     end_user_rpm_limit: Optional[int] = None
     end_user_max_budget: Optional[float] = None
+    end_user_model_max_budget: Optional[dict] = None
 
     # Organization Params
     organization_max_budget: Optional[float] = None
     organization_tpm_limit: Optional[int] = None
     organization_rpm_limit: Optional[int] = None
     organization_metadata: Optional[dict] = None
+
+    # Project Params
+    project_metadata: Optional[dict] = None
 
     # Time stamps
     last_refreshed_at: Optional[float] = None  # last time joint view was pulled from db
@@ -2434,8 +2447,18 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
         Any
     ] = None  # You might want to replace 'Any' with a more specific type if available
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    user_email: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="after")
+    def populate_user_email(self) -> "LiteLLM_OrganizationMembershipTable":
+        if self.user_email is None and self.user is not None:
+            if isinstance(self.user, dict):
+                self.user_email = self.user.get("user_email")
+            else:
+                self.user_email = getattr(self.user, "user_email", None)
+        return self
 
 
 class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
@@ -2561,6 +2584,7 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     team_id: str
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    tags: Optional[List[str]] = None
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2570,6 +2594,11 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
+        if "tags" in values and values["tags"] is not None:
+            if not isinstance(values["tags"], list):
+                raise ValueError(
+                    f"tags must be a list of strings, got {type(values['tags']).__name__}"
+                )
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
@@ -2587,6 +2616,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     description: Optional[str] = None
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
+    tags: Optional[List[str]] = None
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2597,6 +2627,11 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
+        if "tags" in values and values["tags"] is not None:
+            if not isinstance(values["tags"], list):
+                raise ValueError(
+                    f"tags must be a list of strings, got {type(values['tags']).__name__}"
+                )
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
@@ -3041,6 +3076,10 @@ class SpendLogsMetadata(TypedDict):
         str
     ]  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: Optional[float]  # LiteLLM overhead time in milliseconds
+    attempted_retries: Optional[
+        int
+    ]  # Number of retries attempted (0 = first attempt succeeded)
+    max_retries: Optional[int]  # Max retries configured for this request
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
@@ -3077,6 +3116,7 @@ class SpendLogsPayload(TypedDict):
     response: Optional[Union[str, list, dict]]
     proxy_server_request: Optional[str]
     session_id: Optional[str]
+    request_duration_ms: Optional[int]
     status: Literal["success", "failure"]
 
 
@@ -3653,6 +3693,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     spend_logs_metadata: Optional[dict]
     agent_id: Optional[str]
     trace_id: Optional[str]
+    session_id: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):
@@ -4096,6 +4137,15 @@ class SpendUpdateQueueItem(TypedDict, total=False):
     response_cost: Optional[float]
 
 
+class ToolDiscoveryQueueItem(TypedDict, total=False):
+    tool_name: str
+    origin: Optional[str]  # MCP server name or "user_defined"
+    created_by: Optional[str]
+    key_hash: Optional[str]  # hash of virtual key that triggered discovery
+    team_id: Optional[str]  # team that triggered discovery
+    key_alias: Optional[str]  # human-readable key alias
+
+
 class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     unified_file_id: str
     file_object: Optional[OpenAIFileObject] = None
@@ -4116,6 +4166,7 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     """Table for managing vector stores with target_model_names support."""
+
     unified_resource_id: str
     resource_object: Optional[Any] = None  # VectorStoreCreateResponse
     model_mappings: Dict[str, str]

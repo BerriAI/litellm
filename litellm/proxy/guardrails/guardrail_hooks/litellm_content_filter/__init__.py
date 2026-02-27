@@ -44,6 +44,12 @@ def initialize_guardrail(
         severity_threshold=getattr(litellm_params, "severity_threshold", "medium"),
         llm_router=llm_router,
         image_model=getattr(litellm_params, "image_model", None),
+        competitor_intent_config=getattr(
+            litellm_params, "competitor_intent_config", None
+        ),
+        end_session_after_n_fails=getattr(litellm_params, "end_session_after_n_fails", None),
+        on_violation=getattr(litellm_params, "on_violation", None),
+        realtime_violation_message=getattr(litellm_params, "realtime_violation_message", None),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(content_filter_guardrail)

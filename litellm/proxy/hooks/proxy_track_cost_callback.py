@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import log_db_metrics
+from litellm.proxy.auth.auth_checks import get_key_object, get_team_object, log_db_metrics
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -74,6 +74,10 @@ class _ProxyDBLogger(CustomLogger):
         ] = StandardLoggingPayloadSetup.get_error_information(
             original_exception=original_exception,
             traceback_str=traceback_str,
+        )
+
+        _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
+            metadata=_metadata,
         )
 
         existing_metadata: dict = request_data.get("metadata", None) or {}
@@ -254,6 +258,72 @@ class _ProxyDBLogger(CustomLogger):
             verbose_proxy_logger.exception(
                 "Error in tracking cost callback - %s", str(e)
             )
+
+    @staticmethod
+    async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
+        """
+        Enriches failure spend log metadata by looking up the key object (and team object)
+        from cache/DB when key fields are missing.
+
+        This handles two scenarios:
+        1. Auth errors (401): UserAPIKeyAuth is created with only api_key set, all other
+           fields are null. We look up the full key object to fill in alias, user_id,
+           team_id, etc.
+        2. Post-auth failures (provider errors, rate limits): key fields are populated
+           but team_alias is missing because LiteLLM_VerificationTokenView SQL view
+           doesn't include it. We look up the team object to fill in team_alias.
+        """
+        api_key_hash = metadata.get("user_api_key")
+        if not api_key_hash:
+            return metadata
+
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        # Step 1: If key fields are missing, look up the full key object
+        if metadata.get("user_api_key_alias") is None:
+            try:
+                key_obj = await get_key_object(
+                    hashed_token=api_key_hash,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if metadata.get("user_api_key_alias") is None:
+                    metadata["user_api_key_alias"] = key_obj.key_alias
+                if metadata.get("user_api_key_user_id") is None:
+                    metadata["user_api_key_user_id"] = key_obj.user_id
+                if metadata.get("user_api_key_team_id") is None:
+                    metadata["user_api_key_team_id"] = key_obj.team_id
+                if metadata.get("user_api_key_org_id") is None:
+                    metadata["user_api_key_org_id"] = key_obj.org_id
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Failed to enrich failure metadata with key info for api_key=%s",
+                    api_key_hash,
+                )
+
+        # Step 2: If team_id is known but team_alias is missing, look up the team object
+        team_id = metadata.get("user_api_key_team_id")
+        if team_id and metadata.get("user_api_key_team_alias") is None:
+            try:
+                team_obj = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if team_obj.team_alias is not None:
+                    metadata["user_api_key_team_alias"] = team_obj.team_alias
+            except Exception:
+                verbose_proxy_logger.debug(
+                    "Failed to enrich failure metadata with team_alias for team_id=%s",
+                    team_id,
+                )
+        return metadata
 
     @staticmethod
     def _should_track_errors_in_db():

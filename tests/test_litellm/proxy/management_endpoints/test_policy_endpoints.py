@@ -98,7 +98,7 @@ class TestApplyPoliciesEarlyReturn:
         mock_registry.is_initialized.return_value = False
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ):
             result = await apply_policies(
@@ -124,10 +124,10 @@ class TestApplyPoliciesEarlyReturn:
         mock_registry.get_all_policies.return_value = {}
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(policy_name="p", guardrails=[], inheritance_chain=[]),
         ):
             result = await apply_policies(
@@ -163,17 +163,17 @@ class TestApplyPoliciesWithGuardrails:
         mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(
                 policy_name="p",
                 guardrails=["my_guardrail"],
                 inheritance_chain=["p"],
             ),
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -216,17 +216,17 @@ class TestApplyPoliciesWithGuardrails:
         mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = get_callback
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(
                 policy_name="p",
                 guardrails=["guardrail_a", "guardrail_b"],
                 inheritance_chain=["p"],
             ),
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -254,17 +254,17 @@ class TestApplyPoliciesWithGuardrails:
         mock_guardrail_registry.get_initialized_guardrail_callback.return_value = None
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(
                 policy_name="p",
                 guardrails=["missing_guardrail"],
                 inheritance_chain=["p"],
             ),
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -302,17 +302,17 @@ class TestApplyPoliciesWithGuardrails:
         )
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(
                 policy_name="p",
                 guardrails=["failing_guardrail"],
                 inheritance_chain=["p"],
             ),
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -352,17 +352,17 @@ class TestApplyPoliciesWithGuardrails:
         )
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(
                 policy_name="p",
                 guardrails=["no_apply_guardrail"],
                 inheritance_chain=["p"],
             ),
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -414,17 +414,17 @@ class TestApplyPoliciesWithGuardrails:
         )
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(
                 policy_name="p",
                 guardrails=["guardrail_a", "guardrail_b"],
                 inheritance_chain=["p"],
             ),
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -476,13 +476,13 @@ class TestApplyPoliciesMultiplePolicies:
         ]
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             side_effect=resolve_returns,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -513,7 +513,7 @@ class TestApplyPoliciesDirectGuardrailNames:
         mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(
@@ -562,17 +562,17 @@ class TestApplyPoliciesDirectGuardrailNames:
         )
 
         with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.get_policy_registry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
             return_value=mock_registry,
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.PolicyResolver.resolve_policy_guardrails",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
             return_value=ResolvedPolicy(
                 policy_name="p",
                 guardrails=["from_policy"],
                 inheritance_chain=["p"],
             ),
         ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.GuardrailRegistry",
+            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
             return_value=mock_guardrail_registry,
         ):
             result = await apply_policies(

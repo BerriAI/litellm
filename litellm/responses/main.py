@@ -20,6 +20,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -670,6 +673,14 @@ def responses(
         )
 
         local_vars.update(kwargs)
+        # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
+        if reasoning is None and "reasoning_effort" in local_vars:
+            _mapped = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(
+                local_vars.pop("reasoning_effort")
+            )
+            if _mapped is not None:
+                reasoning = _mapped
+                local_vars["reasoning"] = _mapped
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
         response_api_optional_params: ResponsesAPIOptionalRequestParams = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(

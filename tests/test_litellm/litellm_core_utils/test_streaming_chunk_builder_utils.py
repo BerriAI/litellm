@@ -8,6 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm import stream_chunk_builder
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -512,3 +513,93 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77    
     assert usage.server_tool_use['web_search_requests'] == 2
+
+
+def test_sort_chunks_handles_dict_hidden_params_created_at():
+    chunks = [
+        {
+            "id": "chunk_2",
+            "object": "chat.completion.chunk",
+            "created": 2,
+            "model": "gpt-4.1-mini",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "b"}}],
+            "_hidden_params": {"created_at": 2},
+        },
+        {
+            "id": "chunk_1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4.1-mini",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "a"}}],
+            "_hidden_params": {"created_at": 1},
+        },
+    ]
+
+    processor = ChunkProcessor(chunks=chunks)
+    assert processor.chunks[0]["id"] == "chunk_1"
+    assert processor.chunks[1]["id"] == "chunk_2"
+
+
+def test_stream_chunk_builder_accepts_dict_snapshot_chunks():
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-123",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello ", role="assistant"),
+            )
+        ],
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-123",
+        created=2,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="world", role=None),
+            )
+        ],
+    )
+    chunk1._hidden_params = {"created_at": 1}
+    chunk2._hidden_params = {"created_at": 2}
+
+    chunks = []
+    for chunk in [chunk2, chunk1]:
+        chunk_dict = chunk.model_dump()
+        chunk_dict["_hidden_params"] = chunk._hidden_params
+        chunks.append(chunk_dict)
+
+    response = stream_chunk_builder(chunks=chunks)
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+
+
+def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
+    chunk = ModelResponseStream(
+        id="chatcmpl-123",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hi", role="assistant"),
+            )
+        ],
+    )
+    chunk_dict = chunk.model_dump()
+    chunk_dict["_hidden_params"] = {
+        "provider_specific_fields": {"traffic_type": "default"}
+    }
+
+    response = stream_chunk_builder(chunks=[chunk_dict])
+    assert response is not None
+    assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"

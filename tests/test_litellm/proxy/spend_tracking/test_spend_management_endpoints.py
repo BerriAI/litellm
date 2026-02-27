@@ -274,6 +274,7 @@ ignored_keys = [
     "endTime",
     "completionStartTime",
     "endTime",
+    "request_duration_ms",
     "organization_id",
     "metadata.model_map_information",
     "metadata.usage_object",
@@ -287,6 +288,20 @@ ignored_keys = [
     "metadata.additional_usage_values.speed",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.user_api_key",
+    "metadata.user_api_key_alias",
+    "metadata.user_api_key_team_id",
+    "metadata.user_api_key_project_id",
+    "metadata.user_api_key_org_id",
+    "metadata.user_api_key_user_id",
+    "metadata.user_api_key_team_alias",
+    "metadata.spend_logs_metadata",
+    "metadata.requester_ip_address",
+    "metadata.status",
+    "metadata.proxy_server_request",
+    "metadata.error_information",
+    "metadata.attempted_retries",
+    "metadata.max_retries",
 ]
 
 MODEL_LIST = [
@@ -588,6 +603,82 @@ async def test_ui_view_spend_logs_sort_validation_errors(
         )
 
         assert response.status_code == 400
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatch):
+    """Test that request_duration_ms is accepted as a valid sort_by field."""
+    base_logs = [
+        {
+            "request_id": "req_fast",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.10,
+            "total_tokens": 100,
+            "request_duration_ms": 100,
+            "startTime": "2025-01-01T00:00:00+00:00",
+            "endTime": "2025-01-01T00:00:00.100000+00:00",
+            "model": "gpt-4",
+        },
+        {
+            "request_id": "req_slow",
+            "api_key": "sk-test-key",
+            "user": "user1",
+            "spend": 0.05,
+            "total_tokens": 50,
+            "request_duration_ms": 5000,
+            "startTime": "2025-01-01T00:00:01+00:00",
+            "endTime": "2025-01-01T00:00:06+00:00",
+            "model": "gpt-4",
+        },
+    ]
+
+    async def mock_count(*args, **kwargs):
+        return len(base_logs)
+
+    async def mock_query_raw(sql_query, *params):
+        reverse = "DESC" in sql_query
+        sorted_logs = sorted(
+            base_logs, key=lambda x: x.get("request_duration_ms", 0), reverse=reverse
+        )
+        page_size = params[-2] if len(params) >= 2 else 50
+        skip = params[-1] if len(params) >= 1 else 0
+        return sorted_logs[skip : skip + page_size]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(side_effect=mock_count)
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "sort_by": "request_duration_ms",
+                "sort_order": "asc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        actual_ids = [log["request_id"] for log in data["data"]]
+        assert actual_ids == ["req_fast", "req_slow"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -972,39 +1063,45 @@ async def test_ui_view_spend_logs_with_status(client, monkeypatch):
 
     start_date, end_date = _default_date_range()
 
-    # Test success status
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "status_filter": "success",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
     )
+    try:
+        # Test success status
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "status_filter": "success",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["status"] == "success"
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["status"] == "success"
 
-    # Test failure status
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "status_filter": "failure",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
-    )
+        # Test failure status
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "status_filter": "failure",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["status"] == "failure"
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["status"] == "failure"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1046,25 +1143,31 @@ async def test_ui_view_spend_logs_with_model(client, monkeypatch):
 
     start_date, end_date = _default_date_range()
 
-    # Make the request with model filter
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "model": "gpt-3.5-turbo",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
     )
+    try:
+        # Make the request with model filter
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "model": "gpt-3.5-turbo",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    # Assert response
-    assert response.status_code == 200
-    data = response.json()
+        # Assert response
+        assert response.status_code == 200
+        data = response.json()
 
-    # Verify the filtered data
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["model"] == "gpt-3.5-turbo"
+        # Verify the filtered data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model"] == "gpt-3.5-turbo"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1109,21 +1212,27 @@ async def test_ui_view_spend_logs_with_model_id(client, monkeypatch):
 
     start_date, end_date = _default_date_range()
 
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "model_id": "deployment-id-1",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
     )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "model_id": "deployment-id-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["model_id"] == "deployment-id-1"
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_id"] == "deployment-id-1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1184,7 +1293,28 @@ async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
     assert data["data"][0]["api_key"] == "sk-test-key-1"
 
 
+async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
+    """Poll until mock has been called at least once, or timeout."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if mock.call_count > 0:
+            return
+        await asyncio.sleep(interval)
+    mock.assert_called_once()  # will raise with a clear message
+
+
 class TestSpendLogsPayload:
+    def setup_method(self):
+        self._original_callbacks = litellm.callbacks[:]
+        self._original_cache = litellm.cache
+        litellm.cache = None
+
+    def teardown_method(self):
+        litellm.callbacks = self._original_callbacks
+        litellm.cache = self._original_cache
+
     @pytest.mark.asyncio
     async def test_spend_logs_payload_e2e(self):
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
@@ -1203,9 +1333,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hello, world!"
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1263,7 +1391,7 @@ class TestSpendLogsPayload:
         mock_response.json.return_value = {
             "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
             "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-4-sonnet-20250514",
             "role": "assistant",
             "stop_reason": "end_turn",
             "stop_sequence": None,
@@ -1275,6 +1403,10 @@ class TestSpendLogsPayload:
     @pytest.mark.asyncio
     async def test_spend_logs_payload_success_log_with_api_base(self, monkeypatch):
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        # Clear any env overrides that would change the recorded api_base
+        monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
 
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
         # litellm._turn_on_debug()
@@ -1290,7 +1422,7 @@ class TestSpendLogsPayload:
             client, "post", side_effect=self.mock_anthropic_response
         ):
             response = await litellm.acompletion(
-                model="claude-3-7-sonnet-20250219",
+                model="claude-4-sonnet-20250514",
                 messages=[{"role": "user", "content": "Hello, world!"}],
                 metadata={"user_api_key_end_user_id": "test_user_1"},
                 client=client,
@@ -1298,9 +1430,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hi! My name is Claude."
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1319,10 +1449,10 @@ class TestSpendLogsPayload:
                     "completionStartTime": datetime.datetime(
                         2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
                     ),
-                    "model": "claude-3-7-sonnet-20250219",
+                    "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1351,8 +1481,12 @@ class TestSpendLogsPayload:
                 assert False, f"Dictionary mismatch: {differences}"
 
     @pytest.mark.asyncio
-    async def test_spend_logs_payload_success_log_with_router(self):
+    async def test_spend_logs_payload_success_log_with_router(self, monkeypatch):
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        # Clear any env overrides that would change the recorded api_base
+        monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
 
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
         # litellm._turn_on_debug()
@@ -1364,7 +1498,7 @@ class TestSpendLogsPayload:
                 {
                     "model_name": "my-anthropic-model-group",
                     "litellm_params": {
-                        "model": "claude-3-7-sonnet-20250219",
+                        "model": "claude-4-sonnet-20250514",
                     },
                     "model_info": {
                         "id": "my-unique-model-id",
@@ -1390,9 +1524,7 @@ class TestSpendLogsPayload:
 
             assert response.choices[0].message.content == "Hi! My name is Claude."
 
-            await asyncio.sleep(1)
-
-            mock_client.assert_called_once()
+            await _wait_for_mock_call(mock_client)
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
@@ -1411,10 +1543,10 @@ class TestSpendLogsPayload:
                     "completionStartTime": datetime.datetime(
                         2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
                     ),
-                    "model": "claude-3-7-sonnet-20250219",
+                    "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1518,58 +1650,64 @@ async def test_global_spend_keys_endpoint_limit_validation(client, monkeypatch):
     # Create a simple mock for prisma client with empty response
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
-    mock_query_raw = MagicMock()
-    mock_query_raw.return_value = asyncio.Future()
-    mock_query_raw.return_value.set_result([])
+    mock_query_raw = AsyncMock(return_value=[])
     mock_db.query_raw = mock_query_raw
     mock_prisma_client.db = mock_db
     # Apply the mock to the prisma_client module
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    # Call the endpoint without specifying a limit
-    no_limit_response = client.get("/global/spend/keys")
-    assert no_limit_response.status_code == 200
-    mock_query_raw.assert_called_once_with('SELECT * FROM "Last30dKeysBySpend";')
-    # Reset the mock for the next test
-    mock_query_raw.reset_mock()
-    # Test with valid input
-    normal_limit = "10"
-    good_input_response = client.get(f"/global/spend/keys?limit={normal_limit}")
-    assert good_input_response.status_code == 200
-    # Verify the mock was called with the correct parameters
-    mock_query_raw.assert_called_once_with(
-        'SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;', 10
+    # Override auth to bypass API key validation
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
-    # Reset the mock for the next test
-    mock_query_raw.reset_mock()
-    # Test with SQL injection payload
-    sql_injection_limit = "10; DROP TABLE spend_logs; --"
-    response = client.get(f"/global/spend/keys?limit={sql_injection_limit}")
-    # Verify the response is a validation error (422)
-    assert response.status_code == 422
-    # Verify the mock was not called with the SQL injection payload
-    # This confirms that the validation happens before the database query
-    mock_query_raw.assert_not_called()
-    # Reset the mock for the next test
-    mock_query_raw.reset_mock()
-    # Test with non-numeric input
-    non_numeric_limit = "abc"
-    response = client.get(f"/global/spend/keys?limit={non_numeric_limit}")
-    assert response.status_code == 422
-    mock_query_raw.assert_not_called()
-    mock_query_raw.reset_mock()
-    # Test with negative number
-    negative_limit = "-5"
-    response = client.get(f"/global/spend/keys?limit={negative_limit}")
-    assert response.status_code == 422
-    mock_query_raw.assert_not_called()
-    mock_query_raw.reset_mock()
-    # Test with zero
-    zero_limit = "0"
-    response = client.get(f"/global/spend/keys?limit={zero_limit}")
-    assert response.status_code == 422
-    mock_query_raw.assert_not_called()
-    mock_query_raw.reset_mock()
+
+    try:
+        # Call the endpoint without specifying a limit
+        no_limit_response = client.get("/global/spend/keys")
+        assert no_limit_response.status_code == 200
+        mock_query_raw.assert_called_once_with('SELECT * FROM "Last30dKeysBySpend";')
+        # Reset the mock for the next test
+        mock_query_raw.reset_mock()
+        # Test with valid input
+        normal_limit = "10"
+        good_input_response = client.get(f"/global/spend/keys?limit={normal_limit}")
+        assert good_input_response.status_code == 200
+        # Verify the mock was called with the correct parameters
+        mock_query_raw.assert_called_once_with(
+            'SELECT * FROM "Last30dKeysBySpend" LIMIT $1 ;', 10
+        )
+        # Reset the mock for the next test
+        mock_query_raw.reset_mock()
+        # Test with SQL injection payload
+        sql_injection_limit = "10; DROP TABLE spend_logs; --"
+        response = client.get(f"/global/spend/keys?limit={sql_injection_limit}")
+        # Verify the response is a validation error (422)
+        assert response.status_code == 422
+        # Verify the mock was not called with the SQL injection payload
+        # This confirms that the validation happens before the database query
+        mock_query_raw.assert_not_called()
+        # Reset the mock for the next test
+        mock_query_raw.reset_mock()
+        # Test with non-numeric input
+        non_numeric_limit = "abc"
+        response = client.get(f"/global/spend/keys?limit={non_numeric_limit}")
+        assert response.status_code == 422
+        mock_query_raw.assert_not_called()
+        mock_query_raw.reset_mock()
+        # Test with negative number
+        negative_limit = "-5"
+        response = client.get(f"/global/spend/keys?limit={negative_limit}")
+        assert response.status_code == 422
+        mock_query_raw.assert_not_called()
+        mock_query_raw.reset_mock()
+        # Test with zero
+        zero_limit = "0"
+        response = client.get(f"/global/spend/keys?limit={zero_limit}")
+        assert response.status_code == 422
+        mock_query_raw.assert_not_called()
+        mock_query_raw.reset_mock()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1656,69 +1794,75 @@ async def test_view_spend_logs_summarize_parameter(client, monkeypatch):
     )
     end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Test 1: summarize=false should return individual log entries
-    response = client.get(
-        "/spend/logs",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-            "summarize": "false",
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
     )
+    try:
+        # Test 1: summarize=false should return individual log entries
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "summarize": "false",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
+        assert response.status_code == 200
+        data = response.json()
 
-    # Should return the raw log entries
-    assert isinstance(data, list)
-    assert len(data) == 2
-    assert data[0]["id"] == "log1"
-    assert data[1]["id"] == "log2"
-    assert data[0]["request_id"] == "req1"
-    assert data[1]["request_id"] == "req2"
+        # Should return the raw log entries
+        assert isinstance(data, list)
+        assert len(data) == 2
+        assert data[0]["id"] == "log1"
+        assert data[1]["id"] == "log2"
+        assert data[0]["request_id"] == "req1"
+        assert data[1]["request_id"] == "req2"
 
-    # Test 2: summarize=true should return grouped data
-    response = client.get(
-        "/spend/logs",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-            "summarize": "true",
-        },
-        headers={"Authorization": "Bearer sk-test"},
-    )
+        # Test 2: summarize=true should return grouped data
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "summarize": "true",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
+        assert response.status_code == 200
+        data = response.json()
 
-    # Should return grouped/summarized data
-    assert isinstance(data, list)
-    # The structure should be different - grouped by date with aggregated spend
-    assert "startTime" in data[0]
-    assert "spend" in data[0]
-    assert "users" in data[0]
-    assert "models" in data[0]
+        # Should return grouped/summarized data
+        assert isinstance(data, list)
+        # The structure should be different - grouped by date with aggregated spend
+        assert "startTime" in data[0]
+        assert "spend" in data[0]
+        assert "users" in data[0]
+        assert "models" in data[0]
 
-    # Test 3: default behavior (no summarize parameter) should maintain backward compatibility
-    response = client.get(
-        "/spend/logs",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
-    )
+        # Test 3: default behavior (no summarize parameter) should maintain backward compatibility
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    assert response.status_code == 200
-    data = response.json()
+        assert response.status_code == 200
+        data = response.json()
 
-    # Should return grouped/summarized data (same as summarize=true)
-    assert isinstance(data, list)
-    assert "startTime" in data[0]
-    assert "spend" in data[0]
-    assert "users" in data[0]
-    assert "models" in data[0]
+        # Should return grouped/summarized data (same as summarize=true)
+        assert isinstance(data, list)
+        assert "startTime" in data[0]
+        assert "spend" in data[0]
+        assert "users" in data[0]
+        assert "models" in data[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -1916,28 +2060,34 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     start_date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
     end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Call the endpoint with both start and end dates.
-    # We don't need `summarize=true` as it's the default.
-    response = client.get(
-        "/spend/logs",
-        params={
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
     )
+    try:
+        # Call the endpoint with both start and end dates.
+        # We don't need `summarize=true` as it's the default.
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    # ASSERTIONS
-    assert response.status_code == 200
-    data = response.json()
+        # ASSERTIONS
+        assert response.status_code == 200
+        data = response.json()
 
-    # Check that the response is not empty and has the summarized structure.
-    assert isinstance(data, list)
-    assert len(data) > 0
-    assert "startTime" in data[0]
-    assert "spend" in data[0]
-    assert "users" in data[0]
-    assert "models" in data[0]
+        # Check that the response is not empty and has the summarized structure.
+        assert isinstance(data, list)
+        assert len(data) > 0
+        assert "startTime" in data[0]
+        assert "spend" in data[0]
+        assert "users" in data[0]
+        assert "models" in data[0]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio

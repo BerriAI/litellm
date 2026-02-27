@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { InfoCircleOutlined, LoadingOutlined, UserOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, LoadingOutlined } from "@ant-design/icons";
 import {
   BarChart,
   Card,
@@ -21,7 +21,7 @@ import {
   Text,
   Title
 } from "@tremor/react";
-import { Alert, Segmented, Select, Tooltip } from "antd";
+import { Alert, Segmented, Select, Tooltip, Typography } from "antd";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import React, { useCallback, useEffect, useMemo, useState, type UIEvent } from "react";
 
@@ -50,6 +50,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import UsageAIChatPanel from "./UsageAIChatPanel";
 
 interface UsagePageProps {
   teams: Team[];
@@ -142,10 +143,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [modelViewType, setModelViewType] = useState<"groups" | "individual">("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
-  const [showOrganizationBanner, setShowOrganizationBanner] = useState(true);
-  const [showCustomerBanner, setShowCustomerBanner] = useState(true);
+  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [usageView, setUsageView] = useState<UsageOption>("global");
-  const [showAgentBanner, setShowAgentBanner] = useState(true);
+  const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const getAllTags = async () => {
@@ -498,6 +498,36 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {/* Your Usage Panel */}
           {usageView === "global" && (
             <>
+            {isAdmin && (
+              <div className="mb-4">
+                <Text className="mb-2">Filter by user</Text>
+                <Select
+                  showSearch
+                  allowClear
+                  style={{ width: "100%" }}
+                  placeholder="Select user to filter..."
+                  value={selectedUserId}
+                  onChange={(value) => setSelectedUserId(value ?? null)}
+                  filterOption={false}
+                  onSearch={handleUserSearchChange}
+                  searchValue={userSearchInput}
+                  onPopupScroll={handleUserPopupScroll}
+                  loading={isLoadingUsers}
+                  notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
+                  options={userOptions}
+                  popupRender={(menu) => (
+                    <>
+                      {menu}
+                      {isFetchingNextUsersPage && (
+                        <div style={{ textAlign: "center", padding: 8 }}>
+                          <LoadingOutlined spin />
+                        </div>
+                      )}
+                    </>
+                  )}
+                />
+              </div>
+            )}
             <TabGroup>
               <div className="flex justify-between items-center">
                 <TabList variant="solid" className="mt-1">
@@ -507,21 +537,33 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <Tab>MCP Server Activity</Tab>
                   <Tab>Endpoint Activity</Tab>
                 </TabList>
-                <Button
-                  onClick={() => setIsGlobalExportModalOpen(true)}
-                  icon={() => (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                      />
-                    </svg>
-                  )}
-                >
-                  Export Data
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={() => setIsAiChatOpen(true)}
+                    icon={() => (
+                      <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
+                      </svg>
+                    )}
+                  >
+                    Ask AI
+                  </Button>
+                  <Button
+                    onClick={() => setIsGlobalExportModalOpen(true)}
+                    icon={() => (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                        />
+                      </svg>
+                    )}
+                  >
+                    Export Data
+                  </Button>
+                </div>
               </div>
               <TabPanels>
                 {/* Cost Panel */}
@@ -548,41 +590,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </>
                           )}
                         </Text>
-                        {isAdmin && (
-                          <div className="flex items-center gap-2">
-                            <UserOutlined style={{ fontSize: "14px", color: "#6b7280" }} />
-                            <Select
-                              showSearch
-                              allowClear
-                              style={{ width: 300 }}
-                              placeholder="All Users (Global View)"
-                              value={selectedUserId}
-                              onChange={(value) => setSelectedUserId(value ?? null)}
-                              filterOption={false}
-                              onSearch={handleUserSearchChange}
-                              searchValue={userSearchInput}
-                              onPopupScroll={handleUserPopupScroll}
-                              loading={isLoadingUsers}
-                              notFoundContent={isLoadingUsers ? <LoadingOutlined spin /> : "No users found"}
-                              options={userOptions}
-                              popupRender={(menu) => (
-                                <>
-                                  {menu}
-                                  {isFetchingNextUsersPage && (
-                                    <div style={{ textAlign: "center", padding: 8 }}>
-                                      <LoadingOutlined spin />
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                            />
-                            {selectedUserId && (
-                              <span className="text-xs text-gray-500">
-                                Filtering by user
-                              </span>
-                            )}
-                          </div>
-                        )}
                       </div>
 
                       <ViewUserSpend
@@ -805,33 +812,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {/* Organization Usage Panel */}
 
           {usageView === "organization" && (
-            <>
-              {showOrganizationBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Organization usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowOrganizationBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="organization"
-                userID={userID}
-                userRole={userRole}
-                dateValue={dateValue}
-                entityList={
-                  organizations?.map((organization) => ({
-                    label: organization.organization_alias,
-                    value: organization.organization_id,
-                  })) || null
-                }
-                premiumUser={premiumUser}
-              />
-            </>
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="organization"
+              userID={userID}
+              userRole={userRole}
+              dateValue={dateValue}
+              entityList={
+                organizations?.map((organization) => ({
+                  label: organization.organization_alias,
+                  value: organization.organization_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+            />
           )}
 
           {/* Team Usage Panel */}
@@ -854,71 +848,76 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
           {/* Customer Usage Panel */}
           {usageView === "customer" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="customer"
+              userID={userID}
+              userRole={userRole}
+              entityList={
+                customers?.map((customer) => ({
+                  label: customer.alias || customer.user_id,
+                  value: customer.user_id,
+                })) || null
+              }
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
+          )}
+          {/* Tag Usage Panel */}
+          {usageView === "tag" && (
             <>
-              {showCustomerBanner && (
+              {showCredentialBanner && (
                 <Alert
                   banner
                   type="info"
-                  message="Customer usage is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
+                  message="Reusable credentials are automatically tracked as tags"
+                  description={
+                    <Typography.Text>
+                      When a reusable credential is used, it will appear as a tag prefixed with{" "}
+                      <Typography.Text code>Credential: </Typography.Text>
+                      in this view.
+                    </Typography.Text>
+                  }
                   closable
-                  onClose={() => setShowCustomerBanner(false)}
+                  onClose={() => setShowCredentialBanner(false)}
                   className="mb-5"
                 />
               )}
               <EntityUsage
                 accessToken={accessToken}
-                entityType="customer"
+                entityType="tag"
                 userID={userID}
                 userRole={userRole}
-                entityList={
-                  customers?.map((customer) => ({
-                    label: customer.alias || customer.user_id,
-                    value: customer.user_id,
-                  })) || null
-                }
+                entityList={allTags}
                 premiumUser={premiumUser}
                 dateValue={dateValue}
               />
             </>
           )}
-          {/* Tag Usage Panel */}
-          {usageView === "tag" && (
+          {usageView === "agent" && (
             <EntityUsage
               accessToken={accessToken}
-              entityType="tag"
+              entityType="agent"
               userID={userID}
               userRole={userRole}
-              entityList={allTags}
+              entityList={
+                agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
+              }
               premiumUser={premiumUser}
               dateValue={dateValue}
             />
           )}
-          {usageView === "agent" && (
-            <>
-              {showAgentBanner && (
-                <Alert
-                  banner
-                  type="info"
-                  message="Agent usage (A2A) is a new feature."
-                  description="Spend is tracked from feature launch and previous data isn't backfilled, so only future usage appears here."
-                  closable
-                  onClose={() => setShowAgentBanner(false)}
-                  className="mb-5"
-                />
-              )}
-              <EntityUsage
-                accessToken={accessToken}
-                entityType="agent"
-                userID={userID}
-                userRole={userRole}
-                entityList={
-                  agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
-                }
-                premiumUser={premiumUser}
-                dateValue={dateValue}
-              />{" "}
-            </>
+          {/* User Usage Panel */}
+          {usageView === "user" && (
+            <EntityUsage
+              accessToken={accessToken}
+              entityType="user"
+              userID={userID}
+              userRole={userRole}
+              entityList={userOptions.length > 0 ? userOptions : null}
+              premiumUser={premiumUser}
+              dateValue={dateValue}
+            />
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
@@ -946,6 +945,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         dateRange={dateValue}
         selectedFilters={[]}
         customTitle="Export Usage Data"
+      />
+
+      {/* AI Chat Panel */}
+      <UsageAIChatPanel
+        open={isAiChatOpen}
+        onClose={() => setIsAiChatOpen(false)}
+        accessToken={accessToken}
       />
     </div>
   );

@@ -924,14 +924,7 @@ class AmazonConverseConfig(BaseConfig):
                     self._validate_request_metadata(value)  # type: ignore
                     optional_params["requestMetadata"] = value
             if param == "service_tier" and isinstance(value, str):
-                # Map OpenAI service_tier (string) to Bedrock serviceTier (object)
-                # OpenAI values: "auto", "default", "flex", "priority"
-                # Bedrock values: "default", "flex", "priority" (no "auto")
-                bedrock_tier = value
-                if value == "auto":
-                    bedrock_tier = "default"  # Bedrock doesn't support "auto"
-                if bedrock_tier in ("default", "flex", "priority"):
-                    optional_params["serviceTier"] = {"type": bedrock_tier}
+                self._map_service_tier_param(value, optional_params)
 
             if param == "web_search_options" and isinstance(value, dict):
                 # Note: we use `isinstance(value, dict)` instead of `value and isinstance(value, dict)`
@@ -961,6 +954,18 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(auto={})
 
         return optional_params
+
+    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
+        """Map OpenAI service_tier (string) to Bedrock serviceTier (object).
+
+        OpenAI values: "auto", "default", "flex", "priority"
+        Bedrock values: "default", "flex", "priority" (no "auto")
+        """
+        bedrock_tier = value
+        if value == "auto":
+            bedrock_tier = "default"  # Bedrock doesn't support "auto"
+        if bedrock_tier in ("default", "flex", "priority"):
+            optional_params["serviceTier"] = {"type": bedrock_tier}
 
     def _translate_response_format_param(
         self,
@@ -1201,6 +1206,17 @@ class AmazonConverseConfig(BaseConfig):
         inference_params = {
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
+
+        # Handle parallel_tool_calls configuration
+        parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
+        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+            for key, value in parallel_tool_use_config.items():
+                if key in additional_request_params and isinstance(additional_request_params[key], dict) and isinstance(value, dict):
+                    additional_request_params[key].update(value)
+                else:
+                    additional_request_params[key] = value
+
+        additional_request_params.pop("parallel_tool_calls", None)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(

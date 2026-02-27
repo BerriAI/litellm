@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import {
@@ -29,6 +30,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
   const { userId, userEmail, userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
   const disableUsageIndicator = useDisableUsageIndicator();
+  const disableBlogPosts = useDisableBlogPosts();
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
 
   useEffect(() => {
@@ -146,6 +148,23 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
             }
           }}
           aria-label="Toggle hide usage indicator"
+        />
+      </Space>
+      <Space style={{ width: "100%", justifyContent: "space-between" }}>
+        <Text type="secondary">Hide Blog Posts</Text>
+        <Switch
+          size="small"
+          checked={disableBlogPosts}
+          onChange={(checked) => {
+            if (checked) {
+              setLocalStorageItem("disableBlogPosts", "true");
+              emitLocalStorageChange("disableBlogPosts");
+            } else {
+              removeLocalStorageItem("disableBlogPosts");
+              emitLocalStorageChange("disableBlogPosts");
+            }
+          }}
+          aria-label="Toggle hide blog posts"
         />
       </Space>
     </Space>
