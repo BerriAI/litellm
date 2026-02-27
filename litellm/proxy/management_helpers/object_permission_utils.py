@@ -279,10 +279,18 @@ async def validate_mcp_object_permission_for_key(
         )
         from litellm.proxy.proxy_server import user_api_key_cache
     except ImportError:
-        verbose_proxy_logger.debug(
-            "MCP modules not available, skipping MCP object permission validation"
+        verbose_proxy_logger.warning(
+            "MCP modules not available, cannot validate MCP object permission"
         )
-        return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "MCP object permission validation is unavailable. "
+                    "Cannot assign mcp_servers or mcp_access_groups to this key."
+                )
+            },
+        )
 
     if prisma_client is None or user_api_key_cache is None:
         return
@@ -299,8 +307,9 @@ async def validate_mcp_object_permission_for_key(
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
     )
-    if allowed_access_group_ids is None:
-        allowed_access_group_ids = set()
+    # None is impossible here: admins return early above, and
+    # get_allowed_mcp_access_groups_for_user returns None only for admins.
+    assert allowed_access_group_ids is not None
 
     # Validate requested mcp_servers
     disallowed_servers = [
