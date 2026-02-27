@@ -241,12 +241,12 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   return (
     <Card
       title={
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
           <Title level={5} style={{ margin: 0 }}>
-            Content Categories
+            Blocked topics
           </Title>
-          <Text type="secondary" style={{ fontSize: 14, fontWeight: 400 }}>
-            Detect harmful content, bias, and inappropriate advice using semantic analysis
+          <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+            Select topics to block using keyword and semantic analysis
           </Text>
         </div>
       }
@@ -316,10 +316,13 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                 borderRadius: "4px",
                 overflow: "auto",
                 maxHeight: "300px",
+                maxWidth: "100%",
                 fontSize: "12px",
                 lineHeight: "1.5",
                 margin: 0,
                 border: "1px solid #e0e0e0",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
               }}
             >
               <code>{previewYaml}</code>
@@ -410,7 +413,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             borderRadius: "4px",
           }}
         >
-          No content categories selected. Add categories to detect harmful content, bias, or inappropriate advice.
+          No blocked topics selected. Add topics to detect and block harmful content.
         </div>
       )}
     </Card>

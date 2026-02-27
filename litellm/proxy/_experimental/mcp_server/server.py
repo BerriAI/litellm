@@ -43,9 +43,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.litellm_pre_call_utils import (
-    LiteLLMProxyRequestSetup,
-)
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
@@ -773,8 +771,8 @@ if MCP_AVAILABLE:
                 user_api_key_auth
             )
         )
-        allowed_mcp_server_ids = (
-            global_mcp_server_manager.filter_server_ids_by_ip(
+        allowed_mcp_server_ids, _ip_blocked = (
+            global_mcp_server_manager.filter_server_ids_by_ip_with_info(
                 allowed_mcp_server_ids, client_ip
             )
         )
@@ -782,6 +780,16 @@ if MCP_AVAILABLE:
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
             client_ip, allowed_mcp_server_ids,
         )
+        if _ip_blocked > 0:
+            verbose_logger.debug(
+                "MCP IP filtering: %d server(s) are not accessible from client IP %s "
+                "because they are restricted to internal networks. "
+                "No tools from those servers will be returned. "
+                "To expose a server externally, set 'available_on_public_internet: true' "
+                "in its configuration.",
+                _ip_blocked,
+                client_ip,
+            )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
@@ -795,6 +803,7 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
+        
 
         return allowed_mcp_servers
 
@@ -938,9 +947,6 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
-            # Decide whether to add prefix based on number of allowed servers
-            add_prefix = not (len(allowed_mcp_servers) == 1)
-
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
             ) -> List[MCPTool]:
@@ -961,7 +967,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -1079,8 +1085,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        # Decide whether to add prefix based on number of allowed servers
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         # Get prompts from each allowed server
         all_prompts = []
@@ -1101,7 +1105,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
 
@@ -1140,7 +1144,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
@@ -1160,7 +1163,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
@@ -1197,7 +1200,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1218,7 +1220,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                 )
@@ -1676,14 +1678,9 @@ if MCP_AVAILABLE:
                 detail="User not allowed to get this prompt.",
             )
 
-        # Decide whether to add prefix based on number of allowed servers
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
-        if add_prefix:
-            original_prompt_name, server_name = split_server_prefix_from_name(name)
-        else:
-            original_prompt_name = name
-            server_name = allowed_mcp_servers[0].name
+        # Extract server name from prefixed prompt name
+        original_prompt_name, server_name = split_server_prefix_from_name(name)
 
         server = next((s for s in allowed_mcp_servers if s.name == server_name), None)
         if server is None:

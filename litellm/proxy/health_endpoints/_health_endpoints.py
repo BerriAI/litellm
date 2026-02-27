@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import os
 import time
 import traceback
@@ -10,8 +11,9 @@ import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -32,7 +34,6 @@ from litellm.proxy.health_check import (
     run_with_timeout,
 )
 from litellm.secret_managers.main import get_secret
-from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
 #### Health ENDPOINTS ####
 
@@ -110,26 +111,31 @@ def _resolve_os_environ_variables(params: dict) -> dict:
 def get_callback_identifier(callback):
     """
     Get the callback identifier string, handling both strings and objects.
-    
+
     This function extracts a string identifier from a callback, which can be:
     - A string (returned as-is)
     - An object with a callback_name attribute
     - An object registered in CustomLoggerRegistry
     - Falls back to callback_name() helper function
-    
+
     Args:
         callback: The callback to identify (can be str or object)
-        
+
     Returns:
         str: The callback identifier string
     """
     if isinstance(callback, str):
         return callback
-    if hasattr(callback, 'callback_name') and callback.callback_name:
+    if hasattr(callback, "callback_name") and callback.callback_name:
         return callback.callback_name
-    if hasattr(callback, '__class__'):
-        callback_strs = CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback.__class__)
-        if hasattr(callback, 'callback_name') and callback.callback_name in callback_strs:
+    if hasattr(callback, "__class__"):
+        callback_strs = CustomLoggerRegistry.get_all_callback_strs_from_class_type(
+            callback.__class__
+        )
+        if (
+            hasattr(callback, "callback_name")
+            and callback.callback_name in callback_strs
+        ):
             return callback.callback_name
         if callback_strs:
             return callback_strs[0]
@@ -151,7 +157,7 @@ services = Union[
         "datadog_llm_observability",
         "generic_api",
         "arize",
-        "sqs"
+        "sqs",
     ],
     str,
 ]
@@ -224,7 +230,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
-            "sqs"
+            "sqs",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -238,14 +244,14 @@ async def health_services_endpoint(  # noqa: PLR0915
             service_in_success_callbacks = True
         else:
             for cb in litellm.success_callback:
-                if hasattr(cb, 'callback_name') and cb.callback_name == service:
+                if getattr(cb, "callback_name", None) == service:
                     service_in_success_callbacks = True
                     break
                 cb_id = get_callback_identifier(cb)
                 if cb_id == service:
                     service_in_success_callbacks = True
                     break
-        
+
         if (
             service == "openmeter"
             or service == "braintrust"
@@ -320,6 +326,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             )
         elif service == "sqs":
             from litellm.integrations.sqs import SQSLogger
+
             sqs_logger = SQSLogger()
             response = await sqs_logger.async_health_check()
             return {
@@ -518,12 +525,12 @@ async def _save_health_check_to_db(
 def _build_model_param_to_info_mapping(model_list: list) -> dict:
     """
     Build a mapping from model parameter to model info (model_name, model_id).
-    
+
     Multiple models might share the same model parameter, so we use a list.
-    
+
     Args:
         model_list: List of model configurations
-        
+
     Returns:
         Dictionary mapping model parameter to list of model info dicts
     """
@@ -534,14 +541,16 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
         model_id = model_info.get("id")
         litellm_params = model.get("litellm_params", {})
         model_param = litellm_params.get("model")
-        
+
         if model_param and model_name:
             if model_param not in model_param_to_info:
                 model_param_to_info[model_param] = []
-            model_param_to_info[model_param].append({
-                "model_name": model_name,
-                "model_id": model_id,
-            })
+            model_param_to_info[model_param].append(
+                {
+                    "model_name": model_name,
+                    "model_id": model_id,
+                }
+            )
     return model_param_to_info
 
 
@@ -552,19 +561,19 @@ def _aggregate_health_check_results(
 ) -> dict:
     """
     Aggregate health check results per unique model.
-    
+
     Uses (model_id, model_name) as key, or (None, model_name) if model_id is None.
-    
+
     Args:
         model_param_to_info: Mapping from model parameter to model info
         healthy_endpoints: List of healthy endpoint results
         unhealthy_endpoints: List of unhealthy endpoint results
-        
+
     Returns:
         Dictionary mapping (model_id, model_name) to aggregated health check results
     """
     model_results = {}
-    
+
     # Process healthy endpoints
     for endpoint in healthy_endpoints:
         model_param = endpoint.get("model")
@@ -580,7 +589,7 @@ def _aggregate_health_check_results(
                         "error_message": None,
                     }
                 model_results[key]["healthy_count"] += 1
-    
+
     # Process unhealthy endpoints
     for endpoint in unhealthy_endpoints:
         model_param = endpoint.get("model")
@@ -600,7 +609,7 @@ def _aggregate_health_check_results(
                 # Use the first error message encountered
                 if not model_results[key]["error_message"] and error_message:
                     model_results[key]["error_message"] = str(error_message)[:500]
-    
+
     return model_results
 
 
@@ -613,14 +622,14 @@ async def _save_health_check_results_if_changed(
 ):
     """
     Save health check results to database, but only if status changed or >1 hour since last save.
-    
+
     OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
     This dramatically reduces database writes when health status remains stable.
-    
+
     - Stable systems: ~1 write/hour per model (instead of 12 writes/hour with 5-min intervals)
     - Status changes: Immediate write (no delay)
     - Result: ~92% reduction in DB writes for stable systems, while maintaining real-time updates on changes
-    
+
     Args:
         prisma_client: Database client
         model_results: Dictionary of aggregated health check results per model
@@ -630,7 +639,7 @@ async def _save_health_check_results_if_changed(
     """
     for result in model_results.values():
         new_status = "healthy" if result["healthy_count"] > 0 else "unhealthy"
-        
+
         # Check if we should save this result
         should_save = True
         lookup_key = result["model_id"] if result["model_id"] else result["model_name"]
@@ -641,6 +650,7 @@ async def _save_health_check_results_if_changed(
                 # Check if last check was recent (within 1 hour)
                 if last_check.checked_at:
                     from datetime import datetime, timezone
+
                     time_since_last_check = (
                         datetime.now(timezone.utc) - last_check.checked_at
                     ).total_seconds()
@@ -648,7 +658,7 @@ async def _save_health_check_results_if_changed(
                     # This ensures we still get periodic updates even if status is stable
                     if time_since_last_check < 3600:  # 1 hour threshold
                         should_save = False
-        
+
         if should_save:
             asyncio.create_task(
                 prisma_client.save_health_check_result(
@@ -675,27 +685,27 @@ async def _save_background_health_checks_to_db(
 ):
     """
     Save background health check results to database for each model.
-    
+
     Maps health check endpoints back to their original models to get model_name and model_id.
     Aggregates results per unique model (by model_id if available, otherwise model_name).
-    
+
     OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
     This dramatically reduces database writes when health status remains stable.
     """
     if prisma_client is None:
         return
-    
+
     try:
         # Step 1: Build mapping from model parameter to model info
         model_param_to_info = _build_model_param_to_info_mapping(model_list)
-        
+
         # Step 2: Aggregate health check results per unique model
         model_results = _aggregate_health_check_results(
             model_param_to_info,
             healthy_endpoints,
             unhealthy_endpoints,
         )
-        
+
         # Step 3: Get latest health checks for all models in one query to compare status
         latest_checks = await prisma_client.get_all_latest_health_checks()
         latest_checks_map = {}
@@ -704,7 +714,7 @@ async def _save_background_health_checks_to_db(
             key = check.model_id if check.model_id else check.model_name
             if key not in latest_checks_map:
                 latest_checks_map[key] = check
-        
+
         # Step 4: Save aggregated results, but only if status changed
         await _save_health_check_results_if_changed(
             prisma_client,
@@ -729,10 +739,16 @@ async def _perform_health_check_and_save(
     start_time,
     user_id,
     model_id=None,
+    max_concurrency=None,
 ):
     """Helper function to perform health check and save results to database"""
     healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-        model_list=model_list, cli_model=cli_model, model=target_model, details=details
+        model_list=model_list,
+        cli_model=cli_model,
+        model=target_model,
+        details=details,
+        max_concurrency=max_concurrency,
+        model_id=model_id,
     )
 
     # Optionally save health check result to database (non-blocking)
@@ -789,6 +805,7 @@ async def health_endpoint(
     import time
 
     from litellm.proxy.proxy_server import (
+        health_check_concurrency,
         health_check_details,
         health_check_results,
         llm_model_list,
@@ -841,6 +858,7 @@ async def health_endpoint(
                     start_time=start_time,
                     user_id=user_api_key_dict.user_id,
                     model_id=None,  # CLI model doesn't have model_id
+                    max_concurrency=health_check_concurrency,
                 )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -864,6 +882,7 @@ async def health_endpoint(
                 start_time=start_time,
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
+                max_concurrency=health_check_concurrency,
             )
     except Exception as e:
         verbose_proxy_logger.error(
@@ -1007,10 +1026,7 @@ async def shared_health_check_status_endpoint(
 
 
 def _read_license_data() -> Optional[Dict[str, Any]]:
-    from litellm.proxy.proxy_server import (
-        _license_check,
-        premium_user_data,
-    )
+    from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: Optional[EnterpriseLicenseData] = (
         premium_user_data or _license_check.airgapped_license_data
@@ -1054,10 +1070,7 @@ async def health_license_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Return metadata about the configured LiteLLM license without exposing the key."""
-    from litellm.proxy.proxy_server import (
-        _license_check,
-        premium_user,
-    )
+    from litellm.proxy.proxy_server import _license_check, premium_user
 
     license_data = _read_license_data()
     has_license = bool(getattr(_license_check, "license_str", None))
@@ -1251,6 +1264,10 @@ async def health_readiness():
                     index_info = "index does not exist - error: " + str(e)
                 cache_type = {"type": cache_type, "index_info": index_info}
 
+        # check log level
+        log_level_name = logging.getLevelName(verbose_logger.getEffectiveLevel())
+        is_detailed_debug = verbose_logger.isEnabledFor(logging.DEBUG)
+
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
@@ -1261,6 +1278,8 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "log_level": log_level_name,
+                "is_detailed_debug": is_detailed_debug,
                 **db_health_status,
             }
         else:
@@ -1271,6 +1290,8 @@ async def health_readiness():
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
                 "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "log_level": log_level_name,
+                "is_detailed_debug": is_detailed_debug,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
@@ -1420,11 +1441,11 @@ async def test_model_connection(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        
+
         # Get model name from litellm_params
         request_litellm_params = litellm_params or {}
         model_name = request_litellm_params.get("model")
-        
+
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
@@ -1432,34 +1453,39 @@ async def test_model_connection(
             try:
                 # First try to find by proxy model_name (e.g., "gpt-4o")
                 deployments = llm_router.get_model_list(model_name=model_name)
-                
+
                 # If not found, try to find by litellm model name (e.g., "azure/gpt-4o")
                 if not deployments or len(deployments) == 0:
                     all_deployments = llm_router.get_model_list(model_name=None)
                     if all_deployments:
                         for deployment in all_deployments:
-                            if deployment.get("litellm_params", {}).get("model") == model_name:
+                            if (
+                                deployment.get("litellm_params", {}).get("model")
+                                == model_name
+                            ):
                                 deployments = [deployment]
                                 break
-                
+
                 if deployments and len(deployments) > 0:
                     # Use the first deployment's litellm_params as base config
                     # These already have resolved environment variables from proxy config
-                    config_litellm_params = dict(deployments[0].get("litellm_params", {}))
+                    config_litellm_params = dict(
+                        deployments[0].get("litellm_params", {})
+                    )
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Could not find model {model_name} in router: {e}. "
                     "Proceeding with request params only."
                 )
-        
+
         # Merge: config params (from proxy config) as base, request params override
         # This allows users to override specific params while using config for credentials
         merged_litellm_params = {**config_litellm_params, **request_litellm_params}
-        
+
         # Resolve os.environ/ environment variables in any remaining request params
         # This handles cases where user explicitly passes os.environ/ values to override config
         litellm_params = _resolve_os_environ_variables(merged_litellm_params)
-        
+
         ## Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(

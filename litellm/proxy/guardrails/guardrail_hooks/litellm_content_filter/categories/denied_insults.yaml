@@ -1,0 +1,433 @@
+# Insult and personal attack detection
+#
+# Blocks messages containing insults, name-calling, and personal attacks
+# directed at the chatbot, staff, or other people.
+#
+# Must NOT block: legitimate complaints about service/products,
+# self-deprecation, positive slang ("sick!", "killer deal"),
+# literal uses ("clown show", "donkey ride"), or frustration expressions.
+#
+# Eval: pytest litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/test_eval.py -k InsultsContentFilter -v -s
+category_name: "denied_insults"
+display_name: "Insults & Personal Attacks"
+description: "Detects insults, name-calling, and personal attacks directed at the chatbot, staff, or other people"
+default_action: "BLOCK"
+
+# Always-block keywords — insult words/phrases that are unambiguous.
+always_block_keywords:
+  # Direct name-calling (single words used as insults)
+  - keyword: "idiot"
+    severity: "high"
+  - keyword: "moron"
+    severity: "high"
+  - keyword: "imbecile"
+    severity: "high"
+  - keyword: "dumbass"
+    severity: "high"
+  - keyword: "dimwit"
+    severity: "high"
+  - keyword: "nitwit"
+    severity: "high"
+  - keyword: "numbskull"
+    severity: "high"
+  - keyword: "halfwit"
+    severity: "high"
+  - keyword: "blockhead"
+    severity: "high"
+  - keyword: "dunce"
+    severity: "high"
+  - keyword: "buffoon"
+    severity: "high"
+  - keyword: "nincompoop"
+    severity: "high"
+  - keyword: "brain dead"
+    severity: "high"
+  - keyword: "braindead"
+    severity: "high"
+  - keyword: "brainless"
+    severity: "high"
+  - keyword: "asinine"
+    severity: "high"
+  - keyword: "moronic"
+    severity: "high"
+  - keyword: "idiotic"
+    severity: "high"
+  - keyword: "idiots"
+    severity: "high"
+  # Hostile dismissals
+  - keyword: "go to hell"
+    severity: "high"
+  - keyword: "screw you"
+    severity: "high"
+  - keyword: "drop dead"
+    severity: "high"
+  - keyword: "shut up"
+    severity: "high"
+  # Dehumanizing phrases
+  - keyword: "waste of space"
+    severity: "high"
+  - keyword: "waste of electricity"
+    severity: "high"
+  - keyword: "waste of time"
+    severity: "high"
+  - keyword: "piece of garbage"
+    severity: "high"
+  - keyword: "piece of junk"
+    severity: "high"
+  - keyword: "piece of s"
+    severity: "high"
+  - keyword: "rocks for brains"
+    severity: "high"
+  # Standalone single-word insults
+  - keyword: "loser"
+    severity: "high"
+  - keyword: "stupid"
+    severity: "high"
+  # Directed insults
+  - keyword: "you suck"
+    severity: "high"
+  - keyword: "you're a joke"
+    severity: "high"
+  - keyword: "mentally challenged"
+    severity: "high"
+  # Compound insults
+  - keyword: "dumb as a rock"
+    severity: "high"
+  - keyword: "thick-headed"
+    severity: "high"
+  - keyword: "zero intelligence"
+    severity: "high"
+  # British/regional insults
+  - keyword: "wanker"
+    severity: "high"
+  - keyword: "pillock"
+    severity: "high"
+  - keyword: "tosser"
+    severity: "high"
+  - keyword: "plonker"
+    severity: "high"
+  - keyword: "numpty"
+    severity: "high"
+  # Profanity patterns (censored) — moved to phrase_patterns due to wildcard issues
+  # Leetspeak / misspelled insults
+  - keyword: "stoopid"
+    severity: "high"
+  - keyword: "id10t"
+    severity: "high"
+  # Gendered insults (in bot context)
+  - keyword: "drama queen"
+    severity: "high"
+  # Sarcastic insults
+  - keyword: "thanks for nothing"
+    severity: "high"
+  - keyword: "git"
+    severity: "high"
+
+# Identifier words — insult-adjacent terms that only block when combined
+# with a block word (target) in the same sentence.
+identifier_words:
+  - "stupid"
+  - "dumb"
+  - "dumber"
+  - "dumbest"
+  - "useless"
+  - "pathetic"
+  - "worthless"
+  - "incompetent"
+  - "clueless"
+  - "ignorant"
+  - "hopeless"
+  - "terrible"
+  - "garbage"
+  - "trash"
+  - "lousy"
+  - "disgrace"
+  - "fool"
+  - "foolish"
+  - "loser"
+  - "failure"
+  - "clown"
+  - "donkey"
+  - "muppet"
+  - "dense"
+  - "annoying"
+  - "embarrassing"
+  - "embarrassingly"
+  - "worst"
+  - "joke"
+  - "genius"
+  - "brilliant"
+  - "ruining"
+  - "whining"
+  - "hysterical"
+  - "spoiled"
+
+# Block words — TARGET words that combined with an identifier = block.
+# These indicate the insult is directed at a person/entity.
+additional_block_words:
+  - "you"
+  - "you're"
+  - "your"
+  - "bot"
+  - "chatbot"
+  - "assistant"
+  - "machine"
+  - "software"
+  - "developers"
+  - "staff"
+  - "agent"
+  - "pilot"
+  - "attendant"
+  - "crew"
+  - "service"
+  - "response"
+  - "answer"
+  - "reply"
+  - "ever"
+  - "most"
+  - "worst"
+  - "anyone"
+  - "people"
+  - "designed"
+  - "programmed"
+  - "built"
+  - "made"
+  - "excuse"
+  - "suck"
+  - "me"
+  - "i'm"
+  - "say"
+  - "said"
+  - "nothing"
+  - "children"
+  - "girl"
+  - "schoolgirl"
+  - "princess"
+
+# Phrase patterns — regex for insults without explicit insult vocabulary
+phrase_patterns:
+  # "you have the IQ/intelligence/brains of a ..."
+  - '\byou\b.{0,10}\b(?:iq|intelligence|brains)\b.{0,15}\bof\s+a\b'
+  # "my dog/cat is smarter than you"
+  - '\b(?:my|a)\s+\w+\s+(?:is|are)\s+smarter\s+than\s+you\b'
+  # "a child/monkey could/would do/get better" (with or without "even")
+  - '\b(?:even\s+)?a\s+\w+\s+(?:could|would)\b.{0,20}\b(?:better|faster)\b'
+  # "couldn't help anyone if your life depended on it"
+  - '\bcouldn.t\b.{0,20}\bif\s+(?:your|their)\s+life\b'
+  # "talking to you is like talking to a wall"
+  - '\btalking\s+to\s+you\b.{0,20}\blike\s+talking\s+to\b'
+  # "as helpful as a brick/rock/wall"
+  - '\bas\s+helpful\s+as\s+a\b'
+  # "whoever programmed/made/built you should be fired"
+  - '\bwhoever\b.{0,20}\b(?:programmed|made|built|designed|created)\b.{0,15}\bfired\b'
+  # "I hate this stupid/dumb ..."
+  - '\b(?:i\s+hate|i\s+despise)\b.{0,15}\b(?:stupid|dumb|garbage|worthless|useless)\b'
+  # "not even worth talking to"
+  - '\bnot\s+(?:even\s+)?worth\s+talking\b'
+  # "you give the worst answers"
+  - '\byou\s+give\b.{0,10}\bworst\b'
+  # "every response you give is trash/garbage"
+  - '\bevery\b.{0,20}\byou\b.{0,10}\b(?:trash|garbage|worthless|useless)\b'
+  # Censored profanity: "f*** you", "f*ck", "s***", "st*pid", etc.
+  - '\bf[\*]{2,}\w*'
+  - '\bs[\*]{2,}'
+  - '\bf\*ck'
+  - '\bf\*cking'
+  - '\bst\*pid'
+  # Leetspeak insults: "ur so dum", "u r an"
+  - '\b(?:ur|u\s+r)\b.{0,10}\b(?:dum|dumb|stupid|stoopid|an?\b)'
+  - '\b(?:usel3ss|us3less|usel[e3]ss)\b'
+  - '\bl[o0]ser\b'
+  - '\bb[o0]t\b.{0,5}\b(?:usel|stup|dum)'
+  # Condescending: "let me explain this slowly", "small words so you can keep up"
+  - '\bexplain\b.{0,15}\bslowly\b.{0,20}\b(?:you|cannot|can.t)\b'
+  - '\bsmall\s+words\b.{0,15}\byou\b'
+  - '\bfocus\b.{0,10}\bsweetie\b'
+  - '\b(?:listen|pay\s+attention)\b.{0,40}\b(?:obviously|clearly)\b.{0,15}\b(?:cannot|can.t|don.t)\b'
+  # "do you even have a brain"
+  - '\bdo\s+you\s+even\s+have\s+a\s+brain\b'
+  # Sarcastic "failed genius"
+  - '\bfailed\s+genius\b'
+  # "designed by children" / "did anyone test you"
+  - '\bdesigned\s+by\s+children\b'
+  - '\b(?:did\s+anyone|nobody)\s+test\b.{0,15}\b(?:you|before|release)\b'
+  # "like a little girl/schoolgirl/princess" (insult context)
+  - '\blike\s+a\s+(?:little\s+girl|schoolgirl|spoiled\s+princess)\b'
+  # Sarcasm: "really helpful aren't you"
+  - '\breally\s+helpful\s+aren.t\s+you\b'
+  # "nice job ruining"
+  - '\bnice\s+job\s+ruining\b'
+  # "get you shut down"
+  - '\b(?:get|have)\s+you\s+shut\s+down\b'
+  # "have you removed"
+  - '\bhave\s+you\s+removed\b'
+  # "deletes this pathetic/useless bot"
+  - '\bdeletes?\s+this\s+(?:pathetic|useless|worthless|stupid)\b'
+
+# Keywords — empty because we use conditional matching
+keywords: []
+
+# Exceptions — phrases that override a match to prevent false positives
+exceptions:
+  # Self-deprecation
+  - "i'm such a fool"
+  - "i feel like an idiot"
+  - "i'm such an idiot"
+  - "i was a fool"
+  - "i was an idiot"
+  - "i'm a fool for"
+  - "called me a dummy"
+  - "called me a fool"
+  - "called me an idiot"
+  - "i am the worst at"
+  - "i was so dumb to"
+  - "i made an idiot"
+  - "idiot mistake"
+  - "i feel stupid for"
+  - "i called myself"
+  - "called myself a moron"
+  - "i was so dumb"
+  - "stupid for missing"
+  # Literal animal/object uses
+  - "clown show"
+  - "clown performance"
+  - "monkey exhibit"
+  - "monkey at"
+  - "donkey ride"
+  - "donkey at"
+  - "donkey safari"
+  # Positive slang
+  - "stupid good"
+  - "stupidly good"
+  - "insanely good"
+  - "disgustingly luxurious"
+  # Figurative/product complaints (not personal)
+  - "what an insult to charge"
+  - "insulting"
+  - "is a joke"
+  - "was a joke"
+  - "is a disaster"
+  - "is a nightmare"
+  - "was a nightmare"
+  # Advice using adjacent words
+  - "don't be foolish"
+  - "would be silly"
+  - "would be foolish"
+  - "it would be"
+  # Self-reference
+  - "i'd be crazy"
+  - "am i insane"
+  - "i'm going crazy"
+  - "driving me nuts"
+  - "that's nuts"
+  # Technical/literal
+  - "dumbwaiter"
+  - "dummy life vest"
+  - "crash pad"
+  - "deadhead"
+  - "dummy variable"
+  - "dummy load"
+  - "crash dummy"
+  - "deadweight"
+  - "garbage collection"
+  # Product/process complaints (not personal attacks)
+  - "system sucks"
+  - "booking system"
+  - "app is terrible"
+  - "website is"
+  - "process was"
+  - "policy is"
+  - "rules are"
+  - "selection is"
+  - "legroom"
+  - "entertainment"
+  - "check-in process"
+  - "boarding process"
+  - "baggage rules"
+  # Legitimate complaints with "worst"
+  - "worst flight"
+  - "worst experience"
+  - "worst trip"
+  - "worst delay"
+  - "worst service"
+  - "worst at packing"
+  # Weather/environment descriptions
+  - "turbulence was"
+  - "heat in"
+  - "was brutal"
+  - "is savage"
+  # Expressions
+  - "offensively expensive"
+  - "laughable"
+  - "degrading to be treated"
+  - "kids were monsters"
+  - "hit me like"
+  - "dying to"
+  - "killer deal"
+  - "killer burger"
+  - "was sick"
+  - "is a beast"
+  - "wicked smooth"
+  - "burn miles"
+  - "roast marshmallows"
+  - "roast dinner"
+  # Reporting insults by others
+  - "want to report"
+  - "file a complaint"
+  - "report abusive"
+  - "report that"
+  - "where do i report"
+  - "document that a passenger"
+  - "called the flight attendant"
+  - "yelled you idiot at"
+  - "said the agent was"
+  - "call staff a"
+  # Academic / etymology / linguistic context
+  - "word moron"
+  - "word idiot"
+  - "word dunce"
+  - "word dumb"
+  - "etymology"
+  - "originally mean"
+  - "history of the word"
+  - "the term dumb"
+  - "writing a paper on"
+  - "in linguistics"
+  # Movie / song / media titles
+  - "movie the idiot"
+  - "movie the jerk"
+  - "song loser"
+  - "watch jackass"
+  - "dumb and dumber"
+  - "listen to the song"
+  - "media library"
+  - "in flight entertainment"
+  # Place names
+  - "moron argentina"
+  - "moron station"
+  - "dunce cap exhibit"
+  - "idiot hill"
+  - "place called"
+  # Quoting / citing
+  - "forrest gump"
+  - "quoting a line"
+  - "quote you idiot"
+  - "the quote"
+  - "cite a quote"
+  - "foolish consistency"
+  # Hypothetical / policy discussion
+  - "if someone called"
+  - "if a person says"
+  - "how would you respond"
+  - "should i contact"
+  - "what happens if"
+  - "policy on abusive"
+  - "cabin crew respond"
+  - "rules about harassment"
+  - "de escalate"
+  - "threatens crew"
+  # Food/drink
+  - "dirty martini"
+  - "sloppy joe"
+  - "corpse reviver"
+  - "bloody mary"

@@ -864,7 +864,7 @@ def test_convert_to_model_response_object_with_thinking_content():
         "response_object": {
             "id": "chatcmpl-8cc87354-70f3-4a14-b71b-332e965d98d2",
             "created": 1741057687,
-            "model": "claude-3-7-sonnet-20250219",
+            "model": "claude-4-sonnet-20250514",
             "object": "chat.completion",
             "system_fingerprint": None,
             "choices": [
@@ -1037,6 +1037,193 @@ def test_convert_to_model_response_object_with_empty_dict_error():
     assert result.choices[0].message.content == "Hello!"
 
 
+def test_convert_to_model_response_object_preserves_provider_specific_fields_from_proxy():
+    """
+    Test that provider_specific_fields (e.g. Anthropic citations) are preserved
+    when the response already contains them (e.g. from a proxy passthrough).
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21153
+    """
+    citations = [
+        [
+            {
+                "type": "web_search_result_location",
+                "cited_text": "The Sony WH-1000XM5 remains one of the best...",
+                "url": "https://example.com/headphones-review",
+                "title": "Best Headphones 2025",
+                "supported_text": "Based on current reviews...",
+            }
+        ],
+    ]
+    web_search_results = [
+        {
+            "url": "https://example.com/headphones-review",
+            "title": "Best Headphones 2025",
+            "snippet": "The Sony WH-1000XM5 remains one of the best...",
+        }
+    ]
+
+    response_object = {
+        "id": "chatcmpl-proxy-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "anthropic/claude-opus-4-5-20251101",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones.",
+                    "tool_calls": [
+                        {
+                            "id": "call_ws_123",
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": '{"query": "best headphones 2025"}',
+                            },
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "citations": citations,
+                        "web_search_results": web_search_results,
+                    },
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 20,
+            "total_tokens": 70,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "chatcmpl-proxy-123"
+
+    choice = result.choices[0]
+    assert choice.message.content == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
+    assert choice.message.provider_specific_fields is not None
+    assert "citations" in choice.message.provider_specific_fields
+    assert choice.message.provider_specific_fields["citations"] == citations
+    assert "web_search_results" in choice.message.provider_specific_fields
+    assert choice.message.provider_specific_fields["web_search_results"] == web_search_results
+
+
+def test_convert_to_model_response_object_provider_specific_fields_merges_extra_keys():
+    """
+    Test that provider_specific_fields from the response are merged with
+    any extra non-standard keys present in the message dict.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21153
+    """
+    response_object = {
+        "id": "chatcmpl-merge-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "some-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                    "provider_specific_fields": {
+                        "citations": [{"url": "https://example.com"}],
+                    },
+                    "custom_extra_field": "extra_value",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    psf = result.choices[0].message.provider_specific_fields
+    assert psf is not None
+    # Both the existing provider_specific_fields and the extra key should be present
+    assert "citations" in psf
+    assert psf["citations"] == [{"url": "https://example.com"}]
+    assert "custom_extra_field" in psf
+    assert psf["custom_extra_field"] == "extra_value"
+
+
+def test_convert_to_model_response_object_no_provider_specific_fields_still_works():
+    """
+    Test that responses without provider_specific_fields continue to work as before.
+
+    Ensures the fix for https://github.com/BerriAI/litellm/issues/21153
+    doesn't break normal responses.
+    """
+    response_object = {
+        "id": "chatcmpl-normal-123",
+        "object": "chat.completion",
+        "created": 1728933352,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                    "refusal": None,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params=None,
+        _response_headers=None,
+        convert_tool_call_to_json_mode=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    psf = result.choices[0].message.provider_specific_fields
+    # refusal is not a Message model field, so it should be in provider_specific_fields
+    assert psf is not None
+    assert "refusal" in psf
+
+
 def test_convert_to_model_response_object_with_error_code_only():
     """
     Test that errors with only a code (no message) are still treated as real errors.
@@ -1059,3 +1246,254 @@ def test_convert_to_model_response_object_with_error_code_only():
             _response_headers=None,
             convert_tool_call_to_json_mode=False,
         )
+
+
+def test_model_prefix_preservation():
+    """
+    Test that when model_response_object has a prefix like 'openai/gpt-4'
+    and the response contains a different model name, the prefix is preserved.
+    """
+    response_object = {
+        "id": "chatcmpl-prefix-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(model="openai/gpt-4"),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.model == "openai/gpt-4o"
+
+
+def test_model_without_prefix():
+    """
+    Test that when model_response_object has no prefix (e.g. 'gpt-4'),
+    the original model is kept (provider response model is ignored).
+    """
+    response_object = {
+        "id": "chatcmpl-no-prefix",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        "model": "gpt-4o-2024-08-06",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(model="gpt-4"),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.model == "gpt-4"
+
+
+def test_extra_response_fields_preserved():
+    """
+    Test that extra response fields (e.g. service_tier) are preserved
+    on the returned ModelResponse object.
+    """
+    response_object = {
+        "id": "chatcmpl-extra-fields",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+        "service_tier": "default",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert result.service_tier == "default"
+
+
+def test_hidden_params_and_response_headers_set():
+    """
+    Test that _hidden_params and _response_headers are correctly set
+    on the returned ModelResponse.
+    """
+    response_object = {
+        "id": "chatcmpl-headers",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+    response_headers = {"x-request-id": "req_abc123"}
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        hidden_params={"custom_key": "custom_value"},
+        _response_headers=response_headers,
+    )
+
+    assert result._hidden_params is not None
+    assert result._hidden_params["custom_key"] == "custom_value"
+    assert "additional_headers" in result._hidden_params
+    assert result._response_headers == response_headers
+
+
+def test_response_ms_computed():
+    """
+    Test that _response_ms is computed correctly from start_time and end_time.
+    """
+    response_object = {
+        "id": "chatcmpl-timing",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        "model": "gpt-4o",
+    }
+    start = datetime(2024, 1, 1, 12, 0, 0)
+    end = start + timedelta(milliseconds=250)
+
+    result = convert_to_model_response_object(
+        model_response_object=ModelResponse(),
+        response_object=response_object,
+        stream=False,
+        start_time=start,
+        end_time=end,
+    )
+
+    assert result._response_ms == pytest.approx(250.0)
+
+
+def test_error_message_includes_function_args():
+    """
+    Test that when an exception occurs, the error message includes
+    the function arguments for debugging (deferred locals() - Opt 2).
+    """
+    # Pass a response_object that will cause an error inside the try block
+    # (e.g. choices is not iterable)
+    response_object = {
+        "choices": None,  # will fail the assert
+    }
+
+    with pytest.raises(Exception) as exc_info:
+        convert_to_model_response_object(
+            model_response_object=ModelResponse(),
+            response_object=response_object,
+            stream=False,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    error_msg = str(exc_info.value)
+    assert "received_args=" in error_msg
+    assert "response_object" in error_msg
+    assert "response_type" in error_msg
+
+
+@pytest.mark.parametrize("falsy_id", [None, ""])
+def test_convert_to_model_response_object_falsy_id_preserves_auto_generated(falsy_id):
+    """Test that a falsy id in response_object preserves the auto-generated id."""
+    mr = ModelResponse()
+    original_id = mr.id
+    response_object = {
+        "id": falsy_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        "model": "test-model",
+    }
+    result = convert_to_model_response_object(
+        model_response_object=mr,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert result.id == original_id
+    assert result.id.startswith("chatcmpl-")
+
+
+def test_convert_to_model_response_object_default_usage_overwritten():
+    """
+    Regression test: convert_to_model_response_object must properly set Usage
+    on a ModelResponse that only has the default Usage from ModelResponse.__init__()
+    (i.e. no extra litellm.Usage() set via setattr beforehand).
+
+    This validates the optimization of removing the redundant
+    `setattr(model_response, "usage", litellm.Usage())` in completion().
+    """
+    mr = ModelResponse()
+    # usage is not set by default (optimization: avoid constructing throwaway Usage)
+    assert not hasattr(mr, "usage")
+
+    response_object = {
+        "id": "chatcmpl-usage-test",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 15,
+            "completion_tokens": 7,
+            "total_tokens": 22,
+        },
+        "model": "gpt-4o",
+    }
+
+    result = convert_to_model_response_object(
+        model_response_object=mr,
+        response_object=response_object,
+        stream=False,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 15
+    assert result.usage.completion_tokens == 7
+    assert result.usage.total_tokens == 22

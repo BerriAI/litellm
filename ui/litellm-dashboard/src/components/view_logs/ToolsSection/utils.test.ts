@@ -258,6 +258,83 @@ describe("ToolsSection utils", () => {
       expect(result[1].index).toBe(2);
       expect(result[2].index).toBe(3);
     });
+
+    it("should parse tool calls from realtime API response with tool_calls field", () => {
+      const log: Partial<LogEntry> = {
+        request_id: "test-realtime-1",
+        proxy_server_request: {
+          tools: [
+            {
+              type: "function",
+              name: "get_weather",
+              description: "Get current weather",
+            },
+          ],
+        },
+        response: {
+          results: [],
+          usage: {},
+          tool_calls: [
+            {
+              id: "call_abc",
+              type: "function",
+              function: {
+                name: "get_weather",
+                arguments: '{"location": "Paris"}',
+              },
+            },
+          ],
+        },
+      } as any;
+
+      const result = parseToolsFromLog(log as LogEntry);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe("get_weather");
+      expect(result[0].called).toBe(true);
+      expect(result[0].callData?.arguments).toEqual({ location: "Paris" });
+    });
+
+    it("should parse tool calls from realtime response.done events", () => {
+      const log: Partial<LogEntry> = {
+        request_id: "test-realtime-2",
+        proxy_server_request: {
+          tools: [
+            {
+              type: "function",
+              name: "get_weather",
+              description: "Get current weather",
+            },
+          ],
+        },
+        response: {
+          results: [
+            { type: "session.created", session: {} },
+            {
+              type: "response.done",
+              response: {
+                output: [
+                  {
+                    type: "function_call",
+                    call_id: "call_xyz",
+                    name: "get_weather",
+                    arguments: '{"location": "Tokyo"}',
+                  },
+                ],
+              },
+            },
+          ],
+          usage: {},
+        },
+      } as any;
+
+      const result = parseToolsFromLog(log as LogEntry);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe("get_weather");
+      expect(result[0].called).toBe(true);
+      expect(result[0].callData?.arguments).toEqual({ location: "Tokyo" });
+    });
   });
 
   describe("hasTools", () => {

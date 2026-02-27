@@ -48,6 +48,7 @@ export interface KeyResponse {
   organization_id: string | null;
   created_at: string;
   updated_at: string;
+  last_active: string | null;
   team_spend: number;
   team_alias: string;
   team_tpm_limit: number;

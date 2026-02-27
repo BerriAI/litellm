@@ -13,7 +13,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from fastapi import HTTPException
-from litellm.types.utils import CallTypes as LitellmCallTypes
+from litellm.types.utils import CallTypes as LitellmCallTypes, ModelResponse
 
 
 @pytest.mark.asyncio
@@ -379,4 +379,132 @@ async def test_lakera_monitor_mode_during_call():
         )
         
         assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_lakera_post_call_blocks_flagged_content():
+    """Post-call hook should block when violations are flagged."""
+
+    lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
+
+    mock_response = {
+        "payload": [],
+        "flagged": True,
+        "breakdown": [
+            {"detector_type": "moderated_content/violence", "detected": True, "message_id": 0},
+        ],
+    }
+
+    # Mock LLM response object
+    llm_response = MagicMock()
+    llm_response.model_dump.return_value = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "some response"}}
+        ]
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Harmful content"}],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await lakera_guardrail.async_post_call_success_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=llm_response,
+            )
+
+        assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_lakera_post_call_allows_clean_content():
+    """Post-call hook should allow when not flagged."""
+
+    lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
+
+    mock_response = {
+        "payload": [],
+        "flagged": False,
+        "breakdown": [],
+    }
+
+    llm_response = MagicMock()
+    llm_response.model_dump.return_value = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "clean response"}}
+        ]
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Hello"}],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+
+        result = await lakera_guardrail.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=llm_response,
+        )
+
+        assert result is llm_response
+
+
+@pytest.mark.asyncio
+async def test_lakera_post_call_masks_pii_and_allows():
+    """Post-call hook should mask PII-only violations and allow response."""
+
+    lakera_guardrail = LakeraAIGuardrail(api_key="test_key")
+
+    mock_response = {
+        "payload": [
+            {"detector_type": "pii/email", "start": 11, "end": 26, "message_id": 1}
+        ],
+        "flagged": True,
+        "breakdown": [
+            {"detector_type": "pii/email", "detected": True, "message_id": 1},
+        ],
+    }
+
+    llm_response = MagicMock()
+    llm_response.model_dump.return_value = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "Your email is test@example.com"}},
+        ]
+    }
+
+    with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = (mock_response, {})
+
+        data = {
+            "messages": [{"role": "user", "content": "Hello"}],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
+
+        result = await lakera_guardrail.async_post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=llm_response,
+        )
+
+        assert isinstance(result, ModelResponse), "PII masking path must return ModelResponse"
+        result_dict = result.model_dump()
+        assert result_dict["choices"][0]["message"]["content"] != "Your email is test@example.com"
+        assert "[MASKED" in result_dict["choices"][0]["message"]["content"]
 

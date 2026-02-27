@@ -100,6 +100,10 @@ vi.mock("../../EntityUsageExport", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
+vi.mock("./UsageAIChatPanel", () => ({
+  default: () => <div data-testid="usage-ai-chat-panel">Usage AI Chat Panel</div>,
+}));
+
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
   useCustomers: vi.fn(),
 }));
@@ -645,7 +649,6 @@ describe("UsagePage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Organization usage is a new feature.")).toBeInTheDocument();
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
@@ -710,7 +713,7 @@ describe("UsagePage", () => {
       // Admin should see the user selector select element with the placeholder attribute
       const userSelects = screen.getAllByRole("combobox");
       const userSelect = userSelects.find(
-        (el) => el.getAttribute("placeholder") === "All Users (Global View)",
+        (el) => el.getAttribute("placeholder") === "Select user to filter...",
       );
       expect(userSelect).toBeDefined();
     });
@@ -825,7 +828,7 @@ describe("UsagePage", () => {
       // Non-admin should not see the user selector
       const userSelects = screen.getAllByRole("combobox");
       const userSelect = userSelects.find(
-        (el) => el.getAttribute("placeholder") === "All Users (Global View)",
+        (el) => el.getAttribute("placeholder") === "Select user to filter...",
       );
       expect(userSelect).toBeUndefined();
     });
@@ -991,6 +994,28 @@ describe("UsagePage", () => {
     });
   });
 
+  describe("Ask AI button", () => {
+    it("should render Ask AI button in global view", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(screen.getByText("Ask AI")).toBeInTheDocument();
+    });
+
+    it("should render AI chat panel component", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(screen.getByTestId("usage-ai-chat-panel")).toBeInTheDocument();
+    });
+  });
+
   describe("model view toggle", () => {
     it("should show Public Model Name view by default", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
@@ -1073,17 +1098,8 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Customer usage is a new feature.")).toBeInTheDocument();
-      });
-
-      // Click the close button
-      const closeButton = screen.getByLabelText("Close");
-      act(() => {
-        fireEvent.click(closeButton);
-      });
-
-      await waitFor(() => {
-        expect(screen.queryByText("Customer usage is a new feature.")).not.toBeInTheDocument();
+        const entityUsageElements = screen.getAllByText("Entity Usage");
+        expect(entityUsageElements.length).toBeGreaterThan(0);
       });
     });
   });
@@ -1108,7 +1124,8 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Agent usage (A2A) is a new feature.")).toBeInTheDocument();
+        const entityUsageElements = screen.getAllByText("Entity Usage");
+        expect(entityUsageElements.length).toBeGreaterThan(0);
       });
     });
   });
