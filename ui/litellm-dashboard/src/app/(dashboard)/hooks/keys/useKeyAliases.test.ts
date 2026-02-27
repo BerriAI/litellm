@@ -40,15 +40,18 @@ const mockPage2: PaginatedKeyAliasResponse = {
   size: 2,
 };
 
-const createWrapper = () => {
+function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
     },
   });
-  return ({ children }: { children: ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
-};
+  function Wrapper({ children }: { children: ReactNode }) {
+    return React.createElement(QueryClientProvider, { client: queryClient }, children);
+  }
+  Wrapper.displayName = "QueryClientWrapper";
+  return Wrapper;
+}
 
 describe("useInfiniteKeyAliases", () => {
   beforeEach(() => {

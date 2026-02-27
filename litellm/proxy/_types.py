@@ -1,59 +1,40 @@
 import enum
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
+from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Literal,
+                    Optional, Union)
 
 import httpx
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    Json,
-    field_validator,
-    model_validator,
-)
+from pydantic import (BaseModel, ConfigDict, Field, Json, field_validator,
+                      model_validator)
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    OpenAIFileObject,
-    ResponsesAPIResponse,
-)
-from litellm.types.mcp import (
-    MCPAuthType,
-    MCPCredentials,
-    MCPTransport,
-    MCPTransportType,
-)
+from litellm.types.llms.openai import (AllMessageValues, OpenAIFileObject,
+                                       ResponsesAPIResponse)
+from litellm.types.mcp import (MCPAuthType, MCPCredentials, MCPTransport,
+                               MCPTransportType)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
-from litellm.types.utils import (
-    CallTypes,
-    CostBreakdown,
-    EmbeddingResponse,
-    GenericBudgetConfigType,
-    ImageResponse,
-    LiteLLMBatch,
-    LiteLLMFineTuningJob,
-    LiteLLMPydanticObjectBase,
-    ModelResponse,
-    ProviderField,
-    StandardCallbackDynamicParams,
-    StandardLoggingGuardrailInformation,
-    StandardLoggingMCPToolCall,
-    StandardLoggingModelInformation,
-    StandardLoggingPayloadErrorInformation,
-    StandardLoggingPayloadStatus,
-    StandardLoggingVectorStoreRequest,
-    StandardPassThroughResponseObject,
-    TextCompletionResponse,
-)
+from litellm.types.utils import (CallTypes, CostBreakdown, EmbeddingResponse,
+                                 GenericBudgetConfigType, ImageResponse,
+                                 LiteLLMBatch, LiteLLMFineTuningJob,
+                                 LiteLLMPydanticObjectBase, ModelResponse,
+                                 ProviderField, StandardCallbackDynamicParams,
+                                 StandardLoggingGuardrailInformation,
+                                 StandardLoggingMCPToolCall,
+                                 StandardLoggingModelInformation,
+                                 StandardLoggingPayloadErrorInformation,
+                                 StandardLoggingPayloadStatus,
+                                 StandardLoggingVectorStoreRequest,
+                                 StandardPassThroughResponseObject,
+                                 TextCompletionResponse)
 from litellm.types.videos.main import VideoObject
 
-from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
+from .types_utils.utils import (get_instance_fn,
+                                validate_custom_validate_return_type)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -607,6 +588,13 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
     ] + info_routes
 
+    guardrails_ui_routes = [
+        "/guardrails/ui/add_guardrail_settings",
+        "/guardrails/ui/category_yaml/{category_name}",
+        "/guardrails/ui/major_airlines",
+        "/guardrails/ui/provider_specific_params",
+    ]
+
     internal_user_routes = (
         [
             "/global/spend/tags",
@@ -621,6 +609,7 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + spend_tracking_routes
         + key_management_routes
+        + guardrails_ui_routes
     )
 
     internal_user_view_only_routes = (
@@ -644,6 +633,10 @@ class LiteLLMRoutes(enum.Enum):
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
+        # Guardrail CRUD - proxy admin or team admin enforced in guardrail_endpoints
+        "/guardrails",
+        "/guardrails/*",
+        "/v2/guardrails/list",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -2373,7 +2366,8 @@ class UserAPIKeyAuth(
 
         This is used to track number of requests/spend for health check calls.
         """
-        from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+        from litellm.constants import \
+            LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 
         return cls(
             api_key=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
@@ -2405,7 +2399,8 @@ class UserAPIKeyAuth(
 
         This is used to track actions performed by automated system jobs.
         """
-        from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
+        from litellm.constants import \
+            LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 
         return cls(
             api_key=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
@@ -2796,7 +2791,8 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+        from litellm.litellm_core_utils.sensitive_data_masker import \
+            SensitiveDataMasker
 
         masker = SensitiveDataMasker(sensitive_patterns={"key"})
 

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -55,6 +55,55 @@ def _team_member_has_permission(
         ):
             return True
     return False
+
+
+async def get_team_ids_where_user_is_team_admin(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional["PrismaClient"] = None,
+    user_api_key_cache: Optional["DualCache"] = None,
+    proxy_logging_obj: Optional["ProxyLogging"] = None,
+) -> List[str]:
+    """
+    Return team_ids for which the user is a team admin.
+
+    Returns empty list if user is proxy admin (caller should not restrict in that case),
+    or if no DB / user_id, or if user is not admin of any team.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return []
+    if prisma_client is None or user_api_key_dict.user_id is None:
+        return []
+
+    from litellm.caching import DualCache as DualCacheImport
+    from litellm.proxy.auth.auth_checks import get_user_object
+
+    try:
+        user_obj = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache or DualCacheImport(),
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if user_obj is None or not user_obj.teams:
+            return []
+
+        teams = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": user_obj.teams}}
+        )
+        admin_team_ids: List[str] = []
+        for team in teams:
+            team_obj = LiteLLM_TeamTable(**team.model_dump())
+            if _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                admin_team_ids.append(team_obj.team_id)
+        return admin_team_ids
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Error getting team admin list for user {user_api_key_dict.user_id}: {e}"
+        )
+        return []
 
 
 async def _user_has_admin_privileges(

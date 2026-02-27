@@ -3,7 +3,7 @@
 import importlib
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type, cast
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 import litellm
 from litellm import Router
@@ -11,29 +11,21 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import GraySwanGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.grayswan import \
+    initialize_guardrail as initialize_grayswan
 from litellm.proxy.types_utils.utils import get_instance_fn
+from litellm.proxy.utils import PrismaClient
 from litellm.secret_managers.main import get_secret
-from litellm.types.guardrails import (
-    Guardrail,
-    GuardrailEventHooks,
-    LakeraCategoryThresholds,
-    LitellmParams,
-    SupportedGuardrailIntegrations,
-)
-from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
-    GraySwanGuardrail,
-    initialize_guardrail as initialize_grayswan,
-)
+from litellm.types.guardrails import (Guardrail, GuardrailEventHooks,
+                                      LakeraCategoryThresholds, LitellmParams,
+                                      SupportedGuardrailIntegrations)
 
-from .guardrail_initializers import (
-    initialize_bedrock,
-    initialize_hide_secrets,
-    initialize_lakera,
-    initialize_lakera_v2,
-    initialize_presidio,
-    initialize_tool_permission,
-)
+from .guardrail_initializers import (initialize_bedrock,
+                                     initialize_hide_secrets,
+                                     initialize_lakera, initialize_lakera_v2,
+                                     initialize_presidio,
+                                     initialize_tool_permission)
 
 guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
@@ -251,21 +243,28 @@ class GuardrailRegistry:
                 )
             litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
+            team_id: Optional[str] = guardrail.get("team_id")
 
             # Create guardrail in DB
+            data: Dict[str, Any] = {
+                "guardrail_name": guardrail_name,
+                "litellm_params": litellm_params,
+                "guardrail_info": guardrail_info,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            if team_id is not None:
+                data["team_id"] = team_id
             created_guardrail = await prisma_client.db.litellm_guardrailstable.create(
-                data={
-                    "guardrail_name": guardrail_name,
-                    "litellm_params": litellm_params,
-                    "guardrail_info": guardrail_info,
-                    "created_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
-                }
+                data=data
             )
 
-            # Add guardrail_id to the returned guardrail object
+            # Add guardrail_id and team_id to the returned guardrail object
             guardrail_dict = dict(guardrail)
             guardrail_dict["guardrail_id"] = created_guardrail.guardrail_id
+            guardrail_dict["team_id"] = getattr(
+                created_guardrail, "team_id", guardrail.get("team_id")
+            )
 
             return guardrail_dict
         except Exception as e:
@@ -305,16 +304,19 @@ class GuardrailRegistry:
                 )
             litellm_params: str = safe_dumps(litellm_params_dict)
             guardrail_info: str = safe_dumps(guardrail.get("guardrail_info", {}))
+            team_id: Optional[str] = guardrail.get("team_id")
 
-            # Update in DB
+            # Update in DB (include team_id so it can be updated or cleared)
+            update_data: Dict[str, Any] = {
+                "guardrail_name": guardrail_name,
+                "litellm_params": litellm_params,
+                "guardrail_info": guardrail_info,
+                "team_id": team_id,
+                "updated_at": datetime.now(timezone.utc),
+            }
             updated_guardrail = await prisma_client.db.litellm_guardrailstable.update(
                 where={"guardrail_id": guardrail_id},
-                data={
-                    "guardrail_name": guardrail_name,
-                    "litellm_params": litellm_params,
-                    "guardrail_info": guardrail_info,
-                    "updated_at": datetime.now(timezone.utc),
-                },
+                data=update_data,
             )
 
             # Convert to dict and return
@@ -323,17 +325,50 @@ class GuardrailRegistry:
             raise Exception(f"Error updating guardrail in DB: {str(e)}")
 
     @staticmethod
-    async def get_all_guardrails_from_db(
+    async def get_guardrails_from_db(
         prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
+        view: str = "all",
+        allowed_team_ids: Optional[List[str]] = None,
     ) -> List[Guardrail]:
         """
-        Get all guardrails from the database
+        Get guardrails from the database.
+
+        - If view == 'all' and allowed_team_ids is None: return all guardrails, order by created_at desc.
+        - If view == 'all' and allowed_team_ids is not None: return only guardrails where
+          team_id is in allowed_team_ids (for non-proxy-admin list filtering). Empty list returns [].
+        - If view == 'current_team' and team_id is not None: return guardrails where
+          team_id is null (global) or team_id == team_id, order by created_at desc.
+        - If view == 'current_team' and team_id is None: return guardrails where
+          team_id is null, order by created_at desc.
         """
         try:
+            if view == "all":
+                if allowed_team_ids is not None:
+                    if len(allowed_team_ids) == 0:
+                        return []
+                    where_filter = {"team_id": {"in": allowed_team_ids}}
+                else:
+                    where_filter = None
+            elif view == "current_team":
+                if team_id is not None:
+                    where_filter = {
+                        "OR": [
+                            {"team_id": None},
+                            {"team_id": team_id},
+                        ]
+                    }
+                else:
+                    where_filter = {"team_id": None}
+            else:
+                where_filter = None
+
+            kwargs: Dict[str, Any] = {"order": {"created_at": "desc"}}
+            if where_filter is not None:
+                kwargs["where"] = where_filter
+
             guardrails_from_db = (
-                await prisma_client.db.litellm_guardrailstable.find_many(
-                    order={"created_at": "desc"},
-                )
+                await prisma_client.db.litellm_guardrailstable.find_many(**kwargs)
             )
 
             guardrails: List[Guardrail] = []
@@ -343,6 +378,17 @@ class GuardrailRegistry:
             return guardrails
         except Exception as e:
             raise Exception(f"Error getting guardrails from DB: {str(e)}")
+
+    @staticmethod
+    async def get_all_guardrails_from_db(
+        prisma_client: PrismaClient,
+    ) -> List[Guardrail]:
+        """
+        Get all guardrails from the database (backward-compatible wrapper).
+        """
+        return await GuardrailRegistry.get_guardrails_from_db(
+            prisma_client, team_id=None, view="all"
+        )
 
     async def get_guardrail_by_id_from_db(
         self, guardrail_id: str, prisma_client: PrismaClient
@@ -363,20 +409,34 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
     async def get_guardrail_by_name_from_db(
-        self, guardrail_name: str, prisma_client: PrismaClient
+        self,
+        guardrail_name: str,
+        prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
     ) -> Optional[Guardrail]:
         """
-        Get a guardrail by its name from the database
+        Get a guardrail by its name from the database.
+        When team_id is provided, prefer the row with matching team_id; else use
+        the row with team_id null (global).
         """
         try:
-            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+            guardrails = await prisma_client.db.litellm_guardrailstable.find_many(
                 where={"guardrail_name": guardrail_name}
             )
 
-            if not guardrail:
+            if not guardrails:
                 return None
 
-            return Guardrail(**(dict(guardrail)))  # type: ignore
+            # Prefer team_id match, then team_id is null
+            if team_id is not None:
+                for g in guardrails:
+                    if g.team_id == team_id:
+                        return Guardrail(**(dict(g)))  # type: ignore
+            for g in guardrails:
+                if g.team_id is None:
+                    return Guardrail(**(dict(g)))  # type: ignore
+            # Fallback: return first (e.g. another team's guardrail if only those exist)
+            return Guardrail(**(dict(guardrails[0])))  # type: ignore
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
@@ -474,6 +534,7 @@ class InMemoryGuardrailHandler:
             guardrail_id=guardrail.get("guardrail_id"),
             guardrail_name=guardrail["guardrail_name"],
             litellm_params=litellm_params,
+            team_id=guardrail.get("team_id"),
         )
 
         # store references to the guardrail in memory
@@ -587,6 +648,35 @@ class InMemoryGuardrailHandler:
         Get a guardrail by its ID from memory
         """
         return self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
+
+    def get_guardrail_by_name_and_team(
+        self,
+        guardrail_name: str,
+        team_id: Optional[str] = None,
+    ) -> Optional[Tuple[Guardrail, Optional[CustomGuardrail]]]:
+        """
+        Resolve guardrail by name and optional team_id.
+        Prefer: guardrail with guardrail_name and team_id == team_id.
+        Else: guardrail with guardrail_name and team_id is null (global).
+        Returns (Guardrail, callback) or None if not found.
+        """
+        candidates_team: List[Tuple[Guardrail, Optional[CustomGuardrail]]] = []
+        candidates_global: List[Tuple[Guardrail, Optional[CustomGuardrail]]] = []
+        for g_id, guardrail in self.IN_MEMORY_GUARDRAILS.items():
+            if guardrail.get("guardrail_name") != guardrail_name:
+                continue
+            g_team_id = guardrail.get("team_id")
+            callback = self.guardrail_id_to_custom_guardrail.get(g_id)
+            pair = (guardrail, callback)
+            if g_team_id == team_id and team_id is not None:
+                candidates_team.append(pair)
+            elif g_team_id is None:
+                candidates_global.append(pair)
+        if team_id is not None and candidates_team:
+            return candidates_team[0]
+        if candidates_global:
+            return candidates_global[0]
+        return None
 
     def _has_guardrail_params_changed(
         self, guardrail_id: str, new_guardrail: Guardrail

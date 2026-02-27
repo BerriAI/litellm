@@ -20,23 +20,17 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    log_guardrail_information,
-)
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
+from litellm.integrations.custom_guardrail import (CustomGuardrail,
+                                                   log_guardrail_information)
+from litellm.llms.custom_httpx.http_handler import (get_async_httpx_client,
+                                                    httpxSpecialProvider)
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
+from litellm.proxy.guardrails.guardrail_helpers import (
+    resolve_guardrail_for_request, should_proceed_based_on_metadata)
 from litellm.secret_managers.main import get_secret
-from litellm.types.guardrails import (
-    GuardrailItem,
-    LakeraCategoryThresholds,
-    Role,
-    default_roles,
-)
+from litellm.types.guardrails import (LakeraCategoryThresholds, Role,
+                                      default_roles)
+from litellm.types.utils import CallTypesLiteral
 
 GUARDRAIL_NAME = "lakera_prompt_injection"
 
@@ -125,24 +119,13 @@ class lakeraAI_Moderation(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         if (
             await should_proceed_based_on_metadata(
                 data=data,
                 guardrail_name=GUARDRAIL_NAME,
+                team_id=getattr(user_api_key_dict, "team_id", None),
             )
             is False
         ):
@@ -150,14 +133,15 @@ class lakeraAI_Moderation(CustomGuardrail):
         text = ""
         _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
-            prompt_injection_obj: Optional[
-                GuardrailItem
-            ] = litellm.guardrail_name_config_map.get("prompt_injection")
-            if prompt_injection_obj is not None:
-                enabled_roles = prompt_injection_obj.enabled_roles
+            team_id = getattr(user_api_key_dict, "team_id", None)
+            resolved = resolve_guardrail_for_request("prompt_injection", team_id=team_id)
+            litellm_params = resolved.get("litellm_params") if resolved else None
+            if litellm_params is not None and hasattr(litellm_params, "enabled_roles"):
+                enabled_roles = getattr(litellm_params, "enabled_roles", None)
+            elif isinstance(litellm_params, dict):
+                enabled_roles = litellm_params.get("enabled_roles")
             else:
                 enabled_roles = None
-
             if enabled_roles is None:
                 enabled_roles = default_roles
 
@@ -306,18 +290,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: litellm.DualCache,
         data: Dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.types.guardrails import GuardrailEventHooks
 
@@ -344,16 +317,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ):
         if self.event_hook is None:
             if self.moderation_check == "pre_call":

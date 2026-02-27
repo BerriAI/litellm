@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Dropdown } from "antd";
 import { DownOutlined, PlusOutlined, CodeOutlined } from "@ant-design/icons";
@@ -14,6 +14,9 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { getGuardrailLogoAndName } from "./guardrails/guardrail_info_helpers";
 import { CustomCodeModal } from "./guardrails/custom_code";
 import GuardrailGarden from "./guardrails/guardrail_garden";
+import { Team } from "./key_team_helpers/key_list";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
@@ -38,7 +41,13 @@ interface GuardrailsResponse {
   guardrails: Guardrail[];
 }
 
-const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
+type GuardrailViewMode = "all" | "current_team";
+
+const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken: accessTokenProp, userRole: userRoleProp }) => {
+  const { accessToken: accessTokenFromAuth, userRole: userRoleFromAuth } = useAuthorized();
+  const accessToken = accessTokenProp ?? accessTokenFromAuth;
+  const userRole = userRoleProp ?? userRoleFromAuth;
+  const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isCustomCodeModalVisible, setIsCustomCodeModalVisible] = useState(false);
@@ -48,17 +57,25 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<number>(0);
+  const [currentTeam, setCurrentTeam] = useState<Team | "personal" | null>("personal");
+  const [modelViewMode, setModelViewMode] = useState<GuardrailViewMode>("all");
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
-  const fetchGuardrails = async () => {
+  const teamIdForQuery = currentTeam === "personal" || currentTeam === null ? undefined : currentTeam.team_id;
+
+  const fetchGuardrails = useCallback(async () => {
     if (!accessToken) {
       return;
     }
 
     setIsLoading(true);
     try {
-      const response: GuardrailsResponse = await getGuardrailsList(accessToken);
+      const response: GuardrailsResponse = await getGuardrailsList(
+        accessToken,
+        teamIdForQuery,
+        modelViewMode,
+      );
       console.log(`guardrails: ${JSON.stringify(response)}`);
       setGuardrailsList(response.guardrails);
     } catch (error) {
@@ -66,11 +83,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken, teamIdForQuery, modelViewMode]);
 
   useEffect(() => {
     fetchGuardrails();
-  }, [accessToken]);
+  }, [fetchGuardrails]);
 
   const handleAddGuardrail = () => {
     if (selectedGuardrailId) {
@@ -203,6 +220,8 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               onClose={handleCloseModal}
               accessToken={accessToken}
               onSuccess={handleSuccess}
+              teams={teams ?? null}
+              userRole={userRole}
             />
 
             <CustomCodeModal

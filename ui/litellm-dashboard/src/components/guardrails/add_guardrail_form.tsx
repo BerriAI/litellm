@@ -1,7 +1,11 @@
-import { Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
+import { Alert, Form, Input, Modal, Select, Tag, Typography, Button } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
+import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
+import TeamDropdown from "../common_components/team_dropdown";
+import type { Team } from "../key_team_helpers/key_list";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import {
   getGuardrailProviders,
@@ -44,6 +48,8 @@ interface AddGuardrailFormProps {
   accessToken: string | null;
   onSuccess: () => void;
   preset?: GuardrailPreset;
+  teams?: Team[] | null;
+  userRole?: string;
 }
 
 interface GuardrailSettings {
@@ -96,10 +102,22 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
-const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, preset }) => {
+const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
+  visible,
+  onClose,
+  accessToken,
+  onSuccess,
+  preset,
+  teams = null,
+  userRole,
+}) => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [teamAdminSelectedTeam, setTeamAdminSelectedTeam] = useState<string | null>(null);
+  const { userId } = useAuthorized();
+  const isAdmin = userRole ? all_admin_roles.includes(userRole) : false;
+  const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId ?? undefined);
   const [guardrailSettings, setGuardrailSettings] = useState<GuardrailSettings | null>(null);
   const [selectedEntities, setSelectedEntities] = useState<string[]>([]);
   const [selectedActions, setSelectedActions] = useState<{ [key: string]: string }>({});
@@ -161,7 +179,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         populateGuardrailProviderMap(providerParamsResp);
       } catch (error) {
         console.error("Error fetching guardrail data:", error);
-        NotificationsManager.fromBackend("Failed to load guardrail configuration");
+        NotificationsManager.fromBackend("Failed to load guardrail configuration for the selected provider");
       }
     };
 
@@ -353,6 +371,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
 
   const resetForm = () => {
     form.resetFields();
+    setTeamAdminSelectedTeam(null);
     setSelectedProvider(null);
     setSelectedEntities([]);
     setSelectedActions({});
@@ -583,8 +602,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         throw new Error("No access token available");
       }
 
+      const teamId = values.team_id ?? null;
       console.log("Sending guardrail data:", JSON.stringify(guardrailData));
-      await createGuardrailCall(accessToken, guardrailData);
+      await createGuardrailCall(accessToken, guardrailData, teamId);
 
       NotificationsManager.success("Guardrail created successfully");
 
@@ -605,6 +625,41 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const renderBasicInfo = () => {
     return (
       <>
+        {isTeamAdmin && !isAdmin && (
+          <>
+            <Form.Item
+              name="team_id"
+              label="Select Team"
+              rules={[{ required: true, message: "Please select a team to continue" }]}
+              tooltip="Select the team for which you want to add this guardrail"
+            >
+              <TeamDropdown
+                teams={teams}
+                onChange={(value) => setTeamAdminSelectedTeam(value ?? null)}
+              />
+            </Form.Item>
+            {!teamAdminSelectedTeam && (
+              <Alert
+                message="Team Selection Required"
+                description="As a team admin, you need to select your team first before adding guardrails."
+                type="info"
+                showIcon
+                className="mb-4"
+              />
+            )}
+          </>
+        )}
+        {(isAdmin || !isTeamAdmin || (isTeamAdmin && teamAdminSelectedTeam)) && (
+          <>
+            {isAdmin && (
+              <Form.Item
+                name="team_id"
+                label="Team (optional)"
+                tooltip="Leave empty for a global guardrail, or select a team to create a team-scoped guardrail"
+              >
+                <TeamDropdown teams={teams} />
+              </Form.Item>
+            )}
         <Form.Item
           name="guardrail_name"
           label="Guardrail Name"
@@ -756,6 +811,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             accessToken={accessToken}
             providerParams={providerParams}
           />
+        )}
+          </>
         )}
       </>
     );

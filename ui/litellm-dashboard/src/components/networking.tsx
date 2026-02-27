@@ -5458,9 +5458,17 @@ export const testMCPSemanticFilter = async (accessToken: string, model: string, 
   }
 };
 
-export const getGuardrailsList = async (accessToken: string) => {
+export const getGuardrailsList = async (
+  accessToken: string,
+  teamId?: string | null,
+  view: "all" | "current_team" = "all",
+) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
+    const params = new URLSearchParams();
+    if (teamId != null && teamId !== "") params.append("team_id", teamId);
+    params.append("view", view);
+    if (params.toString()) url += `?${params.toString()}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -6694,9 +6702,15 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
   }
 };
 
-export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
+export const createGuardrailCall = async (
+  accessToken: string,
+  guardrailData: any,
+  teamId?: string | null,
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
+    const body: { guardrail: any; team_id?: string } = { guardrail: guardrailData };
+    if (teamId != null && teamId !== "") body.team_id = teamId;
 
     const response = await fetch(url, {
       method: "POST",
@@ -6704,9 +6718,7 @@ export const createGuardrailCall = async (accessToken: string, guardrailData: an
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        guardrail: guardrailData,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

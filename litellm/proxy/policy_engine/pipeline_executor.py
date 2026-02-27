@@ -10,19 +10,13 @@ from typing import Any, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import (
-    CustomGuardrail,
-    ModifyResponseException,
-)
+from litellm.integrations.custom_guardrail import (CustomGuardrail,
+                                                   ModifyResponseException)
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-    UnifiedLLMGuardrails,
-)
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import \
+    UnifiedLLMGuardrails
 from litellm.types.proxy.policy_engine.pipeline_types import (
-    PipelineExecutionResult,
-    PipelineStep,
-    PipelineStepResult,
-)
+    PipelineExecutionResult, PipelineStep, PipelineStepResult)
 
 try:
     from fastapi.exceptions import HTTPException
@@ -143,7 +137,10 @@ class PipelineExecutor:
             - modified_data: dict if guardrail returned modified data, else None
             - error_detail: error message string if fail/error, else None
         """
-        callback = PipelineExecutor._find_guardrail_callback(step.guardrail)
+        team_id = getattr(user_api_key_dict, "team_id", None)
+        callback = PipelineExecutor._find_guardrail_callback(
+            step.guardrail, team_id=team_id
+        )
         if callback is None:
             verbose_proxy_logger.warning(
                 f"Pipeline: guardrail '{step.guardrail}' not found in callbacks"
@@ -196,8 +193,22 @@ class PipelineExecutor:
                 return ("error", None, str(e))
 
     @staticmethod
-    def _find_guardrail_callback(guardrail_name: str) -> Optional[CustomGuardrail]:
-        """Look up an initialized guardrail callback by name from litellm.callbacks."""
+    def _find_guardrail_callback(
+        guardrail_name: str,
+        team_id: Optional[str] = None,
+    ) -> Optional[CustomGuardrail]:
+        """Look up an initialized guardrail callback by name. When team_id is set,
+        prefer team-scoped then global from in-memory handler; else search litellm.callbacks."""
+        if team_id is not None:
+            from litellm.proxy.guardrails.guardrail_registry import \
+                IN_MEMORY_GUARDRAIL_HANDLER
+
+            in_memory = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_name_and_team(
+                guardrail_name, team_id
+            )
+            if in_memory is not None:
+                _, callback = in_memory
+                return callback
         for callback in litellm.callbacks:
             if isinstance(callback, CustomGuardrail):
                 if callback.guardrail_name == guardrail_name:

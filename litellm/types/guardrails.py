@@ -780,6 +780,7 @@ class Guardrail(TypedDict, total=False):
     litellm_params: Required[LitellmParams]
     guardrail_info: Optional[Dict]
     policy_template: Optional[str]
+    team_id: Optional[str]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
@@ -812,6 +813,7 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_name: str
     litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict] = None
+    team_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = (

@@ -134,6 +134,25 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
       },
     },
     {
+      header: "Scope",
+      accessorKey: "team_id",
+      cell: ({ row }) => {
+        const guardrail = row.original;
+        if (guardrail.team_id == null || guardrail.team_id === "") {
+          return (
+            <Badge color="gray" className="text-xs font-normal" size="xs">
+              Global
+            </Badge>
+          );
+        }
+        return (
+          <span className="text-xs">
+            Team: {guardrail.team_alias || guardrail.team_id}
+          </span>
+        );
+      },
+    },
+    {
       header: "Created At",
       accessorKey: "created_at",
       cell: ({ row }) => {

@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Dict
+from typing import Dict, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -27,7 +27,9 @@ def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
     return True
 
 
-async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> bool:
+async def should_proceed_based_on_metadata(
+    data: dict, guardrail_name: str, team_id: Optional[str] = None
+) -> bool:
     """
     checks if this guardrail should be applied to this call
     """
@@ -73,6 +75,24 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
                 return False
 
     return True
+
+
+def resolve_guardrail_for_request(
+    guardrail_name: str, team_id: Optional[str] = None
+) -> Optional[Guardrail]:
+    """
+    Resolve guardrail config by name and optional team_id from in-memory handler.
+    Returns the Guardrail dict or None if not found.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    result = IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_name_and_team(
+        guardrail_name, team_id
+    )
+    if result is None:
+        return None
+    guardrail, _ = result
+    return guardrail
 
 
 async def should_proceed_based_on_api_key(

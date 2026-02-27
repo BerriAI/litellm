@@ -32,6 +32,8 @@ export interface Guardrail {
   created_at?: string;
   updated_at?: string;
   guardrail_definition_location: GuardrailDefinitionLocation;
+  team_id?: string | null;
+  team_alias?: string | null;
 }
 
 export enum GuardrailDefinitionLocation {
