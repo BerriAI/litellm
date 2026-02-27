@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openrouter.common_utils import NATIVE_OPENROUTER_MODELS
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -170,6 +171,12 @@ def get_llm_provider(  # noqa: PLR0915
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
             )
+
+        # Check native OpenRouter models before provider_list stripping.
+        # These models have IDs like "openrouter/free" which would be
+        # incorrectly stripped to just "free" by the logic below.
+        if model in NATIVE_OPENROUTER_MODELS:
+            return model, "openrouter", dynamic_api_key, api_base
 
         # check if llm provider part of model name
 
