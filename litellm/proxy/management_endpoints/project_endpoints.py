@@ -358,6 +358,16 @@ async def new_project(
                 },
             )
 
+        # ADD METADATA FIELDS
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+                delattr(data, field)
+
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -473,7 +483,7 @@ async def new_project(
     response_model=LiteLLM_ProjectTable,
 )
 @management_endpoint_wrapper
-async def update_project(
+async def update_project(  # noqa: PLR0915
     data: UpdateProjectRequest,
     http_request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -542,6 +552,16 @@ async def update_project(
                     + CommonProxyErrors.not_premium_user.value
                 },
             )
+
+        # ADD METADATA FIELDS
+        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+            if getattr(data, field, None) is not None:
+                _set_object_metadata_field(
+                    object_data=data,
+                    field_name=field,
+                    value=getattr(data, field),
+                )
+                delattr(data, field)
 
         if prisma_client is None:
             raise HTTPException(
