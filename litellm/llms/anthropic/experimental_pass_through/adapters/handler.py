@@ -44,8 +44,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         For OpenAI models, Chat Completions typically does not return reasoning text
         (only token accounting). To return a thinking-like content block in the
-        Anthropic response format, we route the request through OpenAI's Responses API
-        and request a reasoning summary.
+        Anthropic response format, we route the request through OpenAI's Responses API.
         """
         custom_llm_provider = completion_kwargs.get("custom_llm_provider")
         if custom_llm_provider is None:
@@ -80,16 +79,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if isinstance(reasoning_effort, str) and reasoning_effort:
             completion_kwargs["reasoning_effort"] = {
                 "effort": reasoning_effort,
-                "summary": "detailed",
             }
-        elif isinstance(reasoning_effort, dict):
-            if (
-                "summary" not in reasoning_effort
-                and "generate_summary" not in reasoning_effort
-            ):
-                updated_reasoning_effort = dict(reasoning_effort)
-                updated_reasoning_effort["summary"] = "detailed"
-                completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
     def _prepare_completion_kwargs(
