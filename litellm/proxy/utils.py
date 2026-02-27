@@ -1481,7 +1481,6 @@ class ProxyLogging:
                     and callback.experimental_use_latest_role_message_only
                     and isinstance(data.get("messages"), list)
                 ):
-                    import copy
 
                     data_for_guardrail = copy.copy(data)
                     filtered, _, _ = callback.filter_messages_for_latest_role(
