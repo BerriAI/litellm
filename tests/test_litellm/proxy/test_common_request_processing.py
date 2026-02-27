@@ -13,6 +13,7 @@ from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
+    _add_dd_apm_tags_for_litellm_call_id,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _override_openai_response_model,
@@ -78,6 +79,20 @@ class TestProxyBaseLLMRequestProcessing:
         except ValueError:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
+
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+        mock_set_active_span_tag = MagicMock(return_value=True)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "set_active_span_tag",
+            mock_set_active_span_tag,
+        )
+
+        _add_dd_apm_tags_for_litellm_call_id("test-call-id")
+
+        mock_set_active_span_tag.assert_called_once_with(
+            "litellm.call_id", "test-call-id"
+        )
 
     @pytest.mark.asyncio
     async def test_should_apply_hierarchical_router_settings_as_override(
