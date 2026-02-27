@@ -150,14 +150,25 @@ class KeyManagementEventHooks:
                     existing_key_row.key_alias
                     or f"virtual-key-{existing_key_row.token}"
                 )
+                new_secret_name = (
+                    response.key_alias
+                    or data.key_alias
+                    or f"virtual-key-{response.token_id}"
+                )
+                verbose_proxy_logger.info(
+                    "Updating secret in secret manager: secret_name=%s",
+                    new_secret_name,
+                )
                 team_id = getattr(existing_key_row, "team_id", None)
                 await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
                     current_secret_name=initial_secret_name,
-                    new_secret_name=response.key_alias
-                    or data.key_alias
-                    or f"virtual-key-{response.token_id}",
+                    new_secret_name=new_secret_name,
                     new_secret_value=response.key,
                     team_id=team_id,
+                )
+                verbose_proxy_logger.info(
+                    "Secret updated in secret manager: secret_name=%s",
+                    new_secret_name,
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(

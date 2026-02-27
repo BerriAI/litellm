@@ -40,6 +40,10 @@ IGNORE_FUNCTIONS = [
     "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
     "_validate_inheritance_chain",  # max depth set (default 100) to prevent infinite recursion in policy inheritance validation.
+    "_basic_json_schema_validate",  # max depth set.
+    "extract_text_from_a2a_message",  # max depth set (default 10) to prevent infinite recursion in A2A message parsing.
+    "_convert_to_json_serializable_dict",  # max depth set (default 20) and circular reference protection to prevent infinite recursion.
+    "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
 ]
 
 

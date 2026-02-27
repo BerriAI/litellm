@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import Navbar from "@/components/navbar";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
+import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 
 /** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
@@ -22,7 +23,7 @@ function withBase(path: string): string {
 }
 /** -------------------------------- */
 
-export default function Layout({ children }: { children: React.ReactNode }) {
+function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
@@ -61,6 +62,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           isDarkMode={false}
           toggleDarkMode={() => { }}
         />
+        <DebugWarningBanner />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
             <Sidebar2 defaultSelectedKey={page} accessToken={accessToken} userRole={userRole} />
@@ -69,5 +71,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     </ThemeProvider>
+  );
+}
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+      <LayoutContent>{children}</LayoutContent>
+    </Suspense>
   );
 }

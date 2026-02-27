@@ -1,6 +1,7 @@
 import base64
 import json  # <--- NEW
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -8,9 +9,8 @@ from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
-from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.types.integrations.langfuse_otel import (
-    LangfuseOtelConfig,
     LangfuseSpanAttributes,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -18,17 +18,8 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.integrations.opentelemetry import (
-        OpenTelemetryConfig as _OpenTelemetryConfig,
-    )
-    from litellm.types.integrations.arize import Protocol as _Protocol
-
-    Protocol = _Protocol
-    OpenTelemetryConfig = _OpenTelemetryConfig
     Span = Union[_Span, Any]
 else:
-    Protocol = Any
-    OpenTelemetryConfig = Any
     Span = Any
 
 
@@ -37,8 +28,12 @@ LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
 
 class LangfuseOtelLogger(OpenTelemetry):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, config=None, *args, **kwargs):
+        # Prevent LangfuseOtelLogger from modifying global environment variables by constructing config manually
+        # and passing it to the parent OpenTelemetry class
+        if config is None:
+            config = self._create_open_telemetry_config_from_langfuse_env()
+        super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
     def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
@@ -114,6 +109,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         for key, enum_attr in mapping.items():
             if key in metadata and metadata[key] is not None:
                 value = metadata[key]
+                if key == "trace_id" and isinstance(value, str):
+                    # trace_id must be 32 hex char no dashes for langfuse : Litellm sends uuid with dashes (might be breaking at some point)
+                    value = value.replace("-", "")
+
                 if isinstance(value, (list, dict)):
                     try:
                         value = json.dumps(value)
@@ -265,8 +264,47 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         return os.environ.get("LANGFUSE_OTEL_HOST") or os.environ.get("LANGFUSE_HOST")
 
+    def _create_open_telemetry_config_from_langfuse_env(self) -> OpenTelemetryConfig:
+        """
+        Creates OpenTelemetryConfig from Langfuse environment variables.
+        Does NOT modify global environment variables.
+        """
+        from litellm.integrations.opentelemetry import OpenTelemetryConfig
+
+        public_key = os.environ.get("LANGFUSE_PUBLIC_KEY", None)
+        secret_key = os.environ.get("LANGFUSE_SECRET_KEY", None)
+
+        if not public_key or not secret_key:
+            # If no keys, return default from env (likely logging to console or something else)
+            return OpenTelemetryConfig.from_env()
+
+        # Determine endpoint - default to US cloud
+        langfuse_host = LangfuseOtelLogger._get_langfuse_otel_host()
+
+        if langfuse_host:
+            # If LANGFUSE_HOST is provided, construct OTEL endpoint from it
+            if not langfuse_host.startswith("http"):
+                langfuse_host = "https://" + langfuse_host
+            endpoint = f"{langfuse_host.rstrip('/')}/api/public/otel"
+            verbose_logger.debug(f"Using Langfuse OTEL endpoint from host: {endpoint}")
+        else:
+            # Default to US cloud endpoint
+            endpoint = LANGFUSE_CLOUD_US_ENDPOINT
+            verbose_logger.debug(f"Using Langfuse US cloud endpoint: {endpoint}")
+
+        auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
+            public_key=public_key, secret_key=secret_key
+        )
+        otlp_auth_headers = f"Authorization={auth_header}"
+
+        return OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint=endpoint,
+            headers=otlp_auth_headers,
+        )
+
     @staticmethod
-    def get_langfuse_otel_config() -> LangfuseOtelConfig:
+    def get_langfuse_otel_config() -> "OpenTelemetryConfig":
         """
         Retrieves the Langfuse OpenTelemetry configuration based on environment variables.
 
@@ -276,7 +314,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             LANGFUSE_HOST: Optional. Custom Langfuse host URL. Defaults to US cloud.
 
         Returns:
-            LangfuseOtelConfig: A Pydantic model containing Langfuse OTEL configuration.
+            OpenTelemetryConfig: A Pydantic model containing Langfuse OTEL configuration.
 
         Raises:
             ValueError: If required keys are missing.
@@ -308,12 +346,14 @@ class LangfuseOtelLogger(OpenTelemetry):
         )
         otlp_auth_headers = f"Authorization={auth_header}"
 
-        # Set standard OTEL environment variables
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
-        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = otlp_auth_headers
+        # Prevent modification of global env vars which causes leakage
+        # os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
+        # os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = otlp_auth_headers
 
-        return LangfuseOtelConfig(
-            otlp_auth_headers=otlp_auth_headers, protocol="otlp_http"
+        return OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint=endpoint,
+            headers=otlp_auth_headers,
         )
 
     @staticmethod
@@ -352,6 +392,22 @@ class LangfuseOtelLogger(OpenTelemetry):
             dynamic_headers["Authorization"] = auth_header
 
         return dynamic_headers
+
+    def create_litellm_proxy_request_started_span(
+        self,
+        start_time: datetime,
+        headers: dict,
+    ) -> Optional[Span]:
+        """
+        Override to prevent creating empty proxy request spans.
+
+        Langfuse should only receive spans for actual LLM calls, not for
+        internal proxy operations (auth, postgres, proxy_pre_call, etc.).
+
+        By returning None, we prevent the parent span from being created,
+        which in turn prevents empty traces from being sent to Langfuse.
+        """
+        return None
 
     async def async_service_success_hook(self, *args, **kwargs):
         """

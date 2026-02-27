@@ -77,6 +77,27 @@ class TestMCPClientUnitTests:
             "Authorization": "Token custom_token",
         }
 
+        # OAuth2
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="oauth2-access-token-xyz",
+        )
+        headers = client._get_auth_headers()
+        assert headers == {
+            "Authorization": "Bearer oauth2-access-token-xyz",
+        }
+
+        # OAuth2 with extra_headers (per-user flow overrides auth_value)
+        client = MCPClient(
+            "http://example.com",
+            auth_type=MCPAuth.oauth2,
+            auth_value="static-server-token",
+            extra_headers={"Authorization": "Bearer per-user-token"},
+        )
+        headers = client._get_auth_headers()
+        assert headers["Authorization"] == "Bearer per-user-token"
+
         # No auth
         client = MCPClient("http://example.com")
         headers = client._get_auth_headers()

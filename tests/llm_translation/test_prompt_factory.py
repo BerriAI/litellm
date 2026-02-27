@@ -973,6 +973,54 @@ def test_convert_to_anthropic_tool_invoke_regular_tool():
     assert result[0]["input"] == {"location": "San Francisco"}
 
 
+def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
+    """Test that tool_use IDs with invalid characters are sanitized.
+
+    Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$.
+    IDs from external frameworks (e.g. MiniMax) may contain characters
+    like colons that violate this pattern.
+    """
+    tool_calls = [
+        {
+            "id": "sessions_history:183",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Boston"}',
+            },
+        },
+        {
+            "id": "composio.NOTION_SEARCH",
+            "type": "function",
+            "function": {
+                "name": "search_notes",
+                "arguments": '{"query": "test"}',
+            },
+        },
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 2
+    # Colons replaced with underscores
+    assert result[0]["id"] == "sessions_history_183"
+    # Dots replaced with underscores
+    assert result[1]["id"] == "composio_NOTION_SEARCH"
+    # Valid IDs should pass through unchanged
+    valid_tool_calls = [
+        {
+            "id": "toolu_01ABC-xyz_123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "NYC"}',
+            },
+        }
+    ]
+    valid_result = convert_to_anthropic_tool_invoke(valid_tool_calls)
+    assert valid_result[0]["id"] == "toolu_01ABC-xyz_123"
+
+
 def test_convert_to_anthropic_tool_invoke_server_tool():
     """
     Test that server_tool_use (srvtoolu_) is reconstructed as server_tool_use.
@@ -1164,6 +1212,181 @@ def test_anthropic_messages_pt_with_server_tool_use():
     # Verify regular tool_use
     tool_use = next(c for c in content if c.get("type") == "tool_use")
     assert tool_use["id"] == "toolu_01XYZ789"
+
+
+def test_convert_to_anthropic_tool_invoke_with_tool_results():
+    """
+    Test that non-web-search *_tool_result blocks (e.g. bash_code_execution_tool_result)
+    stored in provider_specific_fields["tool_results"] are paired with their server_tool_use
+    block when reconstructing assistant history.
+
+    Regression for: server tool result blocks dropped on multi-turn replay
+    (bash_code_execution_tool_result, text_editor_code_execution_tool_result, etc.)
+    """
+    tool_calls = [
+        {
+            "id": "srvtoolu_01BASH",
+            "type": "function",
+            "function": {
+                "name": "bash_code_execution",
+                "arguments": '{"command": "python3 -c \\"print(2)\\""}',
+            },
+        }
+    ]
+
+    tool_results = [
+        {
+            "type": "bash_code_execution_tool_result",
+            "tool_use_id": "srvtoolu_01BASH",
+            "content": {
+                "type": "bash_code_execution_result",
+                "stdout": "2\n",
+                "stderr": "",
+                "return_code": 0,
+                "content": [],
+            },
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls, tool_results=tool_results)
+
+    assert len(result) == 2
+    # First: server_tool_use
+    assert result[0]["type"] == "server_tool_use"
+    assert result[0]["id"] == "srvtoolu_01BASH"
+    assert result[0]["name"] == "bash_code_execution"
+    # Second: bash_code_execution_tool_result paired correctly
+    assert result[1]["type"] == "bash_code_execution_tool_result"
+    assert result[1]["tool_use_id"] == "srvtoolu_01BASH"
+
+
+def test_anthropic_messages_pt_raw_bash_tool_result_passthrough():
+    """
+    Test that raw assistant content lists containing bash_code_execution_tool_result
+    blocks are passed through intact to Anthropic.
+
+    Regression: the raw-block passthrough only handled tool_search_tool_result;
+    bash_code_execution_tool_result and other *_tool_result types were silently dropped.
+    """
+    messages = [
+        {"role": "user", "content": "What is 1+1?"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01BASH",
+                    "name": "bash_code_execution",
+                    "input": {"command": "python3 -c \"print(1+1)\""},
+                },
+                {
+                    "type": "bash_code_execution_tool_result",
+                    "tool_use_id": "srvtoolu_01BASH",
+                    "content": {
+                        "type": "bash_code_execution_result",
+                        "stdout": "2\n",
+                        "stderr": "",
+                        "return_code": 0,
+                        "content": [],
+                    },
+                },
+                {"type": "text", "text": "The answer is 2."},
+            ],
+        },
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    assert "server_tool_use" in types, "server_tool_use block must be preserved"
+    assert (
+        "bash_code_execution_tool_result" in types
+    ), "bash_code_execution_tool_result block must not be dropped"
+    assert "text" in types
+
+    # Result must immediately follow its server_tool_use
+    srv_idx = types.index("server_tool_use")
+    result_idx = types.index("bash_code_execution_tool_result")
+    assert result_idx == srv_idx + 1
+
+    bash_result = next(
+        c for c in content if c.get("type") == "bash_code_execution_tool_result"
+    )
+    assert bash_result["tool_use_id"] == "srvtoolu_01BASH"
+
+
+def test_anthropic_messages_pt_with_bash_tool_result_in_provider_specific_fields():
+    """
+    Test that anthropic_messages_pt correctly reconstructs bash_code_execution_tool_result
+    from provider_specific_fields["tool_results"] when replaying LiteLLM response objects.
+
+    Regression: only web_search_results were read from provider_specific_fields;
+    tool_results (bash_code_execution_tool_result, etc.) were silently lost.
+    """
+    messages = [
+        {"role": "user", "content": "What is 1+1?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01BASH",
+                    "type": "function",
+                    "function": {
+                        "name": "bash_code_execution",
+                        "arguments": '{"command": "python3 -c \\"print(1+1)\\""}',
+                    },
+                }
+            ],
+            "provider_specific_fields": {
+                "tool_results": [
+                    {
+                        "type": "bash_code_execution_tool_result",
+                        "tool_use_id": "srvtoolu_01BASH",
+                        "content": {
+                            "type": "bash_code_execution_result",
+                            "stdout": "2\n",
+                            "stderr": "",
+                            "return_code": 0,
+                            "content": [],
+                        },
+                    }
+                ]
+            },
+        },
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+    types = [c.get("type") for c in content]
+
+    assert "server_tool_use" in types, "server_tool_use block must be reconstructed"
+    assert (
+        "bash_code_execution_tool_result" in types
+    ), "bash_code_execution_tool_result must be paired from provider_specific_fields['tool_results']"
+
+    # Result must immediately follow its server_tool_use
+    srv_idx = types.index("server_tool_use")
+    result_idx = types.index("bash_code_execution_tool_result")
+    assert result_idx == srv_idx + 1
+
+    srv = next(c for c in content if c.get("type") == "server_tool_use")
+    assert srv["id"] == "srvtoolu_01BASH"
+    bash_result = next(
+        c for c in content if c.get("type") == "bash_code_execution_tool_result"
+    )
+    assert bash_result["tool_use_id"] == "srvtoolu_01BASH"
 
 
 # ============ parse_tool_call_arguments Tests ============

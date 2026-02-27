@@ -253,3 +253,12 @@ LiteLLM supports customizing the following Datadog environment variables
 \* **Required when using Direct API** (default): `DD_API_KEY` and `DD_SITE` are required  
 \* **Optional when using DataDog Agent**: Set `LITELLM_DD_AGENT_HOST` to use agent mode; `DD_API_KEY` and `DD_SITE` are not required for **Datadog Logs**. (**Note: `DD_API_KEY` IS REQUIRED for Datadog LLM Observability**)
 
+## Automatic Tags
+
+LiteLLM automatically adds the following tags to your Datadog logs and metrics if the information is available in the request:
+
+| Tag | Description | Source |
+|-----|-------------|--------|
+| `team` | The team alias or ID associated with the API Key | `user_api_key_team_alias`, `team_alias`, `user_api_key_team_id`, or `team_id` in metadata |
+| `request_tag` | Custom tags passed in the request | `request_tags` in logging payload |
+

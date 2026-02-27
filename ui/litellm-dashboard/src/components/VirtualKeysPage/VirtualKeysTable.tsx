@@ -24,10 +24,12 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Skeleton, Tooltip } from "antd";
-import React, { useEffect, useState } from "react";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { Popover, Skeleton, Tooltip } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
+import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import { Organization } from "../networking";
@@ -84,17 +86,18 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
   });
-  const totalCount = keys?.total_count || 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
 
-  const { filters, filteredKeys, allKeyAliases, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
+  const { filters, filteredKeys, filteredTotalCount, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
       keys: keys?.keys || [],
       teams,
       organizations,
     });
+
+  const totalCount = filteredTotalCount ?? keys?.total_count ?? 0;
 
   // Add a useEffect to call refresh when a key is created
   useEffect(() => {
@@ -112,7 +115,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     }
   }, [refetch]);
 
-  const columns: ColumnDef<KeyResponse>[] = [
+  const columns: ColumnDef<KeyResponse>[] = useMemo(() => [
     {
       id: "expander",
       header: () => null,
@@ -293,6 +296,33 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       },
     },
     {
+      id: "last_active",
+      accessorKey: "last_active",
+      header: () => (
+        <span className="flex items-center gap-1">
+          Last Active
+          <Popover
+            content="This is a new field and is not backfilled. Only new key usage will update this value."
+            trigger="hover"
+          >
+            <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
+          </Popover>
+        </span>
+      ),
+      size: 130,
+      enableSorting: false,
+      cell: (info) => {
+        const value = info.getValue();
+        if (!value) return "Unknown";
+        const date = new Date(value as string);
+        return (
+          <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
+            <span>{date.toLocaleDateString()}</span>
+          </Tooltip>
+        );
+      },
+    },
+    {
       id: "expires",
       accessorKey: "expires",
       header: "Expires",
@@ -437,7 +467,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         );
       },
     },
-  ];
+  ], []);
 
   const filterOptions: FilterOption[] = [
     {
@@ -481,19 +511,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     {
       name: "Key Alias",
       label: "Key Alias",
-      isSearchable: true,
-      searchFn: async (searchText) => {
-        const filteredKeyAliases = allKeyAliases.filter((key) => {
-          return key.toLowerCase().includes(searchText.toLowerCase());
-        });
-
-        return filteredKeyAliases.map((key) => {
-          return {
-            label: key,
-            value: key,
-          };
-        });
-      },
+      customComponent: PaginatedKeyAliasSelect,
     },
     {
       name: "User ID",
@@ -727,7 +745,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                                 whiteSpace: "pre-wrap",
                                 overflow: "hidden",
                               }}
-                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
+                              className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "models" && Array.isArray(cell.getValue()) && (cell.getValue() as string[]).length > 3 ? "px-0" : ""}`}
                             >
                               {flexRender(cell.column.columnDef.cell, cell.getContext())}
                             </TableCell>

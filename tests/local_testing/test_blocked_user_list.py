@@ -95,6 +95,7 @@ def prisma_client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_block_user_check(prisma_client):
     """
     - Set a blocked user as a litellm module value
@@ -140,6 +141,7 @@ async def test_block_user_check(prisma_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
 async def test_block_user_db_check(prisma_client):
     """
     - Block end user via "/user/block"
