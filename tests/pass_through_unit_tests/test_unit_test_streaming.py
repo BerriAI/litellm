@@ -169,7 +169,6 @@ async def test_chunk_processor_passes_kwargs_to_logging_handler():
         pass
 
     # Allow the asyncio.create_task to run
-    import asyncio
     await asyncio.sleep(0.5)
 
     # Verify async_success_handler was called with kwargs containing
