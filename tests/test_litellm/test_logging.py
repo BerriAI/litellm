@@ -16,6 +16,7 @@ import litellm
 from litellm._logging import (
     ALL_LOGGERS,
     JsonFormatter,
+    SensitiveLogFilter,
     _initialize_loggers_with_handler,
     _turn_on_json,
     verbose_logger,
@@ -262,3 +263,114 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+# ---------------------------------------------------------------------------
+# SensitiveLogFilter tests
+# ---------------------------------------------------------------------------
+
+def _make_record(msg, args=(), level=logging.DEBUG, name="LiteLLM"):
+    """Helper to create a LogRecord for filter tests."""
+    return logging.LogRecord(
+        name=name,
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=msg,
+        args=args,
+        exc_info=None,
+    )
+
+
+class TestSensitiveLogFilter:
+    """Tests for the SensitiveLogFilter that redacts Bearer tokens."""
+
+    def setup_method(self):
+        self.filt = SensitiveLogFilter()
+
+    def test_should_redact_bearer_token_in_plain_message(self):
+        record = _make_record(
+            "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig"
+        )
+        self.filt.filter(record)
+        msg = record.getMessage()
+        assert "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9" not in msg
+        assert "Bearer [REDACTED]" in msg
+
+    def test_should_redact_bearer_in_dict_format_arg(self):
+        data = {
+            "model": "gpt-4",
+            "secret_fields": {
+                "raw_headers": {
+                    "authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.abc"
+                }
+            },
+        }
+        record = _make_record("receiving data: %s", (data,))
+        self.filt.filter(record)
+        msg = record.getMessage()
+        assert "eyJhbGciOiJSUzI1NiJ9" not in msg
+        assert "Bearer [REDACTED]" in msg
+        assert "gpt-4" in msg
+
+    def test_should_leave_non_sensitive_messages_unchanged(self):
+        record = _make_record("Cache hit for model gpt-4, returning cached response")
+        self.filt.filter(record)
+        assert record.getMessage() == "Cache hit for model gpt-4, returning cached response"
+
+    def test_should_handle_nested_dict_with_authorization(self):
+        data = {
+            "proxy_server_request": {
+                "url": "http://localhost:4000/v1/chat/completions",
+                "method": "POST",
+                "headers": {
+                    "authorization": "Bearer sk-proj-abc123def456"
+                },
+            }
+        }
+        record = _make_record("receiving data: %s", (data,))
+        self.filt.filter(record)
+        msg = record.getMessage()
+        assert "sk-proj-abc123def456" not in msg
+        assert "Bearer [REDACTED]" in msg
+
+    def test_should_not_redact_bearer_word_alone(self):
+        record = _make_record("The bearer of this message is authorized")
+        self.filt.filter(record)
+        assert record.getMessage() == "The bearer of this message is authorized"
+
+    def test_should_redact_multiple_tokens_in_one_message(self):
+        record = _make_record(
+            "Header1: Bearer tokenAAA, Header2: Bearer tokenBBB"
+        )
+        self.filt.filter(record)
+        msg = record.getMessage()
+        assert "tokenAAA" not in msg
+        assert "tokenBBB" not in msg
+        assert msg.count("Bearer [REDACTED]") == 2
+
+    def test_should_be_case_insensitive(self):
+        record = _make_record("auth: bearer eyJsecretPayload.data.sig")
+        self.filt.filter(record)
+        msg = record.getMessage()
+        assert "eyJsecretPayload" not in msg
+        assert "[REDACTED]" in msg
+
+    def test_should_always_return_true(self):
+        record = _make_record("Bearer supersecrettoken123")
+        result = self.filt.filter(record)
+        assert result is True
+
+    def test_should_preserve_args_when_no_token_present(self):
+        record = _make_record("model=%s tokens=%d", ("gpt-4", 150))
+        self.filt.filter(record)
+        assert record.args == ("gpt-4", 150)
+        assert record.getMessage() == "model=gpt-4 tokens=150"
+
+    def test_should_clear_args_after_redaction(self):
+        record = _make_record("auth: %s", ("Bearer my_jwt_token_here",))
+        self.filt.filter(record)
+        assert record.args is None
+        msg = record.getMessage()
+        assert "my_jwt_token_here" not in msg
+        assert "Bearer [REDACTED]" in msg

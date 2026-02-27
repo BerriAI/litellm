@@ -1,6 +1,7 @@
 import ast
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from logging import Formatter
@@ -179,14 +180,47 @@ else:
 
     handler.setFormatter(formatter)
 
+_BEARER_TOKEN_PATTERN = re.compile(
+    r"(Bearer\s+)[^\s'\",})]{8,}",
+    re.IGNORECASE,
+)
+
+_REDACTED_TOKEN = r"\1[REDACTED]"
+
+
+class SensitiveLogFilter(logging.Filter):
+    """
+    Redacts Bearer tokens from all log output so JWTs and API keys in
+    Authorization headers are never written to logs in plaintext.
+
+    Works by pre-formatting the log message (msg % args) and applying a regex
+    substitution before the record reaches the handler/formatter.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            formatted = record.getMessage()
+            if _BEARER_TOKEN_PATTERN.search(formatted):
+                record.msg = _BEARER_TOKEN_PATTERN.sub(_REDACTED_TOKEN, formatted)
+                record.args = None
+        except Exception:
+            pass
+        return True
+
+
+_sensitive_filter = SensitiveLogFilter()
+
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
-# Add the handler to the logger
+# Add the handler and the sensitive-data filter to every logger
 verbose_router_logger.addHandler(handler)
+verbose_router_logger.addFilter(_sensitive_filter)
 verbose_proxy_logger.addHandler(handler)
+verbose_proxy_logger.addFilter(_sensitive_filter)
 verbose_logger.addHandler(handler)
+verbose_logger.addFilter(_sensitive_filter)
 
 
 def _suppress_loggers():
