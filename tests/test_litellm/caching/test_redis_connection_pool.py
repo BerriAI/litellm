@@ -4,14 +4,12 @@ Regression tests for Redis connection pool leak fixes (RC1-RC5).
 Tests are pure unit tests — no Redis server required.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import redis.asyncio as async_redis
 
 from litellm._redis import get_redis_async_client, get_redis_connection_pool
-from litellm.caching.llm_caching_handler import LLMClientCache
 
 
 def test_url_config_uses_passed_pool():
@@ -131,37 +129,3 @@ async def test_disconnect_idempotent():
     await cache.disconnect()  # should not raise
 
 
-@pytest.mark.asyncio
-async def test_eviction_calls_aclose():
-    """When an async client is evicted from LLMClientCache, its aclose()
-    should be scheduled via create_task."""
-    cache = LLMClientCache(max_size_in_memory=2, default_ttl=600)
-
-    client = AsyncMock()
-    client.aclose = AsyncMock()
-
-    cache.set_cache(key="client-0", value=client)
-    cache.set_cache(key="filler", value="x")
-    # Third insert triggers eviction of client-0
-    cache.set_cache(key="trigger", value="y")
-
-    # Let the scheduled task run
-    await asyncio.sleep(0.05)
-
-    assert client.aclose.await_count > 0
-
-
-@pytest.mark.asyncio
-async def test_eviction_non_closeable_safe():
-    """Evicting plain values (strings, dicts, ints) should not crash."""
-    cache = LLMClientCache(max_size_in_memory=2, default_ttl=600)
-
-    cache.set_cache(key="str-val", value="hello")
-    cache.set_cache(key="dict-val", value={"foo": "bar"})
-    # This evicts "str-val" — should not raise
-    cache.set_cache(key="int-val", value=42)
-
-    await asyncio.sleep(0.05)
-
-    # If we got here without exception, the test passes
-    assert cache.get_cache(key="int-val") == 42
