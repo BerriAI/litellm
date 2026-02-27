@@ -13,6 +13,7 @@ import { fetchTeams } from "@/components/common_components/fetch_teams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
+import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -37,6 +38,7 @@ import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
+import ToolPolicies from "@/components/ToolPolicies";
 import SpendLogsTable from "@/components/view_logs";
 import ViewUserDashboard from "@/components/view_users";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -547,6 +549,10 @@ function CreateKeyPageContent() {
                     <AccessGroupsPage />
                   ) : page == "vector-stores" ? (
                     <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
+                  ) : page == "tool-policies" ? (
+                    <ToolPolicies accessToken={accessToken} userRole={userRole} />
+                  ) : page == "guardrails-monitor" ? (
+                    <GuardrailsMonitorView accessToken={accessToken} />
                   ) : page == "new_usage" ? (
                     <NewUsagePage
                       teams={(teams as Team[]) ?? []}

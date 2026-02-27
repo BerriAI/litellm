@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import Sidebar2 from "@/app/(dashboard)/components/Sidebar2";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
+import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 
 /** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
@@ -61,6 +62,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           isDarkMode={false}
           toggleDarkMode={() => { }}
         />
+        <DebugWarningBanner />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
             <Sidebar2 defaultSelectedKey={page} accessToken={accessToken} userRole={userRole} />

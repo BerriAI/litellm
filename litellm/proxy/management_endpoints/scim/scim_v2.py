@@ -21,6 +21,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -724,7 +725,7 @@ async def get_service_provider_config(request: Request):
         "SCIM ServiceProviderConfig request: method=%s url=%s headers=%s",
         request.method,
         request.url,
-        dict(request.headers),
+        _safe_get_request_headers(request),
     )
     meta = {
         "resourceType": "ServiceProviderConfig",
@@ -1127,6 +1128,23 @@ def _apply_patch_ops(
         path = (op.path or "").lower()
         value = op.value
         op_type = op.op
+
+        # Handle SCIM operations without path where value contains the fields
+        if not path and isinstance(value, dict):
+            for key, val in value.items():
+                key_lower = key.lower()
+                if key_lower == "active":
+                    _handle_active_update(op_type, val, metadata)
+                elif key_lower == "displayname":
+                    _handle_displayname_update(op_type, val, update_data)
+                elif key_lower == "externalid":
+                    _handle_externalid_update(op_type, val, update_data)
+                elif key_lower == "name" and isinstance(val, dict):
+                    for name_key, name_val in val.items():
+                        name_key_lower = name_key.lower()
+                        if name_key_lower in ("givenname", "familyname"):
+                            _handle_name_update(f"name.{name_key_lower}", op_type, name_val, scim_metadata)
+            continue
 
         if path == "displayname":
             _handle_displayname_update(op_type, value, update_data)

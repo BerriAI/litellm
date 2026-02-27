@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Annotated
 
 import litellm
@@ -55,22 +55,21 @@ def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
         return None
 
     # Coerce non-string values (int, bool, etc.) to str before sanitizing
-    if not isinstance(value, str):
-        value = str(value)
+    str_value: str = value if isinstance(value, str) else str(value)
 
     # Remove Unicode line/paragraph separators that break text format
-    value = value.replace("\u2028", "").replace("\u2029", "")
+    str_value = str_value.replace("\u2028", "").replace("\u2029", "")
 
     # Remove carriage returns
-    value = value.replace("\r", "")
+    str_value = str_value.replace("\r", "")
 
     # Replace newlines with spaces
-    value = value.replace("\n", " ")
+    str_value = str_value.replace("\n", " ")
 
     # Escape backslashes and double quotes per Prometheus exposition format
-    value = value.replace("\\", "\\\\").replace('"', '\\"')
+    str_value = str_value.replace("\\", "\\\\").replace('"', '\\"')
 
-    return value
+    return str_value
 
 
 @dataclass
@@ -185,6 +184,7 @@ class UserAPIKeyLabelNames(Enum):
     CLIENT_IP = "client_ip"
     USER_AGENT = "user_agent"
     CALLBACK_NAME = "callback_name"
+    STREAM = "stream"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -638,6 +638,14 @@ class PrometheusMetricLabels:
             ]
         )
 
+        # Conditionally add stream label to litellm_proxy_total_requests_metric
+        if (
+            label_name == "litellm_proxy_total_requests_metric"
+            and litellm.prometheus_emit_stream_label is True
+            and UserAPIKeyLabelNames.STREAM.value not in default_labels
+        ):
+            custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
+
         return default_labels + custom_labels
 
 
@@ -709,6 +717,16 @@ class UserAPIKeyLabelValues(BaseModel):
     user_agent: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_AGENT.value)
     ] = None
+    stream: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
+    ] = None
+
+    @field_validator("stream", mode="before")
+    @classmethod
+    def coerce_stream_to_str(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        return str(v)
 
 
 class PrometheusMetricsConfig(BaseModel):
