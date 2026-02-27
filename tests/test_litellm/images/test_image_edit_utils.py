@@ -5,6 +5,7 @@ import pytest
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
 
@@ -168,3 +169,92 @@ class TestImageEditRequestUtilsDropParams:
         assert "size" in result
         assert "quality" not in result
         assert "unsupported_param" not in result
+
+
+class TestImageEditCustomPricing:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/22244
+
+    image_edit must forward model_info and metadata into litellm_params
+    when calling update_environment_variables, so that custom pricing
+    detection works after PR #20679 stripped custom pricing fields from
+    the shared backend model key.
+    """
+
+    def test_image_edit_passes_model_info_to_logging(self):
+        """
+        When the router provides model_info with custom pricing fields,
+        image_edit should include model_info and metadata in litellm_params.
+        """
+        from litellm.images.main import image_edit
+
+        custom_model_info = {
+            "id": "test-deployment-id",
+            "input_cost_per_image": 0.00676128,
+            "mode": "image_generation",
+        }
+        custom_metadata = {
+            "model_info": custom_model_info,
+        }
+
+        captured_litellm_params = {}
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {}
+
+        original_update = mock_logging_obj.update_environment_variables
+
+        def capturing_update(**kwargs):
+            captured_litellm_params.update(kwargs.get("litellm_params", {}))
+            return original_update(**kwargs)
+
+        mock_logging_obj.update_environment_variables = capturing_update
+
+        with patch(
+            "litellm.images.main.get_llm_provider",
+            return_value=("test-model", "openai", None, None),
+        ), patch(
+            "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
+            return_value=MagicMock(),
+        ), patch(
+            "litellm.images.main._get_ImageEditRequestUtils",
+            return_value=MagicMock(
+                get_requested_image_edit_optional_param=MagicMock(return_value={}),
+                get_optional_params_image_edit=MagicMock(return_value={}),
+            ),
+        ), patch(
+            "litellm.images.main.base_llm_http_handler"
+        ) as mock_handler:
+            mock_handler.image_edit_handler.return_value = MagicMock()
+
+            try:
+                image_edit(
+                    image=b"fake-image-data",
+                    prompt="test prompt",
+                    model="openai/test-model",
+                    litellm_logging_obj=mock_logging_obj,
+                    model_info=custom_model_info,
+                    metadata=custom_metadata,
+                )
+            except Exception:
+                pass
+
+        assert "model_info" in captured_litellm_params
+        assert captured_litellm_params["model_info"] == custom_model_info
+        assert "metadata" in captured_litellm_params
+        assert captured_litellm_params["metadata"] == custom_metadata
+
+    def test_custom_pricing_detected_from_model_info_in_metadata(self):
+        litellm_params = {
+            "metadata": {
+                "model_info": {
+                    "id": "deployment-id",
+                    "input_cost_per_image": 0.00676128,
+                },
+            },
+        }
+        assert use_custom_pricing_for_model(litellm_params) is True
+
+    def test_custom_pricing_not_detected_without_model_info(self):
+        litellm_params = {"litellm_call_id": "test-call-id"}
+        assert use_custom_pricing_for_model(litellm_params) is False
