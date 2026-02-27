@@ -95,7 +95,7 @@ response = ocr(
     document={
         "type": "file",
         "file": pdf_bytes,
-        "mime_type": "application/pdf"  # optional: MIME type is auto-detected from file extension
+        "mime_type": "application/pdf"  # recommended for raw bytes (auto-detected from extension for file paths)
     }
 )
 ```
@@ -105,7 +105,7 @@ The `file` field accepts:
 - **File object** (binary file-like object) — e.g. `open("doc.pdf", "rb")`
 - **Raw bytes** (`bytes`) — use `mime_type` to specify the content type
 
-LiteLLM automatically converts file inputs to base64 data URIs internally, so all providers (Mistral, Azure AI, Vertex AI, Azure Document Intelligence) work seamlessly.
+LiteLLM automatically converts file inputs to base64 data URIs internally, so all providers work seamlessly.
 
 ### Using Base64 Encoded Documents
 
@@ -203,13 +203,6 @@ curl http://0.0.0.0:4000/v1/ocr \
   -F 'pages=[0,1,2]' \
   -F "include_image_base64=true"
 ```
-
-:::tip
-
-The multipart file upload is also accessible from tools like **Postman** — just use the "form-data" body type, add a `file` field with your document, and a `model` field with the model name.
-
-:::
-
 
 ## **Request/Response Format**
 
