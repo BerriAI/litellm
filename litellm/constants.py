@@ -1193,6 +1193,11 @@ SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+# MEMORY LEAK FIX: Maximum number of spend log entries to hold in memory.
+# When the queue exceeds this cap (e.g., DB is unreachable and flush fails),
+# the oldest entries are dropped to prevent unbounded memory growth.
+# Each spend log payload is ~2-5KB after deepcopy; 10000 entries ≈ 20-50MB.
+MAX_SPEND_LOG_TRANSACTIONS = int(os.getenv("MAX_SPEND_LOG_TRANSACTIONS", 10000))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute
