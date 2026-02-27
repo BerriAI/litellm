@@ -5,7 +5,8 @@ This module handles the transformation of requests from Anthropic Messages API f
 to AWS Bedrock's CountTokens API format and vice versa.
 """
 
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
@@ -75,45 +76,80 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         input_type = self._detect_input_type(request_data)
 
         if input_type == "converse":
-            return self._transform_to_converse_format(request_data.get("messages", []))
+            return self._transform_to_converse_format(request_data)
         else:
             return self._transform_to_invoke_model_format(request_data)
 
     def _transform_to_converse_format(
-        self, messages: List[Dict[str, Any]]
+        self, request_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Transform to Converse input format."""
-        # Extract system messages if present
-        system_messages = []
+        """Transform to Converse input format, including system and tools."""
+        messages = request_data.get("messages", [])
+        system = request_data.get("system")
+        tools = request_data.get("tools")
+
+        # Transform messages
         user_messages = []
-
         for message in messages:
-            if message.get("role") == "system":
-                system_messages.append({"text": message.get("content", "")})
-            else:
-                # Transform message content to Bedrock format
-                transformed_message: Dict[str, Any] = {"role": message.get("role"), "content": []}
+            transformed_message: Dict[str, Any] = {"role": message.get("role"), "content": []}
+            content = message.get("content", "")
+            if isinstance(content, str):
+                transformed_message["content"].append({"text": content})
+            elif isinstance(content, list):
+                transformed_message["content"] = content
+            user_messages.append(transformed_message)
 
-                # Handle content - ensure it's in the correct array format
-                content = message.get("content", "")
-                if isinstance(content, str):
-                    # String content -> convert to text block
-                    transformed_message["content"].append({"text": content})
-                elif isinstance(content, list):
-                    # Already in blocks format - use as is
-                    transformed_message["content"] = content
+        converse_input: Dict[str, Any] = {"messages": user_messages}
 
-                user_messages.append(transformed_message)
+        # Transform system prompt (string or list of blocks → Bedrock format)
+        system_blocks = self._transform_system(system)
+        if system_blocks:
+            converse_input["system"] = system_blocks
 
-        # Build the converse input format
-        converse_input = {"messages": user_messages}
+        # Transform tools (Anthropic format → Bedrock toolConfig)
+        tool_config = self._transform_tools(tools)
+        if tool_config:
+            converse_input["toolConfig"] = tool_config
 
-        # Add system messages if present
-        if system_messages:
-            converse_input["system"] = system_messages
-
-        # Build the complete request
         return {"input": {"converse": converse_input}}
+
+    def _transform_system(self, system: Optional[Any]) -> List[Dict[str, Any]]:
+        """Transform Anthropic system prompt to Bedrock system blocks."""
+        if system is None:
+            return []
+        if isinstance(system, str):
+            return [{"text": system}]
+        if isinstance(system, list):
+            # Already in blocks format (e.g. [{"type": "text", "text": "..."}])
+            return [{"text": block.get("text", "")} for block in system if isinstance(block, dict)]
+        return []
+
+    def _transform_tools(self, tools: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+        """Transform Anthropic tools to Bedrock toolConfig format."""
+        if not tools:
+            return None
+
+        bedrock_tools = []
+        for tool in tools:
+            name = tool.get("name", "")
+            # Bedrock tool names must match [a-zA-Z][a-zA-Z0-9_]* and max 64 chars
+            name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+            if name and not name[0].isalpha():
+                name = "t_" + name
+            name = name[:64]
+
+            description = tool.get("description") or name
+            input_schema = tool.get("input_schema", {"type": "object", "properties": {}})
+
+            bedrock_tools.append({
+                "toolSpec": {
+                    "name": name,
+                    "description": description,
+                    "inputSchema": {"json": input_schema},
+                }
+            })
+
+        return {"tools": bedrock_tools}
 
     def _transform_to_invoke_model_format(
         self, request_data: Dict[str, Any]
