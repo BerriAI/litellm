@@ -924,8 +924,6 @@ async def get_end_user_object(
         return _response
 
     except Exception as e:
-        if isinstance(e, litellm.BudgetExceededError):
-            raise e
         return None
 
 
