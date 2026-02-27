@@ -18,7 +18,11 @@ import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 from litellm import get_secret, get_secret_str
-from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
+from litellm.constants import (
+    DEFAULT_REDIS_MAX_CONNECTIONS,
+    REDIS_CONNECTION_POOL_TIMEOUT,
+    REDIS_SOCKET_TIMEOUT,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
@@ -461,15 +465,31 @@ def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
-        return async_redis.BlockingConnectionPool.from_url(
-            timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=redis_kwargs["url"]
-        )
+        pool_kwargs = {"timeout": REDIS_CONNECTION_POOL_TIMEOUT, "url": redis_kwargs["url"]}
+        # MEMORY LEAK FIX: Apply max_connections if user provided it
+        if "max_connections" in redis_kwargs:
+            try:
+                pool_kwargs["max_connections"] = int(redis_kwargs["max_connections"])
+            except (TypeError, ValueError):
+                verbose_logger.warning(
+                    "REDIS: invalid max_connections value %r, using default %d",
+                    redis_kwargs["max_connections"],
+                    DEFAULT_REDIS_MAX_CONNECTIONS,
+                )
+                pool_kwargs["max_connections"] = DEFAULT_REDIS_MAX_CONNECTIONS
+        else:
+            pool_kwargs["max_connections"] = DEFAULT_REDIS_MAX_CONNECTIONS
+        return async_redis.BlockingConnectionPool.from_url(**pool_kwargs)
     connection_class = async_redis.Connection
     if "ssl" in redis_kwargs:
         connection_class = async_redis.SSLConnection
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
     redis_kwargs.pop("startup_nodes", None)
+    # MEMORY LEAK FIX: Ensure max_connections is always set to prevent
+    # unbounded connection pool growth (redis-py defaults to 2^31)
+    if "max_connections" not in redis_kwargs:
+        redis_kwargs["max_connections"] = DEFAULT_REDIS_MAX_CONNECTIONS
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )

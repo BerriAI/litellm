@@ -256,6 +256,10 @@ AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
 )
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+# MEMORY LEAK FIX: Default max connections for Redis connection pools.
+# Without a cap, redis-py defaults to 2^31 connections (effectively unlimited),
+# causing unbounded growth of lock/MutexValue objects and file descriptors.
+DEFAULT_REDIS_MAX_CONNECTIONS = int(os.getenv("DEFAULT_REDIS_MAX_CONNECTIONS", 100))
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
