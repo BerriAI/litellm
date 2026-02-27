@@ -88,8 +88,8 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
     data: Dict[str, Any] = {"document": document}
 
     for field_name, field_value in form.items():
-        if field_name == "file":
-            continue  # Already handled
+        if field_name in ("file", "document"):
+            continue
         # Try to parse JSON values (e.g. pages=[0,1,2])
         if isinstance(field_value, str):
             try:

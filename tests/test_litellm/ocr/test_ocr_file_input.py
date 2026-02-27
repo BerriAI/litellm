@@ -371,15 +371,20 @@ class TestBuildDocumentFromUpload:
 
 
 class TestProxySecurityGuard:
-    """Test that the proxy rejects type='file' documents in JSON requests."""
+    """Test that the proxy rejects type='file' documents in JSON requests
+    and that multipart form fields cannot override the constructed document."""
 
     @pytest.fixture(autouse=True)
     def _import_helpers(self):
-        """Import the proxy parser, skip if proxy deps aren't installed."""
+        """Import the proxy helpers, skip if proxy deps aren't installed."""
         try:
-            from litellm.proxy.ocr_endpoints.endpoints import _parse_ocr_request
+            from litellm.proxy.ocr_endpoints.endpoints import (
+                _parse_multipart_form,
+                _parse_ocr_request,
+            )
 
             self._parse = _parse_ocr_request
+            self._parse_multipart = _parse_multipart_form
         except ImportError:
             pytest.skip("Proxy dependencies (fastapi/orjson) not installed")
 
@@ -431,3 +436,29 @@ class TestProxySecurityGuard:
 
         with pytest.raises(ValueError, match="Invalid JSON in request body"):
             await self._parse(mock_request)
+
+    @pytest.mark.asyncio
+    async def test_should_ignore_document_form_field_injection(self):
+        """A 'document' form field must not override the document built from the uploaded file."""
+        from starlette.datastructures import UploadFile
+
+        file_content = b"%PDF-1.4 legit content"
+        upload = UploadFile(filename="legit.pdf", file=BytesIO(file_content))
+
+        injected = '{"type": "file", "file": "/etc/passwd"}'
+
+        mock_form = {
+            "file": upload,
+            "model": "mistral/mistral-ocr-latest",
+            "document": injected,
+        }
+
+        mock_request = MagicMock()
+        mock_request.headers = {"content-type": "multipart/form-data; boundary=---"}
+        mock_request.form = AsyncMock(return_value=mock_form)
+
+        result = await self._parse_multipart(mock_request)
+
+        assert result["document"]["type"] == "document_url"
+        assert result["document"]["document_url"].startswith("data:application/pdf;base64,")
+        assert result["model"] == "mistral/mistral-ocr-latest"
