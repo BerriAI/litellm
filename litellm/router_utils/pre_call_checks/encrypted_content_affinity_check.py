@@ -7,26 +7,36 @@ organization's API key. If a follow-up request containing those items is routed 
 different deployment (different org), OpenAI rejects it with an `invalid_encrypted_content`
 error because the organization_id doesn't match.
 
-This callback solves the problem by:
-1. Tracking output item IDs from Responses API responses and mapping them to the
-   deployment (model_id) that produced them.
-2. On subsequent requests, scanning the `input` field for known item IDs and pinning
-   the request to the originating deployment.
+This callback solves the problem by encoding the originating deployment's ``model_id``
+directly into the item IDs of output items that carry ``encrypted_content`` (the same
+approach used by the responses-API affinity for ``previous_response_id``).  The encoded
+ID is decoded on the next request so the router can pin to the correct deployment without
+any cache lookup.
+
+Response post-processing (encoding) is handled by
+``ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response`` which is
+called inside ``_update_responses_api_response_id_with_model_id`` in ``responses/utils.py``.
+
+Request pre-processing (ID restoration before forwarding to upstream) is handled by
+``ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input`` which is called
+in ``get_optional_params_responses_api``.
+
+This pre-call check is responsible only for the routing decision: it reads the encoded
+``model_id`` out of the item IDs and pins the request to the matching deployment.
 
 Safe to enable globally:
-- Only activates when known item IDs appear in the request `input`.
+- Only activates when encoded item IDs appear in the request ``input``.
 - No effect on embedding models, chat completions, or first-time requests.
 - No quota reduction -- first requests are fully load balanced.
+- No cache required.
 """
 
 from typing import Any, List, Optional, cast
 
 from litellm._logging import verbose_router_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
-
-_DEFAULT_TTL_SECONDS = 86400  # 24 hours
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.openai import AllMessageValues
 
 
 class EncryptedContentAffinityCheck(CustomLogger):
@@ -34,89 +44,43 @@ class EncryptedContentAffinityCheck(CustomLogger):
     Routes follow-up Responses API requests to the deployment that produced
     the encrypted output items they reference.
 
+    The ``model_id`` is decoded directly from the litellm-encoded item IDs –
+    no caching or TTL management needed.
+
     Wired via ``Router(optional_pre_call_checks=["encrypted_content_affinity"])``.
     """
 
-    CACHE_KEY_PREFIX = "encrypted_content_affinity:v1"
-
-    def __init__(
-        self,
-        cache: DualCache,
-        ttl_seconds: int = _DEFAULT_TTL_SECONDS,
-    ):
+    def __init__(self) -> None:
         super().__init__()
-        self.cache = cache
-        self.ttl_seconds = ttl_seconds
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _get_output_from_response(
-        response_obj: Any,
-    ) -> Optional[list]:
+    def _extract_model_id_from_input(request_input: Any) -> Optional[str]:
         """
-        Extract the ``output`` list from a Responses API response, handling
-        both ``ResponsesAPIResponse`` objects and plain dicts.
-        """
-        if isinstance(response_obj, ResponsesAPIResponse):
-            return response_obj.output
-        if isinstance(response_obj, dict) and "output" in response_obj:
-            output = response_obj["output"]
-            if isinstance(output, list):
-                return output
-        if hasattr(response_obj, "output"):
-            output = response_obj.output
-            if isinstance(output, list):
-                return output
-        return None
-
-    @staticmethod
-    def _extract_item_ids_from_output(
-        output: list,
-    ) -> List[str]:
-        """Extract item IDs from output items that contain encrypted_content."""
-        item_ids: List[str] = []
-        for item in output:
-            item_id: Optional[str] = None
-            has_encrypted_content = False
-            
-            if isinstance(item, dict):
-                item_id = item.get("id")
-                has_encrypted_content = "encrypted_content" in item
-            else:
-                item_id = getattr(item, "id", None)
-                has_encrypted_content = hasattr(item, "encrypted_content")
-            
-            if item_id and isinstance(item_id, str) and has_encrypted_content:
-                item_ids.append(item_id)
-        return item_ids
-
-    @staticmethod
-    def _extract_item_ids_from_input(request_input: Any) -> List[str]:
-        """
-        Extract item IDs from input items that contain encrypted_content.
+        Scan ``input`` items for litellm-encoded encrypted-content item IDs and
+        return the ``model_id`` embedded in the first one found.
 
         ``input`` can be:
-        - a plain string  -> no item IDs
-        - a list of items -> only extract IDs from items with encrypted_content
+        - a plain string  -> no encoded IDs
+        - a list of items -> check each item's ``id`` field
         """
         if not isinstance(request_input, list):
-            return []
+            return None
 
-        item_ids: List[str] = []
         for item in request_input:
-            if isinstance(item, dict):
-                item_id = item.get("id")
-                has_encrypted_content = "encrypted_content" in item
-                if item_id and isinstance(item_id, str) and has_encrypted_content:
-                    item_ids.append(item_id)
-        return item_ids
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("id")
+            if not item_id or not isinstance(item_id, str):
+                continue
+            decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+            if decoded:
+                return decoded.get("model_id")
 
-    @classmethod
-    def _cache_key(cls, item_id: str) -> str:
-        return f"{cls.CACHE_KEY_PREFIX}:{item_id}"
+        return None
 
     @staticmethod
     def _find_deployment_by_model_id(
@@ -133,82 +97,6 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 return deployment
         return None
 
-    @staticmethod
-    def _get_model_id_from_kwargs(kwargs: dict) -> Optional[str]:
-        """
-        Extract the deployment model_id from success-callback kwargs.
-
-        The Router populates ``litellm_params.metadata.model_info.id`` after
-        selecting a deployment. Also check top-level ``model_info`` as a
-        fallback (some call paths set it there).
-        """
-        # Primary path: litellm_params -> metadata -> model_info -> id
-        litellm_params = kwargs.get("litellm_params")
-        if isinstance(litellm_params, dict):
-            metadata = litellm_params.get("metadata")
-            if isinstance(metadata, dict):
-                model_info = metadata.get("model_info")
-                if isinstance(model_info, dict):
-                    model_id = model_info.get("id")
-                    if model_id is not None:
-                        return str(model_id)
-
-        # Fallback: top-level model_info (set by some router call paths)
-        model_info = kwargs.get("model_info")
-        if isinstance(model_info, dict):
-            model_id = model_info.get("id")
-            if model_id is not None:
-                return str(model_id)
-
-        return None
-
-    # ------------------------------------------------------------------
-    # Response tracking  (success callback)
-    # ------------------------------------------------------------------
-
-    async def async_log_success_event(
-        self, kwargs: dict, response_obj: Any, start_time: Any, end_time: Any
-    ) -> None:
-        """
-        After a successful Responses API call, cache each output item ID
-        mapped to the deployment that produced it.
-        """
-        output = self._get_output_from_response(response_obj)
-        if output is None:
-            return
-
-        model_id = self._get_model_id_from_kwargs(kwargs)
-        if not model_id:
-            verbose_router_logger.debug(
-                "EncryptedContentAffinityCheck: model_id not found in kwargs, skipping tracking",
-            )
-            return
-
-        item_ids = self._extract_item_ids_from_output(output)
-        if not item_ids:
-            return
-
-        for item_id in item_ids:
-            try:
-                cache_key = self._cache_key(item_id)
-                await self.cache.async_set_cache(
-                    cache_key,
-                    model_id,
-                    ttl=self.ttl_seconds,
-                )
-            except Exception as e:
-                verbose_router_logger.error(
-                    "EncryptedContentAffinityCheck: failed to cache item_id=%s error=%s",
-                    item_id,
-                    e,
-                )
-
-        verbose_router_logger.debug(
-            "EncryptedContentAffinityCheck: cached %d item IDs -> deployment=%s",
-            len(item_ids),
-            model_id,
-        )
-
     # ------------------------------------------------------------------
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
@@ -222,52 +110,41 @@ class EncryptedContentAffinityCheck(CustomLogger):
         parent_otel_span: Optional[Span] = None,
     ) -> List[dict]:
         """
-        If the request ``input`` contains items whose IDs were previously
-        tracked, pin the request to the deployment that produced them.
+        If the request ``input`` contains litellm-encoded item IDs, decode the
+        embedded ``model_id`` and pin the request to that deployment.
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments = cast(List[dict], healthy_deployments)
 
+        # Signal to the response post-processor that encrypted item IDs should be
+        # encoded in the output of this request.
+        litellm_metadata = request_kwargs.setdefault("litellm_metadata", {})
+        litellm_metadata["encrypted_content_affinity_enabled"] = True
+
         request_input = request_kwargs.get("input")
-        input_item_ids = self._extract_item_ids_from_input(request_input)
-        if not input_item_ids:
+        model_id = self._extract_model_id_from_input(request_input)
+        if not model_id:
             return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "EncryptedContentAffinityCheck: found %d item IDs in input, checking cache",
-            len(input_item_ids),
+            "EncryptedContentAffinityCheck: decoded model_id=%s from input item IDs",
+            model_id,
         )
 
-        for item_id in input_item_ids:
-            cache_key = self._cache_key(item_id)
-            try:
-                cached_model_id = await self.cache.async_get_cache(key=cache_key)
-            except Exception:
-                continue
-
-            if not cached_model_id or not isinstance(cached_model_id, str):
-                continue
-
-            deployment = self._find_deployment_by_model_id(
-                healthy_deployments=typed_healthy_deployments,
-                model_id=cached_model_id,
+        deployment = self._find_deployment_by_model_id(
+            healthy_deployments=typed_healthy_deployments,
+            model_id=model_id,
+        )
+        if deployment is not None:
+            verbose_router_logger.debug(
+                "EncryptedContentAffinityCheck: pinning -> deployment=%s",
+                model_id,
             )
-            if deployment is not None:
-                verbose_router_logger.debug(
-                    "EncryptedContentAffinityCheck: item_id=%s pinning -> deployment=%s",
-                    item_id,
-                    cached_model_id,
-                )
-                request_kwargs[
-                    "_encrypted_content_affinity_pinned"
-                ] = True
-                return [deployment]
+            request_kwargs["_encrypted_content_affinity_pinned"] = True
+            return [deployment]
 
-            verbose_router_logger.error(
-                "EncryptedContentAffinityCheck: cached deployment=%s for item_id=%s "
-                "not found in healthy_deployments",
-                cached_model_id,
-                item_id,
-            )
-
+        verbose_router_logger.error(
+            "EncryptedContentAffinityCheck: decoded deployment=%s not found in healthy_deployments",
+            model_id,
+        )
         return typed_healthy_deployments
