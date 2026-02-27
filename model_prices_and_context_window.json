@@ -2332,6 +2332,19 @@
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
+    "azure/gpt-3.5-turbo-0125": {
+        "deprecation_date": "2025-03-31",
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true
+    },
     "azure/gpt-3.5-turbo-instruct-0914": {
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "azure_text",
@@ -2349,6 +2362,19 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
         "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "azure/gpt-35-turbo-0125": {
+        "deprecation_date": "2025-05-31",
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "azure",
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
         "supports_tool_choice": true
     },
     "azure/gpt-35-turbo-16k": {
