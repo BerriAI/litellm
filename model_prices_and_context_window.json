@@ -27339,6 +27339,13 @@
         "output_cost_per_image": 0.04,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "vertex_ai/imagen-3.0-generate-002": {
+        "deprecation_date": "2025-11-10",
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "vertex_ai/imagen-3.0-capability-001": {
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
