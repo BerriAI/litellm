@@ -468,14 +468,110 @@ async def test_mcp_allowed_tools_filtering():
     print("✓ MCP allowed_tools filtering test completed successfully!")
 
 @pytest.mark.asyncio
+async def test_sse_event_ordering_response_created_first():
+    """
+    Test that response.created is emitted before mcp_list_tools events.
+    OpenAI Node SDK expects response.created as the first SSE event.
+    """
+    from unittest.mock import AsyncMock, patch
+    from litellm.types.llms.openai import (
+        ResponsesAPIStreamEvents,
+        ResponseCreatedEvent,
+        ResponsesAPIResponse,
+    )
+    from litellm.responses.mcp.mcp_streaming_iterator import (
+        MCPEnhancedStreamingIterator,
+        create_mcp_list_tools_events,
+    )
+
+    mock_mcp_tools = [
+        type("MCPTool", (), {
+            "name": "test_tool",
+            "description": "Test",
+            "inputSchema": {"type": "object", "properties": {}},
+        })(),
+    ]
+
+    mcp_discovery_events = await create_mcp_list_tools_events(
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/test"}],
+        user_api_key_auth=None,
+        base_item_id="mcp_test123",
+        pre_processed_mcp_tools=mock_mcp_tools,
+    )
+
+    async def mock_stream():
+        yield ResponseCreatedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            response=ResponsesAPIResponse(
+                id="resp_123",
+                object="response",
+                created_at=1234567890,
+                status="in_progress",
+                error=None,
+                incomplete_details=None,
+                instructions=None,
+                max_output_tokens=None,
+                model="gpt-4o-mini",
+                output=[],
+                parallel_tool_calls=True,
+                previous_response_id=None,
+                reasoning=None,
+                store=True,
+                temperature=1.0,
+                text={"format": {"type": "text"}},
+                tool_choice="auto",
+                tools=[],
+                top_p=1.0,
+                truncation="disabled",
+                usage=None,
+                user=None,
+                metadata={},
+            ),
+        )
+
+    mock_stream_obj = mock_stream()
+
+    with patch(
+        "litellm.responses.main.aresponses",
+        new_callable=AsyncMock,
+        return_value=mock_stream_obj,
+    ):
+        iterator = MCPEnhancedStreamingIterator(
+            base_iterator=None,
+            mcp_events=mcp_discovery_events,
+            tool_server_map={"test": "test_server"},
+            mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy"}],
+            user_api_key_auth=None,
+            original_request_params={
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "tools": [{"type": "mcp", "server_url": "litellm_proxy"}],
+            },
+        )
+
+        event_types = []
+        async for chunk in iterator:
+            event_types.append(getattr(chunk, "type", "unknown"))
+            if len(event_types) >= 5:
+                break
+
+    assert len(event_types) >= 1, "Should have at least one event"
+    assert event_types[0] == ResponsesAPIStreamEvents.RESPONSE_CREATED, (
+        f"First event must be response.created for OpenAI SDK compatibility, got {event_types[0]}. "
+        f"Order: {event_types}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_streaming_mcp_events_validation():
     """
     Test that MCP streaming events are properly emitted when using streaming with MCP tools.
     
     This test validates:
-    1. MCP discovery events are emitted first
-    2. Regular streaming response events follow
-    3. Tool execution events are emitted when tools are auto-executed
+    1. response.created is emitted first (OpenAI SDK requirement)
+    2. MCP discovery events follow
+    3. Regular streaming response events follow
+    4. Tool execution events are emitted when tools are auto-executed
     """
     from unittest.mock import AsyncMock, patch
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
