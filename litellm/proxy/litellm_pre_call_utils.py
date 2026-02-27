@@ -1023,7 +1023,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 "spend_logs_metadata"
             ]
 
-    ## PROJECT-LEVEL SPEND LOGS/TAGS
+    ## PROJECT-LEVEL TAGS
     project_metadata = user_api_key_dict.project_metadata or {}
     if "tags" in project_metadata and project_metadata["tags"] is not None:
         data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
