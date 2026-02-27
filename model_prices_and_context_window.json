@@ -24216,6 +24216,18 @@
         "output_cost_per_token": 0.0,
         "source": "https://docs.mistral.ai/capabilities/code_generation/"
     },
+    "text-embedding-004": {
+        "deprecation_date": "2026-01-14",
+        "input_cost_per_character": 2.5e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "max_input_tokens": 2048,
+        "max_tokens": 2048,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 768,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
     "text-embedding-005": {
         "input_cost_per_character": 2.5e-08,
         "input_cost_per_token": 1e-07,
@@ -24279,6 +24291,17 @@
         "output_cost_per_token": 0,
         "output_vector_size": 768,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "text-multilingual-embedding-002": {
+        "input_cost_per_character": 2.5e-08,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "max_input_tokens": 2048,
+        "max_tokens": 2048,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 768,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
     },
     "text-moderation-007": {
         "input_cost_per_token": 0.0,
