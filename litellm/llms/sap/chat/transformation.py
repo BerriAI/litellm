@@ -245,9 +245,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             if optional_params.get(module, None):
                 optional_modules[module] = optional_params.pop(module)
 
-        request_body = {
-            "config": {
-                "modules": {
+        fallback_modules = optional_params.pop("fallback_modules", [])
+        modules = [
+                    {
                     "prompt_templating": {
                         "prompt": {
                             "template": template,
@@ -262,13 +262,67 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                         },
                     },
                     **optional_modules
-                },
+                }
+                ]
+        for modules_dict in fallback_modules:
+            fallback_model = modules_dict.pop("model")
+            fallback_model_version = modules_dict.pop("model_version", "latest")
+            fallback_template = modules_dict.pop("messages", [])
+            fallback_tools_ = modules_dict.pop("tools", [])
+            if fallback_tools_ != []:
+                fallback_tools = {"tools": fallback_tools_}
+            else:
+                fallback_tools = {}
+
+            fallback_response_format = modules_dict.pop("response_format", {})
+            fallback_resp_type = fallback_response_format.get("type", None)
+            if fallback_resp_type:
+                if fallback_resp_type == "json_schema":
+                    fallback_response_format = validate_dict(response_format, ResponseFormatJSONSchema)
+                else:
+                    fallback_response_format = validate_dict(response_format, ResponseFormat)
+                fallback_response_format = {"response_format": fallback_response_format}
+
+            fallback_placeholder_defaults = modules_dict.pop("placeholder_defaults", {})
+            if fallback_placeholder_defaults:
+                fallback_placeholder_defaults = {"placeholder_defaults": fallback_placeholder_defaults}
+
+            fallback_optional_modules = {}
+            for module in optional_modules_lst:
+                if modules_dict.get(module, None):
+                    fallback_optional_modules[module] = modules_dict.pop(module)
+
+            modules.append(
+                {
+                    "prompt_templating": {
+                        "prompt": {
+                            "template": fallback_template,
+                            **fallback_placeholder_defaults,
+                            **fallback_tools,
+                            **fallback_response_format
+                        },
+                        "model": {
+                            "name": fallback_model,
+                            "params": modules_dict,
+                            "version": fallback_model_version,
+                        },
+                    },
+                    **fallback_optional_modules
+                }
+            )
+
+
+
+        request_body = {
+            "config": {
+                "modules": modules,
                 "stream": stream_config,
             },
             **placeholder_values,
         }
 
         validate_dict(request_body, OrchestrationRequest)
+        print(request_body)
 
         return request_body
 
