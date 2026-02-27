@@ -2599,10 +2599,7 @@ class NewProjectRequest(LiteLLM_BudgetTable):
                 raise ValueError(
                     f"tags must be a list of strings, got {type(values['tags']).__name__}"
                 )
-        for field in (
-            LiteLLM_ManagementEndpoint_MetadataFields
-            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
-        ):
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})
@@ -2635,10 +2632,7 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
                 raise ValueError(
                     f"tags must be a list of strings, got {type(values['tags']).__name__}"
                 )
-        for field in (
-            LiteLLM_ManagementEndpoint_MetadataFields
-            + LiteLLM_ManagementEndpoint_MetadataFields_Premium
-        ):
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
                     values.update({"metadata": {}})
