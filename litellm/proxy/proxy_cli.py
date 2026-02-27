@@ -188,6 +188,7 @@ class ProxyInitializationHelpers:
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
         max_requests_before_restart: Optional[int] = None,
+        keepalive_timeout: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -271,6 +272,10 @@ class ProxyInitializationHelpers:
         # Optional: recycle workers after N requests to mitigate memory growth
         if max_requests_before_restart is not None:
             gunicorn_options["max_requests"] = max_requests_before_restart
+
+        # Wire keepalive timeout through to gunicorn (matches uvicorn's timeout_keep_alive)
+        if keepalive_timeout is not None:
+            gunicorn_options["keepalive"] = keepalive_timeout
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(  # noqa
@@ -860,6 +865,7 @@ def run_server(  # noqa: PLR0915
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
+                keepalive_timeout=keepalive_timeout,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(
