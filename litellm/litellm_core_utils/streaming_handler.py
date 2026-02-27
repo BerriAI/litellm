@@ -1231,7 +1231,7 @@ class CustomStreamWrapper:
                                     ],
                                 )
                                 _streaming_response = StreamingChoices(delta=_delta_obj)
-                                _model_response = ModelResponse(stream=True)
+                                _model_response = ModelResponseStream()
                                 _model_response.choices = [_streaming_response]
                                 response_obj = {"original_chunk": _model_response}
                             else:

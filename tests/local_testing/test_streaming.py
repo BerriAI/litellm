@@ -393,7 +393,7 @@ def test_completion_azure_stream_content_filter_no_delta():
 
         chunk_list = []
         for chunk in chunks:
-            new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+            new_chunk = litellm.ModelResponseStream(id=chunk["id"])
             if "choices" in chunk and isinstance(chunk["choices"], list):
                 new_choices = []
                 for choice in chunk["choices"]:
@@ -3026,7 +3026,7 @@ def test_unit_test_custom_stream_wrapper():
             {"index": 0, "delta": {"content": "How are you?"}, "finish_reason": "stop"}
         ],
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
@@ -3223,7 +3223,7 @@ def test_unit_test_custom_stream_wrapper_openai():
         "system_fingerprint": None,
         "usage": None,
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
@@ -3457,7 +3457,7 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
 
     chunk_list = []
     for chunk in chunks:
-        new_chunk = litellm.ModelResponse(stream=True, id=chunk["id"])
+        new_chunk = litellm.ModelResponseStream(id=chunk["id"])
         if "choices" in chunk and isinstance(chunk["choices"], list):
             print("INSIDE CHUNK CHOICES!")
             new_choices = []
@@ -3541,7 +3541,7 @@ def test_unit_test_custom_stream_wrapper_function_call():
         "system_fingerprint": "fp_44709d6fcb",
         "choices": [{"index": 0, "delta": delta, "finish_reason": "stop"}],
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
@@ -3651,7 +3651,7 @@ def test_unit_test_perplexity_citations_chunk():
             }
         ],
     }
-    chunk = litellm.ModelResponse(**chunk, stream=True)
+    chunk = litellm.ModelResponseStream(**chunk)
 
     completion_stream = ModelResponseIterator(model_response=chunk)
 
