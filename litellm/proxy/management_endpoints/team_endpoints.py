@@ -1672,6 +1672,26 @@ async def _process_team_members(
     updated_users: List[LiteLLM_UserTable] = []
     updated_team_memberships: List[LiteLLM_TeamMembership] = []
 
+    if data.models is not None:
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_team_model_overrides_enabled,
+        )
+
+        if _is_team_model_overrides_enabled():
+            if (
+                complete_team_data.models
+                and SpecialModelNames.all_proxy_models.value
+                not in complete_team_data.models
+            ):
+                invalid = set(data.models) - set(complete_team_data.models)
+                if invalid:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Models {list(invalid)} not in team's allowed models: {complete_team_data.models}"
+                        },
+                    )
+
     default_team_budget_id = (
         complete_team_data.metadata.get("team_member_budget_id")
         if complete_team_data.metadata is not None
@@ -2326,6 +2346,27 @@ async def team_member_update(
         if tm.user_id == received_user_id:
             identified_budget_id = tm.budget_id
             break
+
+    if data.models is not None:
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_team_model_overrides_enabled,
+        )
+
+        if _is_team_model_overrides_enabled():
+            # Validate models are within team's allowed set (team.models)
+            if (
+                existing_team_row.models
+                and SpecialModelNames.all_proxy_models.value
+                not in existing_team_row.models
+            ):
+                invalid = set(data.models) - set(existing_team_row.models)
+                if invalid:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Models {list(invalid)} not in team's allowed models: {existing_team_row.models}"
+                        },
+                    )
 
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
