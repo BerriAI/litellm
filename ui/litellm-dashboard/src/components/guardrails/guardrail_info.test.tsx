@@ -1,7 +1,17 @@
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import * as networking from "@/components/networking";
 import { fireEvent, render, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
+
+// Mock useAuthorized and useTeams so we don't need QueryClientProvider / auth context
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: vi.fn(),
+}));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: vi.fn(),
+}));
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
@@ -35,6 +45,11 @@ vi.mock("./content_filter/ContentFilterManager", () => ({
 }));
 
 describe("Guardrail Info", () => {
+  beforeEach(() => {
+    vi.mocked(useAuthorized).mockReturnValue({ userId: "test-user" } as any);
+    vi.mocked(useTeams).mockReturnValue({ data: [] } as any);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -266,5 +281,63 @@ describe("Guardrail Info", () => {
     expect(secondCallArgs.litellm_params).toBeDefined();
     expect(secondCallArgs.litellm_params.patterns).toEqual(["new_pattern"]);
     expect(secondCallArgs.litellm_params.blocked_words).toEqual(["new_word"]);
+  });
+
+  it("should show the Settings tab and Edit Settings button when user is team admin for the guardrail's team", async () => {
+    const teamAdminUserId = "team-admin-user";
+    vi.mocked(useAuthorized).mockReturnValue({ userId: teamAdminUserId } as any);
+    vi.mocked(useTeams).mockReturnValue({
+      data: [
+        {
+          team_id: "team-1",
+          team_alias: "Team 1",
+          models: [],
+          max_budget: null,
+          budget_duration: null,
+          members_with_roles: [
+            { user_id: teamAdminUserId, user_email: "admin@test.com", role: "admin" },
+          ],
+          spend: 0,
+        },
+      ],
+    } as any);
+
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Team Guardrail",
+      team_id: "team-1",
+      litellm_params: {
+        guardrail: "presidio",
+        mode: "pre_call",
+        default_on: true,
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: ["PERSON", "EMAIL"],
+      supported_actions: ["MASK", "REDACT"],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    const { getByText } = render(
+      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={false} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("Settings")).toBeInTheDocument();
+    });
+    fireEvent.click(getByText("Settings"));
+
+    await waitFor(() => {
+      expect(getByText("Guardrail Settings")).toBeInTheDocument();
+    });
+
+    expect(getByText("Edit Settings")).toBeInTheDocument();
   });
 });

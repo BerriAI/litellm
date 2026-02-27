@@ -936,6 +936,7 @@ async def get_guardrail_info(
             guardrail_name=result.get("guardrail_name"),
             litellm_params=masked_litellm_params,
             guardrail_info=dict(result.get("guardrail_info") or {}),
+            team_id=result.get("team_id"),
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
             guardrail_definition_location=guardrail_definition_location,

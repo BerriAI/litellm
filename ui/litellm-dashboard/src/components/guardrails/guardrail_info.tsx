@@ -1,3 +1,5 @@
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import {
   getGuardrailInfo,
   getGuardrailProviderSpecificParams,
@@ -5,6 +7,7 @@ import {
   updateGuardrailCall,
 } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import {
@@ -57,6 +60,8 @@ interface ProviderParamsResponse {
 }
 
 const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, accessToken, isAdmin }) => {
+  const { userId } = useAuthorized();
+  const { data: teams } = useTeams();
   const [guardrailData, setGuardrailData] = useState<any>(null);
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -463,6 +468,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   };
 
   const isConfigGuardrail = guardrailData.guardrail_definition_location === "config";
+  const canEditGuardrail =
+    isAdmin ||
+    (guardrailData?.team_id &&
+      teams &&
+      isUserTeamAdminForSingleTeam(
+        teams.find((t) => t.team_id === guardrailData.team_id)?.members_with_roles ?? null,
+        userId ?? "",
+      ));
 
   return (
     <div className="p-4">
@@ -490,7 +503,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       <TabGroup>
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
-          {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
+          {canEditGuardrail ? <Tab key="settings">Settings</Tab> : <></>}
         </TabList>
 
         <TabPanels>
@@ -589,7 +602,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     <CodeOutlined className="text-blue-500" />
                     <Text className="font-medium text-lg">Custom Code</Text>
                   </div>
-                  {isAdmin && !isConfigGuardrail && (
+                  {canEditGuardrail && !isConfigGuardrail && (
                     <Button
                       size="small"
                       icon={<CodeOutlined />}
@@ -616,8 +629,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
             />
           </TabPanel>
 
-          {/* Settings Panel (only for admins) */}
-          {isAdmin && (
+          {/* Settings Panel (only for admins or team admins for this guardrail's team) */}
+          {canEditGuardrail && (
             <TabPanel>
               <Card>
                 <div className="flex justify-between items-center mb-4">
