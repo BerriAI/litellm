@@ -19210,6 +19210,39 @@
         "supports_tool_choice": true,
         "supports_vision": false
     },
+    "gpt-audio-1.5": {
+        "input_cost_per_audio_token": 3.2e-05,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_audio_token": 6.4e-05,
+        "output_cost_per_token": 1e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": false,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "gpt-audio-2025-08-28": {
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_token": 2.5e-06,
