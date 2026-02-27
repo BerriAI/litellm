@@ -416,6 +416,82 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
     assert params["reasoning_effort"] == "xhigh"
 
 
+# GPT-5-Search specific tests
+def test_gpt5_search_model_detection(gpt5_config: OpenAIGPT5Config):
+    """Test that GPT-5 search models are correctly detected."""
+    assert gpt5_config.is_model_gpt_5_search_model("gpt-5-search-api")
+    assert gpt5_config.is_model_gpt_5_search_model("gpt-5-search-mini-api")
+
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5")
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5-codex")
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5-mini")
+
+
+def test_gpt5_search_supported_params(gpt5_config: OpenAIGPT5Config):
+    """Test that search models do NOT list reasoning/tool params as supported."""
+    supported = gpt5_config.get_supported_openai_params(model="gpt-5-search-api")
+    rejected = [
+        "logit_bias",
+        "modalities",
+        "prediction",
+        "n",
+        "seed",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "function_call",
+        "functions",
+        "parallel_tool_calls",
+        "audio",
+        "reasoning_effort",
+    ]
+    for param in rejected:
+        assert param not in supported, f"{param} should not be supported for search models"
+
+
+def test_gpt5_search_has_expected_params(gpt5_config: OpenAIGPT5Config):
+    """Test that search models DO list the correct supported params."""
+    supported = gpt5_config.get_supported_openai_params(model="gpt-5-search-api")
+    expected = [
+        "max_tokens",
+        "max_completion_tokens",
+        "stream",
+        "stream_options",
+        "web_search_options",
+        "service_tier",
+        "response_format",
+        "user",
+        "store",
+        "verbosity",
+        "extra_headers",
+    ]
+    for param in expected:
+        assert param in supported, f"{param} should be supported for search models"
+
+
+def test_gpt5_search_maps_max_tokens(config: OpenAIConfig):
+    """Test that search models map max_tokens -> max_completion_tokens."""
+    params = config.map_openai_params(
+        non_default_params={"max_tokens": 200},
+        optional_params={},
+        model="gpt-5-search-api",
+        drop_params=False,
+    )
+    assert params["max_completion_tokens"] == 200
+    assert "max_tokens" not in params
+
+
+def test_gpt5_search_drops_unsupported_params(config: OpenAIConfig):
+    """Test that search models drop unsupported params via map_openai_params."""
+    params = config.map_openai_params(
+        non_default_params={"n": 2, "temperature": 0.7, "tools": [{"type": "function"}]},
+        optional_params={},
+        model="gpt-5-search-api",
+        drop_params=True,
+    )
+    assert "n" not in params
+    assert "temperature" not in params
+    assert "tools" not in params
 # GPT-5 unsupported params audit (validated via direct API calls)
 def test_gpt5_rejects_params_unsupported_by_openai(config: OpenAIConfig):
     """Params that OpenAI rejects for all GPT-5 reasoning models."""
