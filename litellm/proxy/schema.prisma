@@ -119,6 +119,7 @@ model LiteLLM_TeamTable {
     soft_budget Float?
     spend      Float    @default(0.0)
     models     String[]
+    default_models String[] @default([])
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
@@ -538,6 +539,7 @@ model LiteLLM_TeamMembership {
   team_id    String
   spend      Float    @default(0.0)
   budget_id String?
+  models     String[] @default([])
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
 }

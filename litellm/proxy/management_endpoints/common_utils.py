@@ -1,3 +1,4 @@
+import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -312,6 +313,7 @@ async def _upsert_budget_and_membership(
     user_api_key_dict: UserAPIKeyAuth,
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
+    models: Optional[List[str]] = None,
 ):
     """
     Helper function to Create/Update or Delete the budget within the team membership
@@ -324,15 +326,20 @@ async def _upsert_budget_and_membership(
         user_api_key_dict: User API Key dictionary containing user information
         tpm_limit: Tokens per minute limit for the team member
         rpm_limit: Requests per minute limit for the team member
+        models: Model names the team member is allowed to call (per-user overrides)
 
     If max_budget, tpm_limit, and rpm_limit are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
     """
     if max_budget is None and tpm_limit is None and rpm_limit is None:
         # disconnect the budget since all limits are None
+        update_data: Dict[str, Any] = {"litellm_budget_table": {"disconnect": True}}
+        if models is not None:
+            update_data["models"] = models
+
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={"litellm_budget_table": {"disconnect": True}},
+            data=update_data,
         )
         return
 
@@ -352,6 +359,25 @@ async def _upsert_budget_and_membership(
         data=create_data,
         include={"team_membership": True},
     )
+
+    update_payload: Dict[str, Any] = {
+        "litellm_budget_table": {
+            "connect": {"budget_id": new_budget.budget_id},
+        },
+    }
+    if models is not None:
+        update_payload["models"] = models
+
+    create_payload: Dict[str, Any] = {
+        "user_id": user_id,
+        "team_id": team_id,
+        "litellm_budget_table": {
+            "connect": {"budget_id": new_budget.budget_id},
+        },
+    }
+    if models is not None:
+        create_payload["models"] = models
+
     # upsert the team membership with the new/updated budget
     await tx.litellm_teammembership.upsert(
         where={
@@ -361,18 +387,8 @@ async def _upsert_budget_and_membership(
             }
         },
         data={
-            "create": {
-                "user_id": user_id,
-                "team_id": team_id,
-                "litellm_budget_table": {
-                    "connect": {"budget_id": new_budget.budget_id},
-                },
-            },
-            "update": {
-                "litellm_budget_table": {
-                    "connect": {"budget_id": new_budget.budget_id},
-                },
-            },
+            "create": create_payload,
+            "update": update_payload,
         },
     )
 
@@ -429,3 +445,7 @@ def _update_metadata_fields(updated_kv: dict) -> None:
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
+
+
+def _is_team_model_overrides_enabled() -> bool:
+    return os.getenv("LITELLM_TEAM_MODEL_OVERRIDES", "false").lower() == "true"

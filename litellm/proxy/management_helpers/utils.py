@@ -146,6 +146,7 @@ async def add_new_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     default_team_budget_id: Optional[str] = None,
+    models: Optional[List[str]] = None,
 ) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
     """
     Add a new member to a team
@@ -220,14 +221,19 @@ async def add_new_member(
     else:
         _budget_id = default_team_budget_id
 
-    if _budget_id and returned_user is not None and returned_user.user_id is not None:
+    if returned_user is not None and returned_user.user_id is not None:
+        create_data: Dict[str, Any] = {
+            "team_id": team_id,
+            "user_id": returned_user.user_id,
+        }
+        if _budget_id:
+            create_data["budget_id"] = _budget_id
+        if models is not None:
+            create_data["models"] = models
+
         _returned_team_membership = (
             await prisma_client.db.litellm_teammembership.create(
-                data={
-                    "team_id": team_id,
-                    "user_id": returned_user.user_id,
-                    "budget_id": _budget_id,
-                },
+                data=create_data,  # type: ignore
                 include={"litellm_budget_table": True},
             )
         )

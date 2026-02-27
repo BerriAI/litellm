@@ -1688,6 +1688,7 @@ async def _process_team_members(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
+                models=data.models,
             )
         except Exception as e:
             raise HTTPException(
@@ -1712,6 +1713,7 @@ async def _process_team_members(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
+                    models=data.models,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2336,6 +2338,7 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            models=data.models,
         )
 
     ### update team member role
@@ -2368,6 +2371,7 @@ async def team_member_update(
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
+        models=data.models,
     )
 
 

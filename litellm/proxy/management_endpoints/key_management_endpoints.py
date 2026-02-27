@@ -890,6 +890,62 @@ async def _check_team_key_limits(
     )
 
 
+async def _validate_key_models_against_effective_team_models(
+    team_id: str,
+    user_id: Optional[str],
+    requested_models: List[str],
+    team_table: LiteLLM_TeamTableCachedObj,
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Validate that the requested models for a key are a subset of the effective team models.
+    Effective models = team.default_models ∪ membership.models
+    """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_team_model_overrides_enabled,
+    )
+
+    if not _is_team_model_overrides_enabled():
+        return
+
+    if not requested_models:
+        return
+
+    # 1. Fetch team membership if user_id is provided
+    member_models: List[str] = []
+    if user_id:
+        membership = await prisma_client.db.litellm_teammembership.find_unique(
+            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+        )
+        if membership:
+            member_models = membership.models or []
+
+    # 2. Compute effective models
+    from litellm.proxy.auth.auth_checks import compute_effective_team_models
+
+    effective_models = compute_effective_team_models(
+        team_default_models=team_table.default_models or [],
+        team_member_models=member_models,
+    )
+
+    # 3. If effective models are defined, validate requested models are a subset
+    if effective_models:
+        for m in requested_models:
+            if m not in effective_models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model '{m}' is not available for this user in Team={team_id}. Available models = {effective_models}"
+                    },
+                )
+    else:
+        # If no effective models (empty defaults AND empty member overrides)
+        # and feature is enabled, we only allow models that are in the global team models.
+        # But according to plan: "If Effective models is empty, follow EXISTING behavior (team.models)."
+        # So we don't raise error here.
+        pass
+
+
 async def _check_project_key_limits(
     project_id: str,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
@@ -1201,6 +1257,13 @@ async def generate_key_fn(
                 data=data,
                 prisma_client=prisma_client,
             )
+            await _validate_key_models_against_effective_team_models(
+                team_id=data.team_id,
+                user_id=data.user_id,
+                requested_models=data.models or [],
+                team_table=team_table,
+                prisma_client=prisma_client,
+            )
 
         # Validate key against project limits if project_id is set
         if data.project_id is not None:
@@ -1352,6 +1415,13 @@ async def generate_service_account_key_fn(
         await _check_team_key_limits(
             team_table=team_table,
             data=data,
+            prisma_client=prisma_client,
+        )
+        await _validate_key_models_against_effective_team_models(
+            team_id=data.team_id,
+            user_id=data.user_id,
+            requested_models=data.models or [],
+            team_table=team_table,
             prisma_client=prisma_client,
         )
 
