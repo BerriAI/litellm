@@ -800,6 +800,7 @@ const sidebars = {
         "providers/amazon_nova",
         "providers/anyscale",
         "providers/apertis",
+        "providers/avian",
         "providers/baseten",
         "providers/bytez",
         "providers/cerebras",
