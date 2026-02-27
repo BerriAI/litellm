@@ -16,6 +16,8 @@ import pytest
 import litellm
 from litellm.proxy._types import (
     CallInfo,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     Litellm_EntityType,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
@@ -29,6 +31,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_vector_stores,
+    _check_end_user_budget,
     _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
@@ -59,9 +62,9 @@ def reset_constants_module():
     # Reload modules before test
     importlib.reload(constants)
     importlib.reload(auth_checks)
-    
+
     yield
-    
+
     # Reload modules after test to clean up
     importlib.reload(constants)
     importlib.reload(auth_checks)
@@ -290,12 +293,12 @@ def test_get_cli_jwt_auth_token_custom_expiration(
 
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
-    
+
     # Reload the constants module to pick up the new env var
     importlib.reload(constants)
     # Also reload auth_checks to pick up the new constant value
     importlib.reload(auth_checks)
-    
+
     token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
@@ -1571,3 +1574,188 @@ async def test_common_checks_skip_route_check_for_custom_auth():
     )
 
     assert result is True
+
+class TestCheckEndUserBudget:
+    @pytest.mark.asyncio
+    async def test_budget_alert_fired_when_spend_exceeds_max(self):
+        """Test that budget_alerts is called with type='end_user_budget' when spend > max_budget"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=150.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+        )
+        mock_proxy_logging = AsyncMock()
+        mock_proxy_logging.budget_alerts = AsyncMock()
+
+        with pytest.raises(litellm.BudgetExceededError):
+            await _check_end_user_budget(
+                end_user_obj=end_user_obj,
+                route="/chat/completions",
+                proxy_logging_obj=mock_proxy_logging,
+            )
+
+        # Allow the asyncio.create_task to run
+        await asyncio.sleep(0.1)
+
+        mock_proxy_logging.budget_alerts.assert_called_once()
+        call_kwargs = mock_proxy_logging.budget_alerts.call_args
+        assert call_kwargs.kwargs["type"] == "end_user_budget"
+        user_info = call_kwargs.kwargs["user_info"]
+        assert user_info.spend == 150.0
+        assert user_info.max_budget == 100.0
+        assert user_info.customer_id == "customer_abc"
+        assert user_info.event_group == Litellm_EntityType.END_USER
+
+    @pytest.mark.asyncio
+    async def test_no_alert_when_under_budget(self):
+        """Test that no alert is fired when spend is under max_budget"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=50.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+        )
+        mock_proxy_logging = AsyncMock()
+
+        # Should not raise
+        await _check_end_user_budget(
+            end_user_obj=end_user_obj,
+            route="/chat/completions",
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        mock_proxy_logging.budget_alerts.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_alert_when_no_proxy_logging_obj(self):
+        """Test that BudgetExceededError is raised even without proxy_logging_obj"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=150.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+        )
+
+        with pytest.raises(litellm.BudgetExceededError):
+            await _check_end_user_budget(
+                end_user_obj=end_user_obj,
+                route="/chat/completions",
+                proxy_logging_obj=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_skips_check_for_info_routes(self):
+        """Test that budget check is skipped for info routes"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=150.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+        )
+
+        # Should not raise for info routes
+        await _check_end_user_budget(
+            end_user_obj=end_user_obj,
+            route="/key/info",
+        )
+
+    @pytest.mark.asyncio
+    async def test_skips_check_when_no_budget_table(self):
+        """Test that budget check is skipped when litellm_budget_table is None"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=150.0,
+            litellm_budget_table=None,
+        )
+
+        # Should not raise when no budget table
+        await _check_end_user_budget(
+            end_user_obj=end_user_obj,
+            route="/chat/completions",
+        )
+
+    @pytest.mark.asyncio
+    async def test_soft_budget_alert_fired_when_spend_exceeds_soft(self):
+        """Test that a soft budget alert is fired when spend >= soft_budget but under max_budget"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=80.0,
+            litellm_budget_table=LiteLLM_BudgetTable(
+                max_budget=200.0, soft_budget=50.0
+            ),
+        )
+        mock_proxy_logging = AsyncMock()
+        mock_proxy_logging.budget_alerts = AsyncMock()
+
+        # Should not raise (under max_budget)
+        await _check_end_user_budget(
+            end_user_obj=end_user_obj,
+            route="/chat/completions",
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        # Allow the asyncio.create_task to run
+        await asyncio.sleep(0.1)
+
+        mock_proxy_logging.budget_alerts.assert_called_once()
+        call_kwargs = mock_proxy_logging.budget_alerts.call_args
+        assert call_kwargs.kwargs["type"] == "end_user_budget"
+        user_info = call_kwargs.kwargs["user_info"]
+        assert user_info.spend == 80.0
+        assert user_info.soft_budget == 50.0
+        assert user_info.max_budget == 200.0
+        assert user_info.customer_id == "customer_abc"
+        assert user_info.event_group == Litellm_EntityType.END_USER
+
+    @pytest.mark.asyncio
+    async def test_no_soft_budget_alert_when_under_soft_budget(self):
+        """Test that no alert is fired when spend is under soft_budget"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=30.0,
+            litellm_budget_table=LiteLLM_BudgetTable(
+                max_budget=200.0, soft_budget=50.0
+            ),
+        )
+        mock_proxy_logging = AsyncMock()
+
+        await _check_end_user_budget(
+            end_user_obj=end_user_obj,
+            route="/chat/completions",
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        mock_proxy_logging.budget_alerts.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_max_budget_alert_includes_soft_budget(self):
+        """Test that the max budget alert CallInfo includes soft_budget when set"""
+        end_user_obj = LiteLLM_EndUserTable(
+            user_id="customer_abc",
+            blocked=False,
+            spend=250.0,
+            litellm_budget_table=LiteLLM_BudgetTable(
+                max_budget=200.0, soft_budget=100.0
+            ),
+        )
+        mock_proxy_logging = AsyncMock()
+        mock_proxy_logging.budget_alerts = AsyncMock()
+
+        with pytest.raises(litellm.BudgetExceededError):
+            await _check_end_user_budget(
+                end_user_obj=end_user_obj,
+                route="/chat/completions",
+                proxy_logging_obj=mock_proxy_logging,
+            )
+
+        await asyncio.sleep(0.1)
+
+        # Only the max budget alert fires (raises before reaching soft check)
+        mock_proxy_logging.budget_alerts.assert_called_once()
+        user_info = mock_proxy_logging.budget_alerts.call_args.kwargs["user_info"]
+        assert user_info.soft_budget == 100.0
+        assert user_info.max_budget == 200.0

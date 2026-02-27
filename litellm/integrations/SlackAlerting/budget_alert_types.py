@@ -82,6 +82,14 @@ class ProjectBudgetAlert(BaseBudgetAlertType):
         return user_info.token or "default_id"
 
 
+class EndUserBudgetAlert(BaseBudgetAlertType):
+    def get_event_message(self) -> str:
+        return "Customer Budget: "
+
+    def get_id(self, user_info: CallInfo) -> str:
+        return user_info.customer_id or "default_id"
+
+
 def get_budget_alert_type(
     type: Literal[
         "token_budget",
@@ -93,6 +101,7 @@ def get_budget_alert_type(
         "proxy_budget",
         "projected_limit_exceeded",
         "project_budget",
+        "end_user_budget",
     ],
 ) -> BaseBudgetAlertType:
     """Factory function to get the appropriate budget alert type class"""
@@ -107,6 +116,7 @@ def get_budget_alert_type(
         "token_budget": TokenBudgetAlert(),
         "projected_limit_exceeded": ProjectedLimitExceededAlert(),
         "project_budget": ProjectBudgetAlert(),
+        "end_user_budget": EndUserBudgetAlert(),
     }
 
     if type in alert_types:
