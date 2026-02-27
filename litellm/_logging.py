@@ -221,6 +221,7 @@ verbose_proxy_logger.addHandler(handler)
 verbose_proxy_logger.addFilter(_sensitive_filter)
 verbose_logger.addHandler(handler)
 verbose_logger.addFilter(_sensitive_filter)
+logging.getLogger().addFilter(_sensitive_filter)
 
 
 def _suppress_loggers():
