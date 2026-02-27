@@ -2368,6 +2368,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 ),
             )
+        finally:
+            self._cleanup_after_logging()
 
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -2712,6 +2714,25 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
                 pass
+        self._cleanup_after_logging()
+
+    def _cleanup_after_logging(self) -> None:
+        """Release large response objects after all logging callbacks have completed.
+
+        Prevents response objects, streaming chunks, and httpx responses from being
+        retained in memory longer than necessary. The Logging object may persist
+        (e.g., held by a generator), so explicitly clearing these references allows
+        the GC to reclaim the memory sooner.
+        """
+        self.streaming_chunks.clear()
+        self.sync_streaming_chunks.clear()
+        # Clear large response objects from model_call_details
+        for key in (
+            "complete_streaming_response",
+            "async_complete_streaming_response",
+            "httpx_response",
+        ):
+            self.model_call_details.pop(key, None)
 
     def _handle_callback_failure(self, callback: Any):
         """

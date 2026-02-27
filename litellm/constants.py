@@ -346,6 +346,10 @@ AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI = int(
 )
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
 REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
+# Default max connections for Redis connection pools.
+# redis-py ConnectionPool defaults to 2**31 (2 billion) which is effectively
+# unlimited and can cause unbounded lock/MutexValue object growth.
+DEFAULT_REDIS_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", 100))
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
@@ -1334,6 +1338,11 @@ SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+# Maximum number of spend log entries to buffer in memory before dropping.
+# Prevents unbounded memory growth when the database is unreachable or slow.
+MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE = int(
+    os.getenv("MAX_SPEND_LOG_TRANSACTIONS_QUEUE_SIZE", 10000)
+)
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
     os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)
 )  # 1 minute

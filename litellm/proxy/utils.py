@@ -3567,15 +3567,28 @@ class PrismaClient:
         except (PermissionError, OSError):
             return True
 
-    @staticmethod
-    def _reap_all_zombies() -> set:
-        """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
+    def _reap_all_zombies(self) -> set:
+        """Reap the known engine PID and any other zombie children.
 
-        Returns a set of reaped PIDs.  As PID 1 in Docker (or any
-        process that spawns children), we must reap ALL terminated
-        children to prevent zombie accumulation.
+        Targets the specific engine PID first, then reaps remaining zombies
+        to prevent accumulation. In multi-worker setups, each worker only
+        sees its own children, so this won't interfere with uvicorn's
+        process management.
+
+        Returns a set of reaped PIDs.
         """
         reaped: set = set()
+        # First, try to reap the specific engine PID we know about
+        engine_pid = self._engine_pid
+        if engine_pid > 0:
+            try:
+                pid, _ = os.waitpid(engine_pid, os.WNOHANG)
+                if pid > 0:
+                    reaped.add(pid)
+            except ChildProcessError:
+                # Already reaped or not our child
+                pass
+        # Then reap any remaining zombie children
         while True:
             try:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -3584,6 +3597,10 @@ class PrismaClient:
                 reaped.add(pid)
             except ChildProcessError:
                 break
+        if reaped:
+            verbose_proxy_logger.info(
+                "Reaped %d zombie child process(es): %s", len(reaped), reaped,
+            )
         return reaped
 
     def _try_waitpid_watch(self, pid: int) -> bool:
@@ -3772,6 +3789,29 @@ class PrismaClient:
         self._engine_wait_thread = None
         self._engine_pid = 0
 
+    def _register_engine_cleanup(self, pid: int) -> None:
+        """Register an atexit handler to kill the query-engine when the worker exits.
+
+        This prevents orphaned query-engine processes from accumulating when
+        workers die. Without this, the engine gets reparented to PID 1 and
+        holds database connections indefinitely.
+        """
+        import atexit
+        import signal
+
+        def _kill_engine() -> None:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                verbose_proxy_logger.debug(
+                    "atexit: sent SIGTERM to prisma-query-engine PID %s", pid,
+                )
+            except ProcessLookupError:
+                pass  # Already dead
+            except OSError:
+                pass
+
+        atexit.register(_kill_engine)
+
     async def _start_engine_watcher(self) -> None:
         """
         Start watching the Prisma query engine process for death.
@@ -3791,6 +3831,7 @@ class PrismaClient:
             return
         self._engine_pid = pid
         self._engine_confirmed_dead = False
+        self._register_engine_cleanup(pid)
         verbose_proxy_logger.info("Found prisma-query-engine at PID %s.", pid)
         waitpid_ok = self._try_waitpid_watch(pid)
         pidfd_ok = False if waitpid_ok else self._try_pidfd_watch(pid)

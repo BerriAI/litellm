@@ -18,7 +18,7 @@ import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 from litellm import get_secret, get_secret_str
-from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
+from litellm.constants import DEFAULT_REDIS_MAX_CONNECTIONS, REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
@@ -394,6 +394,9 @@ def get_redis_async_client(
                         arg
                     )
                 )
+        # Ensure bounded max_connections when creating internal ConnectionPool.
+        # Redis.from_url() creates its own pool with max_connections=2**31 by default.
+        url_kwargs.setdefault("max_connections", DEFAULT_REDIS_MAX_CONNECTIONS)
         return async_redis.Redis.from_url(**url_kwargs)
 
     if "startup_nodes" in redis_kwargs:
@@ -453,6 +456,9 @@ def get_redis_async_client(
 
     if connection_pool is not None:
         redis_kwargs["connection_pool"] = connection_pool
+    else:
+        # Ensure bounded max_connections when Redis creates its own internal pool.
+        redis_kwargs.setdefault("max_connections", DEFAULT_REDIS_MAX_CONNECTIONS)
 
     return async_redis.Redis(
         **redis_kwargs,
@@ -472,6 +478,9 @@ def get_redis_connection_pool(**env_overrides):
                     "REDIS: invalid max_connections value %r, ignoring",
                     redis_kwargs["max_connections"],
                 )
+        # Always set a bounded max_connections to prevent unbounded pool growth.
+        # redis-py defaults to 2**31 which causes lock/MutexValue object leaks.
+        pool_kwargs.setdefault("max_connections", DEFAULT_REDIS_MAX_CONNECTIONS)
         return async_redis.BlockingConnectionPool.from_url(**pool_kwargs)
     connection_class = async_redis.Connection
     if "ssl" in redis_kwargs:
@@ -479,6 +488,8 @@ def get_redis_connection_pool(**env_overrides):
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
     redis_kwargs.pop("startup_nodes", None)
+    # Always set a bounded max_connections to prevent unbounded pool growth.
+    redis_kwargs.setdefault("max_connections", DEFAULT_REDIS_MAX_CONNECTIONS)
     return async_redis.BlockingConnectionPool(
         timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
     )
