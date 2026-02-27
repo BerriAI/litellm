@@ -2306,6 +2306,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 ),
             )
+        finally:
+            self._cleanup_heavy_references()
 
     async def async_success_handler(  # noqa: PLR0915
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -2626,6 +2628,23 @@ class Logging(LiteLLMLoggingBaseClass):
                 self._handle_callback_failure(callback=callback)
                 pass
 
+        self._cleanup_heavy_references()
+
+    def _cleanup_heavy_references(self) -> None:
+        """Release heavyweight objects from model_call_details after logging.
+
+        httpx.Response objects and their Headers hold OrderedDicts that
+        accumulate if the Logging object isn't promptly garbage-collected
+        (e.g. when referenced by pending asyncio tasks).
+        """
+        for key in (
+            "httpx_response",
+            "response_headers",
+            "raw_request_typed_dict",
+            "complete_streaming_response",
+        ):
+            self.model_call_details.pop(key, None)
+
     def _handle_callback_failure(self, callback: Any):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
@@ -2921,6 +2940,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     str(e)
                 )
             )
+        finally:
+            self._cleanup_heavy_references()
 
     async def async_failure_handler(
         self, exception, traceback_exception, start_time=None, end_time=None
@@ -2985,6 +3006,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
+
+        self._cleanup_heavy_references()
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
         """
