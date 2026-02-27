@@ -109,20 +109,17 @@ If you want to send your request to the AssemblyAI EU endpoint, you can do so by
 ```python
 import assemblyai as aai
 
-LITELLM_VIRTUAL_KEY = "sk-1234" # <your-virtual-key>
-LITELLM_PROXY_BASE_URL = "http://0.0.0.0:4000/eu.assemblyai" # <your-proxy-base-url>/eu.assemblyai
+aai.settings.base_url = "http://0.0.0.0:4000/eu.assemblyai" # <your-proxy-base-url>/eu.assemblyai
+aai.settings.api_key = "Bearer sk-1234" # Bearer <your-virtual-key>
 
-aai.settings.api_key = f"Bearer {LITELLM_VIRTUAL_KEY}"
-aai.settings.base_url = LITELLM_PROXY_BASE_URL
+# Use a publicly-accessible URL
+audio_file = "https://assembly.ai/wildfires.mp3"
 
-# URL of the file to transcribe
-FILE_URL = "https://assembly.ai/wildfires.mp3"
-
-# You can also transcribe a local file by passing in a file path
-# FILE_URL = './path/to/file.mp3'
+# Or use a local file:
+# audio_file = "./path/to/file.mp3"
 
 transcriber = aai.Transcriber()
-transcript = transcriber.transcribe(FILE_URL)
+transcript = transcriber.transcribe(audio_file)
 print(transcript)
 print(transcript.id)
 ```
@@ -133,18 +130,37 @@ Use AssemblyAI's [LLM Gateway](https://www.assemblyai.com/docs/llm-gateway) as a
 
 [**See Available Models**](https://www.assemblyai.com/docs/llm-gateway#available-models)
 
-### 1. Config
+### Usage
+
+#### LiteLLM Python SDK
+
+```python
+import litellm
+import os
+
+os.environ["ASSEMBLYAI_API_KEY"] = "your-assemblyai-api-key"
+
+response = litellm.completion(
+    model="assemblyai/claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "What is the capital of France?"}]
+)
+
+print(response.choices[0].message.content)
+```
+
+#### LiteLLM Proxy
+
+1. Config
 
 ```yaml
 model_list:
   - model_name: assemblyai/*
     litellm_params:
-      model: openai/*
+      model: assemblyai/*
       api_key: os.environ/ASSEMBLYAI_API_KEY
-      api_base: https://llm-gateway.assemblyai.com/v1
 ```
 
-### 2. Start LiteLLM Proxy
+2. Start proxy
 
 ```bash
 litellm --config config.yaml
@@ -152,7 +168,7 @@ litellm --config config.yaml
 # RUNNING on http://0.0.0.0:4000
 ```
 
-### 3. Test it!
+3. Test it!
 
 ```python
 import requests
@@ -176,4 +192,3 @@ response = requests.post(
 result = response.json()
 print(result["choices"][0]["message"]["content"])
 ```
-
