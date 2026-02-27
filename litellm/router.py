@@ -1597,17 +1597,24 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    initial_kwargs["messages"] = messages + [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
-                        },
-                        {
-                            "role": "assistant",
-                            "content": e.generated_content,
-                            "prefix": True,
-                        },
-                    ]
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content was generated before the error (e.g. a
+                        # rate-limit 429 on the very first chunk).  Retry with
+                        # the original messages — adding a continuation prompt
+                        # would waste tokens and confuse the model.
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
                     self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )

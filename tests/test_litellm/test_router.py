@@ -1357,11 +1357,96 @@ async def test_acompletion_streaming_iterator_edge_cases():
         fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
         modified_messages = fallback_kwargs["messages"]
 
-        # Should have assistant message with empty content
-        assert modified_messages[2]["content"] == ""
+        # With empty generated_content, should use original messages (no
+        # continuation prompt) to avoid wasting tokens on an empty prefix.
+        assert len(modified_messages) == 1
+        assert modified_messages[0] == {"role": "user", "content": "Test"}
         print("✓ Handles empty generated content correctly")
 
     print("✓ Edge case tests passed!")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_pre_first_chunk_skips_continuation():
+    """Pre-first-chunk errors (e.g. 429 rate-limit before any content) should
+    retry with original messages, not add a continuation prompt.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/18229
+    and https://github.com/BerriAI/litellm/issues/20870
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key-2"},
+            },
+        ],
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+    )
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    # Simulate a 429 rate-limit error on the very first chunk
+    pre_first_chunk_error = MidStreamFallbackError(
+        message="Rate limit exceeded",
+        model="gpt-4",
+        llm_provider="vertex_ai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class AsyncIteratorImmediateError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "vertex_ai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise pre_first_chunk_error
+
+    mock_response = AsyncIteratorImmediateError()
+
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=EmptyAsyncIterator(),
+    ) as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+        async for _ in iterator:
+            pass
+
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+        modified_messages = fallback_kwargs["messages"]
+
+        # Pre-first-chunk: should use original messages without continuation prompt
+        assert len(modified_messages) == 1
+        assert modified_messages[0] == {"role": "user", "content": "Hello"}
+        print("✓ Pre-first-chunk error uses original messages (no continuation prompt)")
 
 
 @pytest.mark.asyncio

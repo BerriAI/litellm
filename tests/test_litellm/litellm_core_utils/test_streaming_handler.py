@@ -714,6 +714,41 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
+    """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
+
+    429 is technically a 4xx status code, but unlike other client errors (400, 401, 403)
+    it is transient and retriable. The Router's fallback system should be able to catch
+    it via MidStreamFallbackError and switch to a different model group.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/20870
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    async def _raise_rate_limit(**kwargs):
+        raise VertexAIError(
+            status_code=429,
+            message="Resource exhausted. Please try again later.",
+            headers=None,
+        )
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.generated_content == ""
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):

@@ -2156,9 +2156,12 @@ class CustomStreamWrapper:
             mapped_status_code = _normalize_status_code(mapped_exception)
             original_status_code = _normalize_status_code(e)
 
-            if mapped_status_code is not None and 400 <= mapped_status_code < 500:
+            # Raise non-retriable client errors directly (skip fallback).
+            # Exception: 429 (rate-limit) IS retriable/transient — allow it
+            # through so the Router can switch to a different model group.
+            if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
                 raise mapped_exception
-            if original_status_code is not None and 400 <= original_status_code < 500:
+            if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
                 raise mapped_exception
 
             from litellm.exceptions import MidStreamFallbackError
