@@ -2616,11 +2616,11 @@ def test_empty_assistant_message_handling():
     empty or whitespace-only content with a placeholder to prevent AWS Bedrock
     Converse API 400 Bad Request errors.
     """
-    # Import the litellm module that factory.py uses to ensure we patch the correct reference
-    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
+    # Import the litellm module that factory.py uses to ensure we patch the correct reference
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -3135,12 +3135,7 @@ def test_native_structured_output_no_fake_stream():
 
 def test_transform_request_with_output_config():
     """Test that outputConfig flows through _transform_request_helper into the final request."""
-    from litellm.types.llms.bedrock import (
-        JsonSchemaDefinition,
-        OutputConfigBlock,
-        OutputFormat,
-        OutputFormatStructure,
-    )
+    from litellm.types.llms.bedrock import OutputConfigBlock, OutputFormat, OutputFormatStructure, JsonSchemaDefinition
 
     config = AmazonConverseConfig()
 
