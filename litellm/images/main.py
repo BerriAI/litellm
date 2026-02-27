@@ -469,6 +469,8 @@ def image_generation(  # noqa: PLR0915
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Optional[str] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
