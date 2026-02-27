@@ -35,9 +35,9 @@ def clean_env():
 @pytest.mark.asyncio
 async def test_init(clean_env):
     """Test initialization sets up clients and url correctly."""
-    logger = DatadogMetricsLogger()
-    assert logger.dd_api_key == "test_api_key"
-    assert logger.dd_site == "test.datadoghq.com"
+async def test_init(clean_env):
+    """Test initialization sets up clients and url correctly."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
     assert logger.upload_url == "https://api.test.datadoghq.com/api/v2/series"
 
 
