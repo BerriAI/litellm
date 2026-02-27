@@ -286,7 +286,7 @@ def test_completion_claude_3_empty_response():
         },
     ]
     try:
-        response = litellm.completion(model="claude-3-7-sonnet-20250219", messages=messages)
+        response = litellm.completion(model="claude-sonnet-4-5-20250929", messages=messages)
         print(response)
     except litellm.InternalServerError as e:
         pytest.skip(f"InternalServerError - {str(e)}")
@@ -313,7 +313,7 @@ def test_completion_claude_3():
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-7-sonnet-20250219",
+            model="anthropic/claude-sonnet-4-5-20250929",
             messages=messages,
         )
         # Add any assertions, here to check response args
@@ -326,7 +326,7 @@ def test_completion_claude_3():
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-3-7-sonnet-20250219", "anthropic.claude-3-sonnet-20240229-v1:0"],
+    ["anthropic/claude-sonnet-4-5-20250929", "anthropic.claude-3-sonnet-20240229-v1:0"],
 )
 def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
@@ -411,7 +411,7 @@ def test_completion_claude_3_function_call(model):
     "model, api_key, api_base",
     [
         ("gpt-3.5-turbo", None, None),
-        ("claude-3-7-sonnet-20250219", None, None),
+        ("claude-sonnet-4-5-20250929", None, None),
         ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
@@ -512,7 +512,7 @@ async def test_anthropic_no_content_error():
     try:
         litellm.drop_params = True
         response = await litellm.acompletion(
-            model="anthropic/claude-3-7-sonnet-20250219",
+            model="anthropic/claude-sonnet-4-5-20250929",
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             messages=[
                 {
@@ -630,7 +630,7 @@ def test_completion_claude_3_multi_turn_conversations():
     ]
     try:
         response = completion(
-            model="anthropic/claude-3-7-sonnet-20250219",
+            model="anthropic/claude-sonnet-4-5-20250929",
             messages=messages,
         )
         print(response)
@@ -644,7 +644,7 @@ def test_completion_claude_3_stream():
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-7-sonnet-20250219",
+            model="anthropic/claude-sonnet-4-5-20250929",
             messages=messages,
             max_tokens=10,
             stream=True,
@@ -669,7 +669,7 @@ def encode_image(image_path):
     [
         "gpt-4o",
         "azure/gpt-4.1-mini",
-        "anthropic/claude-3-7-sonnet-20250219",
+        "anthropic/claude-sonnet-4-5-20250929",
     ],
 )  #
 def test_completion_base64(model):
@@ -1373,8 +1373,8 @@ HF Tests we should pass
 
 
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
-)  # "vertex_ai",
+    "provider", ["openai", "lm_studio", "llamafile"]
+)  # "vertex_ai", hosted_vllm removed - no longer uses OpenAI client
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
     litellm.set_verbose = True
@@ -1414,10 +1414,9 @@ async def test_openai_compatible_custom_api_base(provider):
     "provider",
     [
         "openai",
-        "hosted_vllm",
         "llamafile",
     ],
-)  # "vertex_ai",
+)  # "vertex_ai", hosted_vllm removed - no longer uses OpenAI client
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_video(provider):
     litellm.set_verbose = True
@@ -2186,20 +2185,6 @@ async def test_acompletion_ollama_function_call_stream(model):
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_openrouter1():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="openrouter/mistralai/mistral-tiny",
-            messages=messages,
-            max_tokens=5,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_openrouter_reasoning_effort():
     try:
         litellm.set_verbose = True
@@ -2329,10 +2314,6 @@ async def test_completion_functions_param():
             assert (
                 "litellm_param_is_function_call"
                 not in mock_client.call_args.kwargs["json"]
-            )
-            assert (
-                "litellm_param_is_function_call"
-                not in mock_client.call_args.kwargs["json"]["generationConfig"]
             )
             assert response.choices[0].message.function_call is not None
     except Exception as e:

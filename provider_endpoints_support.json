@@ -32,6 +32,23 @@
     }
   },
   "providers": {
+    "a2a": {
+      "display_name": "A2A (Agent-to-Agent) (`a2a`)",
+      "url": "https://docs.litellm.ai/docs/providers/a2a",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "abliteration": {
       "display_name": "Abliteration (`abliteration`)",
       "url": "https://docs.litellm.ai/docs/providers/abliteration",
@@ -234,6 +251,26 @@
         "count_tokens": true,
         "rag_ingest": true,
         "rag_query": true
+      }
+    },
+    "s3_vectors": {
+      "display_name": "AWS S3 Vectors (`s3_vectors`)",
+      "url": "https://docs.litellm.ai/docs/providers/s3_vectors",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false,
+        "vector_stores_create": true,
+        "vector_stores_search": true
       }
     },
     "sagemaker": {
@@ -724,6 +761,23 @@
         "interactions": true
       }
     },
+    "duckduckgo": {
+      "display_name": "DuckDuckGo (`duckduckgo`)",
+      "url": "https://docs.litellm.ai/docs/search/duckduckgo",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
     "elevenlabs": {
       "display_name": "ElevenLabs (`elevenlabs`)",
       "url": "https://docs.litellm.ai/docs/providers/elevenlabs",
@@ -745,6 +799,23 @@
     "exa_ai": {
       "display_name": "Exa AI (`exa_ai`)",
       "url": "https://docs.litellm.ai/docs/search/exa_ai",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
+    "brave": {
+      "display_name": "Brave Search (`brave`)",
+      "url": "https://docs.litellm.ai/docs/search/brave",
       "endpoints": {
         "chat_completions": false,
         "messages": false,
@@ -919,9 +990,45 @@
         "interactions": true
       }
     },
+    "chatgpt": {
+      "display_name": "ChatGPT Subscription (`chatgpt`)",
+      "url": "https://docs.litellm.ai/docs/providers/chatgpt",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "github": {
       "display_name": "GitHub Models (`github`)",
       "url": "https://docs.litellm.ai/docs/providers/github",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "gmi": {
+      "display_name": "GMI Cloud (`gmi`)",
+      "url": "https://docs.litellm.ai/docs/providers/gmi_cloud",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -959,7 +1066,8 @@
         "fine_tuning": true,
         "rag_ingest": true,
         "rag_query": true,
-        "generateContent": true
+        "generateContent": true,
+        "realtime": true
       }
     },
     "gemini": {
@@ -1833,6 +1941,24 @@
         "interactions": true
       }
     },
+    "scaleway": {
+      "display_name": "Scaleway (`scaleway`)",
+      "url": "https://docs.litellm.ai/docs/providers/scaleway",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "snowflake": {
       "display_name": "Snowflake (`snowflake`)",
       "url": "https://docs.litellm.ai/docs/providers/snowflake",
@@ -2093,7 +2219,8 @@
         "batches": false,
         "rerank": false,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "realtime": true
       }
     },
     "xinference": {
@@ -2335,9 +2462,19 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
+        "files": true,
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "sarvam": {
+      "display_name": "Sarvam (`sarvam`)",
+      "url": "https://docs.litellm.ai/docs/providers/sarvam",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
       }
     }
   },
@@ -2352,7 +2489,7 @@
     },
     "messages": {
       "docs_label": "anthropic_unified",
-      "display_name": "Anthropic /v1/messages API",
+      "display_name": "Anthropic Messages API",
       "leftnav_label": "/messages",
       "provider_json_field": "messages",
       "url": "https://docs.litellm.ai/docs/anthropic_unified",
@@ -2360,7 +2497,7 @@
     },
     "anthropic_count_tokens": {
       "docs_label": "anthropic_count_tokens",
-      "display_name": "Anthropic /v1/messages/count_tokens API",
+      "display_name": "Anthropic Count Tokens API",
       "leftnav_label": "/count_tokens",
       "provider_json_field": "count_tokens",
       "url": "https://docs.litellm.ai/docs/anthropic_count_tokens"
@@ -2381,14 +2518,14 @@
     },
     "audio_transcription": {
       "docs_label": "audio_transcription",
-      "display_name": "Audio Transcription API",
+      "display_name": "OpenAI Audio Transcription API",
       "leftnav_label": "/audio/transcriptions",
       "provider_json_field": "audio_transcriptions",
       "url": "https://docs.litellm.ai/docs/audio_transcription"
     },
     "batches": {
       "docs_label": "batches",
-      "display_name": "Batches API",
+      "display_name": "OpenAI Batches API",
       "leftnav_label": "/batches",
       "provider_json_field": "batches",
       "url": "https://docs.litellm.ai/docs/batches"
@@ -2409,7 +2546,7 @@
     },
     "chat_completions": {
       "docs_label": "chat_completions",
-      "display_name": "Chat Completions API",
+      "display_name": "OpenAI Chat Completions API",
       "leftnav_label": "/chat/completions",
       "provider_json_field": "chat_completions",
       "url": "https://docs.litellm.ai/docs/chat_completions"
@@ -2430,7 +2567,7 @@
     },
     "embeddings": {
       "docs_label": "embedding/supported_embedding",
-      "display_name": "Embedding API (OpenAI Format)",
+      "display_name": "OpenAI Embeddings API",
       "leftnav_label": "/embeddings",
       "provider_json_field": "embeddings",
       "url": "https://docs.litellm.ai/docs/embedding/supported_embedding"
@@ -2451,7 +2588,7 @@
     },
     "generateContent": {
       "docs_label": "generateContent",
-      "display_name": "Google's GenerateContent API",
+      "display_name": "Google GenerateContent API",
       "leftnav_label": "/generateContent",
       "provider_json_field": "generateContent",
       "url": "https://docs.litellm.ai/docs/generateContent",
@@ -2495,14 +2632,14 @@
     },
     "moderation": {
       "docs_label": "moderation",
-      "display_name": "OpenAI Moderation API",
+      "display_name": "OpenAI Moderations API",
       "leftnav_label": "/moderations",
       "provider_json_field": "moderations",
       "url": "https://docs.litellm.ai/docs/moderation"
     },
     "ocr": {
       "docs_label": "ocr",
-      "display_name": "OCR API (Mistral Format)",
+      "display_name": "Mistral OCR API",
       "leftnav_label": "/ocr",
       "provider_json_field": "ocr",
       "url": "https://docs.litellm.ai/docs/ocr"
@@ -2530,14 +2667,14 @@
     },
     "rerank": {
       "docs_label": "rerank",
-      "display_name": "Rerank API (Cohere Format)",
+      "display_name": "Cohere Rerank API",
       "leftnav_label": "/rerank",
       "provider_json_field": "rerank",
       "url": "https://docs.litellm.ai/docs/rerank"
     },
     "responses": {
       "docs_label": "response_api",
-      "display_name": "Responses API (OpenAI Format)",
+      "display_name": "OpenAI Responses API",
       "leftnav_label": "/responses",
       "provider_json_field": "responses",
       "url": "https://docs.litellm.ai/docs/response_api",
@@ -2545,7 +2682,7 @@
     },
     "response_api_compact": {
       "docs_label": "response_api_compact",
-      "display_name": "Responses API (OpenAI Format)",
+      "display_name": "OpenAI Responses API",
       "leftnav_label": "/responses",
       "provider_json_field": "compact",
       "url": "https://docs.litellm.ai/docs/response_api"
@@ -2566,7 +2703,7 @@
     },
     "text_completion": {
       "docs_label": "text_completion",
-      "display_name": "Completions API (OpenAI Format)",
+      "display_name": "OpenAI Completions API",
       "leftnav_label": "/completions",
       "provider_json_field": "text_completion",
       "url": "https://docs.litellm.ai/docs/text_completion",
@@ -2574,7 +2711,7 @@
     },
     "text_to_speech": {
       "docs_label": "text_to_speech",
-      "display_name": "Text-to-Speech API (OpenAI Format)",
+      "display_name": "OpenAI Text-to-Speech API",
       "leftnav_label": "/audio/speech",
       "provider_json_field": "audio_speech",
       "url": "https://docs.litellm.ai/docs/text_to_speech"
@@ -2602,7 +2739,7 @@
     },
     "videos": {
       "docs_label": "videos",
-      "display_name": "OpenAI Video Generation API",
+      "display_name": "OpenAI Videos API",
       "leftnav_label": "/videos",
       "provider_json_field": "video_generations",
       "url": "https://docs.litellm.ai/docs/videos"

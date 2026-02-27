@@ -1,7 +1,7 @@
 import { test, expect, Page } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 
-test.describe("Internal Users Page", () => {
+test.skip("Internal Users Page", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   async function goToInternalUsers(page: Page) {

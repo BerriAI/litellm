@@ -150,15 +150,6 @@ def get_api_key_from_env() -> Optional[str]:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
-def get_vertex_api_key_from_env() -> Optional[str]:
-    """
-    Get API key from environment for Vertex AI.
-    Checks VERTEXAI_API_KEY and VERTEX_API_KEY environment variables.
-    This allows using Vertex AI with API keys instead of service account credentials.
-    """
-    return get_secret_str("VERTEXAI_API_KEY") or get_secret_str("VERTEX_API_KEY")
-
-
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Google AI Studio provider."""
     def should_use_token_counting_api(

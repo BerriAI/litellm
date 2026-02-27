@@ -415,6 +415,28 @@ class LoggingWorker:
         """
         Safely log a message during shutdown, suppressing errors if logging is closed.
         """
+        # Check if logger has valid handlers before attempting to log
+        # During shutdown, handlers may be closed, causing ValueError when writing
+        if not hasattr(verbose_logger, 'handlers') or not verbose_logger.handlers:
+            return
+        
+        # Check if any handler has a valid stream
+        has_valid_handler = False
+        for handler in verbose_logger.handlers:
+            try:
+                if hasattr(handler, 'stream') and handler.stream and not handler.stream.closed:
+                    has_valid_handler = True
+                    break
+                elif not hasattr(handler, 'stream'):
+                    # Non-stream handlers (like NullHandler) are always valid
+                    has_valid_handler = True
+                    break
+            except (AttributeError, ValueError):
+                continue
+        
+        if not has_valid_handler:
+            return
+        
         try:
             if level == "debug":
                 verbose_logger.debug(message)

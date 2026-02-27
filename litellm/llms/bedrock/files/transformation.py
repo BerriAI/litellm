@@ -1,12 +1,14 @@
 import json
 import os
 import time
-from litellm._uuid import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import httpx
 from httpx import Headers, Response
+from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -18,6 +20,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     FileTypes,
+    HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     PathLike,
@@ -199,52 +202,84 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return optional_params
 
 
+    # Providers whose InvokeModel body uses the Converse API format
+    # (messages + inferenceConfig + image blocks). Nova is the primary
+    # example; add others here as they adopt the same schema.
+    CONVERSE_INVOKE_PROVIDERS = ("nova",)
+
     def _map_openai_to_bedrock_params(
         self,
         openai_request_body: Dict[str, Any],
         provider: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Transform OpenAI request body to Bedrock-compatible modelInput parameters using existing transformation logic
+        Transform OpenAI request body to Bedrock-compatible modelInput
+        parameters using existing transformation logic.
+
+        Routes to the correct per-provider transformation so that the
+        resulting dict matches the InvokeModel body that Bedrock expects
+        for batch inference.
         """
         from litellm.types.utils import LlmProviders
+
         _model = openai_request_body.get("model", "")
         messages = openai_request_body.get("messages", [])
-        
-        # Use existing Anthropic transformation logic for Anthropic models
+        optional_params = {
+            k: v
+            for k, v in openai_request_body.items()
+            if k not in ["model", "messages"]
+        }
+
+        # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
             from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
                 AmazonAnthropicClaudeConfig,
             )
-            
-            anthropic_config = AmazonAnthropicClaudeConfig()
-            
-            # Extract optional params (everything except model and messages)
-            optional_params = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
-            mapped_params = anthropic_config.map_openai_params(
+
+            config = AmazonAnthropicClaudeConfig()
+            mapped_params = config.map_openai_params(
                 non_default_params={},
                 optional_params=optional_params,
                 model=_model,
-                drop_params=False
+                drop_params=False,
             )
-            
-            # Transform using existing Anthropic logic
-            bedrock_params = anthropic_config.transform_request(
+            return config.transform_request(
                 model=_model,
                 messages=messages,
                 optional_params=mapped_params,
                 litellm_params={},
-                headers={}
+                headers={},
             )
 
-            return bedrock_params
-        else:
-            # For other providers, use basic mapping
-            bedrock_params = {
-                "messages": messages,
-                **{k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
-            }
-            return bedrock_params
+        # --- Converse API providers (e.g. Nova): use AmazonConverseConfig
+        #     to correctly convert image_url blocks to Bedrock image format
+        #     and wrap inference params inside inferenceConfig. ---
+        if provider in self.CONVERSE_INVOKE_PROVIDERS:
+            from litellm.llms.bedrock.chat.converse_transformation import (
+                AmazonConverseConfig,
+            )
+
+            converse_config = AmazonConverseConfig()
+            mapped_params = converse_config.map_openai_params(
+                non_default_params=optional_params,
+                optional_params={},
+                model=_model,
+                drop_params=False,
+            )
+            return converse_config.transform_request(
+                model=_model,
+                messages=messages,
+                optional_params=mapped_params,
+                litellm_params={},
+                headers={},
+            )
+
+        # --- All other providers: passthrough (OpenAI-compatible models
+        #     like openai.gpt-oss-*, qwen, deepseek, etc.) ---
+        return {
+            "messages": messages,
+            **optional_params,
+        }
 
     def _transform_openai_jsonl_content_to_bedrock_jsonl_content(
         self, openai_jsonl_content: List[Dict[str, Any]]
@@ -538,6 +573,70 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         return BedrockError(
             status_code=status_code, message=error_message, headers=headers
         )
+
+    def transform_retrieve_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+
+    def transform_retrieve_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> OpenAIFileObject:
+        raise NotImplementedError("BedrockFilesConfig does not support file retrieval")
+
+    def transform_delete_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("BedrockFilesConfig does not support file deletion")
+
+    def transform_delete_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> FileDeleted:
+        raise NotImplementedError("BedrockFilesConfig does not support file deletion")
+
+    def transform_list_files_request(
+        self,
+        purpose: Optional[str],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("BedrockFilesConfig does not support file listing")
+
+    def transform_list_files_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> List[OpenAIFileObject]:
+        raise NotImplementedError("BedrockFilesConfig does not support file listing")
+
+    def transform_file_content_request(
+        self,
+        file_content_request,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("BedrockFilesConfig does not support file content retrieval")
+
+    def transform_file_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> HttpxBinaryResponseContent:
+        raise NotImplementedError("BedrockFilesConfig does not support file content retrieval")
 
 
 class BedrockJsonlFilesTransformation:

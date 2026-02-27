@@ -95,7 +95,9 @@ def handle_messages_with_content_list_to_str_conversion(
     return messages
 
 
-def strip_name_from_message(message: AllMessageValues, allowed_name_roles: List[str] = ["user"]) -> AllMessageValues:
+def strip_name_from_message(
+    message: AllMessageValues, allowed_name_roles: List[str] = ["user"]
+) -> AllMessageValues:
     """
     Removes 'name' from message
     """
@@ -103,6 +105,7 @@ def strip_name_from_message(message: AllMessageValues, allowed_name_roles: List[
     if msg_copy.get("role") not in allowed_name_roles:
         msg_copy.pop("name", None)  # type: ignore
     return msg_copy
+
 
 def strip_name_from_messages(
     messages: List[AllMessageValues], allowed_name_roles: List[str] = ["user"]
@@ -440,62 +443,158 @@ def update_messages_with_model_file_ids(
 
 def update_responses_input_with_model_file_ids(
     input: Any,
+    model_id: Optional[str] = None,
+    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Union[str, List[Dict[str, Any]]]:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
-    
-    For managed files (unified file IDs), decodes the base64-encoded unified file ID
-    and extracts the llm_output_file_id directly.
+
+    For managed files (unified file IDs), uses model_file_id_mapping if provided,
+    otherwise decodes the base64-encoded unified file ID and extracts the llm_output_file_id directly.
+
+    Args:
+        input: The responses API input parameter
+        model_id: The model ID to use for looking up provider-specific file IDs
+        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
+                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
         _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
     )
-    
+
     if isinstance(input, str):
         return input
-    
+
     if not isinstance(input, list):
         return input
-    
+
     updated_input = []
     for item in input:
         if not isinstance(item, dict):
             updated_input.append(item)
             continue
-        
+
         updated_item = item.copy()
         content = item.get("content")
         if isinstance(content, list):
             updated_content = []
             for content_item in content:
-                if isinstance(content_item, dict) and content_item.get("type") == "input_file":
+                if (
+                    isinstance(content_item, dict)
+                    and content_item.get("type") == "input_file"
+                ):
                     file_id = content_item.get("file_id")
                     if file_id:
-                        # Check if this is a managed file ID (base64-encoded unified file ID)
-                        is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
-                        if is_unified_file_id:
-                            unified_file_id = convert_b64_uid_to_unified_uid(file_id)
-                            if "llm_output_file_id," in unified_file_id:
-                                provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
-                            else:
-                                # Fallback: keep original if we can't extract
-                                provider_file_id = file_id
+                        provider_file_id = file_id  # Default to original
+
+                        # Check if we have a mapping for this file ID
+                        if (
+                            model_file_id_mapping
+                            and model_id
+                            and file_id in model_file_id_mapping
+                        ):
+                            # Use the model-specific file ID from mapping
+                            provider_file_id = (
+                                model_file_id_mapping.get(file_id, {}).get(model_id)
+                                or file_id
+                            )
                             updated_content_item = content_item.copy()
                             updated_content_item["file_id"] = provider_file_id
                             updated_content.append(updated_content_item)
                         else:
-                            updated_content.append(content_item)
+                            # Check if this is a base64-encoded unified file ID without mapping
+                            is_unified_file_id = _is_base64_encoded_unified_file_id(
+                                file_id
+                            )
+                            if is_unified_file_id:
+                                # Fallback: decode unified file ID
+                                unified_file_id = convert_b64_uid_to_unified_uid(
+                                    file_id
+                                )
+                                if "llm_output_file_id," in unified_file_id:
+                                    provider_file_id = unified_file_id.split(
+                                        "llm_output_file_id,"
+                                    )[1].split(";")[0]
+
+                                updated_content_item = content_item.copy()
+                                updated_content_item["file_id"] = provider_file_id
+                                updated_content.append(updated_content_item)
+                            else:
+                                # Not a managed file, keep as-is
+                                updated_content.append(content_item)
                     else:
                         updated_content.append(content_item)
                 else:
                     updated_content.append(content_item)
             updated_item["content"] = updated_content
-        
+
         updated_input.append(updated_item)
-    
+
     return updated_input
+
+
+def update_responses_tools_with_model_file_ids(
+    tools: Optional[List[Dict[str, Any]]],
+    model_id: Optional[str] = None,
+    model_file_id_mapping: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Updates responses API tools with provider-specific file IDs.
+
+    Handles code_interpreter tools with container.file_ids.
+
+    Args:
+        tools: The responses API tools parameter
+        model_id: The model ID to use for looking up provider-specific file IDs
+        model_file_id_mapping: Dictionary mapping litellm file IDs to provider file IDs
+                               Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
+    """
+    if not tools or not isinstance(tools, list):
+        return tools
+
+    if not model_file_id_mapping or not model_id:
+        return tools
+
+    updated_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            updated_tools.append(tool)
+            continue
+
+        updated_tool = tool.copy()
+
+        # Handle code_interpreter with container file_ids
+        if tool.get("type") == "code_interpreter":
+            container = tool.get("container")
+            if isinstance(container, dict):
+                container_file_ids = container.get("file_ids")
+                if isinstance(container_file_ids, list):
+                    updated_file_ids = []
+                    for file_id in container_file_ids:
+                        if isinstance(file_id, str):
+                            # Check if we have a mapping for this file ID
+                            if file_id in model_file_id_mapping:
+                                # Map to provider-specific file ID
+                                provider_file_id = (
+                                    model_file_id_mapping.get(file_id, {}).get(model_id)
+                                    or file_id
+                                )
+                                updated_file_ids.append(provider_file_id)
+                            else:
+                                updated_file_ids.append(file_id)
+                        else:
+                            updated_file_ids.append(file_id)
+
+                    # Update the tool with new file IDs
+                    updated_container = container.copy()
+                    updated_container["file_ids"] = updated_file_ids
+                    updated_tool["container"] = updated_container
+
+        updated_tools.append(updated_tool)
+
+    return updated_tools
 
 
 def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
@@ -697,9 +796,9 @@ def _get_image_mime_type_from_url(url: str) -> Optional[str]:
     video/flv
     """
     from urllib.parse import urlparse
-    
+
     url = url.lower()
-    
+
     # Parse URL to extract path without query parameters
     # This handles URLs like: https://example.com/image.jpg?signature=...
     parsed = urlparse(url)
@@ -744,28 +843,28 @@ def infer_content_type_from_url_and_content(
 ) -> str:
     """
     Infer content type from URL extension and binary content when content-type header is missing or generic.
-    
+
     This helper implements a fallback strategy for determining MIME types when HTTP headers
     are missing or provide generic values (like binary/octet-stream). It's commonly used
     when processing images and documents from various sources (S3, URLs, etc.).
-    
+
     Fallback Strategy:
     1. If current_content_type is valid (not None and not generic octet-stream), return it
     2. Try to infer from URL extension (handles query parameters)
     3. Try to detect from binary content signature (magic bytes)
     4. Raise ValueError if all methods fail
-    
+
     Args:
         url: The URL of the content (used to extract file extension)
         content: The binary content (first ~100 bytes are sufficient for detection)
         current_content_type: The current content-type from headers (may be None or generic)
-    
+
     Returns:
         str: The inferred MIME type (e.g., "image/png", "application/pdf")
-        
+
     Raises:
         ValueError: If content type cannot be determined by any method
-        
+
     Example:
         >>> content_type = infer_content_type_from_url_and_content(
         ...     url="https://s3.amazonaws.com/bucket/image.png?AWSAccessKeyId=123",
@@ -776,14 +875,14 @@ def infer_content_type_from_url_and_content(
         "image/png"
     """
     from litellm.litellm_core_utils.token_counter import get_image_type
-    
+
     # If we have a valid content type that's not generic, use it
     if current_content_type and current_content_type not in [
         "binary/octet-stream",
         "application/octet-stream",
     ]:
         return current_content_type
-    
+
     # Extension to MIME type mapping
     # Supports images, documents, and other common file types
     extension_to_mime = {
@@ -804,14 +903,14 @@ def infer_content_type_from_url_and_content(
         "txt": "text/plain",
         "md": "text/markdown",
     }
-    
+
     # Try to infer from URL extension
     if url:
         extension = url.split(".")[-1].lower().split("?")[0]  # Remove query params
         inferred_type = extension_to_mime.get(extension)
         if inferred_type:
             return inferred_type
-    
+
     # Try to detect from binary content signature (magic bytes)
     if content:
         detected_type = get_image_type(content[:100])
@@ -825,7 +924,7 @@ def infer_content_type_from_url_and_content(
             }
             if detected_type in type_to_mime:
                 return type_to_mime[detected_type]
-    
+
     # If all fallbacks failed, raise error
     raise ValueError(
         f"Unable to determine content type from URL: {url}. "
@@ -1013,6 +1112,46 @@ def set_last_user_message(
     return messages
 
 
+def add_system_prompt_to_messages(
+    messages: List[AllMessageValues],
+    system_prompt: str,
+    merge_with_first_system: bool = False,
+) -> List[AllMessageValues]:
+    """
+    Add a system prompt to the messages list.
+
+    Args:
+        messages: List of chat completion messages
+        system_prompt: The system prompt content to add. If empty or None, returns messages unchanged.
+        merge_with_first_system: If True and the first message is already a system message,
+            prepends the new prompt to that message's content. If False, adds a new system
+            message at the beginning.
+
+    Returns:
+        New list of messages with the system prompt added
+    """
+    if not system_prompt:
+        return list(messages)
+
+    if merge_with_first_system and messages and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        existing_content = first.get("content", "")
+        merged_content: Union[str, List[Dict[str, str]]]
+        if isinstance(existing_content, str):
+            merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
+        elif isinstance(existing_content, list):
+            merged_content = [{"type": "text", "text": system_prompt.strip()}] + list(
+                existing_content
+            )
+        else:
+            merged_content = [{"type": "text", "text": system_prompt.strip()}]
+        first["content"] = merged_content
+        return [cast(AllMessageValues, first)] + list(messages[1:])
+
+    system_message: AllMessageValues = {"role": "system", "content": system_prompt}
+    return [system_message, *messages]
+
+
 def convert_prefix_message_to_non_prefix_messages(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -1063,9 +1202,9 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     """
     message_content = message.get("content")
     if "reasoning_content" in message:
-        return message["reasoning_content"], message["content"]
+        return message["reasoning_content"], message_content
     elif "reasoning" in message:
-        return message["reasoning"], message["content"]
+        return message["reasoning"], message_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content
@@ -1085,7 +1224,9 @@ def _parse_content_for_reasoning(
         return None, message_text
 
     reasoning_match = re.match(
-        r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)", message_text, re.DOTALL
+        r"<(?:think|thinking|budget:thinking)>(.*?)</(?:think|thinking|budget:thinking)>(.*)",
+        message_text,
+        re.DOTALL,
     )
 
     if reasoning_match:
@@ -1135,3 +1276,103 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
                 elif isinstance(image_url, dict) and "url" in image_url:
                     images.append(_extract_base64_data(image_url["url"]))
     return images
+
+
+def parse_tool_call_arguments(
+    arguments: Optional[str],
+    tool_name: Optional[str] = None,
+    context: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Parse tool call arguments from a JSON string.
+
+    This function handles malformed JSON gracefully by raising a ValueError
+    with context about what failed and what the problematic input was.
+
+    Args:
+        arguments: The JSON string containing tool arguments, or None.
+        tool_name: Optional name of the tool (for error messages).
+        context: Optional context string (e.g., "Anthropic Messages API").
+
+    Returns:
+        Parsed arguments as a dictionary. Returns empty dict if arguments is None or empty.
+
+    Raises:
+        ValueError: If the arguments string is not valid JSON.
+    """
+    import json
+
+    if not arguments:
+        return {}
+
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError as e:
+        error_parts = ["Failed to parse tool call arguments"]
+
+        if tool_name:
+            error_parts.append(f"for tool '{tool_name}'")
+        if context:
+            error_parts.append(f"({context})")
+
+        error_message = (
+            " ".join(error_parts) + f". Error: {str(e)}. Arguments: {arguments}"
+        )
+
+        raise ValueError(error_message) from e
+
+
+def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
+    """
+    Split a string that contains one or more concatenated JSON objects into
+    a list of parsed dicts.
+
+    LLM providers (notably Bedrock Claude Sonnet 4.5) sometimes return
+    multiple tool-call argument objects concatenated in a single
+    ``arguments`` string, e.g.::
+
+        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
+
+    ``json.loads()`` fails on this with ``JSONDecodeError: Extra data``.
+    This helper uses ``json.JSONDecoder.raw_decode()`` to walk the string
+    and extract each JSON object individually.
+
+    Returns
+    -------
+    list[dict]
+        A list of parsed dicts – one per JSON object found.  If *raw* is
+        empty or whitespace-only, an empty list is returned.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If the string contains text that cannot be parsed as JSON at all.
+    """
+    import json
+
+    raw = raw.strip()
+    if not raw:
+        return []
+
+    decoder = json.JSONDecoder()
+    results: List[Dict[str, Any]] = []
+    idx = 0
+    length = len(raw)
+
+    while idx < length:
+        # Skip whitespace between objects
+        while idx < length and raw[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+
+        obj, end_idx = decoder.raw_decode(raw, idx)
+        if isinstance(obj, dict):
+            results.append(obj)
+        else:
+            # Non-dict JSON value – wrap in empty dict (Bedrock requires
+            # toolUse.input to be an object).
+            results.append({})
+        idx = end_idx
+
+    return results

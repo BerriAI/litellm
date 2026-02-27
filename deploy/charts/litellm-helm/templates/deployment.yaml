@@ -10,7 +10,7 @@ metadata:
     {{- toYaml .Values.deploymentLabels | nindent 4 }}
     {{- end }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
+  {{- if and (not .Values.keda.enabled) (not .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
@@ -38,6 +38,10 @@ spec:
       serviceAccountName: {{ include "litellm.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ include "litellm.name" . }}
           securityContext:
@@ -154,23 +158,37 @@ spec:
             {{- end }}
           livenessProbe:
             httpGet:
-              path: /health/liveliness
+              path: {{ .Values.livenessProbe.path | quote }}
               port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.livenessProbe.successThreshold }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
           readinessProbe:
             httpGet:
-              path: /health/readiness
+              path: {{ .Values.readinessProbe.path | quote }}
               port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           startupProbe:
             httpGet:
-              path: /health/readiness
+              path: {{ .Values.startupProbe.path | quote }}
               port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
-            failureThreshold: 30
-            periodSeconds: 10
+            initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.startupProbe.successThreshold }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: litellm-config
-              mountPath: /etc/litellm/
+              mountPath: /etc/litellm/config.yaml
+              subPath: config.yaml
           {{ if .Values.securityContext.readOnlyRootFilesystem }}
             - name: tmp
               mountPath: /tmp

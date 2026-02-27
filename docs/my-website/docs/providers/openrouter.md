@@ -1,5 +1,5 @@
 # OpenRouter
-LiteLLM supports all the text / chat / vision models from [OpenRouter](https://openrouter.ai/docs)
+LiteLLM supports all the text / chat / vision / embedding models from [OpenRouter](https://openrouter.ai/docs)
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_OpenRouter.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -77,4 +77,136 @@ response = completion(
             transforms = [""],
             route= ""
         )
+```
+
+## Embedding
+
+```python
+from litellm import embedding
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = embedding(
+    model="openrouter/openai/text-embedding-3-small",
+    input=["good morning from litellm", "this is another item"],
+)
+print(response)
+```
+
+## Image Generation
+
+OpenRouter supports image generation through select models like Google Gemini image generation models. LiteLLM transforms standard image generation requests to OpenRouter's chat completion format.
+
+### Supported Parameters
+
+- `size`: Maps to OpenRouter's `aspect_ratio` format
+  - `1024x1024` → `1:1` (square)
+  - `1536x1024` → `3:2` (landscape)
+  - `1024x1536` → `2:3` (portrait)
+  - `1792x1024` → `16:9` (wide landscape)
+  - `1024x1792` → `9:16` (tall portrait)
+
+- `quality`: Maps to OpenRouter's `image_size` format (Gemini models)
+  - `low` or `standard` → `1K`
+  - `medium` → `2K`
+  - `high` or `hd` → `4K`
+
+- `n`: Number of images to generate
+
+### Usage
+
+```python
+from litellm import image_generation
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Basic image generation
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A beautiful sunset over a calm ocean",
+)
+print(response)
+```
+
+### Advanced Usage with Parameters
+
+```python
+from litellm import image_generation
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Generate high-quality landscape image
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A serene mountain landscape with a lake",
+    size="1536x1024",  # Landscape format
+    quality="high",     # High quality (4K)
+)
+
+# Access the generated image
+image_data = response.data[0]
+if image_data.b64_json:
+    # Base64 encoded image
+    print(f"Generated base64 image: {image_data.b64_json[:50]}...")
+elif image_data.url:
+    # Image URL
+    print(f"Generated image URL: {image_data.url}")
+```
+
+### Using OpenRouter-Specific Parameters
+
+You can also pass OpenRouter-specific parameters directly using `image_config`:
+
+```python
+from litellm import image_generation
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A futuristic cityscape at night",
+    image_config={
+        "aspect_ratio": "16:9",  # OpenRouter native format
+        "image_size": "4K"       # OpenRouter native format
+    }
+)
+print(response)
+```
+
+### Response Format
+
+The response follows the standard LiteLLM ImageResponse format:
+
+```python
+{
+    "created": 1703658209,
+    "data": [{
+        "b64_json": "iVBORw0KGgoAAAANSUhEUgAA...",  # Base64 encoded image
+        "url": None,
+        "revised_prompt": None
+    }],
+    "usage": {
+        "input_tokens": 10,
+        "output_tokens": 1290,
+        "total_tokens": 1300
+    }
+}
+```
+
+### Cost Tracking
+
+OpenRouter provides cost information in the response, which LiteLLM automatically tracks:
+
+```python
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A cute baby sea otter",
+)
+
+# Cost is available in the response metadata
+print(f"Request cost: ${response._hidden_params['additional_headers']['llm_provider-x-litellm-response-cost']}")
 ```

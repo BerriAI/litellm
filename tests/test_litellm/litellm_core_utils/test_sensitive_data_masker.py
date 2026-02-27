@@ -108,14 +108,46 @@ def test_lists_with_sensitive_keys_are_masked():
     """
     masker = SensitiveDataMasker()
     data = {
-        "api_key": ["sk-123", "sk-456"],
+        "api_key": ["sk-1234567890abcdef", "sk-9876543210fedcba"],
         "tags": ["prod", "test"],
     }
 
     masked = masker.mask_dict(data)
     # sensitive key list entries should be masked
-    assert masked["api_key"][0] != "sk-123"
+    assert masked["api_key"][0] != "sk-1234567890abcdef"
     assert "*" in masked["api_key"][0]
+    assert masked["api_key"][1] != "sk-9876543210fedcba"
+    assert "*" in masked["api_key"][1]
 
     # non-sensitive list should remain unchanged
     assert masked["tags"] == ["prod", "test"]
+
+
+def test_cost_per_token_fields_not_masked():
+    """
+    Regression test: cost fields like input_cost_per_token contain "token" in their name
+    but should NOT be masked — they are pricing fields, not secrets.
+    Previously, these would be displayed as e.g. "3.60*******e-06" in the UI.
+    """
+    masker = SensitiveDataMasker()
+    data = {
+        "input_cost_per_token": 3.6e-06,
+        "output_cost_per_token": 1.2e-05,
+        "cache_read_input_token_cost": 9.0e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
+        # Real secret fields should still be masked
+        "api_key": "sk-1234567890abcdef",
+        "access_token": "my-secret-token",
+    }
+
+    masked = masker.mask_dict(data)
+
+    # Cost fields must not be masked
+    assert masked["input_cost_per_token"] == 3.6e-06
+    assert masked["output_cost_per_token"] == 1.2e-05
+    assert masked["cache_read_input_token_cost"] == 9.0e-07
+    assert masked["cache_creation_input_token_cost"] == 3.75e-06
+
+    # Actual secrets must still be masked
+    assert "*" in masked["api_key"]
+    assert "*" in masked["access_token"]

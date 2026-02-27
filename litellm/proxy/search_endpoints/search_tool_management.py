@@ -48,7 +48,7 @@ def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, No
 )
 async def list_search_tools():
     """
-    List all search tools that are available in the database.
+    List all search tools that are available in the database and config file.
 
     Example Request:
     ```bash
@@ -71,38 +71,100 @@ async def list_search_tools():
                     "description": "Perplexity search tool"
                 },
                 "created_at": "2023-11-09T12:34:56.789Z",
-                "updated_at": "2023-11-09T12:34:56.789Z"
+                "updated_at": "2023-11-09T12:34:56.789Z",
+                "is_from_config": false
+            },
+            {
+                "search_tool_name": "config-search-tool",
+                "litellm_params": {
+                    "search_provider": "tavily",
+                    "api_key": "tvly-***"
+                },
+                "is_from_config": true
             }
         ]
     }
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        search_tools = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(
+        search_tools_from_db = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(
             prisma_client=prisma_client
         )
 
+        db_tool_names = {
+            tool.get("search_tool_name") for tool in search_tools_from_db
+        }
+
         search_tool_configs: List[SearchToolInfoResponse] = []
-        for search_tool in search_tools:
+        
+        config_search_tools = []
+        
+        try:
+            config = await proxy_config.get_config()
+            parsed_tools = proxy_config.parse_search_tools(config)
+            if parsed_tools:
+                config_search_tools = parsed_tools
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Could not get config-defined search tools: {e}"
+            )
+        
+        for search_tool in config_search_tools:
+            tool_name = search_tool.get("search_tool_name")
+            if tool_name:
+                litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+                masked_litellm_params_dict = _get_masked_values(
+                    litellm_params_dict,
+                    unmasked_length=4,
+                    number_of_asterisks=4,
+                )
+
+                search_tool_configs.append(
+                    SearchToolInfoResponse(
+                        search_tool_id=None,
+                        search_tool_name=tool_name,
+                        litellm_params=masked_litellm_params_dict,
+                        search_tool_info=search_tool.get("search_tool_info"),
+                        created_at=None,
+                        updated_at=None,
+                        is_from_config=True,
+                    )
+                )
+
+        search_tool_configs = [
+            tool for tool in search_tool_configs
+            if tool.get("search_tool_name") not in db_tool_names
+        ]
+        
+        for search_tool in search_tools_from_db:
+            litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+            masked_litellm_params_dict = _get_masked_values(
+                litellm_params_dict,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
+            
             search_tool_configs.append(
                 SearchToolInfoResponse(
                     search_tool_id=search_tool.get("search_tool_id"),
                     search_tool_name=search_tool.get("search_tool_name", ""),
-                    litellm_params=dict(search_tool.get("litellm_params", {})),
+                    litellm_params=masked_litellm_params_dict,
                     search_tool_info=search_tool.get("search_tool_info"),
                     created_at=_convert_datetime_to_str(search_tool.get("created_at")),
                     updated_at=_convert_datetime_to_str(search_tool.get("updated_at")),
+                    is_from_config=False,
                 )
             )
 
         return ListSearchToolsResponse(search_tools=search_tool_configs)
     except Exception as e:
-        verbose_proxy_logger.exception(f"Error getting search tools from db: {e}")
+        verbose_proxy_logger.exception(f"Error getting search tools: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -382,6 +444,7 @@ async def get_search_tool_info(search_tool_id: str):
             search_tool_info=result.get("search_tool_info"),
             created_at=_convert_datetime_to_str(result.get("created_at")),
             updated_at=_convert_datetime_to_str(result.get("updated_at")),
+            is_from_config=False,  # This endpoint only returns DB tools
         )
     except HTTPException as e:
         raise e

@@ -1,12 +1,13 @@
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
-import { ArrowLeftIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Button as AntdButton, Form, Tooltip } from "antd";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { Form, Tag } from "antd";
+import { KeyInfoHeader } from "./KeyInfoHeader";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -14,12 +15,11 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
+import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -54,12 +54,12 @@ export default function KeyInfoView({
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
+  const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
 
   // Update local state when keyData prop changes (but don't reset to undefined)
   useEffect(() => {
@@ -67,6 +67,40 @@ export default function KeyInfoView({
       setCurrentKeyData(keyData);
     }
   }, [keyData]);
+
+  // Fetch resolved guardrails for all policies
+  useEffect(() => {
+    const fetchPolicyGuardrails = async () => {
+      const policies = currentKeyData?.metadata?.policies;
+      if (!accessToken || !policies || !Array.isArray(policies) || policies.length === 0) {
+        return;
+      }
+
+      setLoadingPolicies(true);
+      const guardrailsMap: Record<string, string[]> = {};
+
+      try {
+        await Promise.all(
+          policies.map(async (policyName: string) => {
+            try {
+              const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
+              guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
+            } catch (error) {
+              console.error(`Failed to fetch guardrails for policy ${policyName}:`, error);
+              guardrailsMap[policyName] = [];
+            }
+          })
+        );
+        setPolicyGuardrails(guardrailsMap);
+      } catch (error) {
+        console.error("Failed to fetch policy guardrails:", error);
+      } finally {
+        setLoadingPolicies(false);
+      }
+    };
+
+    fetchPolicyGuardrails();
+  }, [accessToken, currentKeyData?.metadata?.policies]);
 
   // Reset recent regeneration indicator after 5 seconds
   useEffect(() => {
@@ -167,11 +201,11 @@ export default function KeyInfoView({
             ...parsedMetadata,
             ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-            ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
+            ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
-                  litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-                }
+                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+              }
               : {}),
           };
         } catch (error) {
@@ -186,11 +220,11 @@ export default function KeyInfoView({
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-          ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {}),
+          ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0 ? { logging: formValues.logging_settings } : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
-                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
-              }
+              litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
+            }
             : {}),
         };
       }
@@ -248,16 +282,6 @@ export default function KeyInfoView({
     }
   };
 
-  const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
-    if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
-      setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
-    }
-  };
-
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
@@ -298,93 +322,41 @@ export default function KeyInfoView({
     });
     return `${dateStr} at ${timeStr}`;
   };
-  console.log("userRole", userRole);
 
   const canModifyKey =
     isProxyAdminRole(userRole || "") ||
     (teamsData &&
       isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
         userID || "",
       )) ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
 
   return (
     <div className="w-full h-screen p-4">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
-            {backButtonText}
-          </Button>
-          <Title>{currentKeyData.key_alias || "Virtual Key"}</Title>
-
-          <div className="flex items-center cursor-pointer mb-2 space-y-6">
-            <div>
-              <Text className="text-xs text-gray-400 uppercase tracking-wide mt-2">Key ID</Text>
-              <Text className="text-gray-500 font-mono text-sm">{currentKeyData.token_id || currentKeyData.token}</Text>
-            </div>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["key-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-              onClick={() => copyToClipboard(currentKeyData.token_id || currentKeyData.token, "key-id")}
-              className={`ml-2 transition-all duration-200${
-                copiedStates["key-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
-            />
-          </div>
-
-          {/* Add timestamp and regeneration indicator */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <Text className="text-sm text-gray-500">
-              {currentKeyData.updated_at && currentKeyData.updated_at !== currentKeyData.created_at
-                ? `Updated: ${formatTimestamp(currentKeyData.updated_at)}`
-                : `Created: ${formatTimestamp(currentKeyData.created_at)}`}
-            </Text>
-
-            {isRecentlyRegenerated && (
-              <Badge color="green" size="xs" className="animate-pulse">
-                Recently Regenerated
-              </Badge>
-            )}
-
-            {lastRegeneratedAt && (
-              <Badge color="blue" size="xs">
-                Regenerated
-              </Badge>
-            )}
-          </div>
-        </div>
-        {canModifyKey && (
-          <div className="flex gap-2">
-            <Tooltip
-              title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}
-            >
-              <span className="inline-block">
-                <Button
-                  icon={RefreshIcon}
-                  variant="secondary"
-                  onClick={() => setIsRegenerateModalOpen(true)}
-                  className="flex items-center"
-                  disabled={!premiumUser}
-                >
-                  Regenerate Key
-                </Button>
-              </span>
-            </Tooltip>
-            <Button
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={() => setIsDeleteModalOpen(true)}
-              className="flex items-center text-red-500 border-red-500 hover:text-red-700"
-            >
-              Delete Key
-            </Button>
-          </div>
-        )}
-      </div>
+      <KeyInfoHeader
+        data={{
+          keyName: currentKeyData.key_alias || "Virtual Key",
+          keyId: currentKeyData.token_id || currentKeyData.token,
+          userId: currentKeyData.user_id || "",
+          userEmail: currentKeyData.user_email || "",
+          createdBy: currentKeyData.user_email || currentKeyData.user_id || "",
+          createdAt: currentKeyData.created_at ? formatTimestamp(currentKeyData.created_at) : "",
+          lastUpdated: currentKeyData.updated_at ? formatTimestamp(currentKeyData.updated_at) : "",
+          lastActive: currentKeyData.last_active ? formatTimestamp(currentKeyData.last_active) : "Never",
+        }}
+        onBack={onClose}
+        onRegenerate={() => setIsRegenerateModalOpen(true)}
+        onDelete={() => setIsDeleteModalOpen(true)}
+        canModifyKey={canModifyKey}
+        backButtonText={backButtonText}
+        regenerateDisabled={!premiumUser}
+        regenerateTooltip={
+          !premiumUser
+            ? "This is a LiteLLM Enterprise feature, and requires a valid key to use."
+            : undefined
+        }
+      />
 
       {/* Add RegenerateKeyModal */}
       <RegenerateKeyModal
@@ -484,6 +456,57 @@ export default function KeyInfoView({
                 />
               </Card>
 
+              <Card>
+                <Text className="font-medium mb-3">Guardrails</Text>
+                {Array.isArray(currentKeyData.metadata?.guardrails) && currentKeyData.metadata.guardrails.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {currentKeyData.metadata.guardrails.map((guardrail: string, index: number) => (
+                      <Badge key={index} color="blue">
+                        {guardrail}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No guardrails configured</Text>
+                )}
+                {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
+                  currentKeyData.metadata.disable_global_guardrails === true && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <Badge color="yellow">Global Guardrails Disabled</Badge>
+                    </div>
+                  )}
+              </Card>
+
+              <Card>
+                <Text className="font-medium mb-3">Policies</Text>
+                {Array.isArray(currentKeyData.metadata?.policies) && currentKeyData.metadata.policies.length > 0 ? (
+                  <div className="space-y-4">
+                    {currentKeyData.metadata.policies.map((policy: string, index: number) => (
+                      <div key={index} className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge color="purple">{policy}</Badge>
+                          {loadingPolicies && <Text className="text-xs text-gray-400">Loading guardrails...</Text>}
+                        </div>
+                        {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
+                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
+                            <Text className="text-xs text-gray-500 mb-1">Resolved Guardrails:</Text>
+                            <div className="flex flex-wrap gap-1">
+                              {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
+                                <Badge key={gIndex} color="blue" size="xs">
+                                  {guardrail}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No policies configured</Text>
+                )}
+              </Card>
+
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
                 disabledCallbacks={
@@ -510,7 +533,7 @@ export default function KeyInfoView({
             <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
+                {!isEditing && canModifyKey && (
                   <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>
@@ -604,10 +627,10 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {Array.isArray(currentKeyData.metadata?.tags) && currentKeyData.metadata.tags.length > 0
                         ? currentKeyData.metadata.tags.map((tag, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                              {tag}
-                            </span>
-                          ))
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {tag}
+                          </span>
+                        ))
                         : "No tags specified"}
                     </div>
                   </div>
@@ -617,24 +640,39 @@ export default function KeyInfoView({
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                              {prompt}
-                            </span>
-                          ))
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {prompt}
+                          </span>
+                        ))
                         : "No prompts specified"}
                     </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Allowed Routes</Text>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {Array.isArray(currentKeyData.allowed_routes) && currentKeyData.allowed_routes.length > 0 ? (
+                        currentKeyData.allowed_routes.map((route, index) => (
+                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
+                            {route}
+                          </span>
+                        ))
+                      ) : (
+                        <Tag color="green">All routes allowed</Tag>
+                      )}
+                    </div>
                   </div>
 
                   <div>
                     <Text className="font-medium">Allowed Pass Through Routes</Text>
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.allowed_passthrough_routes) &&
-                      currentKeyData.metadata.allowed_passthrough_routes.length > 0
+                        currentKeyData.metadata.allowed_passthrough_routes.length > 0
                         ? currentKeyData.metadata.allowed_passthrough_routes.map((route, index) => (
-                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                              {route}
-                            </span>
-                          ))
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {route}
+                          </span>
+                        ))
                         : "No pass through routes specified"}
                     </Text>
                   </div>

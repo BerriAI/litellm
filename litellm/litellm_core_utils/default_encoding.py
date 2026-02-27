@@ -15,6 +15,13 @@ except (ImportError, AttributeError):
         __name__, "litellm_core_utils/tokenizers"
     )
 
+# Check if the directory is writable. If not, use /tmp as a fallback.
+# This is especially important for non-root Docker environments where the package directory is read-only.
+is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
+if not os.access(filename, os.W_OK) and is_non_root:
+    filename = "/tmp/tiktoken_cache"
+    os.makedirs(filename, exist_ok=True)
+
 os.environ["TIKTOKEN_CACHE_DIR"] = os.getenv(
     "CUSTOM_TIKTOKEN_CACHE_DIR", filename
 )  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
@@ -36,5 +43,5 @@ for attempt in range(_max_retries):
             # Last attempt, re-raise the exception
             raise
         # Exponential backoff with jitter to reduce collision probability
-        delay = _retry_delay * (2 ** attempt) + random.uniform(0, 0.1)
+        delay = _retry_delay * (2**attempt) + random.uniform(0, 0.1)
         time.sleep(delay)

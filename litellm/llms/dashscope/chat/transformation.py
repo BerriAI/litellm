@@ -24,15 +24,21 @@ class DashScopeChatConfig(OpenAIGPTConfig):
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
-        """
-        DashScope supports cache_control, so we preserve it instead of removing it.
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]:
+        ...
 
-        Override parent behavior that strips cache_control for OpenAI compatibility.
-        """
-        return messages, tools
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        if is_async:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=True
+            )
+        else:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=False
+            )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]

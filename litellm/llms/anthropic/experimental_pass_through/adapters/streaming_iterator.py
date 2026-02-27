@@ -2,11 +2,11 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
 import traceback
-from litellm._uuid import uuid
 from collections import deque
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, Optional
 
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.types.llms.anthropic import UsageDelta
 from litellm.types.utils import AdapterCompletionStreamWrapper
 
@@ -44,9 +44,37 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     pending_new_content_block: bool = False
     chunk_queue: deque = deque()  # Queue for buffering multiple chunks
 
-    def __init__(self, completion_stream: Any, model: str):
+    def __init__(
+        self,
+        completion_stream: Any,
+        model: str,
+        tool_name_mapping: Optional[Dict[str, str]] = None,
+    ):
         super().__init__(completion_stream)
         self.model = model
+        # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
+        self.tool_name_mapping = tool_name_mapping or {}
+
+    def _create_initial_usage_delta(self) -> UsageDelta:
+        """
+        Create the initial UsageDelta for the message_start event.
+
+        Initializes cache token fields (cache_creation_input_tokens, cache_read_input_tokens)
+        to 0 to indicate to clients (like Claude Code) that prompt caching is supported.
+
+        The actual cache token values will be provided in the message_delta event at the
+        end of the stream, since Bedrock Converse API only returns usage data in the final
+        response chunk.
+
+        Returns:
+            UsageDelta with all token counts initialized to 0.
+        """
+        return UsageDelta(
+            input_tokens=0,
+            output_tokens=0,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
 
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
@@ -64,7 +92,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "model": self.model,
                         "stop_reason": None,
                         "stop_sequence": None,
-                        "usage": UsageDelta(input_tokens=0, output_tokens=0),
+                        "usage": self._create_initial_usage_delta(),
                     },
                 }
             if self.sent_content_block_start is False:
@@ -169,7 +197,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "model": self.model,
                             "stop_reason": None,
                             "stop_sequence": None,
-                            "usage": UsageDelta(input_tokens=0, output_tokens=0),
+                            "usage": self._create_initial_usage_delta(),
                         },
                     }
                 )
@@ -211,10 +239,21 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         merged_chunk["delta"] = {}
 
                     # Add usage to the held chunk
-                    merged_chunk["usage"] = {
-                        "input_tokens": chunk.usage.prompt_tokens or 0,
+                    uncached_input_tokens = chunk.usage.prompt_tokens or 0
+                    if hasattr(chunk.usage, "prompt_tokens_details") and chunk.usage.prompt_tokens_details:
+                        cached_tokens = getattr(chunk.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                        uncached_input_tokens -= cached_tokens
+                    
+                    usage_dict: UsageDelta = {
+                        "input_tokens": uncached_input_tokens,
                         "output_tokens": chunk.usage.completion_tokens or 0,
                     }
+                    # Add cache tokens if available (for prompt caching support)
+                    if hasattr(chunk.usage, "_cache_creation_input_tokens") and chunk.usage._cache_creation_input_tokens > 0:
+                        usage_dict["cache_creation_input_tokens"] = chunk.usage._cache_creation_input_tokens
+                    if hasattr(chunk.usage, "_cache_read_input_tokens") and chunk.usage._cache_read_input_tokens > 0:
+                        usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
+                    merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
                     self.chunk_queue.append(merged_chunk)
@@ -374,6 +413,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             choices=chunk.choices  # type: ignore
         )
 
+        # Restore original tool name if it was truncated for OpenAI's 64-char limit
+        if block_type == "tool_use":
+            # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
+            from typing import cast
+
+            from litellm.types.llms.anthropic import ToolUseBlock
+            
+            tool_block = cast(ToolUseBlock, content_block_start)
+            
+            if tool_block.get("name"):
+                truncated_name = tool_block["name"]
+                original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
+                tool_block["name"] = original_name
+
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
             self.current_content_block_start = content_block_start
@@ -381,9 +434,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         # For parallel tool calls, we'll necessarily have a new content block
         # if we get a function name since it signals a new tool call
-        if block_type == "tool_use" and content_block_start.get("name"):
-            self.current_content_block_type = block_type
-            self.current_content_block_start = content_block_start
-            return True
+        if block_type == "tool_use":
+            from typing import cast
+
+            from litellm.types.llms.anthropic import ToolUseBlock
+            
+            tool_block = cast(ToolUseBlock, content_block_start)
+            if tool_block.get("name"):
+                self.current_content_block_type = block_type
+                self.current_content_block_start = content_block_start
+                return True
 
         return False

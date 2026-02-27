@@ -370,11 +370,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 current.map((u, i) =>
                   i === index
                     ? {
-                        ...u,
-                        status: "success",
-                        key: response.key || response.user_id,
-                        invitation_link: invitationUrl,
-                      }
+                      ...u,
+                      status: "success",
+                      key: response.key || response.user_id,
+                      invitation_link: invitationUrl,
+                    }
                     : u,
                 ),
               );
@@ -386,11 +386,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 current.map((u, i) =>
                   i === index
                     ? {
-                        ...u,
-                        status: "success",
-                        key: response.key || response.user_id,
-                        invitation_link: invitationUrl,
-                      }
+                      ...u,
+                      status: "success",
+                      key: response.key || response.user_id,
+                      invitation_link: invitationUrl,
+                    }
                     : u,
                 ),
               );
@@ -401,11 +401,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
               current.map((u, i) =>
                 i === index
                   ? {
-                      ...u,
-                      status: "success",
-                      key: response.key || response.user_id,
-                      error: "User created but failed to generate invitation link",
-                    }
+                    ...u,
+                    status: "success",
+                    key: response.key || response.user_id,
+                    error: "User created but failed to generate invitation link",
+                  }
                   : u,
               ),
             );
@@ -546,7 +546,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
 
       <Modal
         title="Bulk Invite Users"
-        visible={isModalVisible}
+        open={isModalVisible}
         width={800}
         onCancel={() => setIsModalVisible(false)}
         bodyStyle={{ maxHeight: "70vh", overflow: "auto" }}

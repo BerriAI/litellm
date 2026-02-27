@@ -531,6 +531,9 @@ async def test_team_update_sc_2():
                 or k == "object_permission_id"
                 or k == "object_permission"
                 or k == "litellm_model_table"
+                or k == "policies"
+                or k == "allow_team_guardrail_config"
+                or k == "projects"
             ):
                 pass
             else:

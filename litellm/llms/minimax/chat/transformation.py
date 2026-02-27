@@ -1,11 +1,12 @@
 """
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 
 class MinimaxChatConfig(OpenAIGPTConfig):
@@ -73,11 +74,33 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         else:
             return f"{base_url}/v1/chat/completions"
 
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        tools: Optional[List[ChatCompletionToolParam]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List[ChatCompletionToolParam]]]:
+        """
+        Override to preserve cache_control for MiniMax.
+        MiniMax supports cache_control - don't strip it.
+        """
+        # MiniMax supports cache_control, so return messages and tools unchanged
+        return messages, tools
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get supported OpenAI parameters for MiniMax.
-        Adds reasoning_split to the list of supported params.
+        Adds reasoning_split and thinking to the list of supported params.
         """
         base_params = super().get_supported_openai_params(model=model)
-        return base_params + ["reasoning_split"]
+        additional_params = ["reasoning_split"]
+        
+        # Add thinking parameter if model supports reasoning
+        try:
+            if litellm.supports_reasoning(model=model, custom_llm_provider="minimax"):
+                additional_params.append("thinking")
+        except Exception:
+            pass
+        
+        return base_params + additional_params
 

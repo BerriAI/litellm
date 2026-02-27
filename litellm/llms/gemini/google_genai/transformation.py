@@ -89,6 +89,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             "audio_timestamp",
             "automatic_function_calling",
             "thinking_config",
+            "image_config",
         ]
 
     def map_generate_content_optional_params(

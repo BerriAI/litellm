@@ -1,0 +1,23 @@
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  drop_params: true
+
+model_list:
+  - model_name: openai-gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+  - model_name: anthropic-claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+
+mcp_servers:
+  math_stdio:
+    transport: stdio
+    command: python3
+    args:
+      - tests/mcp_tests/mcp_server.py
+  math_streamable_http:
+    transport: http
+    url: http://127.0.0.1:0/mcp

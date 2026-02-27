@@ -151,6 +151,117 @@ describe("BaseSSOSettingsForm", () => {
       expect(screen.getByText("Default Role")).toBeInTheDocument();
     });
   });
+
+  it("should show team mappings checkbox for okta provider", async () => {
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      const handleSubmit = vi.fn();
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    const providerSelect = screen.getByLabelText("SSO Provider");
+    await act(async () => {
+      fireEvent.mouseDown(providerSelect);
+    });
+
+    await waitFor(() => {
+      const oktaOption = screen.getByText(/okta/i);
+      fireEvent.click(oktaOption);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
+    });
+  });
+
+  it("should show team mappings checkbox for generic provider", async () => {
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      const handleSubmit = vi.fn();
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    const providerSelect = screen.getByLabelText("SSO Provider");
+    await act(async () => {
+      fireEvent.mouseDown(providerSelect);
+    });
+
+    await waitFor(() => {
+      const genericOption = screen.getByText(/generic sso/i);
+      fireEvent.click(genericOption);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
+    });
+  });
+
+  it("should show team IDs JWT field when use_team_mappings is checked for okta provider", async () => {
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      const handleSubmit = vi.fn();
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    const providerSelect = screen.getByLabelText("SSO Provider");
+    await act(async () => {
+      fireEvent.mouseDown(providerSelect);
+    });
+
+    await waitFor(() => {
+      const oktaOption = screen.getByText(/okta/i);
+      fireEvent.click(oktaOption);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Use Team Mappings")).toBeInTheDocument();
+    });
+
+    const checkbox = screen.getByLabelText("Use Team Mappings");
+    await act(async () => {
+      fireEvent.click(checkbox);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Team IDs JWT Field")).toBeInTheDocument();
+    });
+  });
+
+  it("should not show team mappings checkbox for google provider", async () => {
+    const TestWrapper = () => {
+      const [form] = Form.useForm();
+      const handleSubmit = vi.fn();
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={handleSubmit} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    const providerSelect = screen.getByLabelText("SSO Provider");
+    await act(async () => {
+      fireEvent.mouseDown(providerSelect);
+    });
+
+    await waitFor(() => {
+      const googleOption = screen.getByText(/google sso/i);
+      fireEvent.click(googleOption);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Google Client ID")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Use Team Mappings")).not.toBeInTheDocument();
+  });
 });
 
 describe("renderProviderFields", () => {
