@@ -36,7 +36,6 @@ def clean_env():
 async def test_init(clean_env):
     """Test initialization sets up clients and url correctly."""
     logger = DatadogMetricsLogger(start_periodic_flush=False)
-    logger = DatadogMetricsLogger(start_periodic_flush=False)
     assert logger.upload_url == "https://api.test.datadoghq.com/api/v2/series"
 
 
