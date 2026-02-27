@@ -1,15 +1,13 @@
-"""
-Regression tests for Redis connection pool leak fixes (RC1-RC5).
-
-Tests are pure unit tests — no Redis server required.
-"""
+"""Redis connection pool and LLMClientCache eviction tests."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import redis.asyncio as async_redis
 
 from litellm._redis import get_redis_async_client, get_redis_connection_pool
+from litellm.caching.llm_caching_handler import LLMClientCache
 
 
 def test_url_config_uses_passed_pool():
@@ -127,5 +125,35 @@ async def test_disconnect_idempotent():
 
     await cache.disconnect()
     await cache.disconnect()  # should not raise
+
+
+# Regression: cache eviction must not close shared httpx clients (PR #22247)
+
+@pytest.mark.asyncio
+async def test_httpx_client_survives_capacity_eviction():
+    """Evicting an httpx client from LLMClientCache must NOT close it."""
+    cache = LLMClientCache(max_size_in_memory=1, default_ttl=600)
+    client = httpx.AsyncClient()
+
+    cache.set_cache("client_1", client)
+    # Exceed capacity — client_1 gets evicted
+    cache.set_cache("client_2", "other")
+
+    assert not client.is_closed
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_httpx_client_survives_ttl_eviction():
+    """Evicting an httpx client via TTL expiry must NOT close it."""
+    cache = LLMClientCache(max_size_in_memory=200, default_ttl=600)
+    client = httpx.AsyncClient()
+
+    # TTL=0 so it expires immediately
+    cache.set_cache("client_1", client, ttl=0)
+    cache.evict_cache()
+
+    assert not client.is_closed
+    await client.aclose()
 
 
