@@ -192,7 +192,7 @@
     {
       "name": "gender_sexual_orientation",
       "display_name": "Gender & Sexual Orientation (Protected Class)",
-      "pattern": "\\b(non-?binary|enby|genderqueer|genderfluid|gender-?fluid|agender|bigender|pangender|two-?spirit|trans(gender|sexual|masc|fem)?|cis(gender)?|intersex|MTF|FTM|AMAB|AFAB|assigned\\s+(male|female)\\s+at\\s+birth|gay|lesbian|bisexual|pansexual|omnisexual|polysexual|asexual|aromantic|demisexual|heterosexual|homosexual|queer|LGBTQ\\+?|LGBT\\+?|LGBTQIA\\+?|same-?sex|opposite-?sex|sexual\\s+orientation|sexual\\s+preference|gender\\s+identity|sex\\s+change|gender\\s+reassignment|gender\\s+confirmation|sexual\\s+minority|he\\/him|she\\/her|they\\/them|xe\\/xem|ze\\/zir)\\b",
+      "pattern": "\\b(non-?binary|enby|genderqueer|genderfluid|gender-?fluid|agender|bigender|pangender|two-?spirit|trans(gender|sexual|masc|fem)?|cis(gender)?|intersex|MTF|FTM|AMAB|AFAB|assigned\\s+(male|female)\\s+at\\s+birth|gay|lesbian|bisexual|pansexual|omnisexual|polysexual|asexual|aromantic|demisexual|heterosexual|homosexual|queer|LGBTQ\\+?|LGBT\\+?|LGBTQIA\\+?|same-?sex|opposite-?sex|sexual\\s+orientation|sexual\\s+preference|gender\\s+identity|sex\\s+change|gender\\s+reassignment|gender\\s+confirmation|sexual\\s+minority|he\\/him|she\\/her|they\\/them|xe\\/xem|ze\\/zir|wom[ae]ns?|females?|males?)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects gender identity and sexual orientation terms - protected under fair lending regulations"
     },
@@ -206,21 +206,21 @@
     {
       "name": "religion",
       "display_name": "Religion & Creed (Protected Class)",
-      "pattern": "\\b(christian|catholic|protestant|baptist|methodist|lutheran|presbyterian|episcopal|pentecostal|evangelical|orthodox\\s+christian|mormon|latter[- ]?day\\s+saint|LDS|jehovah'?s?\\s+witness|seventh[- ]?day\\s+adventist|amish|mennonite|quaker|jewish|jew|judaism|orthodox\\s+jew|hasidic|muslim|islam(ic)?|sunni|shia|shiite|sufi|nation\\s+of\\s+islam|hindu(ism)?|buddhist|buddhism|sikh(ism)?|jain(ism)?|shinto|taoist|taoism|confucian|zoroastrian|baha'?i|rastafari(an)?|pagan|wiccan|druid|satanist|scientolog(y|ist)|unitarian|agnostic|atheist|secular|non-?religious|spiritual\\s+but\\s+not\\s+religious|religious\\s+belief|religious\\s+practice|place\\s+of\\s+worship|church|mosque|synagogue|temple|gurdwara|kosher|halal|sabbath|shabbat|ramadan|lent|yom\\s+kippur|rosh\\s+hashanah|diwali|eid|hijab|yarmulke|kippah|turban|religious\\s+head\\s*covering)\\b",
+      "pattern": "\\b(christians?|catholics?|protestants?|baptists?|methodists?|lutherans?|presbyterians?|episcopal|pentecostal|evangelicals?|orthodox\\s+christian|mormons?|latter[- ]?day\\s+saint|LDS|jehovah'?s?\\s+witness(es)?|seventh[- ]?day\\s+adventist|amish|mennonite|quakers?|jewish|jews?|judaism|orthodox\\s+jew|hasidic|muslims?|islam(ic)?|sunni|shia|shiite|sufi|nation\\s+of\\s+islam|hindus?(ism)?|buddhists?|buddhism|sikhs?(ism)?|jains?(ism)?|shinto|taoists?|taoism|confucian|zoroastrian|baha'?i|rastafari(an)?|pagans?|wiccans?|druids?|satanist|scientolog(y|ist)|unitarian|agnostics?|atheists?|secular|non-?religious|spiritual\\s+but\\s+not\\s+religious|religious\\s+belief|religious\\s+practice|place\\s+of\\s+worship|church|mosque|synagogue|temple|gurdwara|kosher|halal|sabbath|shabbat|ramadan|lent|yom\\s+kippur|rosh\\s+hashanah|diwali|eid|hijab|yarmulke|kippah|turban|religious\\s+head\\s*covering)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects religious affiliation and practice terms - protected under ECOA"
     },
     {
       "name": "age_discrimination",
       "display_name": "Age-Related Terms (Protected Class)",
-      "pattern": "\\b(elderly|senior\\s+citizen|old\\s+age|aged\\s+\\d+|retiree|retired|pensioner|baby\\s+boomer|boomer|geriatric|over\\s+the\\s+hill|too\\s+old|too\\s+young|young\\s+person|millennial|gen[- ]?z|junior|age\\s+discrimination|ageism|years?\\s+old|date\\s+of\\s+birth|DOB|birth\\s*date|born\\s+in\\s+\\d{4}|age\\s+\\d{2,3})\\b",
+      "pattern": "\\b(elderly|senior\\s+citizens?|seniors?|old\\s+age|aged\\s+\\d+|retirees?|retired|pensioners?|baby\\s+boomers?|boomers?|geriatric|over\\s+the\\s+hill|too\\s+old|too\\s+young|young\\s+person|millennials?|gen[- ]?z|junior|age\\s+discrimination|ageism|years?\\s+old|\\d+\\s*years?\\s*old|over\\s+\\d+|under\\s+\\d+|older\\s+workers?|older\\s+employees?|older\\s+candidates?|in\\s+their\\s+\\d{2}s?|date\\s+of\\s+birth|DOB|birth\\s*date|born\\s+in\\s+\\d{4}|age\\s+\\d{2,3})\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects age-related terms - protected under ECOA for applicants 62+"
     },
     {
       "name": "disability",
       "display_name": "Disability Status (Protected Class)",
-      "pattern": "\\b(disabled|disability|handicap(ped)?|impair(ed|ment)|wheelchair|blind(ness)?|deaf(ness)?|hard\\s+of\\s+hearing|hearing\\s+impaired|visually\\s+impaired|mute|paralyz(ed|is)|quadriplegic|paraplegic|amputee|prosthetic|cripple[d]?|mentally\\s+ill|mental\\s+illness|mental\\s+disorder|psychiatric|schizophren(ia|ic)|bipolar|depression|depressed|anxiety\\s+disorder|PTSD|autis(m|tic)|asperger'?s?|ADHD|ADD|dyslexia|dyslexic|learning\\s+disabilit(y|ies)|intellectual\\s+disabilit(y|ies)|down'?s?\\s+syndrome|cerebral\\s+palsy|epilep(sy|tic)|seizure\\s+disorder|multiple\\s+sclerosis|MS\\s+patient|parkinson'?s?|alzheimer'?s?|dementia|chronic\\s+illness|chronic\\s+pain|fibromyalgia|lupus|crohn'?s?|cancer\\s+patient|HIV|AIDS|diabetic|diabetes|SSI|SSDI|disability\\s+benefits|disability\\s+income|ADA|reasonable\\s+accommodation|special\\s+needs|service\\s+animal|service\\s+dog|guide\\s+dog)\\b",
+      "pattern": "\\b(disabled|disabilit(y|ies)|handicap(ped)?|impair(ed|ment|ments)?|wheelchair|blind(ness)?|deaf(ness)?|hard\\s+of\\s+hearing|hearing\\s+impaired|visually\\s+impaired|mute|paralyz(ed|is)|quadriplegic|paraplegic|amputee|prosthetic|cripple[d]?|mentally\\s+ill|mental\\s+illness|mental\\s+disorder|psychiatric|schizophren(ia|ic)|bipolar|depression|depressed|anxiety\\s+disorder|PTSD|autis(m|tic)|asperger'?s?|ADHD|ADD|dyslexia|dyslexic|learning\\s+disabilit(y|ies)|intellectual\\s+disabilit(y|ies)|down'?s?\\s+syndrome|cerebral\\s+palsy|epilep(sy|tic)|seizure\\s+disorder|multiple\\s+sclerosis|MS\\s+patient|parkinson'?s?|alzheimer'?s?|dementia|chronic\\s+illness|chronic\\s+pain|fibromyalgia|lupus|crohn'?s?|cancer\\s+patient|HIV|AIDS|diabetic|diabetes|SSI|SSDI|disability\\s+benefits|disability\\s+income|ADA|reasonable\\s+accommodation|special\\s+needs|service\\s+animal|service\\s+dog|guide\\s+dog)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects disability-related terms - protected under ECOA and ADA"
     },
@@ -234,7 +234,7 @@
     {
       "name": "military_status",
       "display_name": "Military Status (Protected Class)",
-      "pattern": "\\b(veteran|military|armed\\s+forces|army|navy|air\\s+force|marine(s|\\s+corps)?|coast\\s+guard|national\\s+guard|reserve(s|ist)?|active\\s+duty|deployment|deployed|enlisted|commissioned|honorable\\s+discharge|dishonorable\\s+discharge|VA\\s+benefits|GI\\s+bill|military\\s+service|service\\s+member|servicemember|SCRA|MLA|military\\s+lending)\\b",
+      "pattern": "\\b(veterans?|military|armed\\s+forces|army|navy|air\\s+force|marines?(?:\\s+corps)?|coast\\s+guard|national\\s+guard|reserves?(?:ist)?|active\\s+duty|deployment|deployed|enlisted|commissioned|honorable\\s+discharge|dishonorable\\s+discharge|VA\\s+benefits|GI\\s+bill|military\\s+service|service\\s+members?|servicemembers?|SCRA|MLA|military\\s+lending)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects military status terms - protected under SCRA and MLA"
     },
@@ -367,6 +367,182 @@
       "pattern": "\\b\\d{1,2}\\.\\d{3}\\.\\d{3}-[\\dXx]\\b",
       "category": "Brazilian PII Patterns",
       "description": "Detects Brazilian RG identity card numbers (common pattern for SP, RJ, MG states)"
+    },
+    {
+      "name": "au_tfn",
+      "display_name": "TFN (Australian Tax File Number)",
+      "pattern": "\\b\\d{8,9}\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Tax File Numbers (8-9 digits) only when near TFN/tax file context to avoid false positives on arbitrary numbers",
+      "keyword_pattern": "\\b(?:TFN|T\\.F\\.N\\.|tax\\s*file\\s*(?:number|no\\.?)|tax\\s*file\\s*#?|ATO\\s*number)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "au_abn",
+      "display_name": "ABN (Australian Business Number)",
+      "pattern": "\\b\\d{2}\\s?\\d{3}\\s?\\d{3}\\s?\\d{3}\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Business Numbers (11 digits, optional spaces: XX XXX XXX XXX)"
+    },
+    {
+      "name": "au_medicare",
+      "display_name": "Medicare Number (Australia)",
+      "pattern": "\\b(?:\\d{4}\\s?\\d{5}\\s?\\d{1}|\\d{11})\\b",
+      "category": "PII Patterns",
+      "description": "Detects Australian Medicare numbers (formatted XXXX XXXXX X or 11 consecutive digits)"
+    },
+    {
+      "name": "iban",
+      "display_name": "IBAN (International Bank Account Number)",
+      "pattern": "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b",
+      "category": "Payment Card Patterns",
+      "description": "Detects IBANs (2 letter country code + 2 check digits + 4 char bank code + 7 digit base + optional 0-16 alphanumeric)"
+    },
+    {
+      "name": "fr_nir",
+      "display_name": "NIR/INSEE (French Social Security Number)",
+      "pattern": "\\b[12][0-9]{2}(0[1-9]|1[0-2])[0-9]{2}[0-9]{3}[0-9]{3}[0-9]{2}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects French National Identification Number (Numéro d'Inscription au Répertoire) - 15 digits with specific format: sex + year + month + department + commune + order + key"
+    },
+    {
+      "name": "eu_iban_enhanced",
+      "display_name": "IBAN (Enhanced EU Format)",
+      "pattern": "\\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}[A-Z0-9]{0,16}\\b",
+      "category": "EU PII Patterns",
+      "description": "Enhanced IBAN detection with more specific format validation (2 letter country + 2 check digits + 4 char bank code + 7 digit account base + optional 0-16 alphanumeric)"
+    },
+    {
+      "name": "fr_phone",
+      "display_name": "Phone Number (France)",
+      "pattern": "(?<!\\d)(?:\\+33|0033|0)[1-9][0-9]{8}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects French phone numbers in various formats (+33, 0033, or 0 prefix followed by 9 digits starting with 1-9)"
+    },
+    {
+      "name": "eu_vat",
+      "display_name": "VAT Number (EU)",
+      "pattern": "\\b(AT|BE|BG|CY|CZ|DE|DK|EE|EL|ES|FI|FR|HR|HU|IE|IT|LT|LU|LV|MT|NL|PL|PT|RO|SE|SI|SK)[0-9A-Z]{8,12}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects EU VAT identification numbers (2-letter country code + 8-12 alphanumeric characters covering all EU member states)",
+      "keyword_pattern": "\\b(?:VAT|V\\.A\\.T\\.|TVA|IVA|BTW|MWST|value\\s*added\\s*tax|tax\\s*number|tax\\s*id|fiscal\\s*number|fiscal\\s*code)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "eu_passport_generic",
+      "display_name": "Passport Number (EU Generic)",
+      "pattern": "\\b[0-9]{2}[A-Z]{2}[0-9]{5}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects generic EU passport format (2 digits + 2 letters + 5 digits) - covers France and similar EU formats",
+      "keyword_pattern": "\\b(?:passport|passeport|travel\\s*document|document\\s*number|reisepass|paspoort|paszport)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "fr_postal_code",
+      "display_name": "Postal Code (France)",
+      "pattern": "\\b[0-9]{5}\\b",
+      "category": "EU PII Patterns",
+      "description": "Detects French postal codes (5 digits)",
+      "keyword_pattern": "\\b(?:code\\s*postal|postal\\s*code|CP|zip\\s*code|postcode)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "street_address",
+      "display_name": "Street Address",
+      "pattern": "\\b\\d{1,6}\\s+[A-Za-z0-9][A-Za-z0-9\\s.'-]*\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl|Circle|Cir)\\b",
+      "category": "PII Patterns",
+      "description": "Detects street addresses (number + street name + street type)"
+    },
+    {
+      "name": "airline_pnr",
+      "display_name": "Airline PNR / Booking Reference",
+      "pattern": "\\b[A-Z]{6}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects airline PNR / booking references (6 uppercase alpha characters) when near booking context",
+      "keyword_pattern": "\\b(?:PNR|booking\\s*(?:reference|ref|code|number|confirmation)|reservation\\s*(?:code|number|ref)|record\\s*locator|confirmation\\s*(?:code|number)|itinerary\\s*(?:number|ref))\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "skywards_number",
+      "display_name": "Emirates Skywards / Frequent Flyer Number",
+      "pattern": "\\b(?:EK\\s?)?\\d{9,10}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects Emirates Skywards frequent flyer numbers (9-10 digits, optional EK prefix) when near loyalty/frequent flyer context",
+      "keyword_pattern": "\\b(?:[Ss]kywards|frequent\\s*flyer|FF\\s*(?:number|no|#)|loyalty\\s*(?:number|id|member)|member\\s*(?:number|id|#)|miles\\s*(?:account|number)|tier\\s*(?:number|status))\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "uae_emirates_id",
+      "display_name": "UAE Emirates ID",
+      "pattern": "\\b784-?\\d{4}-?\\d{7}-?\\d\\b",
+      "category": "UAE PII Patterns",
+      "description": "Detects UAE Emirates ID numbers (784-YYYY-NNNNNNN-C format, 15 digits starting with 784)"
+    },
+    {
+      "name": "uae_phone",
+      "display_name": "Phone Number (UAE)",
+      "pattern": "(?<!\\d)(?:\\+971|00971|0)\\s?(?:2|3|4|6|7|9|50|52|54|55|56|58)\\s?\\d{3}\\s?\\d{4}\\b",
+      "category": "UAE PII Patterns",
+      "description": "Detects UAE phone numbers (+971/00971/0 prefix, landline and mobile)"
+    },
+    {
+      "name": "flight_number",
+      "display_name": "Airline Flight Number",
+      "pattern": "\\b(?:EK|QF|BA|AA|LH|AF|SQ|CX|QR|EY|FZ|WY|GF|KU|SV|MS|RJ|ME|PK|AI|UL|WS|9W|6E)\\s?\\d{1,4}\\b",
+      "category": "Aviation PII Patterns",
+      "description": "Detects airline flight numbers (major IATA 2-letter codes + 1-4 digit flight number) when near flight context",
+      "keyword_pattern": "\\b(?:flight|departure|arrival|gate|boarding|schedule|operate|route|aircraft|plane|outbound|inbound|leg|sector|flying)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_nric",
+      "display_name": "NRIC/FIN (Singapore National ID)",
+      "pattern": "\\b[STFGM]\\d{7}[A-Z]\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore NRIC and FIN numbers (S/T for citizens/PRs, F/G/M for foreigners + 7 digits + checksum letter)"
+    },
+    {
+      "name": "sg_phone",
+      "display_name": "Phone Number (Singapore)",
+      "pattern": "(?<!\\d)(?:\\+65|0065|65)\\s?[689]\\d{3}\\s?\\d{4}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore phone numbers (+65/0065/65 prefix with 6/8/9 starting digit for landline and mobile)"
+    },
+    {
+      "name": "sg_postal_code",
+      "display_name": "Postal Code (Singapore)",
+      "pattern": "\\b[0-8]\\d{5}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore 6-digit postal codes (ranges 01xxxx to 83xxxx)",
+      "keyword_pattern": "\\b(?:postal\\s*code|postcode|zip\\s*code|Singapore\\s*\\d|blk|block|address|HDB|flat|unit)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "passport_singapore",
+      "display_name": "Passport (Singapore)",
+      "pattern": "\\b[EK]\\d{7}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore passport numbers (E/K prefix + 7 digits)",
+      "keyword_pattern": "\\b(?:passport|travel\\s*document|document\\s*number|immigration|ICA)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_uen",
+      "display_name": "UEN (Singapore Unique Entity Number)",
+      "pattern": "\\b(?:\\d{8}[A-Z]|\\d{9}[A-Z]|[TR]\\d{2}[A-Z]{2}\\d{4}[A-Z])\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore Unique Entity Numbers for business registration (various formats: 8/9 digits + letter, or T/R prefix)",
+      "keyword_pattern": "\\b(?:UEN|company\\s*registration|business\\s*registration|ACRA|entity\\s*number|ROC|ROS)\\b",
+      "allow_word_numbers": false
+    },
+    {
+      "name": "sg_bank_account",
+      "display_name": "Bank Account (Singapore)",
+      "pattern": "\\b\\d{3}-\\d{5,6}-\\d{1,3}\\b",
+      "category": "Singapore PII Patterns",
+      "description": "Detects Singapore bank account numbers (XXX-XXXXX(X)-X(XX) format for DBS/POSB/OCBC/UOB)",
+      "keyword_pattern": "\\b(?:bank\\s*account|account\\s*number|DBS|OCBC|UOB|POSB|savings|current\\s*account|bank\\s*statement)\\b",
+      "allow_word_numbers": false
     }
   ]
 }

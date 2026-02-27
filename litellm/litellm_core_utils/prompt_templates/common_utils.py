@@ -452,7 +452,7 @@ def update_responses_input_with_model_file_ids(
 
     For managed files (unified file IDs), uses model_file_id_mapping if provided,
     otherwise decodes the base64-encoded unified file ID and extracts the llm_output_file_id directly.
-    
+
     Args:
         input: The responses API input parameter
         model_id: The model ID to use for looking up provider-specific file IDs
@@ -488,9 +488,13 @@ def update_responses_input_with_model_file_ids(
                     file_id = content_item.get("file_id")
                     if file_id:
                         provider_file_id = file_id  # Default to original
-                        
+
                         # Check if we have a mapping for this file ID
-                        if model_file_id_mapping and model_id and file_id in model_file_id_mapping:
+                        if (
+                            model_file_id_mapping
+                            and model_id
+                            and file_id in model_file_id_mapping
+                        ):
                             # Use the model-specific file ID from mapping
                             provider_file_id = (
                                 model_file_id_mapping.get(file_id, {}).get(model_id)
@@ -501,15 +505,19 @@ def update_responses_input_with_model_file_ids(
                             updated_content.append(updated_content_item)
                         else:
                             # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+                            is_unified_file_id = _is_base64_encoded_unified_file_id(
+                                file_id
+                            )
                             if is_unified_file_id:
                                 # Fallback: decode unified file ID
-                                unified_file_id = convert_b64_uid_to_unified_uid(file_id)
+                                unified_file_id = convert_b64_uid_to_unified_uid(
+                                    file_id
+                                )
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split(
                                         "llm_output_file_id,"
                                     )[1].split(";")[0]
-                                
+
                                 updated_content_item = content_item.copy()
                                 updated_content_item["file_id"] = provider_file_id
                                 updated_content.append(updated_content_item)
@@ -534,9 +542,9 @@ def update_responses_tools_with_model_file_ids(
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Updates responses API tools with provider-specific file IDs.
-    
+
     Handles code_interpreter tools with container.file_ids.
-    
+
     Args:
         tools: The responses API tools parameter
         model_id: The model ID to use for looking up provider-specific file IDs
@@ -545,18 +553,18 @@ def update_responses_tools_with_model_file_ids(
     """
     if not tools or not isinstance(tools, list):
         return tools
-    
+
     if not model_file_id_mapping or not model_id:
         return tools
-    
+
     updated_tools = []
     for tool in tools:
         if not isinstance(tool, dict):
             updated_tools.append(tool)
             continue
-        
+
         updated_tool = tool.copy()
-        
+
         # Handle code_interpreter with container file_ids
         if tool.get("type") == "code_interpreter":
             container = tool.get("container")
@@ -578,14 +586,14 @@ def update_responses_tools_with_model_file_ids(
                                 updated_file_ids.append(file_id)
                         else:
                             updated_file_ids.append(file_id)
-                    
+
                     # Update the tool with new file IDs
                     updated_container = container.copy()
                     updated_container["file_ids"] = updated_file_ids
                     updated_tool["container"] = updated_container
-        
+
         updated_tools.append(updated_tool)
-    
+
     return updated_tools
 
 
@@ -1104,6 +1112,46 @@ def set_last_user_message(
     return messages
 
 
+def add_system_prompt_to_messages(
+    messages: List[AllMessageValues],
+    system_prompt: str,
+    merge_with_first_system: bool = False,
+) -> List[AllMessageValues]:
+    """
+    Add a system prompt to the messages list.
+
+    Args:
+        messages: List of chat completion messages
+        system_prompt: The system prompt content to add. If empty or None, returns messages unchanged.
+        merge_with_first_system: If True and the first message is already a system message,
+            prepends the new prompt to that message's content. If False, adds a new system
+            message at the beginning.
+
+    Returns:
+        New list of messages with the system prompt added
+    """
+    if not system_prompt:
+        return list(messages)
+
+    if merge_with_first_system and messages and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        existing_content = first.get("content", "")
+        merged_content: Union[str, List[Dict[str, str]]]
+        if isinstance(existing_content, str):
+            merged_content = f"{system_prompt.strip()}\n\n{existing_content}"
+        elif isinstance(existing_content, list):
+            merged_content = [{"type": "text", "text": system_prompt.strip()}] + list(
+                existing_content
+            )
+        else:
+            merged_content = [{"type": "text", "text": system_prompt.strip()}]
+        first["content"] = merged_content
+        return [cast(AllMessageValues, first)] + list(messages[1:])
+
+    system_message: AllMessageValues = {"role": "system", "content": system_prompt}
+    return [system_message, *messages]
+
+
 def convert_prefix_message_to_non_prefix_messages(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -1272,3 +1320,59 @@ def parse_tool_call_arguments(
         )
 
         raise ValueError(error_message) from e
+
+
+def split_concatenated_json_objects(raw: str) -> List[Dict[str, Any]]:
+    """
+    Split a string that contains one or more concatenated JSON objects into
+    a list of parsed dicts.
+
+    LLM providers (notably Bedrock Claude Sonnet 4.5) sometimes return
+    multiple tool-call argument objects concatenated in a single
+    ``arguments`` string, e.g.::
+
+        '{"command":["curl",...]}{"command":["curl",...]}{"command":["curl",...]}'
+
+    ``json.loads()`` fails on this with ``JSONDecodeError: Extra data``.
+    This helper uses ``json.JSONDecoder.raw_decode()`` to walk the string
+    and extract each JSON object individually.
+
+    Returns
+    -------
+    list[dict]
+        A list of parsed dicts – one per JSON object found.  If *raw* is
+        empty or whitespace-only, an empty list is returned.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If the string contains text that cannot be parsed as JSON at all.
+    """
+    import json
+
+    raw = raw.strip()
+    if not raw:
+        return []
+
+    decoder = json.JSONDecoder()
+    results: List[Dict[str, Any]] = []
+    idx = 0
+    length = len(raw)
+
+    while idx < length:
+        # Skip whitespace between objects
+        while idx < length and raw[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+
+        obj, end_idx = decoder.raw_decode(raw, idx)
+        if isinstance(obj, dict):
+            results.append(obj)
+        else:
+            # Non-dict JSON value – wrap in empty dict (Bedrock requires
+            # toolUse.input to be an object).
+            results.append({})
+        idx = end_idx
+
+    return results

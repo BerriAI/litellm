@@ -20,12 +20,12 @@ from typing import (
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
 )
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -161,6 +161,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "web_search_options",
             "service_tier",
             "safety_identifier",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "store",
         ]  # works across all models
 
         model_specific_params = []
@@ -769,14 +772,39 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        """
+        Map 'reasoning' field to 'reasoning_content' field in delta.
+        
+        Some OpenAI-compatible providers (e.g., GLM-5, hosted_vllm) return 
+        delta.reasoning, but LiteLLM expects delta.reasoning_content.
+        
+        Args:
+            choices: List of choice objects from the streaming chunk
+            
+        Returns:
+            List of choices with reasoning field mapped to reasoning_content
+        """
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
+        return choices
+    
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            return ModelResponseStream(
-                id=chunk["id"],
-                object="chat.completion.chunk",
-                created=chunk.get("created"),
-                model=chunk.get("model"),
-                choices=chunk.get("choices", []),
-            )
+            choices = chunk.get("choices", [])
+            choices = self._map_reasoning_to_reasoning_content(choices)
+            
+            kwargs = {
+                "id": chunk["id"],
+                "object": "chat.completion.chunk",
+                "created": chunk.get("created"),
+                "model": chunk.get("model"),
+                "choices": choices,
+            }
+            if "usage" in chunk and chunk["usage"] is not None:
+                kwargs["usage"] = chunk["usage"]
+            return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e

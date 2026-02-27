@@ -205,6 +205,44 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
               <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
             </Descriptions>
 
+            {agent.object_permission &&
+              (agent.object_permission.mcp_servers?.length ||
+                agent.object_permission.mcp_access_groups?.length ||
+                (agent.object_permission.mcp_tool_permissions &&
+                  Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
+              <div style={{ marginTop: 24 }}>
+                <Title>MCP Tool Permissions</Title>
+                <Descriptions bordered column={1} style={{ marginTop: 16 }}>
+                  {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
+                    <Descriptions.Item label="MCP Servers">
+                      {agent.object_permission.mcp_servers.join(", ")}
+                    </Descriptions.Item>
+                  )}
+                  {agent.object_permission.mcp_access_groups &&
+                    agent.object_permission.mcp_access_groups.length > 0 && (
+                      <Descriptions.Item label="MCP Access Groups">
+                        {agent.object_permission.mcp_access_groups.join(", ")}
+                      </Descriptions.Item>
+                    )}
+                  {agent.object_permission.mcp_tool_permissions &&
+                    Object.keys(agent.object_permission.mcp_tool_permissions).length > 0 && (
+                      <Descriptions.Item label="Tool permissions per server">
+                        <div className="space-y-1">
+                          {Object.entries(agent.object_permission.mcp_tool_permissions).map(
+                            ([serverId, tools]) => (
+                              <div key={serverId}>
+                                <span className="font-medium">{serverId}:</span>{" "}
+                                {Array.isArray(tools) ? tools.join(", ") : String(tools)}
+                              </div>
+                            )
+                          )}
+                        </div>
+                      </Descriptions.Item>
+                    )}
+                </Descriptions>
+              </div>
+            )}
+
             <AgentCostView agent={agent} />
 
             {agent.agent_card_params?.skills && agent.agent_card_params.skills.length > 0 && (

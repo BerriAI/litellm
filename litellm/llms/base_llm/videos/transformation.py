@@ -118,10 +118,11 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
         """
         Transform the video content request into a URL and data/params
-        
+
         Returns:
             Tuple[str, Dict]: (url, params) for the video content request
         """

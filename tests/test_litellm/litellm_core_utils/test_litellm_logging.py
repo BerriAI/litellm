@@ -14,7 +14,7 @@ import time
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
 @pytest.fixture
@@ -170,9 +170,9 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
     monkeypatch.setenv("DD_API_KEY", "test")
     monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
 
-    from litellm.litellm_core_utils import litellm_logging as logging_module
     from litellm.integrations.datadog.datadog import DataDogLogger
     from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
 
@@ -205,8 +205,8 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     monkeypatch.setenv("LOGFIRE_BASE_URL", "https://logfire-api-custom.pydantic.dev")  # no trailing slash on purpose
 
     # Import after env vars are set (important if module-level caching exists)
-    from litellm.litellm_core_utils import litellm_logging as logging_module
     from litellm.integrations.opentelemetry import OpenTelemetry  # logger class
+    from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
 
@@ -264,7 +264,7 @@ async def test_logging_result_for_bridge_calls(logging_obj):
             mock_response="Hello, world!",
         )
         await asyncio.sleep(1)
-        assert mock_should_run_logging.call_count == 2  # called twice per call
+        assert mock_should_run_logging.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -405,6 +405,125 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_success_event.assert_called_once()
     dummy_logger.log_stream_event.assert_not_called()
 
+
+def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
+    """Ensure CustomGuardrail logging_hook is skipped when should_run_guardrail is False."""
+    import datetime
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class DummyGuardrail(CustomGuardrail):
+        pass
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+
+    model_response = ModelResponse(
+        id="resp-guardrail-skip",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    guardrail = DummyGuardrail(
+        guardrail_name="dummy-guardrail",
+        event_hook=GuardrailEventHooks.logging_only,
+    )
+    guardrail.should_run_guardrail = MagicMock(return_value=False)
+    guardrail.logging_hook = MagicMock(
+        return_value=(logging_obj.model_call_details, model_response)
+    )
+
+    dummy_logger = DummyLogger()
+    dummy_logger.logging_hook = MagicMock(
+        return_value=(logging_obj.model_call_details, model_response)
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[guardrail, dummy_logger],
+    ):
+        logging_obj.success_handler(
+            result=model_response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            cache_hit=False,
+        )
+
+    guardrail.should_run_guardrail.assert_called_once()
+    guardrail_call_kwargs = guardrail.should_run_guardrail.call_args.kwargs
+    assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
+    guardrail.logging_hook.assert_not_called()
+    dummy_logger.logging_hook.assert_called_once()
+
+
+def test_success_handler_runs_guardrail_logging_hook_when_enabled(logging_obj):
+    """Ensure CustomGuardrail logging_hook runs when should_run_guardrail is True."""
+    import datetime
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class DummyGuardrail(CustomGuardrail):
+        pass
+
+    logging_obj.stream = False
+
+    model_response = ModelResponse(
+        id="resp-guardrail-run",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    guardrail = DummyGuardrail(
+        guardrail_name="dummy-guardrail",
+        event_hook=GuardrailEventHooks.logging_only,
+    )
+    guardrail.should_run_guardrail = MagicMock(return_value=True)
+
+    def _guardrail_logging_hook(kwargs, result, call_type):
+        updated_kwargs = dict(kwargs)
+        updated_kwargs["guardrail_hook_ran"] = True
+        return updated_kwargs, result
+
+    guardrail.logging_hook = MagicMock(side_effect=_guardrail_logging_hook)
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[guardrail],
+    ):
+        logging_obj.success_handler(
+            result=model_response,
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
+            cache_hit=False,
+        )
+
+    guardrail.should_run_guardrail.assert_called_once()
+    guardrail_call_kwargs = guardrail.should_run_guardrail.call_args.kwargs
+    assert guardrail_call_kwargs["event_type"] == GuardrailEventHooks.logging_only
+    guardrail.logging_hook.assert_called_once()
+    assert logging_obj.model_call_details.get("guardrail_hook_ran") is True
+    
 
 def test_get_user_agent_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -1003,6 +1122,44 @@ def test_get_final_response_obj_with_empty_response_obj_and_list_init():
     assert result[1].name == "Object2"
 
 
+def test_get_usage_as_dict():
+    """
+    Test get_usage_as_dict returns usage as plain dict from response_obj or combined_usage_object.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import Usage
+
+    # Test case 1: None response_obj returns empty usage dict
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
+    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    # Test case 2: Empty response_obj returns empty usage dict
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={})
+    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    # Test case 3: combined_usage_object takes priority
+    combined = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={"usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        combined_usage_object=combined,
+    )
+    assert result["prompt_tokens"] == 10
+    assert result["completion_tokens"] == 5
+    assert result["total_tokens"] == 15
+
+    # Test case 4: response_obj with usage dict
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={"usage": {"prompt_tokens": 20, "completion_tokens": 30}}
+    )
+    assert result == {"prompt_tokens": 20, "completion_tokens": 30}
+
+    # Test case 5: response_obj with no usage key returns empty
+    result = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj={"id": "resp-1", "choices": []}
+    )
+    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
 def test_append_system_prompt_messages():
     """
     Test append_system_prompt_messages prepends system message from kwargs to messages list.
@@ -1355,3 +1512,171 @@ def test_get_error_information_error_code_priority():
     result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
     assert result["error_code"] == ""
     assert result["error_class"] == "NoCodeException"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for _get_assembled_streaming_response non-streaming early return
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _make_logging_obj(stream: bool) -> LitellmLogging:
+    return LitellmLogging(
+        model="openai/codex-mini-latest",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=stream,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="test-123",
+        function_id="test-fn",
+    )
+
+
+def test_get_assembled_streaming_response_returns_none_for_non_streaming():
+    """Non-streaming requests should return None so the streaming block is skipped."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=False)
+    result = ModelResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is None
+
+
+def test_get_assembled_streaming_response_returns_result_for_streaming():
+    """Streaming requests should return the ModelResponse for further processing."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=True)
+    result = ModelResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is result
+
+
+def test_get_assembled_streaming_response_returns_none_for_non_streaming_text_completion():
+    """Non-streaming TextCompletionResponse should also return None."""
+    import datetime
+
+    logging_obj = _make_logging_obj(stream=False)
+    result = TextCompletionResponse(id="resp-1", choices=[], model="test")
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+    assert assembled is None
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_computes_standard_logging_object_once():
+    """
+    Non-streaming acompletion should call get_standard_logging_object_payload
+    exactly once, not twice.
+    """
+    import asyncio
+
+    import litellm
+
+    with patch.object(
+        litellm.litellm_core_utils.litellm_logging,
+        "get_standard_logging_object_payload",
+    ) as mock_payload:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        assert mock_payload.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_emit_standard_logging_payload_called_for_non_streaming():
+    """
+    emit_standard_logging_payload should still be called for non-streaming
+    requests (moved from the streaming block to _process_hidden_params_and_response_cost).
+    """
+    import asyncio
+
+    import litellm
+
+    with patch.object(
+        litellm.litellm_core_utils.litellm_logging,
+        "emit_standard_logging_payload",
+    ) as mock_emit:
+        await litellm.acompletion(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hey"}],
+            model="openai/codex-mini-latest",
+            mock_response="Hello, world!",
+        )
+        await asyncio.sleep(1)
+        assert mock_emit.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_preserves_response_cost_for_pass_through_endpoints():
+    """Regression test: PR #19887 added a pass-through branch in async_success_handler
+    that unconditionally set response_cost=None, overwriting costs already calculated
+    by pass-through handlers (Gemini/Vertex)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gemini-2.5-flash-lite",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id-cost",
+        function_id="test-function-id-cost",
+    )
+
+    # Simulate what pass-through handlers do: pre-calculate response_cost
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {}, "proxy_server_request": {}},
+        "litellm_call_id": "test-call-id-cost",
+        "response_cost": 0.0000047,  # Pre-calculated by pass-through handler
+        "custom_llm_provider": "gemini",
+    }
+
+    result = ModelResponse(
+        id="test-response",
+        model="gemini-2.5-flash-lite",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[]):
+        await logging_obj.async_success_handler(
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+        )
+
+    # response_cost must be preserved, not overwritten to None
+    assert logging_obj.model_call_details.get("response_cost") is not None
+    assert logging_obj.model_call_details["response_cost"] > 0
+
+    # standard_logging_object should also have the cost
+    slo = logging_obj.model_call_details.get("standard_logging_object")
+    assert slo is not None
+    assert slo["response_cost"] > 0
