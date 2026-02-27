@@ -389,33 +389,34 @@ async def update_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    existing = await prisma_client.db.litellm_accessgrouptable.find_unique(
-        where={"access_group_id": access_group_id}
-    )
-    if existing is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Access group '{access_group_id}' not found",
-        )
-
-    # Compute team/key assignment deltas before the transaction
     update_fields = data.model_dump(exclude_unset=True)
-    old_team_ids: Set[str] = set(existing.assigned_team_ids or [])
-    old_key_ids: Set[str] = set(existing.assigned_key_ids or [])
-    new_team_ids: Set[str] = set(update_fields["assigned_team_ids"]) if "assigned_team_ids" in update_fields else old_team_ids
-    new_key_ids: Set[str] = set(update_fields["assigned_key_ids"]) if "assigned_key_ids" in update_fields else old_key_ids
-
-    teams_to_add = list(new_team_ids - old_team_ids)
-    teams_to_remove = list(old_team_ids - new_team_ids)
-    keys_to_add = list(new_key_ids - old_key_ids)
-    keys_to_remove = list(old_key_ids - new_key_ids)
-
     update_data: dict = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
         update_data[field] = value
 
     try:
         async with prisma_client.db.tx() as tx:
+            # Read inside the transaction so delta computation is consistent with the write,
+            # avoiding a TOCTOU race where a concurrent update could make deltas stale.
+            existing = await tx.litellm_accessgrouptable.find_unique(
+                where={"access_group_id": access_group_id}
+            )
+            if existing is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Access group '{access_group_id}' not found",
+                )
+
+            old_team_ids: Set[str] = set(existing.assigned_team_ids or [])
+            old_key_ids: Set[str] = set(existing.assigned_key_ids or [])
+            new_team_ids: Set[str] = set(update_fields["assigned_team_ids"]) if "assigned_team_ids" in update_fields else old_team_ids
+            new_key_ids: Set[str] = set(update_fields["assigned_key_ids"]) if "assigned_key_ids" in update_fields else old_key_ids
+
+            teams_to_add = list(new_team_ids - old_team_ids)
+            teams_to_remove = list(old_team_ids - new_team_ids)
+            keys_to_add = list(new_key_ids - old_key_ids)
+            keys_to_remove = list(old_key_ids - new_key_ids)
+
             record = await tx.litellm_accessgrouptable.update(
                 where={"access_group_id": access_group_id},
                 data=update_data,
