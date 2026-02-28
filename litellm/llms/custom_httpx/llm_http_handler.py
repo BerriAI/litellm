@@ -26,6 +26,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.error_utils import is_stream_required_error
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -152,6 +153,63 @@ else:
 
 
 class BaseLLMHTTPHandler:
+    @staticmethod
+    def _merge_stream_hidden_params(
+        response: ModelResponse, streamwrapper: CustomStreamWrapper
+    ) -> None:
+        hidden = getattr(streamwrapper, "_hidden_params", None)
+        if not isinstance(hidden, dict):
+            return
+        response_hidden = getattr(response, "_hidden_params", None)
+        if response_hidden is None:
+            response._hidden_params = {}
+            response_hidden = response._hidden_params
+        response_hidden.update(hidden)
+
+    def _build_complete_response_from_streaming(
+        self,
+        streamwrapper: CustomStreamWrapper,
+        messages: Optional[list],
+        provider_config: BaseConfig,
+    ) -> ModelResponse:
+        chunks = []
+        for chunk in streamwrapper:
+            chunks.append(chunk)
+        complete_response = litellm.stream_chunk_builder(
+            chunks=chunks, messages=messages
+        )
+        if complete_response is None:
+            raise provider_config.get_error_class(
+                error_message="Failed to assemble streaming response for forced stream.",
+                status_code=500,
+                headers={},
+            )
+        complete_response = cast(ModelResponse, complete_response)
+        self._merge_stream_hidden_params(complete_response, streamwrapper)
+        return complete_response
+
+    async def _abuild_complete_response_from_streaming(
+        self,
+        streamwrapper: CustomStreamWrapper,
+        messages: Optional[list],
+        provider_config: BaseConfig,
+    ) -> ModelResponse:
+        chunks = []
+        async for chunk in streamwrapper:
+            chunks.append(chunk)
+        complete_response = litellm.stream_chunk_builder(
+            chunks=chunks, messages=messages
+        )
+        if complete_response is None:
+            raise provider_config.get_error_class(
+                error_message="Failed to assemble streaming response for forced stream.",
+                status_code=500,
+                headers={},
+            )
+        complete_response = cast(ModelResponse, complete_response)
+        self._merge_stream_hidden_params(complete_response, streamwrapper)
+        return complete_response
+
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -305,18 +363,81 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        response = await self._make_common_async_call(
-            async_httpx_client=async_httpx_client,
-            provider_config=provider_config,
-            api_base=api_base,
-            headers=headers,
-            data=data,
-            timeout=timeout,
-            litellm_params=litellm_params,
-            stream=False,
-            logging_obj=logging_obj,
-            signed_json_body=signed_json_body,
-        )
+        try:
+            response = await self._make_common_async_call(
+                async_httpx_client=async_httpx_client,
+                provider_config=provider_config,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                stream=False,
+                logging_obj=logging_obj,
+                signed_json_body=signed_json_body,
+            )
+        except Exception as e:
+            if (
+                is_stream_required_error(e)
+                and not provider_config.has_custom_stream_wrapper
+            ):
+                logging_obj.model_call_details["forced_streaming_fallback"] = True
+                stream_data = self._add_stream_param_to_request_body(
+                    data=data.copy(),
+                    provider_config=provider_config,
+                    fake_stream=False,
+                )
+                forced_headers, forced_signed_json_body = provider_config.sign_request(
+                    headers=headers.copy(),
+                    optional_params=optional_params,
+                    request_data=stream_data,
+                    api_base=api_base,
+                    api_key=api_key,
+                    stream=True,
+                    fake_stream=False,
+                    model=model,
+                )
+                completion_stream, response_headers = await self.make_async_call_stream_helper(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    provider_config=provider_config,
+                    api_base=api_base,
+                    headers=forced_headers,
+                    data=stream_data,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                    timeout=timeout,
+                    fake_stream=False,
+                    client=client,
+                    litellm_params=litellm_params,
+                    optional_params=optional_params,
+                    json_mode=json_mode,
+                    signed_json_body=forced_signed_json_body,
+                )
+                streamwrapper = CustomStreamWrapper(
+                    completion_stream=completion_stream,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging_obj,
+                    _response_headers=dict(response_headers),
+                )
+                complete_response = await self._abuild_complete_response_from_streaming(
+                    streamwrapper=streamwrapper,
+                    messages=messages,
+                    provider_config=provider_config,
+                )
+                agentic_response = await self._call_agentic_chat_completion_hooks(
+                    response=complete_response,
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    logging_obj=logging_obj,
+                    stream=False,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=litellm_params,
+                )
+                return agentic_response if agentic_response is not None else complete_response
+            raise
         initial_response = provider_config.transform_response(
             model=model,
             raw_response=response,
@@ -555,17 +676,73 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        response = self._make_common_sync_call(
-            sync_httpx_client=sync_httpx_client,
-            provider_config=provider_config,
-            api_base=api_base,
-            headers=headers,
-            data=data,
-            signed_json_body=signed_json_body,
-            timeout=timeout,
-            litellm_params=litellm_params,
-            logging_obj=logging_obj,
-        )
+        try:
+            response = self._make_common_sync_call(
+                sync_httpx_client=sync_httpx_client,
+                provider_config=provider_config,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                signed_json_body=signed_json_body,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+            )
+        except Exception as e:
+            if (
+                is_stream_required_error(e)
+                and not provider_config.has_custom_stream_wrapper
+            ):
+                logging_obj.model_call_details["forced_streaming_fallback"] = True
+                stream_data = self._add_stream_param_to_request_body(
+                    data=data.copy(),
+                    provider_config=provider_config,
+                    fake_stream=False,
+                )
+                forced_headers, forced_signed_json_body = provider_config.sign_request(
+                    headers=headers.copy(),
+                    optional_params=optional_params,
+                    request_data=stream_data,
+                    api_base=api_base,
+                    api_key=api_key,
+                    stream=True,
+                    fake_stream=False,
+                    model=model,
+                )
+                completion_stream, response_headers = self.make_sync_call(
+                    provider_config=provider_config,
+                    api_base=api_base,
+                    headers=forced_headers,
+                    data=stream_data,
+                    signed_json_body=forced_signed_json_body,
+                    original_data=stream_data,
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                    timeout=timeout,
+                    fake_stream=False,
+                    client=(
+                        client
+                        if client is not None and isinstance(client, HTTPHandler)
+                        else None
+                    ),
+                    litellm_params=litellm_params,
+                    json_mode=json_mode,
+                    optional_params=optional_params,
+                )
+                streamwrapper = CustomStreamWrapper(
+                    completion_stream=completion_stream,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging_obj,
+                    _response_headers=dict(response_headers),
+                )
+                return self._build_complete_response_from_streaming(
+                    streamwrapper=streamwrapper,
+                    messages=messages,
+                    provider_config=provider_config,
+                )
+            raise
         return provider_config.transform_response(
             model=model,
             raw_response=response,

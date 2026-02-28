@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
 from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.litellm_core_utils.error_utils import is_stream_required_error
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
@@ -165,6 +166,7 @@ class ResponsesToCompletionBridgeHandler:
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
 
+        stream = self._resolve_stream_flag(optional_params, litellm_params)
         request_data = self.transformation_handler.transform_request(
             model=model,
             messages=messages,
@@ -175,11 +177,21 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
-        result = responses(
-            **request_data,
-        )
+        try:
+            result = responses(
+                **request_data,
+            )
+        except Exception as e:
+            if not stream and is_stream_required_error(e):
+                if hasattr(logging_obj, "model_call_details"):
+                    logging_obj.model_call_details["forced_streaming_fallback"] = True
+                request_data = {**request_data, "stream": True}
+                result = responses(
+                    **request_data,
+                )
+            else:
+                raise
 
-        stream = self._resolve_stream_flag(optional_params, litellm_params)
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
                 model=model,
@@ -239,6 +251,7 @@ class ResponsesToCompletionBridgeHandler:
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
 
+        stream = self._resolve_stream_flag(optional_params, litellm_params)
         try:
             request_data = self.transformation_handler.transform_request(
                 model=model,
@@ -251,12 +264,23 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
-        result = await aresponses(
-            **request_data,
-            aresponses=True,
-        )
+        try:
+            result = await aresponses(
+                **request_data,
+                aresponses=True,
+            )
+        except Exception as e:
+            if not stream and is_stream_required_error(e):
+                if hasattr(logging_obj, "model_call_details"):
+                    logging_obj.model_call_details["forced_streaming_fallback"] = True
+                request_data = {**request_data, "stream": True}
+                result = await aresponses(
+                    **request_data,
+                    aresponses=True,
+                )
+            else:
+                raise
 
-        stream = self._resolve_stream_flag(optional_params, litellm_params)
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
                 model=model,
