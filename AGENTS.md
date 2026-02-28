@@ -177,6 +177,38 @@ When opening issues or pull requests, follow these templates:
 6. **UI/Backend Contract Mismatch**: When adding a new entity type to the UI, always check whether the backend endpoint accepts a single value or an array. Match the UI control accordingly (single-select vs. multi-select) to avoid silently dropping user selections
 7. **Missing Tests for New Entity Types**: When adding a new entity type (e.g., in `EntityUsage`, `UsageViewSelect`), always add corresponding tests in the existing test files and update any icon/component mocks
 
+8. **Do not hardcode model-specific flags**: Put model-specific capability flags in `model_prices_and_context_window.json` and read them via `get_model_info` (or existing helpers like `supports_reasoning`). This prevents users from needing to upgrade LiteLLM each time a new model supports a feature.
+
+   **Example of BAD** (hardcoded model checks):
+
+   ```python
+   @staticmethod
+   def _is_effort_supported_model(model: str) -> bool:
+       """Check if the model supports the output_config.effort parameter..."""
+       model_lower = model.lower()
+       if AnthropicConfig._is_claude_4_6_model(model):
+           return True
+       return any(
+           v in model_lower for v in ("opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5")
+       )
+   ```
+
+   **Example of GOOD** (config-driven or helper that reads from config):
+
+   ```python
+   if (
+       "claude-3-7-sonnet" in model
+       or AnthropicConfig._is_claude_4_6_model(model)
+       or supports_reasoning(
+           model=model,
+           custom_llm_provider=self.custom_llm_provider,
+       )
+   ):
+       ...
+   ```
+
+   Using helpers like `supports_reasoning` (which read from `model_prices_and_context_window.json` / `get_model_info`) allows future model updates to "just work" without code changes.
+
 ## HELPFUL RESOURCES
 
 - Main documentation: https://docs.litellm.ai/
