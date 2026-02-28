@@ -2802,8 +2802,8 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
                 litellm.anthropic_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             split_string = key.split("/", 1)
-            if key not in litellm.openrouter_models:
-                litellm.openrouter_models.add(split_string[1])
+            if split_string[-1] not in litellm.openrouter_models:
+                litellm.openrouter_models.add(split_string[-1])
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             if key not in litellm.vercel_ai_gateway_models:
                 litellm.vercel_ai_gateway_models.add(key)
@@ -4963,9 +4963,7 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[List[Choices], List[StreamingChoices]] = response_obj.choices
 
     # Use list accumulation to avoid O(n^2) string concatenation across choices
     response_parts: List[str] = []
@@ -7384,9 +7382,9 @@ def _get_base_model_from_metadata(model_call_details=None):
 class ModelResponseIterator:
     def __init__(self, model_response: ModelResponse, convert_to_delta: bool = False):
         if convert_to_delta is True:
-            self.model_response = ModelResponse(stream=True)
-            _delta = self.model_response.choices[0].delta  # type: ignore
-            _delta.content = model_response.choices[0].message.content  # type: ignore
+            _stream_response = ModelResponseStream()
+            _stream_response.choices[0].delta.content = model_response.choices[0].message.content  # type: ignore
+            self.model_response: Union[ModelResponse, ModelResponseStream] = _stream_response
         else:
             self.model_response = model_response
         self.is_done = False
