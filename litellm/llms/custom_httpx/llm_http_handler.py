@@ -1853,14 +1853,35 @@ class BaseLLMHTTPHandler:
         forwarded_headers = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
         extra_headers_from_kwargs = kwargs.get("extra_headers", None)
-        # Merge all header sources: forwarded < extra_headers < provider_specific
-        merged_headers = {}
-        if forwarded_headers:
-            merged_headers.update(forwarded_headers)
-        if extra_headers_from_kwargs:
-            merged_headers.update(extra_headers_from_kwargs)
-        if provider_specific_headers:
-            merged_headers.update(provider_specific_headers)
+        # Merge all header sources, accumulating anthropic-beta values from every source
+        merged_headers: dict = {}
+        anthropic_beta_parts: list = []
+
+        def _collect_headers(source: dict) -> None:
+            for key, value in source.items():
+                if key.lower() == "anthropic-beta":
+                    # Accumulate all beta values; dedup later via a set.
+                    if isinstance(value, list):
+                        anthropic_beta_parts.extend(v.strip() for v in value if v.strip())
+                    elif isinstance(value, str):
+                        anthropic_beta_parts.extend(
+                            v.strip() for v in value.split(",") if v.strip()
+                        )
+                else:
+                    merged_headers[key] = value
+
+        for _src in [forwarded_headers, provider_specific_headers, extra_headers_from_kwargs]:
+            if _src:
+                _collect_headers(_src)
+
+        # extra_headers_from_kwargs (deployment config) wins for non-beta headers
+        # by being applied last in the loop above.
+        if anthropic_beta_parts:
+            # Preserve insertion order while deduplicating.
+            seen: set = set()
+            merged_headers["anthropic-beta"] = ",".join(
+                v for v in anthropic_beta_parts if not (v in seen or seen.add(v))  # type: ignore[func-returns-value]
+            )
         (
             headers,
             api_base,
