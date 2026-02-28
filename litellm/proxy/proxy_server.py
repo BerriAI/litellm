@@ -424,6 +424,9 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    InFlightRequestsMiddleware,
+)
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_router
@@ -1404,6 +1407,7 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+app.add_middleware(InFlightRequestsMiddleware)
 
 
 def mount_swagger_ui():
@@ -5298,13 +5302,15 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
-        str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
         )
         model_mismatch_logged = False
+        # Use a running string instead of list + join to avoid O(n^2) overhead.
+        # Previously "".join(str_so_far_parts) was called every chunk, re-joining
+        # the entire accumulated response. String += is O(n) amortized total.
+        _str_so_far: str = ""
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -5315,12 +5321,12 @@ async def async_data_generator(
                 user_api_key_dict=user_api_key_dict,
                 response=chunk,
                 data=request_data,
-                str_so_far="".join(str_so_far_parts),
+                str_so_far=_str_so_far if _str_so_far else None,
             )
 
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far_parts.append(response_str)
+                _str_so_far += response_str
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,

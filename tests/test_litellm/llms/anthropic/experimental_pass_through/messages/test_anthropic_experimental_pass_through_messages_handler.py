@@ -39,14 +39,14 @@ def test_anthropic_experimental_pass_through_messages_handler():
 
 def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_and_api_base_and_custom_values():
     """
-    Test that api key, api base, and extra kwargs are forwarded to litellm.responses for Azure models.
-    Azure models are routed directly to the Responses API.
+    Test that api key, api base, and extra kwargs are forwarded to litellm.completion for Azure models.
+    Azure models are routed through chat/completions (not the Responses API).
     """
     from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
         anthropic_messages_handler,
     )
 
-    with patch("litellm.responses", return_value="test-response") as mock_responses:
+    with patch("litellm.completion", return_value=MagicMock()) as mock_completion:
         try:
             anthropic_messages_handler(
                 max_tokens=100,
@@ -58,10 +58,10 @@ def test_anthropic_experimental_pass_through_messages_handler_dynamic_api_key_an
             )
         except Exception as e:
             print(f"Error: {e}")
-        mock_responses.assert_called_once()
-        assert mock_responses.call_args.kwargs["api_key"] == "test-api-key"
-        assert mock_responses.call_args.kwargs["api_base"] == "test-api-base"
-        assert mock_responses.call_args.kwargs["custom_key"] == "custom_value"
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs["api_key"] == "test-api-key"
+        assert mock_completion.call_args.kwargs["api_base"] == "test-api-base"
+        assert mock_completion.call_args.kwargs["custom_key"] == "custom_value"
 
 
 def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provider():
