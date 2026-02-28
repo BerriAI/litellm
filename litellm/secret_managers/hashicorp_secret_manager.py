@@ -24,8 +24,16 @@ class HashicorpSecretManager(BaseSecretManager):
         # Vault-specific config
         self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")
         self.vault_token = os.getenv("HCP_VAULT_TOKEN", "")
-        # Vault namespace (for X-Vault-Namespace header)
+        # Vault namespace (for backward compat)
         self.vault_namespace = os.getenv("HCP_VAULT_NAMESPACE", None)
+        # Login namespace overrides vault_namespace for auth requests
+        self.vault_login_namespace = os.getenv(
+            "HCP_VAULT_LOGIN_NAMESPACE", self.vault_namespace
+        )
+        # Secret namespace overrides vault_namespace for secret URL construction
+        self.vault_secret_namespace = os.getenv(
+            "HCP_VAULT_SECRET_NAMESPACE", self.vault_namespace
+        )
         # KV engine mount name (default: "secret")
         # If your KV engine is mounted somewhere other than "secret", set HCP_VAULT_MOUNT_NAME
         self.vault_mount_name = os.getenv("HCP_VAULT_MOUNT_NAME", "secret")
@@ -120,8 +128,8 @@ class HashicorpSecretManager(BaseSecretManager):
         login_url = f"{self.vault_addr}/v1/auth/{self.approle_mount_path}/login"
 
         headers = {}
-        if hasattr(self, "vault_namespace") and self.vault_namespace:
-            headers["X-Vault-Namespace"] = self.vault_namespace
+        if self.vault_login_namespace:
+            headers["X-Vault-Namespace"] = self.vault_login_namespace
 
         try:
             client = _get_httpx_client()
@@ -187,8 +195,8 @@ class HashicorpSecretManager(BaseSecretManager):
         # E.g. self.vault_namespace = 'mynamespace/'
         # If you only have root namespace, you can omit this header entirely.
         headers = {}
-        if hasattr(self, "vault_namespace") and self.vault_namespace:
-            headers["X-Vault-Namespace"] = self.vault_namespace
+        if self.vault_login_namespace:
+            headers["X-Vault-Namespace"] = self.vault_login_namespace
         try:
             # We use the client cert and key for mutual TLS
             client = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
@@ -230,7 +238,7 @@ class HashicorpSecretManager(BaseSecretManager):
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
         resolved_namespace = self._sanitize_path_component(
-            namespace if namespace is not None else self.vault_namespace
+            namespace if namespace is not None else self.vault_secret_namespace
         )
         resolved_mount = self._sanitize_path_component(
             mount_name if mount_name is not None else self.vault_mount_name
@@ -283,7 +291,7 @@ class HashicorpSecretManager(BaseSecretManager):
     ) -> Dict[str, Any]:
         settings = self._extract_secret_manager_settings(optional_params)
 
-        namespace = settings.get("namespace", self.vault_namespace)
+        namespace = settings.get("namespace", self.vault_secret_namespace)
         mount = settings.get("mount", self.vault_mount_name)
         path_prefix = settings.get("path_prefix", self.vault_path_prefix)
         data_key_override = settings.get("data")
@@ -314,14 +322,18 @@ class HashicorpSecretManager(BaseSecretManager):
         """
         # Priority 1: AppRole auth
         if self.approle_role_id and self.approle_secret_id:
-            return {"X-Vault-Token": self._auth_via_approle()}
-
+            token_headers = {"X-Vault-Token": self._auth_via_approle()}
         # Priority 2: TLS cert auth
-        if self.tls_cert_path and self.tls_key_path:
-            return {"X-Vault-Token": self._auth_via_tls_cert()}
-
+        elif self.tls_cert_path and self.tls_key_path:
+            token_headers = {"X-Vault-Token": self._auth_via_tls_cert()}
         # Priority 3: Direct token
-        return {"X-Vault-Token": self.vault_token}
+        else:
+            token_headers = {"X-Vault-Token": self.vault_token}
+
+        if self.vault_secret_namespace:
+            token_headers["X-Vault-Namespace"] = self.vault_secret_namespace
+
+        return token_headers
 
     async def async_read_secret(
         self,
@@ -467,7 +479,9 @@ class HashicorpSecretManager(BaseSecretManager):
 
         try:
             # First verify the old secret exists using _build_secret_target
-            current_target = self._build_secret_target(current_secret_name, optional_params)
+            current_target = self._build_secret_target(
+                current_secret_name, optional_params
+            )
             try:
                 response = await async_client.get(
                     url=current_target["url"],
@@ -477,8 +491,13 @@ class HashicorpSecretManager(BaseSecretManager):
                 # Secret exists, we can proceed
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(f"Current secret {current_secret_name} not found")
-                    return {"status": "error", "message": f"Current secret {current_secret_name} not found"}
+                    verbose_logger.exception(
+                        f"Current secret {current_secret_name} not found"
+                    )
+                    return {
+                        "status": "error",
+                        "message": f"Current secret {current_secret_name} not found",
+                    }
                 verbose_logger.exception(
                     f"Error checking current secret existence: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
@@ -487,8 +506,13 @@ class HashicorpSecretManager(BaseSecretManager):
                     "message": f"HTTP error occurred while checking current secret: {e.response.text if hasattr(e, 'response') else str(e)}",
                 }
             except Exception as e:
-                verbose_logger.exception(f"Error checking current secret existence: {e}")
-                return {"status": "error", "message": f"Error checking current secret: {e}"}
+                verbose_logger.exception(
+                    f"Error checking current secret existence: {e}"
+                )
+                return {
+                    "status": "error",
+                    "message": f"Error checking current secret: {e}",
+                }
 
             # Create new secret with new name and value
             # Use _build_secret_target to handle optional_params
@@ -501,7 +525,10 @@ class HashicorpSecretManager(BaseSecretManager):
             )
 
             # Check if async_write_secret returned an error
-            if isinstance(create_response, dict) and create_response.get("status") == "error":
+            if (
+                isinstance(create_response, dict)
+                and create_response.get("status") == "error"
+            ):
                 return create_response
 
             # Verify new secret was created successfully using _build_secret_target
@@ -515,7 +542,9 @@ class HashicorpSecretManager(BaseSecretManager):
                 json_resp = response.json()
                 # Use data_key from target to get the correct value
                 data_key = new_target["data_key"]
-                new_secret_value_from_vault = json_resp.get("data", {}).get("data", {}).get(data_key, None)
+                new_secret_value_from_vault = (
+                    json_resp.get("data", {}).get("data", {}).get(data_key, None)
+                )
                 if new_secret_value_from_vault != new_secret_value:
                     verbose_logger.exception(
                         f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}"
@@ -526,8 +555,13 @@ class HashicorpSecretManager(BaseSecretManager):
                     }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(f"Failed to verify new secret {new_secret_name}")
-                    return {"status": "error", "message": f"Failed to verify new secret {new_secret_name}"}
+                    verbose_logger.exception(
+                        f"Failed to verify new secret {new_secret_name}"
+                    )
+                    return {
+                        "status": "error",
+                        "message": f"Failed to verify new secret {new_secret_name}",
+                    }
                 verbose_logger.exception(
                     f"Error verifying new secret: {e.response.text if hasattr(e, 'response') else str(e)}"
                 )
@@ -537,7 +571,10 @@ class HashicorpSecretManager(BaseSecretManager):
                 }
             except Exception as e:
                 verbose_logger.exception(f"Error verifying new secret: {e}")
-                return {"status": "error", "message": f"Error verifying new secret: {e}"}
+                return {
+                    "status": "error",
+                    "message": f"Error verifying new secret: {e}",
+                }
 
             # If everything is successful, delete the old secret
             # Only delete if the names are different (same name means we're just updating the value)
@@ -549,7 +586,10 @@ class HashicorpSecretManager(BaseSecretManager):
                     timeout=timeout,
                 )
                 # Check if async_delete_secret returned an error
-                if isinstance(delete_response, dict) and delete_response.get("status") == "error":
+                if (
+                    isinstance(delete_response, dict)
+                    and delete_response.get("status") == "error"
+                ):
                     # Log the error but don't fail the rotation since new secret was created successfully
                     verbose_logger.warning(
                         f"Failed to delete old secret {current_secret_name} after rotation: {delete_response.get('message')}"
