@@ -1,0 +1,26 @@
+# Core LiteLLM
+litellm>=1.50.0
+
+# RAG Frameworks
+llama-index>=0.10.0
+llama-index-llms-litellm>=0.1.0
+llama-index-embeddings-huggingface>=0.2.0
+llama-index-vector-stores-chroma>=0.1.0
+haystack-ai>=2.0.0
+
+# Evaluation
+ragas>=0.1.0,<0.2.0
+datasets>=2.14.0
+
+# Vector Store & Embeddings
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Use --only-binary to avoid build issues on Python 3.15
+# Install these separately if needed:
+# pip install numpy --only-binary :all:
+# pip install pandas --only-binary :all:

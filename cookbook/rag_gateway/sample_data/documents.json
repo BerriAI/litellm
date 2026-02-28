@@ -1,0 +1,52 @@
+[
+  {
+    "id": "doc_1",
+    "title": "Introduction to Large Language Models",
+    "content": "Large Language Models (LLMs) are neural networks trained on vast amounts of text data. They use transformer architecture with self-attention mechanisms to understand and generate human-like text. Popular LLMs include GPT-4, Claude, and Llama. These models are pre-trained on diverse internet text and can be fine-tuned for specific tasks. LLMs have revolutionized natural language processing by achieving state-of-the-art results on tasks like translation, summarization, question answering, and code generation. The training process involves predicting the next token in a sequence, which allows the model to learn patterns, grammar, facts, and reasoning abilities from the training data."
+  },
+  {
+    "id": "doc_2",
+    "title": "RAG Architecture and Benefits",
+    "content": "Retrieval-Augmented Generation (RAG) combines information retrieval with language generation. The architecture has three main components: a retriever that fetches relevant documents from a knowledge base, an embedder that converts text to vector representations, and a generator (LLM) that produces answers using retrieved context. RAG reduces hallucinations by grounding responses in factual documents, enables knowledge updates without retraining, and provides source attribution for transparency. It's particularly effective for domain-specific applications where up-to-date information is critical. RAG systems typically use vector databases like ChromaDB, Pinecone, or Weaviate to store and retrieve document embeddings efficiently. The retrieval step uses semantic similarity to find the most relevant documents for a given query."
+  },
+  {
+    "id": "doc_3",
+    "title": "LiteLLM Multi-Provider Gateway",
+    "content": "LiteLLM is a unified interface for 100+ LLM providers including OpenAI, Anthropic, Azure, AWS Bedrock, Google Vertex AI, and local models like Ollama. It translates inputs to provider-specific formats and returns consistent OpenAI-compatible outputs. Key features include automatic retries with exponential backoff, fallback chains across providers for reliability, request timeouts to prevent hanging, cost tracking per request, and comprehensive logging for observability. LiteLLM's router enables load balancing across multiple model deployments, making it ideal for production RAG systems that need high availability. The proxy server adds authentication, rate limiting, and budget management capabilities. Configuration is done via YAML files that define model lists, retry policies, and fallback strategies."
+  },
+  {
+    "id": "doc_4",
+    "title": "Vector Embeddings and Semantic Search",
+    "content": "Vector embeddings are dense numerical representations of text that capture semantic meaning. Words or sentences with similar meanings have embeddings that are close together in high-dimensional space. Embedding models like sentence-transformers, OpenAI's text-embedding-ada-002, or Cohere's embed models convert text into vectors (typically 384 to 1536 dimensions). Semantic search uses these embeddings to find relevant documents by computing cosine similarity or dot product between query and document vectors. This approach outperforms traditional keyword-based search because it understands context and meaning. For RAG systems, embeddings are pre-computed for all documents and stored in a vector database with efficient indexing (HNSW, IVF) for fast retrieval. At query time, the question is embedded and used to retrieve the top-k most similar documents."
+  },
+  {
+    "id": "doc_5",
+    "title": "LlamaIndex Framework Overview",
+    "content": "LlamaIndex is a data framework for building LLM applications with external data. It provides data connectors to ingest from APIs, databases, PDFs, and other sources. The core abstraction is the Index, which structures data for efficient retrieval. VectorStoreIndex creates embeddings and enables semantic search. ListIndex stores documents sequentially. TreeIndex builds a hierarchical structure. LlamaIndex includes a query engine that orchestrates retrieval and generation, supporting various retrieval strategies like top-k similarity, MMR (Maximum Marginal Relevance), and hybrid search. It integrates with LiteLLM through the LiteLLM LLM class, allowing seamless provider switching. Response synthesizers combine retrieved context with LLM generation using techniques like refine, compact, or tree summarize. LlamaIndex also supports agents, tools, and multi-step reasoning workflows."
+  },
+  {
+    "id": "doc_6",
+    "title": "Haystack RAG Pipeline",
+    "content": "Haystack is an open-source framework for building production-ready RAG pipelines. It uses a pipeline architecture where components are connected as nodes in a directed graph. Key components include DocumentStores (Elasticsearch, Weaviate, Pinecone) for storing documents and embeddings, Retrievers (DenseRetriever, BM25Retriever) for fetching relevant documents, Readers/Generators for answer generation, and Rankers for re-ranking retrieved results. Haystack 2.0 introduced a more flexible component-based design with better typing and async support. It integrates with LiteLLM through custom generator components that call the LiteLLM completion API. Haystack excels at complex pipelines with multiple retrieval stages, question classification, and answer validation. It supports both extractive QA (extracting spans from documents) and generative QA (synthesizing answers with LLMs)."
+  },
+  {
+    "id": "doc_7",
+    "title": "RAGAS Evaluation Framework",
+    "content": "RAGAS (Retrieval-Augmented Generation Assessment) is a framework for evaluating RAG systems using LLM-based metrics. It measures both retrieval quality and generation quality. Key metrics include: Faithfulness (whether the answer is grounded in retrieved context), Answer Relevancy (how well the answer addresses the question), Context Precision (how relevant retrieved documents are), Context Recall (whether all necessary information was retrieved), and Answer Semantic Similarity (comparing generated answers to ground truth). RAGAS uses LLMs as judges to compute these metrics, making evaluation more aligned with human judgment than traditional metrics like BLEU or ROUGE. It requires a test dataset with questions, ground truth answers, retrieved contexts, and generated answers. RAGAS helps compare different retrieval strategies, chunk sizes, embedding models, and LLM providers to optimize RAG system performance."
+  },
+  {
+    "id": "doc_8",
+    "title": "Production RAG Best Practices",
+    "content": "Building production RAG systems requires careful attention to reliability, latency, and cost. Best practices include: implementing retry logic with exponential backoff for API failures, using fallback chains across multiple LLM providers for high availability, setting appropriate timeouts to prevent hanging requests, chunking documents optimally (typically 256-512 tokens with overlap), using hybrid search (combining semantic and keyword search) for better recall, implementing caching for frequently asked questions, monitoring retrieval quality metrics (MRR, NDCG), tracking LLM costs per request, adding guardrails to filter inappropriate content, and logging all requests for debugging and analysis. For scaling, consider async processing, batch embeddings, and distributed vector databases. Security measures include API key rotation, rate limiting per user, and input validation. Regular evaluation with RAGAS or similar frameworks ensures system quality over time."
+  },
+  {
+    "id": "doc_9",
+    "title": "Prompt Engineering for RAG",
+    "content": "Effective prompt engineering is crucial for RAG systems. The prompt should clearly instruct the LLM to use only the provided context, cite sources when possible, and admit when information is insufficient. A typical RAG prompt structure includes: system instructions defining the assistant's role, retrieved context documents with clear delimiters, the user's question, and output format instructions. Techniques like few-shot examples improve consistency. Chain-of-thought prompting helps with complex reasoning over multiple documents. For multi-turn conversations, include chat history while managing context window limits. Prompt compression techniques like selective context or summarization help fit more information. When using LiteLLM, prompts should be provider-agnostic since LiteLLM handles format translation. Testing prompts across different models (GPT-4, Claude, Llama) ensures robustness. Prompt versioning and A/B testing help optimize performance over time."
+  },
+  {
+    "id": "doc_10",
+    "title": "Cost Optimization for LLM Applications",
+    "content": "LLM costs can escalate quickly in production RAG systems. Optimization strategies include: using smaller models for simple queries and larger models only when needed, implementing semantic caching to avoid redundant API calls, compressing prompts by removing unnecessary context, batching requests when possible, using streaming for better user experience without cost increase, choosing cost-effective providers (Claude Haiku, GPT-3.5-turbo, or open-source models via Ollama), setting token limits to prevent runaway generation, monitoring costs per user/query with tools like LiteLLM's cost tracking, and implementing rate limiting and quotas. For embeddings, batch processing and caching reduce costs significantly. Consider fine-tuning smaller models for specific tasks instead of always using large general-purpose models. LiteLLM's router can automatically route to cheaper models based on query complexity. Regular cost analysis helps identify optimization opportunities."
+  }
+]
