@@ -36,11 +36,14 @@ interface MatchDetail {
   position?: number;
 }
 
+/** Backend may send string, array of strings, or object (GuardrailMode) */
+type GuardrailModeValue = string | string[] | Record<string, unknown>;
+
 interface GuardrailInformation {
   duration: number;
   end_time: number;
   start_time: number;
-  guardrail_mode: string;
+  guardrail_mode: GuardrailModeValue;
   guardrail_name: string;
   guardrail_status: string;
   guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse | any;
@@ -77,9 +80,24 @@ const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set([
   "litellm_content_filter",
 ]);
 
+/** Returns true if the mode value includes the given mode string (handles string or array). */
+const modeIncludes = (mode: GuardrailModeValue, value: string): boolean => {
+  if (mode == null) return false;
+  if (typeof mode === "string") return mode === value;
+  if (Array.isArray(mode)) return mode.some((m) => m === value);
+  return false;
+};
+
 const formatMode = (mode: unknown): string => {
   if (mode == null || mode === "") return "—";
-  const s = typeof mode === "string" ? mode : String(mode);
+  const s: string =
+    typeof mode === "string"
+      ? mode
+      : Array.isArray(mode)
+        ? mode.map((m) => (typeof m === "string" ? m : String(m))).join(", ")
+        : typeof mode === "object" && mode !== null
+          ? "[object]"
+          : String(mode);
   return s.replace(/_/g, "-").toUpperCase();
 };
 
@@ -302,9 +320,11 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     items.push({ type: "request", label: "Request received", offsetMs: 0 });
 
     // Pre-call guardrails
-    const preCalls = sorted.filter((e) => e.guardrail_mode === "pre_call");
-    const postCalls = sorted.filter((e) => e.guardrail_mode === "post_call" || e.guardrail_mode === "logging_only");
-    const duringCalls = sorted.filter((e) => e.guardrail_mode === "during_call");
+    const preCalls = sorted.filter((e) => modeIncludes(e.guardrail_mode, "pre_call"));
+    const postCalls = sorted.filter(
+      (e) => modeIncludes(e.guardrail_mode, "post_call") || modeIncludes(e.guardrail_mode, "logging_only"),
+    );
+    const duringCalls = sorted.filter((e) => modeIncludes(e.guardrail_mode, "during_call"));
 
     for (const e of preCalls) {
       const offsetMs = Math.round((e.end_time - baseTime) * 1000);
