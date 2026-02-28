@@ -7291,6 +7291,37 @@ def get_valid_models(
         return []  # NON-Blocking
 
 
+_SENSITIVE_HEADER_KEYS = frozenset(
+    {"authorization", "x-api-key", "api-key", "x-litellm-api-key", "x-goog-api-key", "ocp-apim-subscription-key", "x-mcp-auth"}
+)
+
+
+def _mask_secret_fields_for_logging(secret_fields: dict) -> dict:
+    """
+    Masks sensitive values (like JWT tokens) in secret_fields before logging.
+    Keeps the field structure intact but redacts authorization header values.
+    """
+    if not isinstance(secret_fields, dict):
+        return secret_fields
+    masked = {}
+    for field_key, field_value in secret_fields.items():
+        if isinstance(field_value, dict):
+            masked_inner = {}
+            for k, v in field_value.items():
+                if k.lower() in _SENSITIVE_HEADER_KEYS and isinstance(v, str):
+                    # Show first 10 and last 4 chars, mask the rest
+                    if len(v) > 20:
+                        masked_inner[k] = v[:10] + "****" + v[-4:]
+                    else:
+                        masked_inner[k] = "****"
+                else:
+                    masked_inner[k] = v
+            masked[field_key] = masked_inner
+        else:
+            masked[field_key] = field_value
+    return masked
+
+
 def print_args_passed_to_litellm(original_function, args, kwargs):
     if not _is_debugging_on():
         return
@@ -7316,7 +7347,11 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
             return
 
         args_str = ", ".join(map(repr, args))
-        kwargs_str = ", ".join(f"{key}={repr(value)}" for key, value in kwargs.items())
+        # Mask JWT tokens / auth headers in secret_fields before logging
+        kwargs_str = ", ".join(
+            f"{key}={repr(_mask_secret_fields_for_logging(value)) if key == 'secret_fields' else repr(value)}"
+            for key, value in kwargs.items()
+        )
         print_verbose(
             "\n",
         )  # new line before

@@ -333,6 +333,11 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
+from litellm.proxy.litellm_pre_call_utils import (
+    add_litellm_data_to_request,
+    clean_headers,
+)
+from litellm.utils import _mask_secret_fields_for_logging
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.access_group_endpoints import (
     router as access_group_router,
@@ -10516,7 +10521,28 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        verbose_proxy_logger.debug("receiving data: %s", data)
+        if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+            # Use clean_headers only for logging to avoid logging JWT/auth tokens
+            # while preserving all headers (including MCP headers) in the stored data
+            _safe_headers = clean_headers(
+                request.headers,
+                litellm_key_header_name=(
+                    general_settings.get("litellm_key_header_name")
+                    if general_settings is not None
+                    else None
+                ),
+            )
+            verbose_proxy_logger.debug(
+                "receiving data: %s",
+                {
+                    k: (
+                        _mask_secret_fields_for_logging(v) if k == "secret_fields"
+                        else {**v, "headers": _safe_headers} if k == "proxy_server_request"
+                        else v
+                    )
+                    for k, v in data.items()
+                },
+            )
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args

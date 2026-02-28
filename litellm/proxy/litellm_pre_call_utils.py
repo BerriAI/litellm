@@ -34,18 +34,17 @@ from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
+from litellm.utils import _mask_secret_fields_for_logging
 
 service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
-    from litellm.types.proxy.policy_engine import PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
-    PolicyMatchContext = Any
 
 
 def parse_cache_control(cache_control):
@@ -939,13 +938,29 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     ## Cache Controls
     headers = request.headers
-    verbose_proxy_logger.debug("Request Headers: %s", headers)
+    verbose_proxy_logger.debug(
+        "Request Headers: %s",
+        clean_headers(
+            headers,
+            litellm_key_header_name=(
+                general_settings.get("litellm_key_header_name")
+                if general_settings is not None
+                else None
+            ),
+        ),
+    )
     cache_control_header = headers.get("Cache-Control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
-    verbose_proxy_logger.debug("receiving data: %s", data)
+    verbose_proxy_logger.debug(
+        "receiving data: %s",
+        {
+            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+            for k, v in data.items()
+        },
+    )
 
     # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
@@ -1173,7 +1188,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     verbose_proxy_logger.debug(
-        "[PROXY] returned data from litellm_pre_call_utils: %s", data
+        "[PROXY] returned data from litellm_pre_call_utils: %s",
+        {
+            k: (_mask_secret_fields_for_logging(v) if k == "secret_fields" else v)
+            for k, v in data.items()
+        },
     )
 
     ## ENFORCED PARAMS CHECK
@@ -1578,6 +1597,11 @@ async def move_guardrails_to_metadata(
             ] = request_body_guardrail_config
 
 
+def add_guardrails_from_policy_engine(
+    data: dict,
+    metadata_variable_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
 def _is_policy_version_id(s: str) -> bool:
     """Return True if string is a policy version ID (starts with policy_<uuid> prefix)."""
     from litellm.proxy.policy_engine.policy_registry import POLICY_VERSION_ID_PREFIX
@@ -1601,18 +1625,70 @@ def _match_and_track_policies(
     policies_override: Optional[Dict[str, Any]] = None,
 ) -> tuple[list[str], dict[str, str]]:
     """
-    Match policies via attachments and request body, track them in metadata.
+    Add guardrails from the policy engine based on request context.
 
-    Returns:
-        Tuple of (applied_policy_names, policy_reasons)
+    This function:
+    1. Extracts "policies" from request body (if present) for dynamic policy application
+    2. Gets matching policies based on team_alias, key_alias, and model (via attachments)
+    3. Combines dynamic policies with attachment-based policies
+    4. Resolves guardrails from all policies (including inheritance)
+    5. Adds guardrails to request metadata
+    6. Tracks applied policies in metadata for response headers
+    7. Removes "policies" from request body so it's not forwarded to LLM provider
+
+    Args:
+        data: The request data to update
+        metadata_variable_name: The name of the metadata field in data
+        user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_utils.callback_utils import (
         add_policy_sources_to_metadata,
         add_policy_to_applied_policies_header,
     )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        get_tags_from_request_body,
+    )
+    from litellm.proxy.policy_engine.attachment_registry import (
+        get_attachment_registry,
+    )
     from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+    from litellm.types.proxy.policy_engine import PolicyMatchContext
+
+    # Extract dynamic policies from request body (if present)
+    # These will be combined with attachment-based policies
+    request_body_policies = data.pop("policies", None)
+
+    registry = get_policy_registry()
+    verbose_proxy_logger.debug(
+        f"Policy engine: registry initialized={registry.is_initialized()}, "
+        f"policy_count={len(registry.get_all_policies())}"
+    )
+    if not registry.is_initialized():
+        verbose_proxy_logger.debug(
+            "Policy engine not initialized, skipping policy matching"
+        )
+        return
+
+    # Extract tags using the shared helper (handles metadata / litellm_metadata,
+    # top-level tags, deduplication, and type filtering).
+
+    all_tags = get_tags_from_request_body(data) or None
+
+    context = PolicyMatchContext(
+        team_alias=user_api_key_dict.team_alias,
+        key_alias=user_api_key_dict.key_alias,
+        model=data.get("model"),
+        tags=all_tags,
+    )
+
+    verbose_proxy_logger.debug(
+        f"Policy engine: matching policies for context team_alias={context.team_alias}, "
+        f"key_alias={context.key_alias}, model={context.model}, tags={context.tags}"
+    )
 
     # Get matching policies via attachments (with match reasons for attribution)
     attachment_registry = get_attachment_registry()
@@ -1620,6 +1696,7 @@ def _match_and_track_policies(
         context
     )
     matching_policy_names = [m["policy_name"] for m in matches_with_reasons]
+    # Build reasons map: {"hipaa-policy": "tag:healthcare", ...}
     policy_reasons = {m["policy_name"]: m["matched_via"] for m in matches_with_reasons}
 
     verbose_proxy_logger.debug(
@@ -1635,7 +1712,7 @@ def _match_and_track_policies(
         )
 
     if not all_policy_names:
-        return [], {}
+        return
 
     # Filter to only policies whose conditions match the context
     applied_policy_names = PolicyMatcher.get_policies_with_matching_conditions(
@@ -1687,6 +1764,8 @@ def _apply_resolved_guardrails_to_metadata(
         f"Policy engine: resolved guardrails: {resolved_guardrails}"
     )
 
+    if not resolved_guardrails:
+        return
     # Resolve pipelines from matching policies
     pipelines = PolicyResolver.resolve_pipelines_for_context(
         context=context,
@@ -1721,10 +1800,8 @@ def _apply_resolved_guardrails_to_metadata(
         existing_guardrails = []
 
     # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    # Exclude pipeline-managed guardrails from the flat list
     combined = set(existing_guardrails)
     combined.update(resolved_guardrails)
-    combined -= pipeline_managed_guardrails
     data[metadata_variable_name]["guardrails"] = list(combined)
 
     verbose_proxy_logger.debug(
