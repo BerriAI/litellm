@@ -46,7 +46,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
       }
     } else {
       form.setFieldValue("allow_all_keys", false);
-      form.setFieldValue("available_on_public_internet", false);
+      form.setFieldValue("available_on_public_internet", true);
     }
   }, [mcpServer, form]);
 
@@ -99,7 +99,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
             <Form.Item
               name="available_on_public_internet"
               valuePropName="checked"
-              initialValue={mcpServer?.available_on_public_internet ?? false}
+              initialValue={mcpServer?.available_on_public_internet ?? true}
               className="mb-0"
             >
               <Switch />
