@@ -8773,6 +8773,12 @@ class ProviderConfigManager:
             )
 
             return BedrockStabilityImageEditConfig()
+        elif LlmProviders.XINFERENCE == provider:
+            from litellm.llms.xinference.image_edit import (
+                get_xinference_image_edit_config,
+            )
+
+            return get_xinference_image_edit_config(model)
         return None
 
     @staticmethod
