@@ -22,6 +22,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -252,7 +253,7 @@ async def make_call(
                 response.aiter_bytes(chunk_size=stream_chunk_size)
             )
         else:
-            decoder = AWSEventStreamDecoder(model=model)
+            decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=stream_chunk_size)
             )
@@ -346,7 +347,7 @@ def make_sync_call(
                 response.iter_bytes(chunk_size=stream_chunk_size)
             )
         else:
-            decoder = AWSEventStreamDecoder(model=model)
+            decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
             completion_stream = decoder.iter_bytes(
                 response.iter_bytes(chunk_size=stream_chunk_size)
             )
@@ -1282,7 +1283,7 @@ def get_response_stream_shape():
 
 
 class AWSEventStreamDecoder:
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, json_mode: Optional[bool] = False) -> None:
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
@@ -1290,6 +1291,8 @@ class AWSEventStreamDecoder:
         self.content_blocks: List[ContentBlockDeltaEvent] = []
         self.tool_calls_index: Optional[int] = None
         self.response_id: Optional[str] = None
+        self.json_mode = json_mode
+        self._current_tool_name: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1391,6 +1394,16 @@ class AWSEventStreamDecoder:
                 response_tool_name = get_bedrock_tool_name(
                     response_tool_name=_response_tool_name
                 )
+                self._current_tool_name = response_tool_name
+
+                # When json_mode is True, suppress the internal json_tool_call
+                # and convert its content to text in delta events instead
+                if (
+                    self.json_mode is True
+                    and response_tool_name == RESPONSE_FORMAT_TOOL_NAME
+                ):
+                    return tool_use, provider_specific_fields, thinking_blocks
+
                 self.tool_calls_index = (
                     0 if self.tool_calls_index is None else self.tool_calls_index + 1
                 )
@@ -1445,19 +1458,27 @@ class AWSEventStreamDecoder:
         if "text" in delta_obj:
             text = delta_obj["text"]
         elif "toolUse" in delta_obj:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": delta_obj["toolUse"]["input"],
-                },
-                "index": (
-                    self.tool_calls_index
-                    if self.tool_calls_index is not None
-                    else index
-                ),
-            }
+            # When json_mode is True and this is the internal json_tool_call,
+            # convert tool input to text content instead of tool call arguments
+            if (
+                self.json_mode is True
+                and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME
+            ):
+                text = delta_obj["toolUse"]["input"]
+            else:
+                tool_use = {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": delta_obj["toolUse"]["input"],
+                    },
+                    "index": (
+                        self.tool_calls_index
+                        if self.tool_calls_index is not None
+                        else index
+                    ),
+                }
         elif "reasoningContent" in delta_obj:
             provider_specific_fields = {
                 "reasoningContent": delta_obj["reasoningContent"],
@@ -1494,6 +1515,17 @@ class AWSEventStreamDecoder:
     ) -> Optional[ChatCompletionToolCallChunk]:
         """Handle stop/contentBlockIndex event in converse chunk parsing."""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
+
+        # If the ending block was the internal json_tool_call, skip emitting
+        # the empty-args tool chunk and reset tracking state
+        if (
+            self.json_mode is True
+            and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME
+        ):
+            self._current_tool_name = None
+            return tool_use
+
+        self._current_tool_name = None
         is_empty = self.check_empty_tool_call_args()
         if is_empty:
             tool_use = {
