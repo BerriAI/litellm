@@ -636,6 +636,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_management_logger: Optional[CustomLogger] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        tools: Optional[List[Dict]] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
@@ -645,6 +646,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_id=prompt_id,
                 prompt_spec=prompt_spec,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
+                tools=tools,
             )
         )
 
@@ -663,6 +665,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 prompt_label=prompt_label,
                 prompt_version=prompt_version,
+                tools=tools,
             )
         self.messages = messages
         return model, messages, non_default_params
