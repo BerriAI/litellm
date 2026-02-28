@@ -18,6 +18,7 @@ Run a specific eval:
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -105,7 +106,25 @@ def _print_confusion_report(label: str, metrics: dict, wrong: list) -> None:
 def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) -> dict:
     """Save confusion matrix results to a JSON file and return the result dict."""
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    safe_label = label.lower().replace(" ", "_").replace("—", "-")
+    # Build a short, filesystem-safe filename from the label.
+    # Full label is preserved inside the JSON; filename just needs to be
+    # unique and recognisable.  Format: {topic}_{method_abbrev}.json
+    parts = label.split("\u2014")
+    topic = parts[0].strip().lower().replace("block ", "").replace(" ", "_")
+    method_full = parts[1].strip() if len(parts) > 1 else ""
+    method_name = re.sub(r"\s*\(.*?\)", "", method_full).strip().lower()
+    qualifier_match = re.search(r"\(([^)]+)\)", method_full)
+    qualifier = qualifier_match.group(1) if qualifier_match else ""
+    qualifier = re.sub(r"\.[a-z]+$", "", qualifier)  # drop .yaml etc.
+    if method_name == "contentfilter":
+        safe_label = f"{topic}_cf"
+    elif qualifier:
+        safe_label = f"{topic}_{method_name}_{qualifier}"
+    else:
+        safe_label = f"{topic}_{method_name}"
+    safe_label = safe_label.replace(" ", "_")
+    safe_label = re.sub(r"[^a-z0-9_.\-]", "", safe_label)
+    safe_label = re.sub(r"_+", "_", safe_label).strip("_")
     result = {
         "label": label,
         "timestamp": datetime.now(timezone.utc).isoformat(),
