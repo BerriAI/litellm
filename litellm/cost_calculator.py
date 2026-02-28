@@ -1093,6 +1093,19 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
+        # When base_model was used and its provider differs from custom_llm_provider,
+        # update custom_llm_provider to match the base_model's provider so
+        # cost_per_token dispatches to the correct provider cost function.
+        if base_model is not None and selected_model == base_model:
+            _base_model_parts = base_model.split("/", 1)
+            if len(_base_model_parts) > 1:
+                _base_model_provider = _base_model_parts[0]
+                if (
+                    _base_model_provider in LlmProvidersSet
+                    and _base_model_provider != custom_llm_provider
+                ):
+                    custom_llm_provider = _base_model_provider
+
         potential_model_names = [
             selected_model,
             _get_response_model(completion_response),

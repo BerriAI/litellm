@@ -2747,6 +2747,27 @@ def test_cost_calculator_with_base_model():
     assert resp._hidden_params["response_cost"] > 0
 
 
+def test_cost_calculator_with_base_model_cross_provider():
+    """
+    When base_model provider differs from deployment provider, cost should
+    still be calculated correctly using the base_model's provider pricing.
+    Regression test for #22257.
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    cost = completion_cost(
+        model="anthropic/gemini-3-flash",
+        custom_llm_provider="anthropic",
+        base_model="gemini/gemini-2.5-flash-preview-05-20",
+        call_type="completion",
+        completion_response={
+            "usage": Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        },
+    )
+    assert cost > 0, "Cost should be non-zero when base_model has valid pricing"
+
+
 @pytest.fixture
 def model_item():
     return {
