@@ -585,69 +585,88 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
 def test_failure_handler_langfuse_kwargs_excludes_original_response():
     """
-    Test that the Langfuse failure logging path passes the local kwargs copy
-    (which excludes 'original_response') rather than self.model_call_details directly.
-    This prevents passing coroutines or large response objects to the Langfuse logger.
+    Test that the actual Logging.failure_handler() passes kwargs without
+    'original_response' to the Langfuse logger. Exercises the real code path
+    rather than simulating the filtering logic.
     """
+    import litellm
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-    # Create a mock coroutine to simulate original_response
-    mock_coroutine = MagicMock()
-    mock_coroutine.__class__.__name__ = "coroutine"
-
-    model_call_details = {
-        "litellm_call_id": "test-call-id",
-        "litellm_trace_id": None,
-        "model": "gpt-4",
-        "messages": [{"role": "user", "content": "test"}],
-        "litellm_params": {
-            "metadata": {"session_id": "test-session"},
-            "litellm_session_id": None,
-        },
-        "original_response": mock_coroutine,
-        "optional_params": {},
-        "stream": False,
-        "call_type": "completion",
-        "input": [{"role": "user", "content": "test"}],
-    }
-
-    captured_kwargs = {}
-
-    class MockLangfuseLogger:
-        def log_event_on_langfuse(self, **log_kwargs):
-            captured_kwargs.update(log_kwargs)
-            return {"trace_id": "mock-trace-id", "generation_id": "mock-gen-id"}
-
-    mock_logger = MockLangfuseLogger()
-
-    # Simulate the failure path logic from litellm_logging.py
-    # This mirrors lines 2937-2957 of the failure_handler
-    kwargs = {}
-    for k, v in model_call_details.items():
-        if k != "original_response":
-            kwargs[k] = v
-
-    # Verify the local kwargs does NOT contain original_response
-    assert "original_response" not in kwargs
-    # Verify session_id is present in kwargs metadata
-    assert kwargs["litellm_params"]["metadata"]["session_id"] == "test-session"
-
-    # Call with the local kwargs (as the fix does)
-    mock_logger.log_event_on_langfuse(
+    # Create a Logging instance
+    logging_obj = Logging(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
         start_time=datetime.datetime.utcnow(),
-        end_time=datetime.datetime.utcnow(),
-        response_obj=None,
-        user_id=kwargs.get("user", None),
-        status_message="TestError: something failed",
-        level="ERROR",
-        kwargs=kwargs,
+        litellm_call_id="test-call-id-failure",
+        function_id="test-function-id",
     )
 
-    # Verify original_response is NOT in the kwargs passed to Langfuse
-    assert "original_response" not in captured_kwargs.get("kwargs", {})
-    # Verify session_id metadata is preserved in the kwargs passed to Langfuse
-    langfuse_metadata = captured_kwargs["kwargs"]["litellm_params"]["metadata"]
-    assert langfuse_metadata["session_id"] == "test-session"
+    # Set up model_call_details with original_response (simulates a coroutine)
+    mock_coroutine = MagicMock()
+    logging_obj.model_call_details["original_response"] = mock_coroutine
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {"session_id": "test-session-failure"},
+        "litellm_session_id": None,
+    }
+    logging_obj.model_call_details["optional_params"] = {}
+
+    # Capture what gets passed to log_event_on_langfuse
+    captured_kwargs = {}
+    mock_langfuse_logger = MagicMock()
+
+    def capture_log_event(**log_kwargs):
+        captured_kwargs.update(log_kwargs)
+        return {"trace_id": "mock-trace-id", "generation_id": "mock-gen-id"}
+
+    mock_langfuse_logger.log_event_on_langfuse.side_effect = capture_log_event
+
+    # Set "langfuse" as a failure callback so the failure_handler processes it
+    original_failure_callback = litellm.failure_callback
+    litellm.failure_callback = ["langfuse"]
+
+    try:
+        # Mock LangFuseHandler to return our capturing mock logger
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.LangFuseHandler"
+        ) as mock_handler_class:
+            mock_handler_class.get_langfuse_logger_for_request.return_value = (
+                mock_langfuse_logger
+            )
+
+            # Call the actual failure_handler
+            test_exception = Exception("TestError: model not found")
+            logging_obj.failure_handler(
+                exception=test_exception,
+                traceback_exception="Traceback: test",
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+            )
+
+        # Verify log_event_on_langfuse was actually called
+        assert mock_langfuse_logger.log_event_on_langfuse.called, (
+            "log_event_on_langfuse was not called"
+        )
+
+        # Verify original_response is NOT in the kwargs passed to Langfuse
+        langfuse_kwargs = captured_kwargs.get("kwargs", {})
+        assert "original_response" not in langfuse_kwargs, (
+            "original_response should be excluded from kwargs passed to Langfuse"
+        )
+
+        # Verify session_id metadata is preserved in the kwargs
+        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get(
+            "metadata", {}
+        )
+        assert langfuse_metadata.get("session_id") == "test-session-failure", (
+            "session_id should be preserved in kwargs passed to Langfuse"
+        )
+
+        # Verify level is ERROR
+        assert captured_kwargs.get("level") == "ERROR"
+    finally:
+        litellm.failure_callback = original_failure_callback
 
 
 def test_max_langfuse_clients_limit():
