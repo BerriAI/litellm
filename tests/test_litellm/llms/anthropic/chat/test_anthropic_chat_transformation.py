@@ -2018,11 +2018,12 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
         "minimal": "low",
         "medium": "medium",
         "high": "high",
+        "max": "max",
     }
 
     # Test with different reasoning_effort values - all should map to adaptive
     for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
-        for effort in ["low", "medium", "high", "minimal"]:
+        for effort in ["low", "medium", "high", "minimal", "max"]:
             non_default_params = {"reasoning_effort": effort}
             optional_params = {}
 
