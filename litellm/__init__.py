@@ -449,8 +449,35 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+# Load local backup at import time (fast, ~12 ms, no network I/O).
+# The remote fetch is deferred to first access — no threading, no locks.
+_model_cost_url: str = model_cost_map_url
+_model_cost_remote_loaded: bool = (
+    os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
+)
+model_cost = GetModelCostMap.load_local_model_cost_map()
+
+
+def _ensure_remote_model_cost() -> None:
+    """Fetch and merge the remote model cost map on first use (once only).
+
+    No threading, no locks — simply fetches on first call and replaces the
+    dict contents in place so all existing references stay valid.
+    """
+    global _model_cost_remote_loaded
+    if _model_cost_remote_loaded:
+        return
+    _model_cost_remote_loaded = True
+    try:
+        remote = get_model_cost_map(url=_model_cost_url)
+        model_cost.clear()
+        model_cost.update(remote)
+    except Exception:
+        pass  # keep using local backup
+
+
 cost_discount_config: Dict[str, float] = (
     {}
 )  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -629,6 +656,8 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):
+    if model_cost_map is None:
+        _ensure_remote_model_cost()
     _map = model_cost_map if model_cost_map is not None else model_cost
     for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
