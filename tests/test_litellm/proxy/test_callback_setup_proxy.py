@@ -13,6 +13,9 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -113,5 +116,79 @@ class TestInvokeCallbackSetupProxy:
         try:
             _invoke_callback_setup_proxy(mock_app)
             assert call_order == ["cb1", "cb2"]
+        finally:
+            litellm.callbacks = original_callbacks
+
+
+# ------------------------------------------------------------------ #
+# E2E test: setup_proxy adds a real route accessible via HTTP
+# ------------------------------------------------------------------ #
+
+
+class TestSetupProxyE2E:
+    """E2E tests verifying that setup_proxy can modify the FastAPI app."""
+
+    def test_e2e_setup_proxy_adds_route(self):
+        """
+        A CustomLogger.setup_proxy(app) that adds a /custom-health route
+        should be reachable via HTTP after _invoke_callback_setup_proxy.
+        """
+
+        class RouteAddingCallback(CustomLogger):
+            def setup_proxy(self, app):
+                @app.get("/custom-health")
+                async def custom_health():
+                    return JSONResponse({"status": "ok", "source": "callback"})
+
+        app = FastAPI()
+        callback = RouteAddingCallback()
+
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [callback]
+        try:
+            _invoke_callback_setup_proxy(app)
+
+            client = TestClient(app)
+            response = client.get("/custom-health")
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok", "source": "callback"}
+        finally:
+            litellm.callbacks = original_callbacks
+
+    def test_e2e_setup_proxy_adds_middleware(self):
+        """
+        A CustomLogger.setup_proxy(app) that adds middleware should affect
+        all subsequent requests.
+        """
+
+        class HeaderMiddlewareCallback(CustomLogger):
+            def setup_proxy(self, app):
+                from starlette.middleware.base import BaseHTTPMiddleware
+
+                class AddHeaderMiddleware(BaseHTTPMiddleware):
+                    async def dispatch(self, request, call_next):
+                        response = await call_next(request)
+                        response.headers["X-Custom-Callback"] = "active"
+                        return response
+
+                app.add_middleware(AddHeaderMiddleware)
+
+        app = FastAPI()
+
+        @app.get("/test-endpoint")
+        async def test_endpoint():
+            return {"ok": True}
+
+        callback = HeaderMiddlewareCallback()
+
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [callback]
+        try:
+            _invoke_callback_setup_proxy(app)
+
+            client = TestClient(app)
+            response = client.get("/test-endpoint")
+            assert response.status_code == 200
+            assert response.headers.get("X-Custom-Callback") == "active"
         finally:
             litellm.callbacks = original_callbacks
