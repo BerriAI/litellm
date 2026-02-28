@@ -1389,10 +1389,6 @@ try:
 except Exception:
     pass
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# ui_path = os.path.join(current_dir, "_experimental", "out")
-# # Mount this test directory instead
-# app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -1404,6 +1400,9 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+from litellm.proxy.middleware.proxy_base_url_middleware import ProxyBaseUrlMiddleware
+
+app.add_middleware(ProxyBaseUrlMiddleware)
 
 
 def mount_swagger_ui():
@@ -2162,22 +2161,24 @@ async def _run_background_health_check():
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = (
-                    await _run_direct_health_check_with_instrumentation(
-                        _llm_model_list,
-                        health_check_details,
-                        health_check_concurrency,
-                        instrumentation_context,
-                    )
-                )
-        else:
-            healthy_endpoints, unhealthy_endpoints = (
-                await _run_direct_health_check_with_instrumentation(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
                     health_check_concurrency,
                     instrumentation_context,
                 )
+        else:
+            (
+                healthy_endpoints,
+                unhealthy_endpoints,
+            ) = await _run_direct_health_check_with_instrumentation(
+                _llm_model_list,
+                health_check_details,
+                health_check_concurrency,
+                instrumentation_context,
             )
 
         # Update the global variable with the health check results
