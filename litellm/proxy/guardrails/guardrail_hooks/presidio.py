@@ -483,11 +483,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if item["operator"] == "replace" and output_parse_pii is True:
                         # check if token in dict
                         # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
-                        pii_tokens = self.pii_tokens
-                        if request_data is not None:
-                            if "pii_tokens" not in request_data:
-                                request_data["pii_tokens"] = {}
-                            pii_tokens = request_data["pii_tokens"]
+                        if request_data is None:
+                            verbose_proxy_logger.warning(
+                                "Presidio anonymize_text called without request_data — "
+                                "PII tokens cannot be stored per-request. "
+                                "This may indicate a missing caller update."
+                            )
+                            request_data = {}
+                        if "pii_tokens" not in request_data:
+                            request_data["pii_tokens"] = {}
+                        pii_tokens = request_data["pii_tokens"]
 
                         # Always append a UUID to ensure the replacement token is unique to this request and session.
                         # This prevents collisions where the LLM might hallucinate a generic token like [PHONE_NUMBER].
@@ -889,6 +894,32 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
         return response
 
+    @staticmethod
+    def _unmask_pii_text(text: str, pii_tokens: Dict[str, str]) -> str:
+        """
+        Replace PII tokens in *text* with their original values.
+
+        Includes a fallback for tokens that were truncated by ``max_tokens``:
+        if the *end* of ``text`` matches the *beginning* of a token and the
+        overlap is long enough, the truncated suffix is replaced with the
+        original value.  The minimum overlap length is
+        ``min(20, len(token) // 2)`` to reduce the risk of false positives
+        when multiple tokens share a common prefix.
+        """
+        for token, original_text in pii_tokens.items():
+            if token in text:
+                text = text.replace(token, original_text)
+            else:
+                # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
+                # Only check at the very end of the text.
+                min_overlap = min(20, len(token) // 2)
+                for i in range(max(0, len(text) - len(token)), len(text)):
+                    sub = text[i:]
+                    if token.startswith(sub) and len(sub) >= min_overlap:
+                        text = text[:i] + original_text
+                        break
+        return text
+
     async def _process_response_for_pii(
         self,
         response: ModelResponse,
@@ -899,11 +930,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        pii_tokens = (
-            request_data.get("pii_tokens", self.pii_tokens)
-            if request_data
-            else self.pii_tokens
-        )
+        pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+        if not pii_tokens and mode == "unmask":
+            verbose_proxy_logger.debug(
+                "No pii_tokens found in request_data — nothing to unmask"
+            )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
         )
@@ -917,20 +948,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content = getattr(message, "content", None)
             if isinstance(content, str):
                 if mode == "unmask":
-                    for token, original_text in pii_tokens.items():
-                        if token in content:
-                            content = content.replace(token, original_text)
-                        # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
-                        else:
-                            # If the end of content matches the start of a token, it's likely truncated
-                            for i in range(
-                                max(0, len(content) - len(token)), len(content)
-                            ):
-                                sub = content[i:]
-                                if token.startswith(sub) and len(sub) > 15:
-                                    content = content[:i] + original_text
-                                    break
-                    message.content = content
+                    message.content = self._unmask_pii_text(content, pii_tokens)
                 elif mode == "mask":
                     message.content = await self.check_pii(
                         text=content,
@@ -946,9 +964,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if text_value is None:
                         continue
                     if mode == "unmask":
-                        for token, original_text in pii_tokens.items():
-                            text_value = text_value.replace(token, original_text)
-                        item["text"] = text_value
+                        item["text"] = self._unmask_pii_text(text_value, pii_tokens)
                     elif mode == "mask":
                         item["text"] = await self.check_pii(
                             text=text_value,
@@ -966,9 +982,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         args = function.arguments
                         if isinstance(args, str):
                             if mode == "unmask":
-                                for token, original_text in pii_tokens.items():
-                                    args = args.replace(token, original_text)
-                                function.arguments = args
+                                function.arguments = self._unmask_pii_text(
+                                    args, pii_tokens
+                                )
                             elif mode == "mask":
                                 function.arguments = await self.check_pii(
                                     text=args,
@@ -983,9 +999,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 args = function_call.arguments
                 if isinstance(args, str):
                     if mode == "unmask":
-                        for token, original_text in pii_tokens.items():
-                            args = args.replace(token, original_text)
-                        function_call.arguments = args
+                        function_call.arguments = self._unmask_pii_text(
+                            args, pii_tokens
+                        )
                     elif mode == "mask":
                         function_call.arguments = await self.check_pii(
                             text=args,
@@ -1077,11 +1093,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
 
         # --- PII unmasking path (output_parse_pii=True) ---
-        pii_tokens = (
-            request_data.get("pii_tokens", self.pii_tokens)
-            if request_data
-            else self.pii_tokens
-        )
+        pii_tokens = request_data.get("pii_tokens", {}) if request_data else {}
+        if not pii_tokens and request_data:
+            verbose_proxy_logger.debug(
+                "No pii_tokens in request_data for streaming unmask path"
+            )
         if not (self.output_parse_pii and pii_tokens):
             async for chunk in response:
                 yield chunk
