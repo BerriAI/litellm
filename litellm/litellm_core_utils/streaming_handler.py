@@ -1097,7 +1097,18 @@ class CustomStreamWrapper:
                 and self.custom_llm_provider in litellm._custom_providers
             ):
                 if self.received_finish_reason is not None:
-                    if "provider_specific_fields" not in chunk:
+                    # Only skip/stop if there is no content in this chunk.
+                    # If the chunk carries text or tool_use data we must yield
+                    # it even though finish_reason was already recorded.
+                    # This prevents truncation when the last content_block_delta
+                    # arrives in the same iteration as (or just after) the
+                    # message_delta that sets finish_reason.
+                    # See: https://github.com/BerriAI/litellm/issues/22098
+                    _chunk_has_content = isinstance(chunk, dict) and (
+                        bool(chunk.get("text", ""))
+                        or chunk.get("tool_use") is not None
+                    )
+                    if not _chunk_has_content and "provider_specific_fields" not in chunk:
                         raise StopIteration
                 anthropic_response_obj: GChunk = cast(GChunk, chunk)
                 completion_obj["content"] = anthropic_response_obj["text"]
@@ -1606,7 +1617,7 @@ class CustomStreamWrapper:
     def _add_mcp_list_tools_to_first_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
         """
         Add mcp_list_tools from _hidden_params to the first chunk's delta.provider_specific_fields.
-        
+
         This method checks if MCP metadata with mcp_list_tools is stored in _hidden_params
         and adds it to the first chunk's delta.provider_specific_fields.
         """
@@ -1614,16 +1625,16 @@ class CustomStreamWrapper:
             # Check if MCP metadata should be added to first chunk
             if not hasattr(self, "_hidden_params") or not self._hidden_params:
                 return chunk
-            
+
             mcp_metadata = self._hidden_params.get("mcp_metadata")
             if not mcp_metadata or not isinstance(mcp_metadata, dict):
                 return chunk
-            
+
             # Only add mcp_list_tools to first chunk (not tool_calls or tool_results)
             mcp_list_tools = mcp_metadata.get("mcp_list_tools")
             if not mcp_list_tools:
                 return chunk
-            
+
             # Add mcp_list_tools to delta.provider_specific_fields
             if hasattr(chunk, "choices") and chunk.choices:
                 for choice in chunk.choices:
@@ -1632,25 +1643,25 @@ class CustomStreamWrapper:
                         provider_fields = (
                             getattr(choice.delta, "provider_specific_fields", None) or {}
                         )
-                        
+
                         # Add only mcp_list_tools to first chunk
                         provider_fields["mcp_list_tools"] = mcp_list_tools
-                        
+
                         # Set the provider_specific_fields
                         setattr(choice.delta, "provider_specific_fields", provider_fields)
-        
+
         except Exception as e:
             from litellm._logging import verbose_logger
             verbose_logger.exception(
                 f"Error adding MCP list tools to first chunk: {str(e)}"
             )
-        
+
         return chunk
 
     def _add_mcp_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
         """
         Add MCP metadata from _hidden_params to the final chunk's delta.provider_specific_fields.
-        
+
         This method checks if MCP metadata is stored in _hidden_params and adds it to
         the chunk's delta.provider_specific_fields, similar to how RAG adds search results.
         """
@@ -1658,11 +1669,11 @@ class CustomStreamWrapper:
             # Check if MCP metadata should be added to final chunk
             if not hasattr(self, "_hidden_params") or not self._hidden_params:
                 return chunk
-            
+
             mcp_metadata = self._hidden_params.get("mcp_metadata")
             if not mcp_metadata:
                 return chunk
-            
+
             # Add MCP metadata to delta.provider_specific_fields
             if hasattr(chunk, "choices") and chunk.choices:
                 for choice in chunk.choices:
@@ -1671,20 +1682,20 @@ class CustomStreamWrapper:
                         provider_fields = (
                             getattr(choice.delta, "provider_specific_fields", None) or {}
                         )
-                        
+
                         # Add MCP metadata
                         if isinstance(mcp_metadata, dict):
                             provider_fields.update(mcp_metadata)
-                        
+
                         # Set the provider_specific_fields
                         setattr(choice.delta, "provider_specific_fields", provider_fields)
-        
+
         except Exception as e:
             from litellm._logging import verbose_logger
             verbose_logger.exception(
                 f"Error adding MCP metadata to final chunk: {str(e)}"
             )
-        
+
         return chunk
 
     def cache_streaming_response(self, processed_chunk, cache_hit: bool):
@@ -1804,12 +1815,12 @@ class CustomStreamWrapper:
                     )
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
-                    
+
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         response = self._add_mcp_list_tools_to_first_chunk(response)
                         self.sent_first_chunk = True
-                    
+
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
