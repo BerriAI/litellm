@@ -2034,8 +2034,10 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             # Should not have budget_tokens for adaptive type
             assert "budget_tokens" not in result["thinking"]
             # Should set output_config with the effort level
+            # "minimal" maps to "low" since Anthropic output_config has no "minimal" level
+            expected_effort = "low" if effort == "minimal" else effort
             assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
-            assert result["output_config"]["effort"] == effort
+            assert result["output_config"]["effort"] == expected_effort
             # reasoning_effort should not be in the result (it's transformed to thinking)
             assert "reasoning_effort" not in result
 
