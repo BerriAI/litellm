@@ -33,7 +33,7 @@ interface TestResult {
   proxyTotalMs: number;        // proxy-measured total (x-litellm-response-duration-ms) or fallback to wallMs
   model: string;
   responseText: string;
-  headers: Record<string, string>;
+  allHeaders: Record<string, string>;  // all response headers
 }
 
 function formatTime(d: Date): string {
@@ -57,11 +57,11 @@ async function runTestRequest(accessToken: string, model: string, messages: { ro
   });
   const wallMs = Date.now() - start;
   const responseText = await resp.text();
-  // Capture headers first via forEach (most reliable cross-browser method for custom headers)
-  const captured: Record<string, string> = {};
-  resp.headers.forEach((v, k) => { if (k.startsWith("x-litellm")) captured[k] = v; });
+  // Capture ALL headers via forEach (most reliable cross-browser method for custom headers)
+  const allHeaders: Record<string, string> = {};
+  resp.headers.forEach((v, k) => { allHeaders[k] = v; });
   // Read overhead from captured map — forEach and get() can behave differently for exposed headers
-  const overheadRaw = captured["x-litellm-overhead-duration-ms"] ?? null;
+  const overheadRaw = allHeaders["x-litellm-overhead-duration-ms"] ?? null;
   const overheadParsed = overheadRaw && overheadRaw !== "None" ? parseFloat(overheadRaw) : NaN;
   const responseDurationRaw = captured["x-litellm-response-duration-ms"] ?? null;
   const responseDurationParsed = responseDurationRaw && responseDurationRaw !== "None" ? parseFloat(responseDurationRaw) : NaN;
@@ -74,7 +74,7 @@ async function runTestRequest(accessToken: string, model: string, messages: { ro
     proxyTotalMs,
     model,
     responseText,
-    headers: captured,
+    allHeaders,
   };
 }
 
@@ -547,20 +547,45 @@ export default function PerformanceDashboardView() {
               </div>
             )}
 
-            {/* x-litellm headers */}
-            {Object.keys(testResult.headers).length > 0 && (
+            {/* Response headers */}
+            {Object.keys(testResult.allHeaders).length > 0 && (
               <div className="mt-4">
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">LiteLLM Headers</p>
-                <table className="w-full text-xs">
-                  <tbody>
-                    {Object.entries(testResult.headers).map(([k, v]) => (
-                      <tr key={k} className="border-b border-gray-50">
-                        <td className="py-1.5 pr-4 text-gray-400 font-mono">{k}</td>
-                        <td className="py-1.5 text-gray-600 font-mono">{v}</td>
+                <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Response Headers</p>
+                <div className="border border-gray-100 rounded-md overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-100">
+                        <th className="py-1.5 px-3 text-left font-medium text-gray-400 w-64">Header</th>
+                        <th className="py-1.5 px-3 text-left font-medium text-gray-400">Value</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {Object.entries(testResult.allHeaders)
+                        .sort(([a], [b]) => {
+                          // x-litellm headers first
+                          const aLitellm = a.startsWith("x-litellm");
+                          const bLitellm = b.startsWith("x-litellm");
+                          if (aLitellm && !bLitellm) return -1;
+                          if (!aLitellm && bLitellm) return 1;
+                          return a.localeCompare(b);
+                        })
+                        .map(([k, v]) => {
+                          const isLitellm = k.startsWith("x-litellm");
+                          const isOverhead = k === "x-litellm-overhead-duration-ms";
+                          return (
+                            <tr key={k} className={`border-b border-gray-50 ${isOverhead ? "bg-blue-50/60" : ""}`}>
+                              <td className={`py-1.5 px-3 font-mono ${isLitellm ? "text-blue-600" : "text-gray-400"} ${isOverhead ? "font-semibold" : ""}`}>
+                                {k}
+                              </td>
+                              <td className={`py-1.5 px-3 font-mono ${isLitellm ? "text-gray-700" : "text-gray-400"} ${isOverhead ? "font-semibold text-blue-700" : ""} break-all`}>
+                                {v}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </>
