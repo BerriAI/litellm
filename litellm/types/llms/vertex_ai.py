@@ -176,7 +176,7 @@ GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
 
 GeminiImageAspectRatio = Literal["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]
 
-GeminiImageSize = Literal["1K", "2K", "4K"]
+GeminiImageSize = Literal["0.5K", "1K", "2K", "4K"]
 
 
 class GeminiImageConfig(TypedDict, total=False):
