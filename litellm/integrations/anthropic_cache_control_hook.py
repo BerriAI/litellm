@@ -130,15 +130,36 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             - list of objects
 
         This method handles inserting cache control in both cases.
-        Per Anthropic's API specification, when using multiple content blocks,
-        only the last content block can have cache_control.
+        Per the OpenAI / Anthropic / Vertex AI specification, ``cache_control``
+        must live *inside* the last content block when content is a list.
+
+        When content is a plain string we convert it to a single-item content-
+        block list so that the directive is placed **inside** the block::
+
+            {"role": "system",
+             "content": [{"type": "text", "text": "...", "cache_control": {...}}]}
+
+        This is required for Vertex AI and Bedrock Invoke API whose message
+        transformers call ``litellm.utils.is_cached_message()``, which returns
+        ``False`` when ``content`` is not a list — causing caching to be silently
+        skipped for those providers.
+
+        Anthropic remains fully backward-compatible: its transformer already
+        handles both string *and* list ``content`` for system messages (see
+        ``litellm/llms/anthropic/chat/transformation.py::translate_system_message``).
+        All other internal consumers that previously read a top-level
+        ``message["cache_control"]`` also check ``isinstance(content, list)``
+        as a fallback (``anthropic/common_utils.py``, ``router_utils/prompt_caching_cache.py``).
         """
         message_content = message.get("content", None)
 
-        # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
-            message["cache_control"] = control  # type: ignore
-        # 2. list of objects - only apply to last item per Anthropic spec
+            # Convert to a content-block list so that cache_control is placed
+            # *inside* the block — the format understood by all providers.
+            message["content"] = [  # type: ignore
+                {"type": "text", "text": message_content, "cache_control": control}
+            ]
+        # list of objects — only apply to last item per OpenAI/Anthropic spec
         elif isinstance(message_content, list):
             if len(message_content) > 0 and isinstance(message_content[-1], dict):
                 message_content[-1]["cache_control"] = control  # type: ignore
