@@ -1054,13 +1054,24 @@ async def bedrock_proxy_route(
 
     bedrock_llm = BedrockConverseLLM()
     credentials: Credentials = bedrock_llm.get_credentials()  # type: ignore
-    sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
     headers = {"Content-Type": "application/json"}
     # Assuming the body contains JSON data, parse it
     try:
         data = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
+
+    if _is_bedrock_kb_retrieve_route(endpoint=endpoint):
+        return await _bedrock_kb_retrieve_passthrough(
+            request=request,
+            aws_region_name=aws_region_name,
+            encoded_endpoint=encoded_endpoint,
+            data=data,
+            credentials=credentials,
+            bedrock_llm=bedrock_llm,
+        )
+
+    sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
     _request = AWSRequest(
         method="POST", url=str(updated_url), data=json.dumps(data), headers=headers
     )
@@ -1181,6 +1192,78 @@ def _is_bedrock_agent_runtime_route(endpoint: str) -> bool:
         if _route in endpoint:
             return True
     return False
+
+
+def _is_bedrock_kb_retrieve_route(endpoint: str) -> bool:
+    """
+    Return True if this is a Bedrock Knowledge Base retrieve call.
+    """
+    if "knowledgebases/" not in endpoint:
+        return False
+    endpoint = endpoint.rstrip("/")
+    return endpoint.endswith("/retrieve")
+
+
+async def _bedrock_kb_retrieve_passthrough(
+    request: Request,
+    aws_region_name: Optional[str],
+    encoded_endpoint: str,
+    data: dict,
+    credentials,
+    bedrock_llm,
+) -> Response:
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    aws_region_name = bedrock_llm.get_aws_region_name_for_non_llm_api_calls(
+        aws_region_name=aws_region_name
+    )
+    updated_url = httpx.URL(
+        f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+    ).copy_with(path=encoded_endpoint)
+    signed_body = json.dumps(
+        data,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    signed_request = AWSRequest(
+        method=request.method,
+        url=str(updated_url),
+        data=signed_body,
+        headers={"Content-Type": "application/json"},
+    )
+    SigV4Auth(credentials, "bedrock", aws_region_name).add_auth(signed_request)
+
+    async_client = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": 600},
+    ).client
+    response = await async_client.request(
+        method=request.method,
+        url=str(updated_url),
+        content=signed_body,
+        headers=dict(signed_request.prepare().headers),
+    )
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=e.response.text,
+        )
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        headers=HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=response.headers,
+        ),
+    )
 
 
 @router.api_route(
