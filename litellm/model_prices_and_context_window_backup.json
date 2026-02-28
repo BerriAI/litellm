@@ -4411,6 +4411,7 @@
         "input_cost_per_image_token": 8e-06,
         "litellm_provider": "azure",
         "mode": "image_generation",
+        "output_cost_per_token": 1e-05,
         "output_cost_per_image_token": 3.2e-05,
         "supported_endpoints": [
             "/v1/images/generations",
@@ -4424,6 +4425,7 @@
         "input_cost_per_image_token": 8e-06,
         "litellm_provider": "azure",
         "mode": "image_generation",
+        "output_cost_per_token": 1e-05,
         "output_cost_per_image_token": 3.2e-05,
         "supported_endpoints": [
             "/v1/images/generations",
