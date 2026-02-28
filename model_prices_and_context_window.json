@@ -21488,7 +21488,7 @@
         "input_cost_per_token": 2.9e-07,
         "litellm_provider": "groq",
         "max_input_tokens": 131000,
-        "max_output_tokens": 131000,
+        "max_output_tokens": 40960,
         "max_tokens": 131000,
         "mode": "chat",
         "output_cost_per_token": 5.9e-07,
