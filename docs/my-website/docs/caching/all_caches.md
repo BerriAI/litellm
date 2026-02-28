@@ -219,7 +219,7 @@ response2 = completion(
 
 Install redisvl client
 ```shell
-pip install redisvl==0.4.1
+pip install redisvl==0.12.1
 ```
 
 For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
@@ -242,6 +242,9 @@ litellm.cache = Cache(
     similarity_threshold=0.8, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
     ttl=120,
     redis_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
+    embedding_cache_enabled=True, # enable caching of embeddings
+    embedding_cache_ttl=120, # ttl for embeddings cache
+    embedding_cache_name="litellm-embeddings-cache", # name for embeddings cache default is litellm_redis_semantic_embeddings_cache
 )
 response1 = completion(
     model="gpt-3.5-turbo",
@@ -612,6 +615,9 @@ def __init__(
     similarity_threshold: Optional[float] = None,
     redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
     redis_semantic_cache_index_name: Optional[str] = None,
+    embedding_cache_enabled: bool = False,
+    embedding_cache_ttl: Optional[int] = None,
+    embedding_cache_name: Optional[str] = None,    
 
     # s3 Bucket, boto3 configuration
     s3_bucket_name: Optional[str] = None,

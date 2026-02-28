@@ -35,6 +35,7 @@ class RedisSemanticCache(BaseCache):
     """
 
     DEFAULT_REDIS_INDEX_NAME: str = "litellm_semantic_cache_index"
+    DEFAULT_REDIS_EMBEDDINGS_CACHE_NAME: str = "litellm_redis_semantic_embeddings_cache"
 
     def __init__(
         self,
@@ -45,10 +46,13 @@ class RedisSemanticCache(BaseCache):
         similarity_threshold: Optional[float] = None,
         embedding_model: str = "text-embedding-ada-002",
         index_name: Optional[str] = None,
+        # Embeddings cache (RedisVL) configuration
+        embedding_cache_enabled: bool = False,
+        embedding_cache_ttl: Optional[int] = None,
+        embedding_cache_name: Optional[str] = None,
         **kwargs,
     ):
-        """
-        Initialize the Redis Semantic Cache.
+        """Initialize the Redis Semantic Cache.
 
         Args:
             host: Redis host address
@@ -59,6 +63,9 @@ class RedisSemanticCache(BaseCache):
                 where 1.0 requires exact matches and 0.0 accepts any match
             embedding_model: Model to use for generating embeddings
             index_name: Name for the Redis index
+            embedding_cache_enabled: Whether to enable RedisVL EmbeddingsCache
+            embedding_cache_ttl: Default TTL for embeddings cache entries in seconds
+            embedding_cache_name: Optional name prefix for embeddings cache keys
             ttl: Default time-to-live for cache entries in seconds
             **kwargs: Additional arguments passed to the Redis client
 
@@ -66,6 +73,8 @@ class RedisSemanticCache(BaseCache):
             Exception: If similarity_threshold is not provided or required Redis
                 connection information is missing
         """
+        # Import RedisVL components lazily to avoid hard dependency when not used
+        from redisvl.extensions.cache.embeddings import EmbeddingsCache
         from redisvl.extensions.llmcache import SemanticCache
         from redisvl.utils.vectorize import CustomTextVectorizer
 
@@ -87,6 +96,15 @@ class RedisSemanticCache(BaseCache):
         self.distance_threshold = 1 - similarity_threshold
         self.embedding_model = embedding_model
 
+        # Embeddings cache configuration
+        self.embedding_cache_enabled: bool = embedding_cache_enabled
+        self.embedding_cache_ttl: Optional[int] = embedding_cache_ttl
+        if embedding_cache_name is None:
+            self.embedding_cache_name = self.DEFAULT_REDIS_EMBEDDINGS_CACHE_NAME
+        else:
+            self.embedding_cache_name = embedding_cache_name
+        self._embeddings_cache: Optional[EmbeddingsCache] = None
+
         # Set up Redis connection
         if redis_url is None:
             try:
@@ -106,8 +124,26 @@ class RedisSemanticCache(BaseCache):
 
         print_verbose(f"Redis semantic-cache redis_url: {redis_url}")
 
+        # Initialize the embeddings cache if enabled
+        if self.embedding_cache_enabled:
+            try:
+                self._embeddings_cache = EmbeddingsCache(
+                    name=self.embedding_cache_name,
+                    redis_url=redis_url,
+                    ttl=self.embedding_cache_ttl,
+                )
+            except Exception as e:  # pragma: no cover - defensive, treat as non-fatal
+                print_verbose(
+                    f"Redis semantic-cache: failed to initialize EmbeddingsCache, "
+                    f"disabling embedding cache. Error: {str(e)}"
+                )
+                self.embedding_cache_enabled = False
+                self._embeddings_cache = None
+
         # Initialize the Redis vectorizer and cache
-        cache_vectorizer = CustomTextVectorizer(self._get_embedding)
+        cache_vectorizer = CustomTextVectorizer(
+            self._get_embedding, cache=self._embeddings_cache
+        )
 
         self.llmcache = SemanticCache(
             name=index_name,
@@ -116,6 +152,14 @@ class RedisSemanticCache(BaseCache):
             distance_threshold=self.distance_threshold,
             overwrite=False,
         )
+
+    @property
+    def embeddings_cache(self):
+        """Expose the underlying EmbeddingsCache instance (if any).
+
+        This is primarily for tests and potential reuse by other components.
+        """
+        return self._embeddings_cache
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
         """
@@ -133,16 +177,16 @@ class RedisSemanticCache(BaseCache):
         return ttl
 
     def _get_embedding(self, prompt: str) -> List[float]:
-        """
-        Generate an embedding vector for the given prompt using the configured embedding model.
+        """Generate an embedding vector for the given prompt.
 
-        Args:
-            prompt: The text to generate an embedding for
-
-        Returns:
-            List[float]: The embedding vector
+        This is the sync embedding function used by RedisVL's CustomTextVectorizer.
+        It deliberately bypasses LiteLLM's high-level cache (cache={"no-store": True})
+        because EmbeddingsCache is responsible for caching at this layer.
         """
-        # Create an embedding from prompt
+
+        # NOTE: EmbeddingsCache is already wired into CustomTextVectorizer via
+        # the `cache` parameter in __init__, so this method only needs to
+        # compute the embedding when there is an EmbeddingsCache miss.
         embedding_response = cast(
             EmbeddingResponse,
             litellm.embedding(
@@ -151,8 +195,7 @@ class RedisSemanticCache(BaseCache):
                 cache={"no-store": True, "no-cache": True},
             ),
         )
-        embedding = embedding_response["data"][0]["embedding"]
-        return embedding
+        return embedding_response["data"][0]["embedding"]
 
     def _get_cache_logic(self, cached_response: Any) -> Any:
         """
@@ -269,16 +312,28 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Error retrieving from Redis semantic cache: {str(e)}")
 
     async def _get_async_embedding(self, prompt: str, **kwargs) -> List[float]:
-        """
-        Asynchronously generate an embedding for the given prompt.
+        """Asynchronously generate an embedding for the given prompt.
 
-        Args:
-            prompt: The text to generate an embedding for
-            **kwargs: Additional arguments that may contain metadata
-
-        Returns:
-            List[float]: The embedding vector
+        This is used by the async semantic cache paths. It first checks the
+        RedisVL EmbeddingsCache (if enabled) before falling back to the
+        underlying embedding provider.
         """
+
+        # Fast path: check embeddings cache if available
+        if self.embedding_cache_enabled and self._embeddings_cache is not None:
+            try:
+                cached = await self._embeddings_cache.aget(
+                    text=prompt,
+                    model_name=self.embedding_model,
+                )
+                if cached is not None:
+                    return cached["embedding"]  # type: ignore[index]
+            except Exception as e:  # pragma: no cover - defensive
+                print_verbose(
+                    f"Redis semantic-cache: EmbeddingsCache.aget failed, "
+                    f"falling back to provider. Error: {str(e)}"
+                )
+
         from litellm.proxy.proxy_server import llm_model_list, llm_router
 
         # Route the embedding request through the proxy if appropriate
@@ -310,8 +365,24 @@ class RedisSemanticCache(BaseCache):
                     cache={"no-store": True, "no-cache": True},
                 )
 
-            # Extract and return the embedding vector
-            return embedding_response["data"][0]["embedding"]
+            embedding_vec = embedding_response["data"][0]["embedding"]
+
+            # Store in embeddings cache (best effort)
+            if self.embedding_cache_enabled and self._embeddings_cache is not None:
+                try:
+                    await self._embeddings_cache.aset(
+                        text=prompt,
+                        model_name=self.embedding_model,
+                        embedding=embedding_vec,
+                        ttl=self.embedding_cache_ttl,
+                    )
+                except Exception as e:  # pragma: no cover - defensive
+                    print_verbose(
+                        "Redis semantic-cache: EmbeddingsCache.aset failed; "
+                        f"continuing without cache. Error: {str(e)}"
+                    )
+
+            return embedding_vec
         except Exception as e:
             print_verbose(f"Error generating async embedding: {str(e)}")
             raise ValueError(f"Failed to generate embedding: {str(e)}") from e

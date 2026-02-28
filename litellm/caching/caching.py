@@ -100,6 +100,10 @@ class Cache:
         gcs_path: Optional[str] = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         redis_semantic_cache_index_name: Optional[str] = None,
+        # Embeddings cache (RedisVL) options for redis-semantic
+        redis_semantic_embedding_cache_enabled: bool = False,
+        redis_semantic_embedding_cache_ttl: Optional[int] = None,
+        redis_semantic_embedding_cache_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
         disk_cache_dir: Optional[str] = None,
@@ -114,8 +118,7 @@ class Cache:
         gcp_ssl_ca_certs: Optional[str] = None,
         **kwargs,
     ):
-        """
-        Initializes the cache based on the given type.
+        """Initializes the cache based on the given type.
 
         Args:
             type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic", "s3" or "disk". Defaults to "local".
@@ -198,6 +201,9 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 embedding_model=redis_semantic_cache_embedding_model,
                 index_name=redis_semantic_cache_index_name,
+                embedding_cache_enabled=redis_semantic_embedding_cache_enabled,
+                embedding_cache_ttl=redis_semantic_embedding_cache_ttl,
+                embedding_cache_name=redis_semantic_embedding_cache_name,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
