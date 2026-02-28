@@ -3493,3 +3493,101 @@ class TestBedrockMinThinkingBudgetTokens:
             drop_params=False,
         )
         assert "thinking" not in result or result.get("thinking") is None
+
+
+class TestProcessToolsAndBetaARN:
+    """
+    Tests for _process_tools_and_beta with ARN-based Bedrock inference profiles.
+
+    Verifies fix for https://github.com/BerriAI/litellm/issues/22016
+    where anthropic-beta headers were dropped for ARN-based inference profiles
+    because get_base_model() returns an opaque profile ID instead of 'anthropic.claude-*'.
+    """
+
+    def _make_tool(self):
+        return {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            },
+        }
+
+    def test_arn_model_preserves_anthropic_beta_headers(self):
+        """
+        ARN-based inference profiles should still get anthropic_beta headers
+        even though get_base_model() does not return an 'anthropic.*' string.
+        """
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
+        additional_request_params: dict = {}
+
+        bedrock_tools, beta_list = config._process_tools_and_beta(
+            original_tools=[self._make_tool()],
+            model="arn:aws:bedrock:us-east-1:123456789012:inference-profile/some-opaque-profile-id",
+            headers=headers,
+            additional_request_params=additional_request_params,
+        )
+
+        assert "prompt-caching-2024-07-31" in beta_list
+        assert "anthropic_beta" in additional_request_params
+        assert "prompt-caching-2024-07-31" in additional_request_params["anthropic_beta"]
+
+    def test_standard_anthropic_model_preserves_anthropic_beta_headers(self):
+        """
+        Standard anthropic.claude-* models should continue to receive anthropic_beta headers.
+        """
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
+        additional_request_params: dict = {}
+
+        bedrock_tools, beta_list = config._process_tools_and_beta(
+            original_tools=[self._make_tool()],
+            model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            headers=headers,
+            additional_request_params=additional_request_params,
+        )
+
+        assert "prompt-caching-2024-07-31" in beta_list
+        assert "anthropic_beta" in additional_request_params
+
+    def test_non_anthropic_model_does_not_get_anthropic_beta_headers(self):
+        """
+        Non-Anthropic models (e.g. meta.llama) should NOT receive anthropic_beta headers
+        even if the header is present in the request.
+        """
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
+        additional_request_params: dict = {}
+
+        bedrock_tools, beta_list = config._process_tools_and_beta(
+            original_tools=[self._make_tool()],
+            model="meta.llama3-2-11b-instruct-v1:0",
+            headers=headers,
+            additional_request_params=additional_request_params,
+        )
+
+        assert "prompt-caching-2024-07-31" in beta_list
+        assert "anthropic_beta" not in additional_request_params
+
+    def test_arn_model_with_bedrock_prefix_preserves_anthropic_beta(self):
+        """
+        ARN models passed with a 'bedrock/' prefix should still get anthropic_beta headers.
+        """
+        config = AmazonConverseConfig()
+        headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
+        additional_request_params: dict = {}
+
+        bedrock_tools, beta_list = config._process_tools_and_beta(
+            original_tools=[self._make_tool()],
+            model="bedrock/converse/arn:aws:bedrock:us-west-2:123456789012:inference-profile/my-profile",
+            headers=headers,
+            additional_request_params=additional_request_params,
+        )
+
+        assert "prompt-caching-2024-07-31" in beta_list
+        assert "anthropic_beta" in additional_request_params
