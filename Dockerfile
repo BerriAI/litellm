@@ -72,6 +72,10 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     done && \
     npm cache clean --force
 
+# Fix CVE-2025-64756: Update glob packages to patched versions (>=10.5.0 or >=11.1.0)
+# This patches the HIGH severity Command Injection vulnerability in glob CLI
+RUN npm update -g glob || true
+
 WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .

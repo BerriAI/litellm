@@ -90,6 +90,14 @@ RUN prisma generate && \
     prisma --version && \
     prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true
 
+RUN NPM_DIR=$(find /usr/lib/python3.13/site-packages -type d -path "*/node_modules/npm" 2>/dev/null | head -n 1) && \
+    if [ -n "$NPM_DIR" ]; then \
+        echo "Found npm at: $NPM_DIR"; \
+        cd "$NPM_DIR" && npm update glob --depth 9999 || true; \
+    else \
+        echo "WARNING: Could not find nodejs_wheel npm directory"; \
+    fi
+
 # -----------------
 # Runtime Stage
 # -----------------
@@ -124,6 +132,8 @@ RUN for i in 1 2 3; do \
         rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
      done \
   && npm cache clean --force
+
+RUN npm update -g glob || true
 
 # Copy artifacts from builder
 COPY --from=builder /app/requirements.txt /app/requirements.txt
