@@ -37,7 +37,7 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
 )
@@ -571,8 +571,9 @@ if MCP_AVAILABLE:
         is_restricted_virtual_key = _is_restricted_virtual_key_request(
             user_api_key_dict
         )
+        is_ui_session = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
 
-        if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
+        if (user_mcp_management_mode == "view_all" or is_ui_session) and not is_restricted_virtual_key:
             servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
             redacted_mcp_servers = _redact_mcp_credentials_list(servers)
         else:
@@ -637,8 +638,9 @@ if MCP_AVAILABLE:
         ```
         """
         user_mcp_management_mode = _get_user_mcp_management_mode()
+        is_ui_session = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" or is_ui_session:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(
                 server_ids=server_ids
             )

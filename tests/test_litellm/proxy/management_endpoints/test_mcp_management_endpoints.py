@@ -1512,3 +1512,124 @@ class TestManagementPayloadValidation:
             assert len(result) == 1
             assert result[0]["server_id"] == "server-1"
             assert result[0]["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+class TestUISessionTokenMCPVisibility:
+    """Test that UI session tokens (team_id='litellm-dashboard') see all MCP servers.
+
+    Dashboard users with UI session tokens should get an unfiltered server list,
+    regardless of their user_role or team permissions, because the dashboard is
+    a management interface that needs full visibility.
+    """
+
+    async def test_fetch_all_mcp_servers_returns_all_for_ui_session_token(self):
+        """UI session token user should see ALL servers (config + DB), not just allow_all_keys."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        )
+
+        config_server = generate_mock_mcp_server_db_record(
+            server_id="config-server", alias="Config MCP"
+        )
+        db_server = generate_mock_mcp_server_db_record(
+            server_id="db-server", alias="DB MCP"
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(
+            return_value=[config_server, db_server]
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
+
+            assert len(result) == 2
+            server_ids = {s.server_id for s in result}
+            assert server_ids == {"config-server", "db-server"}
+            mock_manager.get_all_mcp_servers_unfiltered.assert_called_once()
+
+    async def test_health_check_returns_all_for_ui_session_token(self):
+        """UI session token user should get health for ALL servers."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        )
+
+        mock_health_1 = generate_mock_mcp_server_db_record(server_id="s1")
+        mock_health_1.status = "healthy"
+        mock_health_2 = generate_mock_mcp_server_db_record(server_id="s2")
+        mock_health_2.status = "unhealthy"
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_unfiltered = AsyncMock(
+            return_value=[mock_health_1, mock_health_2]
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                health_check_servers,
+            )
+
+            result = await health_check_servers(
+                server_ids=None, user_api_key_dict=mock_user_auth
+            )
+
+            assert len(result) == 2
+            assert {r["server_id"] for r in result} == {"s1", "s2"}
+            mock_manager.get_all_mcp_servers_with_health_unfiltered.assert_called_once()
+
+    async def test_non_ui_session_still_filtered_in_restricted_mode(self):
+        """Regular (non-UI-session) users should still go through filtered path."""
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            team_id="real-team-123",
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+                return_value="restricted",
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
+
+            assert result == []
+            mock_manager.get_all_mcp_servers_unfiltered.assert_not_called()
+            mock_manager.get_all_allowed_mcp_servers.assert_called_once()
