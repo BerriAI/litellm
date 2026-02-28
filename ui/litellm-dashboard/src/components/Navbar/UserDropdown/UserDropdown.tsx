@@ -11,6 +11,7 @@ import {
 import {
   CrownOutlined,
   DownOutlined,
+  InfoCircleOutlined,
   LogoutOutlined,
   MailOutlined,
   SafetyOutlined,
@@ -59,19 +60,12 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
           <Text type="secondary">{userEmail || "-"}</Text>
         </Space>
         {premiumUser ? (
-          <Tag
-            icon={<CrownOutlined />}
-            color="gold"
-          >
+          <Tag icon={<CrownOutlined />} color="gold">
             Premium
           </Tag>
         ) : (
           <Tooltip title="Upgrade to Premium for advanced features" placement="left">
-            <Tag
-              icon={<CrownOutlined />}
-            >
-              Standard
-            </Tag>
+            <Tag icon={<CrownOutlined />}>Standard</Tag>
           </Tooltip>
         )}
       </Space>
@@ -81,12 +75,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
           <UserOutlined />
           <Text type="secondary">User ID</Text>
         </Space>
-        <Text
-          copyable
-          ellipsis
-          style={{ maxWidth: "150px" }}
-          title={userId || "-"}
-        >
+        <Text copyable ellipsis style={{ maxWidth: "150px" }} title={userId || "-"}>
           {userId || "-"}
         </Text>
       </Space>
@@ -117,18 +106,32 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide All Prompts</Text>
+        <Space>
+          <Text type="secondary">Hide All Prompts</Text>
+          <Tooltip
+            title={
+              !premiumUser
+                ? "Hiding interaction prompts is an enterprise feature. Upgrade to enable."
+                : "Hide interaction prompts (Enterprise)"
+            }
+            placement="top"
+          >
+            <InfoCircleOutlined style={{ color: "#8c8c8c", fontSize: 12 }} />
+          </Tooltip>
+          {!premiumUser && (
+            <Tag icon={<CrownOutlined />} color="default" style={{ fontSize: 10 }}>
+              Enterprise
+            </Tag>
+          )}
+        </Space>
         <Switch
           size="small"
           checked={disableShowPrompts}
+          disabled={!premiumUser}
           onChange={(checked) => {
-            if (checked) {
-              setLocalStorageItem("disableShowPrompts", "true");
-              emitLocalStorageChange("disableShowPrompts");
-            } else {
-              removeLocalStorageItem("disableShowPrompts");
-              emitLocalStorageChange("disableShowPrompts");
-            }
+            if (!premiumUser) return;
+            setLocalStorageItem("disableShowPrompts", checked ? "true" : "false");
+            emitLocalStorageChange("disableShowPrompts");
           }}
           aria-label="Toggle hide all prompts"
         />
@@ -174,9 +177,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
     <Dropdown
       menu={{ items: userItems }}
       popupRender={(menu) => (
-        <div
-          className="bg-white rounded-lg shadow-lg"
-        >
+        <div className="bg-white rounded-lg shadow-lg">
           {renderUserInfoSection()}
           <Divider style={{ margin: 0 }} />
           {React.cloneElement(menu as React.ReactElement, {
@@ -185,7 +186,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
         </div>
       )}
     >
-      <Button type="text" >
+      <Button type="text">
         <Space>
           <UserOutlined />
           <Text>User</Text>
