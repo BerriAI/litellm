@@ -748,6 +748,7 @@ async def get_skill_version_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Get a specific skill version. OpenAI-specific."""
+    skill_version = version  # save path param before import shadows it
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -766,7 +767,7 @@ async def get_skill_version_endpoint(
     data = orjson.loads(body) if body else {}
 
     data["skill_id"] = skill_id
-    data["version"] = version
+    data["version"] = skill_version
 
     model = (
         data.get("model")
@@ -822,6 +823,7 @@ async def delete_skill_version_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Delete a skill version. OpenAI-specific."""
+    skill_version = version  # save path param before import shadows it
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -840,7 +842,7 @@ async def delete_skill_version_endpoint(
     data = orjson.loads(body) if body else {}
 
     data["skill_id"] = skill_id
-    data["version"] = version
+    data["version"] = skill_version
 
     model = (
         data.get("model")
@@ -896,6 +898,7 @@ async def get_skill_version_content_endpoint(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Get skill version content. OpenAI-specific."""
+    skill_version = version  # save path param before import shadows it
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -914,7 +917,7 @@ async def get_skill_version_content_endpoint(
     data = orjson.loads(body) if body else {}
 
     data["skill_id"] = skill_id
-    data["version"] = version
+    data["version"] = skill_version
 
     model = (
         data.get("model")
