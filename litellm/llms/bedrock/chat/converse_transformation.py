@@ -511,6 +511,7 @@ class AmazonConverseConfig(BaseConfig):
             "response_format",
             "requestMetadata",
             "service_tier",
+            "parallel_tool_calls",
         ]
 
         if (
@@ -913,6 +914,13 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+            if param == "parallel_tool_calls":
+                disable_parallel = not value
+                optional_params["_parallel_tool_use_config"] = {
+                    "tool_choice": {
+                        "disable_parallel_tool_use": disable_parallel
+                    }
+                }
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):

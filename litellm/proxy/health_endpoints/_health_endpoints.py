@@ -33,6 +33,9 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    get_in_flight_requests,
+)
 from litellm.secret_managers.main import get_secret
 
 #### Health ENDPOINTS ####
@@ -1295,6 +1298,23 @@ async def health_readiness():
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
+
+
+@router.get(
+    "/health/backlog",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_backlog():
+    """
+    Returns the number of HTTP requests currently in-flight on this uvicorn worker.
+
+    Use this to measure per-pod queue depth. A high value means the worker is
+    processing many concurrent requests — requests arriving now will have to wait
+    for the event loop to get to them, adding latency before LiteLLM even starts
+    its own timer.
+    """
+    return {"in_flight_requests": get_in_flight_requests()}
 
 
 @router.get(

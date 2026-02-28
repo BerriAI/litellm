@@ -141,11 +141,13 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole }) => {
           showIcon
           className="mb-3"
         />
-        <div className="mt-2">
-          <Button onClick={handleAddAgent} disabled={!accessToken}>
-            + Add New Agent
-          </Button>
-        </div>
+        {isAdmin && (
+          <div className="mt-2">
+            <Button onClick={handleAddAgent} disabled={!accessToken}>
+              + Add New Agent
+            </Button>
+          </div>
+        )}
       </div>
 
       {selectedAgentId ? (

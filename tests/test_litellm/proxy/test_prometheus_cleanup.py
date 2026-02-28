@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy.prometheus_cleanup import wipe_directory
+from litellm.proxy.prometheus_cleanup import mark_worker_exit, wipe_directory
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
 
@@ -21,6 +21,35 @@ class TestWipeDirectory:
         (tmp_path / "gauge_livesum_9999.db").touch()
         wipe_directory(str(tmp_path))
         assert not list(tmp_path.glob("*.db"))
+
+
+class TestMarkWorkerExit:
+    def test_calls_mark_process_dead_when_env_set(self, tmp_path):
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
+            with patch(
+                "prometheus_client.multiprocess.mark_process_dead"
+            ) as mock_mark:
+                mark_worker_exit(12345)
+                mock_mark.assert_called_once_with(12345)
+
+    def test_noop_when_env_not_set(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+            with patch(
+                "prometheus_client.multiprocess.mark_process_dead"
+            ) as mock_mark:
+                mark_worker_exit(12345)
+                mock_mark.assert_not_called()
+
+    def test_exception_is_caught_and_logged(self, tmp_path):
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}):
+            with patch(
+                "prometheus_client.multiprocess.mark_process_dead",
+                side_effect=FileNotFoundError("gone"),
+            ) as mock_mark:
+                # Should not raise
+                mark_worker_exit(99)
+                mock_mark.assert_called_once_with(99)
 
 
 class TestMaybeSetupPrometheusMultiprocDir:
