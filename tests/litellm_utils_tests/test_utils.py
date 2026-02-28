@@ -550,6 +550,44 @@ def test_supports_web_search(model, expected_bool):
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_supports_function_calling_custom_model():
+    """
+    Custom models added to litellm.model_cost should properly report function calling support,
+    enabling llama-index and other frameworks to detect capabilities.
+    """
+    import litellm
+
+    custom_model = "test-custom-fc-model"
+    litellm.model_cost[custom_model] = {
+        "max_tokens": 8192,
+        "supports_function_calling": True,
+        "supported_openai_params": ["tools", "tool_choice", "functions"],
+    }
+
+    try:
+        result = litellm.supports_function_calling(custom_model)
+        assert result is True, "Custom model with supports_function_calling=True should return True"
+    finally:
+        del litellm.model_cost[custom_model]
+
+
+def test_supports_function_calling_custom_model_disabled():
+    """Test that custom model with supports_function_calling=False returns False."""
+    import litellm
+
+    custom_model = "test-custom-no-fc"
+    litellm.model_cost[custom_model] = {
+        "max_tokens": 2048,
+        "supports_function_calling": False,
+    }
+
+    try:
+        result = litellm.supports_function_calling(custom_model)
+        assert result is False, "Custom model with supports_function_calling=False should return False"
+    finally:
+        del litellm.model_cost[custom_model]
+
+
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
@@ -589,6 +627,52 @@ def test_get_supported_openai_params() -> None:
 
     # Unmapped provider
     assert get_supported_openai_params("nonexistent") is None
+
+
+def test_get_supported_openai_params_custom_model():
+    """
+    Test for Issue #14067: get_supported_openai_params should check model_cost for custom models.
+
+    Custom models added to litellm.model_cost should expose their supported_openai_params,
+    enabling llama-index and other frameworks to detect function calling support.
+    """
+    import litellm
+
+    # Add a custom model with function calling support
+    custom_model = "test-custom-model-14067"
+    litellm.model_cost[custom_model] = {
+        "max_tokens": 4096,
+        "supports_function_calling": True,
+        "supported_openai_params": ["tools", "tool_choice", "functions", "temperature"],
+    }
+
+    try:
+        # Should return the configured params (not None)
+        result = get_supported_openai_params(custom_model)
+        assert result is not None, "Should return params for custom model in model_cost"
+        assert isinstance(result, list), "Should return a list"
+        assert "tools" in result, "Should include 'tools' param"
+        assert "tool_choice" in result, "Should include 'tool_choice' param"
+    finally:
+        # Cleanup
+        del litellm.model_cost[custom_model]
+
+
+def test_get_supported_openai_params_custom_model_without_params():
+    """Test that custom model without supported_openai_params returns None."""
+    import litellm
+
+    custom_model = "test-custom-no-params"
+    litellm.model_cost[custom_model] = {
+        "max_tokens": 2048,
+        "supports_function_calling": False,
+    }
+
+    try:
+        result = get_supported_openai_params(custom_model)
+        assert result is None, "Should return None when supported_openai_params not defined"
+    finally:
+        del litellm.model_cost[custom_model]
 
 
 def test_get_chat_completion_prompt():
@@ -1462,10 +1546,10 @@ def test_get_end_user_id_for_cost_tracking_metadata_handling(
     fields using the get_litellm_metadata_from_kwargs helper function.
     """
     from litellm.utils import get_end_user_id_for_cost_tracking
-    
+
     # Ensure cost tracking is enabled for this test
     litellm.disable_end_user_cost_tracking = False
-    
+
     result = get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
     assert result == expected_end_user_id
 

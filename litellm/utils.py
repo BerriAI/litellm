@@ -2534,6 +2534,14 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
             f"Model not found or error in checking {key} support. You passed model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
         )
 
+        # Check model_cost for custom models
+        if model in litellm.model_cost:
+            model_info = litellm.model_cost[model]
+            if isinstance(model_info, dict):
+                value = model_info.get(key)
+                if value is True:
+                    return True
+
         supported_by_provider = _supports_provider_info_factory(
             model, custom_llm_provider, key
         )
