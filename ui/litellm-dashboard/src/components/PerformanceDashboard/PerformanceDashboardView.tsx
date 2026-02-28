@@ -28,8 +28,9 @@ interface HistoryPoint {
 
 interface TestResult {
   status: number;
-  overheadMs: number | null;
-  wallMs: number;
+  overheadMs: number | null;   // raw float from x-litellm-overhead-duration-ms
+  wallMs: number;              // client-side wall clock ms
+  proxyTotalMs: number;        // proxy-measured total (x-litellm-response-duration-ms) or fallback to wallMs
   model: string;
   responseText: string;
   headers: Record<string, string>;
@@ -56,14 +57,21 @@ async function runTestRequest(accessToken: string, model: string, messages: { ro
   });
   const wallMs = Date.now() - start;
   const responseText = await resp.text();
+  // Capture headers first via forEach (most reliable cross-browser method for custom headers)
   const captured: Record<string, string> = {};
   resp.headers.forEach((v, k) => { if (k.startsWith("x-litellm")) captured[k] = v; });
-  const overheadRaw = resp.headers.get("x-litellm-overhead-duration-ms");
+  // Read overhead from captured map — forEach and get() can behave differently for exposed headers
+  const overheadRaw = captured["x-litellm-overhead-duration-ms"] ?? null;
   const overheadParsed = overheadRaw && overheadRaw !== "None" ? parseFloat(overheadRaw) : NaN;
+  const responseDurationRaw = captured["x-litellm-response-duration-ms"] ?? null;
+  const responseDurationParsed = responseDurationRaw && responseDurationRaw !== "None" ? parseFloat(responseDurationRaw) : NaN;
+  // Prefer the proxy's measured total over wall clock (avoids network jitter inflating LLM API time)
+  const proxyTotalMs = isNaN(responseDurationParsed) ? wallMs : Math.round(responseDurationParsed);
   return {
     status: resp.status,
-    overheadMs: isNaN(overheadParsed) ? null : Math.round(overheadParsed),
+    overheadMs: isNaN(overheadParsed) ? null : parseFloat(overheadRaw!),
     wallMs,
+    proxyTotalMs,
     model,
     responseText,
     headers: captured,
@@ -332,9 +340,17 @@ export default function PerformanceDashboardView() {
     </div>
   );
 
-  const llmApiMs = testResult ? Math.max(0, testResult.wallMs - (testResult.overheadMs ?? 0)) : 0;
-  const overheadPctTest = testResult && testResult.overheadMs != null
-    ? Math.round((testResult.overheadMs / testResult.wallMs) * 100)
+  // Use proxy-measured total for waterfall so LLM API bar = proxyTotal - overhead (no network noise)
+  const waterfallTotal = testResult?.proxyTotalMs ?? 0;
+  const llmApiMs = testResult ? Math.max(0, waterfallTotal - (testResult.overheadMs ?? 0)) : 0;
+  const overheadPctTest = testResult && testResult.overheadMs != null && waterfallTotal > 0
+    ? parseFloat(((testResult.overheadMs / waterfallTotal) * 100).toFixed(1))
+    : null;
+  // Display string: show 1 decimal for sub-10ms, otherwise round
+  const overheadDisplay = testResult?.overheadMs != null
+    ? testResult.overheadMs < 10
+      ? `${testResult.overheadMs.toFixed(2)}ms`
+      : `${Math.round(testResult.overheadMs)}ms`
     : null;
 
   let parsedContent = "";
@@ -419,13 +435,13 @@ export default function PerformanceDashboardView() {
               </div>
               <div className="px-4 py-2.5 bg-white flex flex-col">
                 <span className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Total</span>
-                <span className="font-semibold text-gray-800 tabular-nums">{testResult.wallMs}ms</span>
+                <span className="font-semibold text-gray-800 tabular-nums">{testResult.proxyTotalMs}ms</span>
               </div>
               <div className={`px-4 py-2.5 flex flex-col ${testResult.overheadMs === null ? "bg-amber-50" : overheadPctTest != null && overheadPctTest > 20 ? "bg-orange-50" : "bg-white"}`}>
                 <span className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">LiteLLM Overhead</span>
-                {testResult.overheadMs !== null ? (
-                  <span className={`font-semibold tabular-nums ${overheadPctTest != null && overheadPctTest > 20 ? "text-orange-500" : "text-gray-800"}`}>
-                    {testResult.overheadMs}ms
+                {overheadDisplay !== null ? (
+                  <span className={`font-semibold tabular-nums ${overheadPctTest != null && overheadPctTest > 20 ? "text-orange-500" : "text-blue-600"}`}>
+                    {overheadDisplay}
                   </span>
                 ) : (
                   <Tooltip title="x-litellm-overhead-duration-ms header not returned — upgrade to a recent proxy version">
@@ -436,7 +452,7 @@ export default function PerformanceDashboardView() {
               {overheadPctTest !== null && testResult.overheadMs !== null && (
                 <div className={`px-4 py-2.5 flex flex-col ${overheadPctTest > 20 ? "bg-orange-50" : "bg-white"}`}>
                   <span className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Overhead %</span>
-                  <span className={`font-semibold tabular-nums ${overheadPctTest > 20 ? "text-orange-500" : "text-green-600"}`}>
+                  <span className={`font-semibold tabular-nums ${overheadPctTest > 20 ? "text-orange-500" : "text-blue-600"}`}>
                     {overheadPctTest}%
                   </span>
                 </div>
@@ -463,7 +479,7 @@ export default function PerformanceDashboardView() {
                         transform: pct === 0 ? "none" : pct === 100 ? "translateX(-100%)" : "translateX(-50%)",
                       }}
                     >
-                      {Math.round((pct / 100) * testResult.wallMs)}ms
+                      {Math.round((pct / 100) * waterfallTotal)}ms
                     </span>
                   ))}
                 </div>
@@ -478,7 +494,7 @@ export default function PerformanceDashboardView() {
                       label="LiteLLM Processing"
                       startMs={0}
                       durationMs={testResult.overheadMs ?? 0}
-                      totalMs={testResult.wallMs}
+                      totalMs={waterfallTotal}
                       color={overheadPctTest != null && overheadPctTest > 20 ? "bg-orange-400" : "bg-blue-500"}
                       tooltip="Time LiteLLM spends on auth, routing, request transformation, and logging — excludes time waiting for the LLM API to respond."
                     />
@@ -486,7 +502,7 @@ export default function PerformanceDashboardView() {
                       label="LLM API (waiting)"
                       startMs={testResult.overheadMs ?? 0}
                       durationMs={llmApiMs}
-                      totalMs={testResult.wallMs}
+                      totalMs={waterfallTotal}
                       color="bg-teal-400"
                     />
                     {/* Total footer row */}
@@ -500,24 +516,25 @@ export default function PerformanceDashboardView() {
                           <div className="absolute top-0.5 left-0 h-5 w-full rounded bg-gradient-to-r from-blue-100 to-teal-100 opacity-70" />
                         </div>
                       </td>
-                      <td className="py-3 text-sm font-semibold text-gray-900 text-right w-20 tabular-nums font-mono">{testResult.wallMs}ms</td>
+                      <td className="py-3 text-sm font-semibold text-gray-900 text-right w-20 tabular-nums font-mono">{testResult.proxyTotalMs}ms</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
-              {overheadPctTest != null && (
-                <p className="text-xs text-gray-400 mt-2">
-                  LiteLLM overhead:{" "}
-                  <span className={overheadPctTest > 20 ? "text-orange-500 font-medium" : "text-gray-600 font-medium"}>
-                    {overheadPctTest}% of total
+              <div className="mt-2 text-xs text-gray-400">
+                {overheadPctTest != null ? (
+                  <span>
+                    LiteLLM overhead:{" "}
+                    <span className={`font-medium ${overheadPctTest > 20 ? "text-orange-500" : "text-blue-600"}`}>
+                      {overheadDisplay} ({overheadPctTest}% of {testResult.proxyTotalMs}ms)
+                    </span>
+                    {overheadPctTest > 20 && <span className="text-orange-500"> — higher than expected</span>}
                   </span>
-                  {overheadPctTest > 20 && <span className="text-orange-500"> — higher than expected</span>}
-                  {testResult.overheadMs === null && (
-                    <span className="text-amber-500 ml-1">— overhead header not returned (check proxy version)</span>
-                  )}
-                </p>
-              )}
+                ) : testResult.overheadMs === null ? (
+                  <span className="text-amber-500">Overhead header not returned — check proxy version</span>
+                ) : null}
+              </div>
             </div>
 
             {/* Response content */}
