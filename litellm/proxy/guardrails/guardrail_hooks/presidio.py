@@ -545,14 +545,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         filtered_results: List[PresidioAnalyzeResponseItem] = []
         deny_list_strings = [
-            x.value if hasattr(x, "value") else str(x)
+            getattr(x, "value", str(x))
             for x in self.presidio_entities_deny_list
         ]
         for item in analyze_results:
             entity_type = item.get("entity_type")
 
             str_entity_type = str(
-                entity_type.value if hasattr(entity_type, "value") else entity_type
+                getattr(entity_type, "value", entity_type)
+                if entity_type is not None
+                else entity_type
             )
             if entity_type and str_entity_type in deny_list_strings:
                 continue
@@ -1057,8 +1059,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # --- Output masking path (apply_to_output=True) ---
         if self.apply_to_output:
+            all_chunks: List[ModelResponseStream] = []
             try:
-                all_chunks: List[ModelResponseStream] = []
                 async for chunk in response:
                     if isinstance(chunk, ModelResponseStream):
                         all_chunks.append(chunk)
@@ -1109,8 +1111,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 yield chunk
             return
 
+        remaining_chunks: List[ModelResponseStream] = []
         try:
-            remaining_chunks: List[ModelResponseStream] = []
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
                     remaining_chunks.append(chunk)
@@ -1130,12 +1132,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # --- PRESERVE USAGE METADATA ---
             # stream_chunk_builder might miss usage if it's only in the last chunk
             if (
-                not hasattr(assembled_model_response, "usage")
-                or not assembled_model_response.usage
+                not getattr(assembled_model_response, "usage", None)
             ) and remaining_chunks:
                 last_chunk = remaining_chunks[-1]
-                if hasattr(last_chunk, "usage") and last_chunk.usage:
-                    assembled_model_response.usage = last_chunk.usage
+                last_chunk_usage = getattr(last_chunk, "usage", None)
+                if last_chunk_usage:
+                    setattr(assembled_model_response, "usage", last_chunk_usage)
 
             # Apply PII unmasking to assembled content (unmasking tokens back to original text)
             await self._process_response_for_pii(
