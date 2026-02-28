@@ -249,6 +249,11 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   })),
 }));
 
+// Mock useProjects hook
+vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
+  useProjects: vi.fn().mockReturnValue({ data: [], isLoading: false }),
+}));
+
 // KeyEditView mock: triggers onSubmit with our injected form values
 vi.mock("./key_edit_view", async () => {
   const React = await import("react");

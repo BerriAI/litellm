@@ -2,6 +2,7 @@ import { useProjects, ProjectResponse } from "@/app/(dashboard)/hooks/projects/u
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { LoadingOutlined, PlusOutlined } from "@ant-design/icons";
 import {
+  Alert,
   Button,
   Card,
   Flex,
@@ -165,6 +166,12 @@ export function ProjectsPage() {
     <Content
       style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
     >
+      <Alert
+        message="Projects is currently in beta. Features and behavior may change without notice."
+        type="warning"
+        showIcon
+        style={{ marginBottom: 16 }}
+      />
       <Flex
         justify="space-between"
         align="center"
