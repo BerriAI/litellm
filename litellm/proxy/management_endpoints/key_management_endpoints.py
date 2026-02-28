@@ -3983,6 +3983,10 @@ async def list_keys(
     status: Optional[str] = Query(
         None, description="Filter by status (e.g. 'deleted')"
     ),
+    project_id: Optional[str] = Query(None, description="Filter keys by project ID"),
+    access_group_id: Optional[str] = Query(
+        None, description="Filter keys by access group ID"
+    ),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -4076,6 +4080,8 @@ async def list_keys(
             sort_order=sort_order,
             expand=expand,
             status=status,
+            project_id=project_id,
+            access_group_id=access_group_id,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -4252,6 +4258,8 @@ def _build_key_filter_conditions(
     admin_team_ids: Optional[List[str]],
     member_team_ids: Optional[List[str]] = None,
     include_created_by_keys: bool = False,
+    project_id: Optional[str] = None,
+    access_group_id: Optional[str] = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -4343,6 +4351,13 @@ def _build_key_filter_conditions(
     elif len(or_conditions) == 1:
         where.update(or_conditions[0])
 
+    # Apply project_id and access_group_id as global AND filters so they
+    # narrow results across all visibility conditions (own keys, team keys, etc.)
+    if project_id:
+        where = {"AND": [where, {"project_id": project_id}]}
+    if access_group_id:
+        where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
+
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
 
@@ -4369,6 +4384,8 @@ async def _list_key_helper(
     sort_order: str = "desc",
     expand: Optional[List[str]] = None,
     status: Optional[str] = None,
+    project_id: Optional[str] = None,
+    access_group_id: Optional[str] = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -4402,6 +4419,8 @@ async def _list_key_helper(
         admin_team_ids=admin_team_ids,
         member_team_ids=member_team_ids,
         include_created_by_keys=include_created_by_keys,
+        project_id=project_id,
+        access_group_id=access_group_id,
     )
 
     # Calculate skip for pagination

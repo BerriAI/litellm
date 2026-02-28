@@ -1093,7 +1093,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
-    available_on_public_internet: bool = False
+    available_on_public_internet: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -1147,7 +1147,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
-    available_on_public_internet: bool = False
+    available_on_public_internet: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -1204,7 +1204,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
     allow_all_keys: bool = False
-    available_on_public_internet: bool = False
+    available_on_public_internet: bool = True
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -2417,6 +2417,7 @@ class UserAPIKeyAuth(
             key_alias=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
             team_alias="system",
             user_id="system",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
 

@@ -1,13 +1,15 @@
 import { useProjects, ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { PlusOutlined } from "@ant-design/icons";
+import { LoadingOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
   Flex,
   Input,
   Layout,
+  Pagination,
   Space,
+  Spin,
   Table,
   Tag,
   theme,
@@ -18,6 +20,7 @@ import type { ColumnsType } from "antd/es/table";
 import { LayersIcon, SearchIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
+import { ProjectDetail } from "./ProjectDetailsPage";
 
 const { Title, Text } = Typography;
 const { Content } = Layout;
@@ -25,8 +28,9 @@ const { Content } = Layout;
 export function ProjectsPage() {
   const { token } = theme.useToken();
   const { data: projects, isLoading } = useProjects();
-  const { data: teams } = useTeams();
+  const { data: teams, isLoading: isTeamsLoading } = useTeams();
 
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -74,6 +78,7 @@ export function ProjectsPage() {
             ellipsis
             className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
             style={{ fontSize: 14, padding: "1px 8px" }}
+            onClick={() => setSelectedProjectId(id)}
           >
             {id}
           </Text>
@@ -96,8 +101,11 @@ export function ProjectsPage() {
         return aAlias.localeCompare(bAlias);
       },
       render: (_: unknown, record: ProjectResponse) => {
-        const alias = teamAliasMap.get(record.team_id ?? "");
-        return alias ?? record.team_id ?? "—";
+        if (!record.team_id) return "—";
+        const alias = teamAliasMap.get(record.team_id);
+        if (alias) return alias;
+        if (isTeamsLoading) return <Spin indicator={<LoadingOutlined spin />} size="small" />;
+        return record.team_id;
       },
     },
     {
@@ -144,6 +152,15 @@ export function ProjectsPage() {
     },
   ];
 
+  if (selectedProjectId) {
+    return (
+      <ProjectDetail
+        projectId={selectedProjectId}
+        onBack={() => setSelectedProjectId(null)}
+      />
+    );
+  }
+
   return (
     <Content
       style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
@@ -184,21 +201,22 @@ export function ProjectsPage() {
             onChange={(e) => setSearchText(e.target.value)}
             allowClear
           />
+          <Pagination
+            current={currentPage}
+            total={filteredProjects.length}
+            pageSize={pageSize}
+            onChange={(page) => setCurrentPage(page)}
+            size="small"
+            showTotal={(total) => `${total} projects`}
+            showSizeChanger={false}
+          />
         </Flex>
         <Table
           columns={columns}
-          dataSource={filteredProjects}
+          dataSource={filteredProjects.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
           rowKey="project_id"
           loading={isLoading}
-          pagination={{
-            current: currentPage,
-            pageSize,
-            total: filteredProjects.length,
-            onChange: (page) => setCurrentPage(page),
-            size: "small",
-            showTotal: (total) => `${total} projects`,
-            showSizeChanger: false,
-          }}
+          pagination={false}
         />
       </Card>
 

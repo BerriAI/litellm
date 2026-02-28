@@ -3,11 +3,37 @@ Add the event loop to the cache key, to prevent event loop closed errors.
 """
 
 import asyncio
+from typing import Set
 
 from .in_memory_cache import InMemoryCache
 
 
 class LLMClientCache(InMemoryCache):
+    # Background tasks must be stored to prevent garbage collection, which would
+    # trigger "coroutine was never awaited" warnings. See:
+    # https://docs.python.org/3/library/asyncio-task.html#creating-tasks
+    # Intentionally shared across all instances as a global task registry.
+    _background_tasks: Set[asyncio.Task] = set()
+
+    def _remove_key(self, key: str) -> None:
+        """Close async clients before evicting them to prevent connection pool leaks."""
+        value = self.cache_dict.get(key)
+        super()._remove_key(key)
+        if value is not None:
+            close_fn = getattr(value, "aclose", None) or getattr(value, "close", None)
+            if close_fn and asyncio.iscoroutinefunction(close_fn):
+                try:
+                    task = asyncio.get_running_loop().create_task(close_fn())
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
+                except RuntimeError:
+                    pass
+            elif close_fn and callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+
     def update_cache_key_with_event_loop(self, key):
         """
         Add the event loop to the cache key, to prevent event loop closed errors.
