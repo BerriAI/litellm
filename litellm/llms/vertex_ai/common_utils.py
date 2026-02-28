@@ -690,8 +690,10 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 anyof.remove(atype)
                 contains_null = True
             elif "type" not in atype and len(atype) == 0:
-                # Handle empty object case
-                atype["type"] = "object"
+                # Handle empty object case — but only if this isn't a truly empty "any type" schema.
+                # Empty schemas {} from JsonValue $defs should stay empty (any type).
+                # In an anyOf context, an empty {} alongside typed schemas likely means "any type".
+                pass
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -722,9 +724,33 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         convert_anyof_null_to_nullable(items, depth=depth + 1)
 
 
-def add_object_type(schema):
+def _is_any_type_schema(schema: dict) -> bool:
+    """Check if a schema represents 'any JSON value' (no structural constraints).
+
+    In JSON Schema, a schema with no type-constraining keywords means 'any value
+    is valid'. This includes empty schemas {} and schemas with only metadata keys
+    like title or description. Pydantic generates these for JsonValue ({}) and
+    typing.Any ({"title": "X"}).
+
+    After $ref resolution, these schemas should NOT be narrowed to type: object.
+    Gemini treats schemas without a type field as TYPE_UNSPECIFIED (any value).
+    """
+    structural_keys = {
+        "type", "properties", "items", "anyOf", "oneOf", "allOf", "enum", "const",
+    }
+    return not any(k in schema for k in structural_keys)
+
+
+def add_object_type(schema, _nested=False):
     # Gemini requires all function parameters to be type OBJECT
     # Handle case where schema has no properties and no type (e.g. tools with no arguments)
+
+    # Skip schemas with no structural constraints in nested context — they represent
+    # "any JSON value" (e.g. Pydantic's JsonValue or typing.Any).
+    # At the root level we still default to type: object for tools with no arguments.
+    if _nested and _is_any_type_schema(schema):
+        return
+
     if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
         schema["type"] = "object"
 
@@ -741,18 +767,18 @@ def add_object_type(schema):
         else:
             schema["type"] = "object"
             for name, value in properties.items():
-                add_object_type(value)
+                add_object_type(value, _nested=True)
 
     items = schema.get("items", None)
     if items is not None:
-        add_object_type(items)
+        add_object_type(items, _nested=True)
 
     for key in ["anyOf", "oneOf", "allOf"]:
         values = schema.get(key, None)
         if values is not None and isinstance(values, list):
             for value in values:
                 if isinstance(value, dict):
-                    add_object_type(value)
+                    add_object_type(value, _nested=True)
 
 
 def strip_field(schema, field_name: str):
