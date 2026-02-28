@@ -5434,12 +5434,26 @@ class Router:
 
         status_code = getattr(error, "status_code", None)
         if status_code is not None and not litellm._should_retry(status_code):
-            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403):
+            # 401/403/404 are special cases - allow retry if multiple deployments exist (handled below)
+            if status_code not in (401, 403, 404):
                 raise error
 
         if isinstance(error, litellm.NotFoundError):
-            raise error
+            """
+            - if other deployments available -> retry
+            - else -> raise error
+
+            NotFoundError can occur for reasons other than "model doesn't exist":
+            - Provider policy restrictions (e.g., OpenRouter privacy settings)
+            - Regional availability issues
+            - Temporary endpoint unavailability
+
+            Allow fallback to other deployments when multiple are configured.
+            """
+            if (
+                _num_all_deployments <= 1
+            ):  # if there is only 1 deployment for this model group then don't retry
+                raise error  # then raise error
         # Error we should only retry if there are other deployments
         if isinstance(error, openai.RateLimitError):
             if (
