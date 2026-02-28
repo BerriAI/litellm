@@ -1,6 +1,9 @@
 import enum
 import heapq
-from typing import Optional
+import time
+from asyncio import Lock
+from typing import Dict, Optional
+from weakref import WeakValueDictionary
 
 from pydantic import BaseModel
 
@@ -44,16 +47,43 @@ class Scheduler:
         self.polling_interval = (
             polling_interval or DEFAULT_POLLING_INTERVAL
         )  # default to 3ms
+        # Use weak refs to avoid unbounded lock growth for highly variable model names.
+        self._model_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
+        self._model_locks_guard = Lock()
+        self._last_unhealthy_pop_at: Dict[str, float] = {}
+
+    @staticmethod
+    def _normalize_queue_items(queue: list) -> list:
+        """
+        Ensure queue entries always use tuples for deterministic heap behavior.
+        Redis JSON round-trips convert tuples to lists.
+        """
+        return [(item[0], item[1]) for item in queue]
+
+    async def _get_model_lock(self, model_name: str) -> Lock:
+        # Process-local lock: protects concurrent coroutines within one router instance.
+        model_lock = self._model_locks.get(model_name)
+        if model_lock is not None:
+            return model_lock
+
+        async with self._model_locks_guard:
+            model_lock = self._model_locks.get(model_name)
+            if model_lock is None:
+                model_lock = Lock()
+                self._model_locks[model_name] = model_lock
+        return model_lock
 
     async def add_request(self, request: FlowItem):
         # We use the priority directly, as lower values indicate higher priority
-        # get the queue
-        queue = await self.get_queue(model_name=request.model_name)
-        # update the queue
-        heapq.heappush(queue, (request.priority, request.request_id))
+        model_lock = await self._get_model_lock(request.model_name)
+        async with model_lock:
+            # get the queue
+            queue = await self.get_queue(model_name=request.model_name)
+            # update the queue
+            heapq.heappush(queue, (request.priority, request.request_id))
 
-        # save the queue
-        await self.save_queue(queue=queue, model_name=request.model_name)
+            # save the queue
+            await self.save_queue(queue=queue, model_name=request.model_name)
 
     async def poll(self, id: str, model_name: str, health_deployments: list) -> bool:
         """
@@ -67,59 +97,78 @@ class Scheduler:
             * If no healthy deployments available
             * AND request not at the top of queue
         """
-        queue = await self.get_queue(model_name=model_name)
-        if not queue:
-            raise Exception(
-                "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
-            )
+        model_lock = await self._get_model_lock(model_name)
+        async with model_lock:
+            queue = await self.get_queue(model_name=model_name)
+            if not queue:
+                raise Exception(
+                    "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
+                )
 
-        # ------------
-        # Setup values
-        # ------------
+            # ------------
+            # Setup values
+            # ------------
 
-        print_verbose(f"len(health_deployments): {len(health_deployments)}")
-        if len(health_deployments) == 0:
-            print_verbose(f"queue: {queue}, seeking id={id}")
-            # Check if the id is at the top of the heap
-            if queue[0][1] == id:
-                # Remove the item from the queue
-                heapq.heappop(queue)
-                await self.save_queue(queue=queue, model_name=model_name)
-                print_verbose(f"Popped id: {id}")
-                return True
-            else:
-                return False
+            print_verbose(f"len(health_deployments): {len(health_deployments)}")
+            if len(health_deployments) == 0:
+                # Ensure only one request is admitted per polling interval for
+                # unhealthy deployment windows.
+                current_time = time.monotonic()
+                last_pop_time = self._last_unhealthy_pop_at.get(model_name)
+                if (
+                    last_pop_time is not None
+                    and current_time - last_pop_time < self.polling_interval
+                ):
+                    return False
 
-        return True
+                print_verbose(f"queue: {queue}, seeking id={id}")
+                # Check if the id is at the top of the heap
+                if queue[0][1] == id:
+                    # Remove the item from the queue
+                    heapq.heappop(queue)
+                    await self.save_queue(queue=queue, model_name=model_name)
+                    self._last_unhealthy_pop_at[model_name] = current_time
+                    print_verbose(f"Popped id: {id}")
+                    return True
+                else:
+                    return False
+
+            return True
 
     async def remove_request(self, request_id: str, model_name: str) -> None:
         """
         Remove a specific request from the priority queue for a model.
         Used when a request times out while waiting in the queue.
         """
-        queue = await self.get_queue(model_name=model_name)
-        filtered_queue = [item for item in queue if item[1] != request_id]
-        heapq.heapify(filtered_queue)  # restore heap invariant after filtering
-        await self.save_queue(queue=filtered_queue, model_name=model_name)
-        print_verbose(f"Removed request_id: {request_id} from queue for model: {model_name}")
+        model_lock = await self._get_model_lock(model_name)
+        async with model_lock:
+            queue = await self.get_queue(model_name=model_name)
+            filtered_queue = [item for item in queue if item[1] != request_id]
+            heapq.heapify(filtered_queue)  # restore heap invariant after filtering
+            await self.save_queue(queue=filtered_queue, model_name=model_name)
+            print_verbose(
+                f"Removed request_id: {request_id} from queue for model: {model_name}"
+            )
 
     async def peek(self, id: str, model_name: str, health_deployments: list) -> bool:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
-        queue = await self.get_queue(model_name=model_name)
-        if not queue:
-            raise Exception(
-                "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
-            )
+        model_lock = await self._get_model_lock(model_name)
+        async with model_lock:
+            queue = await self.get_queue(model_name=model_name)
+            if not queue:
+                raise Exception(
+                    "Incorrectly setup. Queue is invalid. Queue={}".format(queue)
+                )
 
-        # ------------
-        # Setup values
-        # ------------
+            # ------------
+            # Setup values
+            # ------------
 
-        # Check if the id is at the top of the heap
-        if queue[0][1] == id:
-            return True
+            # Check if the id is at the top of the heap
+            if queue[0][1] == id:
+                return True
 
-        return False
+            return False
 
     def get_queue_status(self):
         """Get the status of items in the queue"""
@@ -135,14 +184,20 @@ class Scheduler:
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
-                return response
-        return self.queue
+                return self._normalize_queue_items(response)
+        return list(self.queue)
 
     async def save_queue(self, queue: list, model_name: str) -> None:
         """
         Save the updated queue of the model group
         """
+        queue_snapshot = self._normalize_queue_items(queue)
         if self.cache is not None:
             _cache_key = "{}:{}".format(SchedulerCacheKeys.queue.value, model_name)
-            await self.cache.async_set_cache(key=_cache_key, value=queue)
+            await self.cache.async_set_cache(key=_cache_key, value=queue_snapshot)
+        else:
+            self.queue = list(queue_snapshot)
+
+        if len(queue_snapshot) == 0:
+            self._last_unhealthy_pop_at.pop(model_name, None)
         return None
