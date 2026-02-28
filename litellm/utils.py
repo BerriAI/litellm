@@ -8311,6 +8311,8 @@ class ProviderConfigManager:
             if model and "gpt" in model.lower():
                 return litellm.DatabricksResponsesAPIConfig()
             return None
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            return litellm.OpenRouterResponsesAPIConfig()
         return None
 
     @staticmethod
