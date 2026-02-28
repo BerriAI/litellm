@@ -169,7 +169,8 @@ const sidebars = {
         "tutorials/litellm_gemini_cli",
         "tutorials/google_genai_sdk",
         "tutorials/litellm_qwen_code_cli",
-        "tutorials/openai_codex"
+        "tutorials/openai_codex",
+        "tutorials/retool_assist"
       ]
     },
     {
