@@ -8,6 +8,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -71,16 +72,19 @@ class ResetBudgetJob:
 
     async def reset_budget_for_litellm_budget_table(self):
         """
-        Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
+        Resets the budget for all LiteLLM End-Users (Customers), Organizations, and Team Members if their budget has expired
         The corresponding Budget duration is also updated.
         """
 
         now = datetime.now(timezone.utc)
         start_time = time.time()
         endusers_to_reset: Optional[List[LiteLLM_EndUserTable]] = None
+        organizations_to_reset: Optional[List[LiteLLM_OrganizationTable]] = None
         budgets_to_reset: Optional[List[LiteLLM_BudgetTableFull]] = None
         updated_endusers: List[LiteLLM_EndUserTable] = []
+        updated_organizations: List[LiteLLM_OrganizationTable] = []
         failed_endusers = []
+        failed_organizations = []
         try:
             budgets_to_reset = await self.prisma_client.get_data(
                 table_name="budget", query_type="find_all", reset_at=now
@@ -98,14 +102,21 @@ class ResetBudgetJob:
                     table_name="budget",
                 )
 
+                budget_id_list = [
+                    budget.budget_id
+                    for budget in budgets_to_reset
+                    if budget.budget_id is not None
+                ]
+
                 endusers_to_reset = await self.prisma_client.get_data(
                     table_name="enduser",
                     query_type="find_all",
-                    budget_id_list=[
-                        budget.budget_id
-                        for budget in budgets_to_reset
-                        if budget.budget_id is not None
-                    ],
+                    budget_id_list=budget_id_list,
+                )
+
+                # Query organizations with the same budget_ids
+                organizations_to_reset = await self.prisma_client.db.litellm_organizationtable.find_many(
+                    where={"budget_id": {"in": budget_id_list}}
                 )
 
                 await self.reset_budget_for_litellm_team_members(
@@ -146,11 +157,43 @@ class ResetBudgetJob:
                     table_name="enduser",
                 )
 
+            if organizations_to_reset is not None and len(organizations_to_reset) > 0:
+                # Update organizations directly using prisma client update_many
+                # since "organization" is not supported in update_data
+                # Similar to how team members are reset
+                try:
+                    await self.prisma_client.db.litellm_organizationtable.update_many(
+                        where={"budget_id": {"in": budget_id_list}},
+                        data={"spend": 0.0},
+                    )
+                    # Mark all as updated since update_many succeeded
+                    updated_organizations = organizations_to_reset
+                    verbose_proxy_logger.debug(
+                        "Updated organizations %s",
+                        json.dumps(organizations_to_reset, indent=4, default=str),
+                    )
+                except Exception as e:
+                    # If batch update fails, track all organizations as failed
+                    for org in organizations_to_reset:
+                        failed_organizations.append(
+                            {"organization": org, "error": str(e)}
+                        )
+                    verbose_proxy_logger.exception(
+                        "Failed to reset budget for organizations: %s", e
+                    )
+
             end_time = time.time()
-            if len(failed_endusers) > 0:  # If any endusers failed to reset
-                raise Exception(
-                    f"Failed to reset {len(failed_endusers)} endusers: {json.dumps(failed_endusers, default=str)}"
-                )
+            if len(failed_endusers) > 0 or len(failed_organizations) > 0:
+                error_messages = []
+                if len(failed_endusers) > 0:
+                    error_messages.append(
+                        f"Failed to reset {len(failed_endusers)} endusers: {json.dumps(failed_endusers, default=str)}"
+                    )
+                if len(failed_organizations) > 0:
+                    error_messages.append(
+                        f"Failed to reset {len(failed_organizations)} organizations: {json.dumps(failed_organizations, default=str)}"
+                    )
+                raise Exception("; ".join(error_messages))
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -180,6 +223,20 @@ class ResetBudgetJob:
                         "endusers_failed": json.dumps(
                             failed_endusers, indent=4, default=str
                         ),
+                        "num_organizations_found": (
+                            len(organizations_to_reset) if organizations_to_reset else 0
+                        ),
+                        "organizations_found": json.dumps(
+                            organizations_to_reset, indent=4, default=str
+                        ),
+                        "num_organizations_updated": len(updated_organizations),
+                        "organizations_updated": json.dumps(
+                            updated_organizations, indent=4, default=str
+                        ),
+                        "num_organizations_failed": len(failed_organizations),
+                        "organizations_failed": json.dumps(
+                            failed_organizations, indent=4, default=str
+                        ),
                     },
                 )
             )
@@ -206,10 +263,18 @@ class ResetBudgetJob:
                         "endusers_found": json.dumps(
                             endusers_to_reset, indent=4, default=str
                         ),
+                        "num_organizations_found": (
+                            len(organizations_to_reset) if organizations_to_reset else 0
+                        ),
+                        "organizations_found": json.dumps(
+                            organizations_to_reset, indent=4, default=str
+                        ),
                     },
                 )
             )
-            verbose_proxy_logger.exception("Failed to reset budget for endusers: %s", e)
+            verbose_proxy_logger.exception(
+                "Failed to reset budget for endusers and organizations: %s", e
+            )
 
     async def reset_budget_for_litellm_keys(self):
         """
@@ -540,6 +605,19 @@ class ResetBudgetJob:
             )
             raise e
         return enduser
+
+    @staticmethod
+    async def _reset_budget_for_organization(
+        organization: LiteLLM_OrganizationTable,
+    ) -> Optional[LiteLLM_OrganizationTable]:
+        try:
+            organization.spend = 0.0
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error resetting budget for organization: %s. Item: %s", e, organization
+            )
+            raise e
+        return organization
 
     @staticmethod
     async def _reset_budget_reset_at_date(
