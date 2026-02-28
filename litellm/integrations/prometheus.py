@@ -32,15 +32,30 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+<<<<<<< litellm_fix_prometheus_counted_as_fail
+from litellm.types.integrations.prometheus import (
+    DEFINED_PROMETHEUS_METRICS,
+    LATENCY_BUCKETS,
+    LabelValidationError,
+    MetricValidationError,
+    PrometheusMetricLabels,
+    UserAPIKeyLabelNames,
+    UserAPIKeyLabelValues,
+    ValidationResults,
+    _sanitize_prometheus_label_name,
+    NoOpMetric,
+    PrometheusMetricsConfig,
+=======
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
+>>>>>>> main
 )
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
 else:
     AsyncIOScheduler = Any
 
@@ -447,7 +462,6 @@ class PrometheusLogger(CustomLogger):
     def _parse_prometheus_config(self) -> Dict[str, List[str]]:
         """Parse prometheus metrics configuration for label filtering and enabled metrics"""
         import litellm
-        from litellm.types.integrations.prometheus import PrometheusMetricsConfig
 
         config = litellm.prometheus_metrics_config
 
@@ -1875,7 +1889,9 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider or "",
             )
-            if exception is not None:
+            # Only count real failures; normal control-flow (e.g. StopAsyncIteration
+            # at end of stream) must not inflate deployment failure metrics.
+            if exception is not None and not self._is_control_flow_exception(exception):
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(
                         metric_name="litellm_deployment_failure_responses"
@@ -1884,13 +1900,13 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_deployment_failure_responses.labels(**_labels).inc()
 
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_deployment_total_requests"
-                ),
-                enum_values=enum_values,
-            )
-            self.litellm_deployment_total_requests.labels(**_labels).inc()
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_deployment_total_requests"
+                    ),
+                    enum_values=enum_values,
+                )
+                self.litellm_deployment_total_requests.labels(**_labels).inc()
 
             pass
         except Exception as e:
@@ -2151,6 +2167,21 @@ class PrometheusLogger(CustomLogger):
                 ).inc()
         except Exception as e:
             verbose_logger.debug(f"Error recording guardrail metrics: {str(e)}")
+
+    # Exceptions that signal normal control flow (e.g. end of iterator) and must
+    # not be counted as deployment failures in litellm_deployment_failure_responses.
+    _CONTROL_FLOW_EXCEPTIONS: Tuple[type, ...] = (
+        StopAsyncIteration,
+        StopIteration,
+        GeneratorExit,
+    )
+
+    @staticmethod
+    def _is_control_flow_exception(exception: Optional[Exception]) -> bool:
+        """True if the exception is a normal control-flow signal, not a real failure."""
+        if exception is None:
+            return False
+        return isinstance(exception, PrometheusLogger._CONTROL_FLOW_EXCEPTIONS)
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:
