@@ -1738,3 +1738,34 @@ class TestAgentMCPPermissions:
                         user_api_key_auth=user_api_key_auth,
                     )
                     assert sorted(result) == ["tool_a", "tool_b"]
+
+
+@pytest.mark.asyncio
+async def test_tool_permission_servers_included_in_allowed_servers():
+    """
+    Servers listed only in mcp_tool_permissions (not in mcp_servers)
+    should still be accessible.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21954
+    """
+    perm = MagicMock()
+    perm.mcp_servers = []
+    perm.mcp_access_groups = []
+    perm.mcp_tool_permissions = {"server_id_123": ["tool_a", "tool_b"]}
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+    )
+
+    with patch.object(
+        MCPRequestHandler, "_get_key_object_permission", return_value=perm
+    ), patch.object(
+        MCPRequestHandler, "_get_mcp_servers_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+            user_api_key_auth=user_api_key_auth,
+        )
+        assert "server_id_123" in result

@@ -31,6 +31,15 @@ def is_anthropic_oauth_key(value: Optional[str]) -> bool:
         value = value[7:]
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
+def _merge_beta_headers(existing: Optional[str], new_beta: str) -> str:
+    """Merge a new beta value into an existing comma-separated anthropic-beta header."""
+    if not existing:
+        return new_beta
+    betas = {b.strip() for b in existing.split(",") if b.strip()}
+    betas.add(new_beta)
+    return ",".join(sorted(betas))
+
+
 def optionally_handle_anthropic_oauth(
     headers: dict, api_key: Optional[str]
 ) -> tuple[dict, Optional[str]]:
@@ -52,14 +61,18 @@ def optionally_handle_anthropic_oauth(
     if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
         api_key = auth_header.replace("Bearer ", "")
         headers.pop("x-api-key", None)
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-beta"] = _merge_beta_headers(
+            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
     # Check api_key directly (standard chat/completion flow)
     if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
         headers.pop("x-api-key", None)
         headers["authorization"] = f"Bearer {api_key}"
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-beta"] = _merge_beta_headers(
+            headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
         headers["anthropic-dangerous-direct-browser-access"] = "true"
     return headers, api_key
 
