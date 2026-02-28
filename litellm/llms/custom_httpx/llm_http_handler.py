@@ -8889,8 +8889,9 @@ class BaseLLMHTTPHandler:
             return None, None
             
         # Remove content-type header if present - httpx will set it automatically for multipart
-        if "content-type" in headers:
-            del headers["content-type"]
+        ct_key = next((k for k in headers if k.lower() == "content-type"), None)
+        if ct_key:
+            del headers[ct_key]
         
         # Prepare files for multipart upload
         files = []

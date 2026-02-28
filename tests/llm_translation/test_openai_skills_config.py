@@ -65,7 +65,7 @@ class TestOpenAISkillsConfigValidateEnvironment:
             headers={}, litellm_params=litellm_params
         )
         assert headers["Authorization"] == "Bearer test-openai-key-123"
-        assert headers["Content-Type"] == "application/json"
+        assert "Content-Type" not in headers  # httpx sets Content-Type per request type
 
     def test_raises_without_api_key(self, config):
         params = GenericLiteLLMParams(api_key=None, api_base=None)
@@ -153,9 +153,9 @@ class TestOpenAISkillsConfigCreateSkill:
         response_data = {
             "id": "sk_test123",
             "created_at": 1709251200,
-            "default_version": "1",
+            "default_version": 1,
             "description": "Test skill",
-            "latest_version": "1",
+            "latest_version": 1,
             "name": "my-skill",
             "object": "skill",
         }
@@ -206,14 +206,14 @@ class TestOpenAISkillsConfigListSkills:
                     "created_at": 1709251200,
                     "name": "skill-1",
                     "object": "skill",
-                    "latest_version": "1",
+                    "latest_version": 1,
                 },
                 {
                     "id": "sk_2",
                     "created_at": 1709251300,
                     "name": "skill-2",
                     "object": "skill",
-                    "latest_version": "2",
+                    "latest_version": 2,
                 },
             ],
             "first_id": "sk_1",
@@ -256,8 +256,8 @@ class TestOpenAISkillsConfigGetSkill:
             "created_at": 1709251200,
             "name": "my-skill",
             "description": "A test skill",
-            "default_version": "1",
-            "latest_version": "2",
+            "default_version": 1,
+            "latest_version": 2,
             "object": "skill",
         }
         mock_response = MagicMock(spec=httpx.Response)
@@ -388,8 +388,8 @@ class TestOpenAISkillsConfigUpdateSkill:
             "id": "sk_1",
             "created_at": 1700000000,
             "name": "Updated Skill",
-            "default_version": "3",
-            "latest_version": "3",
+            "default_version": 3,
+            "latest_version": 3,
             "object": "skill",
         }
         logging_obj = MagicMock()
@@ -444,14 +444,14 @@ class TestOpenAISkillsConfigCreateSkillVersion:
         raw_response.json.return_value = {
             "id": "sv_1",
             "created_at": 1700000000,
-            "version": "2",
+            "version": 2,
             "skill_id": "sk_1",
             "object": "skill.version",
         }
         logging_obj = MagicMock()
         result = config.transform_create_skill_version_response(raw_response, logging_obj)
         assert result["id"] == "sv_1"
-        assert result["version"] == "2"
+        assert result["version"] == 2
 
 
 class TestOpenAISkillsConfigListSkillVersions:
@@ -486,7 +486,7 @@ class TestOpenAISkillsConfigListSkillVersions:
         config = OpenAISkillsConfig()
         raw_response = MagicMock(spec=httpx.Response)
         raw_response.json.return_value = {
-            "data": [{"id": "sv_1", "version": "1"}],
+            "data": [{"id": "sv_1", "version": 1}],
             "has_more": True,
             "first_id": "sv_1",
             "last_id": "sv_1",
@@ -518,7 +518,7 @@ class TestOpenAISkillsConfigGetSkillVersion:
         raw_response = MagicMock(spec=httpx.Response)
         raw_response.json.return_value = {
             "id": "sv_3",
-            "version": "3",
+            "version": 3,
             "skill_id": "sk_1",
             "object": "skill.version",
         }
@@ -549,7 +549,7 @@ class TestOpenAISkillsConfigDeleteSkillVersion:
             "id": "sv_2",
             "deleted": True,
             "object": "skill.version.deleted",
-            "version": "2",
+            "version": 2,
         }
         logging_obj = MagicMock()
         result = config.transform_delete_skill_version_response(raw_response, logging_obj)
