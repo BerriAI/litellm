@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    NoReturn,
     Optional,
     Union,
     cast,
@@ -1899,14 +1900,7 @@ class CustomStreamWrapper:
             threading.Thread(
                 target=self.logging_obj.failure_handler, args=(e, traceback_exception)
             ).start()
-            if isinstance(e, OpenAIError):
-                raise e
-            else:
-                raise exception_type(
-                    model=self.model,
-                    original_exception=e,
-                    custom_llm_provider=self.custom_llm_provider,
-                )
+            self._handle_stream_fallback_error(e)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -2124,7 +2118,25 @@ class CustomStreamWrapper:
                 asyncio.create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                 )
-            ## Map to OpenAI Exception
+            self._handle_stream_fallback_error(e)
+
+    def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
+        """
+        Common error handling for both __next__ and __anext__.
+
+        Maps the raw exception to an OpenAI-compatible type, then decides
+        whether to raise it directly (non-retriable 4xx) or wrap it in
+        MidStreamFallbackError so the Router can trigger a fallback.
+
+        429 (rate-limit) is explicitly exempted from the 4xx filter because
+        it is transient and the Router should switch to another model group.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        # Map to OpenAI exception format
+        if isinstance(e, OpenAIError):
+            mapped_exception: Exception = e
+        else:
             try:
                 mapped_exception = exception_type(
                     model=self.model,
@@ -2136,46 +2148,44 @@ class CustomStreamWrapper:
             except Exception as mapping_error:
                 mapped_exception = mapping_error
 
-            def _normalize_status_code(exc: Exception) -> Optional[int]:
-                """
-                Best-effort status_code extraction.
-                Uses status_code on the exception, then falls back to the response.
-                """
+        def _normalize_status_code(exc: Exception) -> Optional[int]:
+            """Best-effort status_code extraction."""
+            try:
+                code = getattr(exc, "status_code", None)
+                if code is not None:
+                    return int(code)
+            except Exception:
+                pass
+
+            response = getattr(exc, "response", None)
+            if response is not None:
                 try:
-                    code = getattr(exc, "status_code", None)
-                    if code is not None:
-                        return int(code)
+                    status_code = getattr(response, "status_code", None)
+                    if status_code is not None:
+                        return int(status_code)
                 except Exception:
                     pass
+            return None
 
-                response = getattr(exc, "response", None)
-                if response is not None:
-                    try:
-                        status_code = getattr(response, "status_code", None)
-                        if status_code is not None:
-                            return int(status_code)
-                    except Exception:
-                        pass
-                return None
+        mapped_status_code = _normalize_status_code(mapped_exception)
+        original_status_code = _normalize_status_code(e)
 
-            mapped_status_code = _normalize_status_code(mapped_exception)
-            original_status_code = _normalize_status_code(e)
+        # Raise non-retriable client errors directly (skip fallback).
+        # Exception: 429 (rate-limit) IS retriable/transient — allow it
+        # through so the Router can switch to a different model group.
+        if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
+            raise mapped_exception
+        if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
+            raise mapped_exception
 
-            if mapped_status_code is not None and 400 <= mapped_status_code < 500:
-                raise mapped_exception
-            if original_status_code is not None and 400 <= original_status_code < 500:
-                raise mapped_exception
-
-            from litellm.exceptions import MidStreamFallbackError
-
-            raise MidStreamFallbackError(
-                message=str(mapped_exception),
-                model=self.model,
-                llm_provider=self.custom_llm_provider or "anthropic",
-                original_exception=mapped_exception,
-                generated_content=self.response_uptil_now,
-                is_pre_first_chunk=not self.sent_first_chunk,
-            )
+        raise MidStreamFallbackError(
+            message=str(mapped_exception),
+            model=self.model,
+            llm_provider=self.custom_llm_provider or "anthropic",
+            original_exception=mapped_exception,
+            generated_content=self.response_uptil_now,
+            is_pre_first_chunk=not self.sent_first_chunk,
+        )
 
     @staticmethod
     def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:
