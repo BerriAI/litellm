@@ -212,7 +212,7 @@ def test_build_vertex_schema():
         "properties": {
             "state": {
                 "properties": {
-                    "messages": {"items": {"type": "object"}, "type": "array"},
+                    "messages": {"items": {}, "type": "array"},
                     "conversation_id": {"type": "string"},
                 },
                 "required": ["messages", "conversation_id"],
@@ -226,7 +226,7 @@ def test_build_vertex_schema():
                     "callbacks": {
                         "anyOf": [
                             {"type": "array", "nullable": True},
-                            {"type": "object", "nullable": True},
+                            {"nullable": True},
                         ]
                     },
                     "run_name": {"type": "string"},
@@ -270,15 +270,15 @@ def test_process_items_basic():
     """Test basic functionality of process_items."""
     from litellm.llms.vertex_ai.common_utils import process_items
 
-    # Test empty items
+    # Test empty items - empty {} means "any type", should be preserved
     schema = {"type": "array", "items": {}}
     process_items(schema)
-    assert schema["items"] == {"type": "object"}
+    assert schema["items"] == {}
 
-    # Test nested items
+    # Test nested items - same for nested empty items
     schema = {"type": "array", "items": {"type": "array", "items": {}}}
     process_items(schema)
-    assert schema["items"]["items"] == {"type": "object"}
+    assert schema["items"]["items"] == {}
 
     # Test items in properties
     schema = {
@@ -286,7 +286,7 @@ def test_process_items_basic():
         "properties": {"nested": {"type": "array", "items": {}}},
     }
     process_items(schema)
-    assert schema["properties"]["nested"]["items"] == {"type": "object"}
+    assert schema["properties"]["nested"]["items"] == {}
 
 
 def test_vertex_ai_complex_response_schema():
@@ -1402,3 +1402,125 @@ def test_add_object_type_does_not_add_type_when_anyof_present():
 
     # Verify type was not added (anyOf handles the type)
     assert "type" not in input_schema, "type should not be added when anyOf is present"
+
+
+def test_build_vertex_schema_jsonvalue_any_type():
+    """
+    Test that _build_vertex_schema preserves 'any type' semantics for JsonValue.
+
+    Pydantic's JsonValue type generates an empty schema {} in $defs, which means
+    'any JSON value is valid'. This should NOT be coerced to {"type": "object"}
+    as that would reject strings, numbers, booleans, and arrays.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22391
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    # Simulates Pydantic's JsonValue: {"$defs": {"JsonValue": {}}, "properties": {"value": {"$ref": "#/$defs/JsonValue"}}}
+    parameters = {
+        "$defs": {"JsonValue": {}},
+        "properties": {
+            "name": {"type": "string"},
+            "value": {"$ref": "#/$defs/JsonValue"},
+        },
+        "required": ["name", "value"],
+        "type": "object",
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    # The 'value' property should NOT have type: "object" — it should remain
+    # typeless so Gemini treats it as TYPE_UNSPECIFIED (any JSON type).
+    assert "type" not in result["properties"]["value"], (
+        "Empty schema (JsonValue) should not be coerced to type: object. "
+        f"Got: {result['properties']['value']}"
+    )
+    # Top-level schema should still be object
+    assert result["type"] == "object"
+    assert result["properties"]["name"]["type"] == "string"
+
+
+def test_build_vertex_schema_jsonvalue_nullable():
+    """
+    Test that Optional[JsonValue] preserves 'any type' semantics.
+
+    Optional[JsonValue] generates anyOf: [{$ref: JsonValue}, {type: null}].
+    After transformation, the empty schema variant should not be coerced to object.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22391
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "$defs": {"JsonValue": {}},
+        "properties": {
+            "data": {
+                "anyOf": [
+                    {"$ref": "#/$defs/JsonValue"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": ["data"],
+        "type": "object",
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    # The anyOf should have the null type removed and nullable added.
+    # The empty schema variant should NOT have type: object.
+    data_schema = result["properties"]["data"]
+    assert "anyOf" in data_schema
+    for variant in data_schema["anyOf"]:
+        if variant.get("nullable"):
+            # This is the any-type variant (was empty {}), should not have type: object
+            assert variant.get("type") != "object", (
+                f"Empty schema in anyOf should not be coerced to type: object. Got: {variant}"
+            )
+
+
+def test_process_items_preserves_any_type():
+    """
+    Test that process_items does not coerce empty items {} to type: object.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22391
+    """
+    from litellm.llms.vertex_ai.common_utils import process_items
+
+    schema = {"type": "array", "items": {}}
+    process_items(schema)
+    assert schema["items"] == {}, (
+        "Empty items {} should be preserved as-is (any type), not coerced to {type: object}"
+    )
+
+
+def test_add_object_type_preserves_any_type_schema():
+    """
+    Test that add_object_type does not add type: object to empty schemas.
+
+    An empty schema {} means 'any JSON value' in JSON Schema. Adding type: object
+    would narrow it to only accept objects.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22391
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Completely empty schema = any type
+    schema = {}
+    add_object_type(schema)
+    assert "type" not in schema, "Empty schema should not get type: object"
+
+    # Schema with only metadata (title/description) = still any type
+    schema = {"description": "Any value"}
+    add_object_type(schema)
+    assert "type" not in schema, "Schema with only description should not get type: object"
+
+    # Schema with properties = should get type: object
+    schema = {"properties": {"name": {"type": "string"}}}
+    add_object_type(schema)
+    assert schema["type"] == "object", "Schema with properties should get type: object"
+
+    # Schema with $schema = structural indicator, should get type: object
+    schema = {"$schema": "https://json-schema.org/draft/2020-12/schema"}
+    add_object_type(schema)
+    assert schema["type"] == "object", "Schema with $schema should get type: object"

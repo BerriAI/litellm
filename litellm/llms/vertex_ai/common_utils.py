@@ -583,6 +583,26 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     return schema_dict
 
 
+def _is_any_type_schema(schema: dict) -> bool:
+    """Check if a schema represents 'any JSON type' (per JSON Schema, empty schema {} validates any value).
+
+    Returns True when the schema contains no type-constraining keywords, meaning it
+    should accept strings, numbers, booleans, arrays, objects, and null — not just objects.
+    """
+    type_constraining_keys = {
+        "type",
+        "properties",
+        "items",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "enum",
+        "$schema",
+        "required",
+    }
+    return not any(k in schema for k in type_constraining_keys)
+
+
 def process_items(schema, depth=0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
@@ -590,7 +610,10 @@ def process_items(schema, depth=0):
         )
     if isinstance(schema, dict):
         if "items" in schema and schema["items"] == {}:
-            schema["items"] = {"type": "object"}
+            # Empty items {} means "any JSON value is valid as array element".
+            # Don't coerce to {"type": "object"} — leave without type so Gemini
+            # treats it as TYPE_UNSPECIFIED (any type).
+            pass
         for key, value in schema.items():
             if isinstance(value, dict):
                 process_items(value, depth + 1)
@@ -690,8 +713,10 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 anyof.remove(atype)
                 contains_null = True
             elif "type" not in atype and len(atype) == 0:
-                # Handle empty object case
-                atype["type"] = "object"
+                # Empty schema {} inside anyOf means "any JSON type".
+                # Don't coerce to {"type": "object"} — leave without type
+                # so Gemini treats it as TYPE_UNSPECIFIED (any type).
+                pass
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -725,8 +750,11 @@ def convert_anyof_null_to_nullable(schema, depth=0):
 def add_object_type(schema):
     # Gemini requires all function parameters to be type OBJECT
     # Handle case where schema has no properties and no type (e.g. tools with no arguments)
+    # BUT: don't coerce empty schemas {} which represent "any JSON type" in JSON Schema.
+    # An empty schema should remain typeless so Gemini treats it as TYPE_UNSPECIFIED.
     if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
-        schema["type"] = "object"
+        if not _is_any_type_schema(schema):
+            schema["type"] = "object"
 
     properties = schema.get("properties", None)
     if properties is not None:
