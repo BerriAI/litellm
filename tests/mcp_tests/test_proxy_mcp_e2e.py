@@ -274,6 +274,11 @@ class TestProxyMcpStatelessBehavior:
                     text_a = getattr(result_a.content[0], "text", None)
                     assert text_a == "30"
 
+            # Allow proxy and MCP SDK to fully clean up the first connection before
+            # opening the second. Without this, the SDK's TaskGroup can raise
+            # ExceptionGroup when the server closes the connection (see MCP SDK #915).
+            await asyncio.sleep(0.5)
+
             # --- Client B: completely independent connection ---
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",
