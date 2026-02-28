@@ -35,6 +35,10 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
     """Ensure local proxy DB settings don't leak into tests."""
     mp = pytest.MonkeyPatch()
     mp.delenv("DATABASE_URL", raising=False)
+    # The FastAPI lifespan event (proxy_startup_event) re-reads master_key from
+    # the LITELLM_MASTER_KEY env var, overriding whatever initialize() set from
+    # the config file. We must set it here so the lifespan doesn't reset it to None.
+    mp.setenv("LITELLM_MASTER_KEY", "sk-1234")
     try:
         yield
     finally:
