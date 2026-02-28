@@ -2166,22 +2166,24 @@ async def _run_background_health_check():
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = (
-                    await _run_direct_health_check_with_instrumentation(
-                        _llm_model_list,
-                        health_check_details,
-                        health_check_concurrency,
-                        instrumentation_context,
-                    )
-                )
-        else:
-            healthy_endpoints, unhealthy_endpoints = (
-                await _run_direct_health_check_with_instrumentation(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
                     health_check_concurrency,
                     instrumentation_context,
                 )
+        else:
+            (
+                healthy_endpoints,
+                unhealthy_endpoints,
+            ) = await _run_direct_health_check_with_instrumentation(
+                _llm_model_list,
+                health_check_details,
+                health_check_concurrency,
+                instrumentation_context,
             )
 
         # Update the global variable with the health check results
@@ -7158,6 +7160,11 @@ async def audio_speech(
         )
 
     except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(
                 str(e)
