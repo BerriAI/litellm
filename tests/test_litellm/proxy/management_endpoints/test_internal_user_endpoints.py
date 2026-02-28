@@ -1282,3 +1282,133 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         api_key=None,
         timezone_offset_minutes=480,
     )
+
+
+@pytest.mark.asyncio
+async def test_user_info_admin_no_user_id_returns_own_info(mocker):
+    """
+    Test that /user/info returns the admin's own user_id and user_info
+    when an admin calls it without specifying a user_id parameter.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22179
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        UserAPIKeyAuth,
+        UserInfoResponse,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _get_user_info_for_proxy_admin,
+        user_info,
+    )
+
+    admin_user_id = "admin-user-123"
+
+    # Create a real LiteLLM_UserTable for the admin
+    mock_admin_user = LiteLLM_UserTable(
+        user_id=admin_user_id,
+        user_email="admin@example.com",
+        teams=[],
+        user_role="proxy_admin",
+    )
+
+    # --- Test _get_user_info_for_proxy_admin directly ---
+    mock_prisma_client = mocker.MagicMock()
+
+    # Mock the raw SQL query for all teams/keys
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"teams": [], "keys": []}]
+    )
+    # Mock get_data to return the admin user row
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_admin_user)
+
+    result = await _get_user_info_for_proxy_admin(
+        user_id=admin_user_id,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert isinstance(result, UserInfoResponse)
+    assert result.user_id == admin_user_id, (
+        "Admin's own user_id should be returned, not None"
+    )
+    assert result.user_info is not None, (
+        "Admin's user_info should be populated, not None"
+    )
+    assert result.user_info["user_id"] == admin_user_id
+
+    # --- Test that _get_user_info_for_proxy_admin with no user_id still works (backward compat) ---
+    mock_prisma_client2 = mocker.MagicMock()
+    mock_prisma_client2.db.query_raw = AsyncMock(
+        return_value=[{"teams": [], "keys": []}]
+    )
+    mock_prisma_client2.get_data = AsyncMock(return_value=None)
+
+    result2 = await _get_user_info_for_proxy_admin(
+        prisma_client=mock_prisma_client2,
+    )
+    assert isinstance(result2, UserInfoResponse)
+    assert result2.user_id is None
+    assert result2.user_info is None
+
+
+@pytest.mark.asyncio
+async def test_user_info_admin_no_user_id_integration(mocker):
+    """
+    Integration-style test: call the user_info endpoint as a proxy admin
+    without specifying user_id and verify the response includes the admin's
+    own user_id and user_info.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22179
+    """
+    from unittest.mock import AsyncMock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        UserAPIKeyAuth,
+        UserInfoResponse,
+    )
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    admin_user_id = "admin-user-integration-456"
+
+    mock_admin_user = LiteLLM_UserTable(
+        user_id=admin_user_id,
+        user_email="admin-int@example.com",
+        teams=[],
+        user_role="proxy_admin",
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"teams": [], "keys": []}]
+    )
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_admin_user)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_request = mocker.MagicMock(spec=Request)
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id=admin_user_id,
+        user_role="proxy_admin",
+    )
+
+    # Call user_info without specifying user_id (simulates admin calling /user/info)
+    response = await user_info(
+        user_id=None,
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+    )
+
+    assert isinstance(response, UserInfoResponse)
+    assert response.user_id == admin_user_id, (
+        "Admin's own user_id should be returned when no user_id param is given"
+    )
+    assert response.user_info is not None, (
+        "Admin's user_info should be populated when no user_id param is given"
+    )
+    assert response.user_info["user_id"] == admin_user_id
