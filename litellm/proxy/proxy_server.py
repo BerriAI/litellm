@@ -451,6 +451,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.performance_endpoints.endpoints import router as performance_router
 from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
 from litellm.proxy.policy_engine.policy_resolve_endpoints import (
     router as policy_resolve_router,
@@ -13060,3 +13061,4 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
+app.include_router(performance_router)
