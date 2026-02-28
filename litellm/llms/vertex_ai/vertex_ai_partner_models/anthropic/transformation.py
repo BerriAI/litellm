@@ -144,6 +144,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         if beta_set:
             data["anthropic_beta"] = list(beta_set)
+            headers["anthropic-beta"] = ",".join(beta_set)
 
         return data
 
