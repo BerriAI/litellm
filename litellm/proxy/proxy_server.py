@@ -5298,29 +5298,62 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
-        str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
         )
         model_mismatch_logged = False
-        async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_data=request_data,
-        ):
-            ### CALL HOOKS ### - modify outgoing data
-            chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=chunk,
-                data=request_data,
-                str_so_far="".join(str_so_far_parts),
-            )
 
-            if isinstance(chunk, (ModelResponse, ModelResponseStream)):
-                response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far_parts.append(response_str)
+        # Performance optimization: check once whether callbacks exist
+        # to skip per-chunk hook overhead when no callbacks are registered
+        _has_callbacks = len(litellm.callbacks) > 0
+
+        if _has_callbacks:
+            # Use a list to accumulate response segments to avoid O(n^2) string concatenation
+            str_so_far_parts: list[str] = []
+            _source = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+            )
+        else:
+            # Fast path: skip iterator hook wrapper when no callbacks
+            _source = response
+
+        async for chunk in _source:
+            # Fast path: if chunk has pre-cached JSON from the streaming
+            # fast path (OpenAI-compatible providers), skip all per-chunk
+            # processing (model restamping, isinstance checks, serialization).
+            # The fast path already sets the correct model before serializing.
+            _cached = getattr(chunk, "_cached_json", None)
+            if _cached is not None:
+                # Model restamping for client-requested model (alias mapping).
+                # The fast path sets self.model, but if the client used an alias
+                # that was mapped, we need to fix the model field in the JSON.
+                if requested_model_from_client and not model_mismatch_logged:
+                    _chunk_model = getattr(chunk, "model", None)
+                    if _chunk_model != requested_model_from_client:
+                        # Need to fix model in cached JSON - replace once
+                        _cached = _cached.replace(
+                            f'"model": "{_chunk_model}"',
+                            f'"model": "{requested_model_from_client}"',
+                            1,
+                        )
+                yield f"data: {_cached}\n\n"
+                continue
+
+            if _has_callbacks:
+                ### CALL HOOKS ### - modify outgoing data
+                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=chunk,
+                    data=request_data,
+                    str_so_far="".join(str_so_far_parts),
+                )
+
+                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                    response_str = litellm.get_response_string(response_obj=chunk)
+                    str_so_far_parts.append(response_str)
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
@@ -5330,7 +5363,11 @@ async def async_data_generator(
             )
 
             if isinstance(chunk, BaseModel):
-                chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+                _cached = getattr(chunk, "_cached_json", None)
+                if _cached is not None:
+                    chunk = _cached
+                else:
+                    chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break

@@ -57,6 +57,24 @@ TOOL_CALLS_ATTRIBUTE = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE = "function_call"
 
 
+class _FastStreamChunk:
+    """
+    Minimal container for a pre-serialized streaming chunk.
+
+    Used by the fast path in CustomStreamWrapper.__anext__ to avoid the
+    overhead of ModelResponseStream.model_construct() per chunk.
+    Only carries the pre-serialized JSON string and the model name
+    (for alias matching in async_data_generator).
+    """
+
+    __slots__ = ("_cached_json", "model", "_usage")
+
+    def __init__(self, cached_json: str, model: Optional[str]):
+        self._cached_json = cached_json
+        self.model = model
+        self._usage: Optional[Usage] = None
+
+
 def is_async_iterable(obj: Any) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -161,6 +179,61 @@ class CustomStreamWrapper:
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
+
+        # Performance: determine if this stream can use the fast serialization
+        # path that bypasses per-chunk Pydantic model creation in chunk_creator.
+        # This is safe for OpenAI-compatible providers where the upstream SDK
+        # already returns well-formed ChatCompletionChunk objects.
+        _logging_obj_llm_provider = self.logging_obj.model_call_details.get(
+            "custom_llm_provider", None
+        )
+        self._openai_compatible_provider: bool = (
+            custom_llm_provider is not None
+            and custom_llm_provider not in litellm._custom_providers
+            and custom_llm_provider
+            not in (
+                "replicate",
+                "predibase",
+                "baseten",
+                "ai21",
+                "maritalk",
+                "vllm",
+                "aleph_alpha",
+                "nlp_cloud",
+                "vertex_ai",
+                "petals",
+                "palm",
+                "triton",
+                "text-completion-openai",
+                "text-completion-codestral",
+                "azure_text",
+                "cached_response",
+                "gemini",
+            )
+            # Don't use fast path for function calling (needs special processing)
+            and not self.is_function_call
+            # Don't use fast path when thinking block merging is needed
+            and not self.merge_reasoning_content_in_choices
+        )
+
+    def _fast_calculate_usage(self) -> Usage:
+        """
+        Lightweight usage calculation for the fast OpenAI-compatible path.
+        Extracts usage from the stored upstream chunks (ChatCompletionChunk objects).
+        """
+        prompt_tokens = 0
+        completion_tokens = 0
+        for chunk in self.chunks:
+            _usage = getattr(chunk, "usage", None)
+            if _usage is not None:
+                prompt_tokens = getattr(_usage, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(_usage, "completion_tokens", 0) or 0
+        total_tokens = prompt_tokens + completion_tokens
+        return Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -658,14 +731,30 @@ class CustomStreamWrapper:
     def model_response_creator(
         self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
     ):
-        _model = self.model
-        _received_llm_provider = self.custom_llm_provider
-        _logging_obj_llm_provider = self.logging_obj.model_call_details.get("custom_llm_provider", None)  # type: ignore
-        if (
-            _received_llm_provider == "openai"
-            and _received_llm_provider != _logging_obj_llm_provider
-        ):
-            _model = "{}/{}".format(_logging_obj_llm_provider, _model)
+        # Performance optimization: cache computed model name and provider
+        # across calls to avoid repeated dict lookups and string formatting.
+        if not hasattr(self, "_cached_model_name"):
+            _model = self.model
+            _received_llm_provider = self.custom_llm_provider
+            _logging_obj_llm_provider = self.logging_obj.model_call_details.get("custom_llm_provider", None)  # type: ignore
+            if (
+                _received_llm_provider == "openai"
+                and _received_llm_provider != _logging_obj_llm_provider
+            ):
+                _model = "{}/{}".format(_logging_obj_llm_provider, _model)
+            self._cached_model_name = _model
+            self._cached_llm_provider = _logging_obj_llm_provider
+            # Pre-compute the base hidden_params template to avoid dict
+            # merge overhead on every chunk.
+            self._base_hidden_params = {
+                **self._hidden_params,
+                "response_cost": None,
+                "custom_llm_provider": _logging_obj_llm_provider,
+            }
+        else:
+            _model = self._cached_model_name
+            _logging_obj_llm_provider = self._cached_llm_provider
+
         if chunk is None:
             chunk = {}
         else:
@@ -681,6 +770,46 @@ class CustomStreamWrapper:
             "model": _model,
             **chunk_dict,
         }
+
+        # Performance optimization: use model_construct to skip Pydantic
+        # validation when building the shell ModelResponseStream.
+        # The data either comes from pre-validated upstream chunks or from
+        # chunk_creator which already validates the relevant fields.
+        if not chunk_dict:
+            # Common fast path: no chunk dict, just need a shell response
+            model_response = ModelResponseStream.model_construct(
+                model=_model,
+                object="chat.completion.chunk",
+                choices=[],
+                id=self.response_id or "",
+                created=self.created or int(time.time()),
+                system_fingerprint=self.system_fingerprint,
+                provider_specific_fields=None,
+            )
+            # Initialize _hidden_params manually since model_construct skips __init__
+            model_response._hidden_params = {
+                **self._base_hidden_params,
+                "created_at": time.time(),
+            }
+            if hidden_params is not None:
+                model_response._hidden_params.update(hidden_params)
+            if self.created is None:
+                self.created = model_response.created
+            # Set default choices
+            model_response.choices = [
+                StreamingChoices.model_construct(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta.model_construct(
+                        content=None,
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                    ),
+                    logprobs=None,
+                )
+            ]
+            return model_response
 
         model_response = ModelResponseStream(**args)
         if self.response_id is not None:
@@ -940,11 +1069,51 @@ class CustomStreamWrapper:
                         for choice in original_chunk.choices:
                             try:
                                 if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()  # type: ignore
-                                    choice_json.pop(
-                                        "finish_reason", None
-                                    )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                    choices.append(StreamingChoices(**choice_json))
+                                    # Performance optimization: build StreamingChoices
+                                    # directly from attributes instead of
+                                    # model_dump() + reconstruct for common case.
+                                    _delta = getattr(choice, "delta", None)
+                                    _index = getattr(choice, "index", 0)
+                                    _logprobs = getattr(choice, "logprobs", None)
+                                    if _delta is not None:
+                                        # Convert delta to our Delta type efficiently
+                                        # using model_construct to skip Pydantic validation
+                                        # since data is already validated by upstream SDK.
+                                        _content = getattr(_delta, "content", None)
+                                        _role = getattr(_delta, "role", None)
+                                        _tool_calls = getattr(_delta, "tool_calls", None)
+                                        _function_call = getattr(_delta, "function_call", None)
+                                        _audio = getattr(_delta, "audio", None)
+                                        _reasoning = getattr(_delta, "reasoning_content", None)
+                                        _refusal = getattr(_delta, "refusal", None)
+                                        _new_delta = Delta.model_construct(
+                                            content=_content,
+                                            role=_role,
+                                            tool_calls=_tool_calls,
+                                            function_call=_function_call,
+                                            audio=_audio,
+                                            reasoning_content=_reasoning,
+                                            refusal=_refusal,
+                                        )
+                                        _sc = StreamingChoices.model_construct(
+                                            delta=_new_delta,
+                                            index=_index,
+                                            logprobs=_logprobs,
+                                            finish_reason=None,
+                                        )
+                                    else:
+                                        _sc = StreamingChoices.model_construct(
+                                            finish_reason=None,
+                                            index=0,
+                                            delta=Delta.model_construct(
+                                                content=None,
+                                                role=None,
+                                                tool_calls=None,
+                                                function_call=None,
+                                            ),
+                                            logprobs=None,
+                                        )
+                                    choices.append(_sc)
                             except Exception:
                                 choices.append(StreamingChoices())
                         setattr(model_response, "choices", choices)
@@ -1502,14 +1671,23 @@ class CustomStreamWrapper:
                         self._handle_special_delta_attributes(delta, model_response)
                     else:
                         try:
-                            delta = (
-                                dict()
-                                if original_chunk.choices[0].delta is None
-                                else dict(original_chunk.choices[0].delta)
-                            )
-                            model_response.choices[0].delta = Delta(**delta)
+                            _orig_delta = original_chunk.choices[0].delta
+                            if _orig_delta is None:
+                                model_response.choices[0].delta = Delta.model_construct(
+                                    content=None, role=None, tool_calls=None, function_call=None,
+                                )
+                            else:
+                                # Use model_construct for the common text-content case
+                                model_response.choices[0].delta = Delta.model_construct(
+                                    content=getattr(_orig_delta, "content", None),
+                                    role=getattr(_orig_delta, "role", None),
+                                    tool_calls=getattr(_orig_delta, "tool_calls", None),
+                                    function_call=getattr(_orig_delta, "function_call", None),
+                                )
                         except Exception:
-                            model_response.choices[0].delta = Delta()
+                            model_response.choices[0].delta = Delta.model_construct(
+                                content=None, role=None, tool_calls=None, function_call=None,
+                            )
                 else:
                     if (
                         self.stream_options is not None
@@ -1938,7 +2116,98 @@ class CustomStreamWrapper:
             if self.completion_stream is None:
                 await self.fetch_stream()
 
+            # Performance optimization: check once per __anext__ call whether
+            # post_call_rules are configured to skip per-chunk rule evaluation
+            _has_rules = len(litellm.post_call_rules) > 0
+
             if is_async_iterable(self.completion_stream):
+                # ----------------------------------------------------------------
+                # Fast path for OpenAI-compatible providers: skip chunk_creator and
+                # return_processed_chunk_logic to avoid per-chunk Pydantic model
+                # construction (ModelResponseStream, StreamingChoices, Delta).
+                # Instead, serialize the upstream ChatCompletionChunk directly.
+                # ----------------------------------------------------------------
+                if self._openai_compatible_provider and not _has_rules:
+                    # Pre-compute values that are the same for all chunks
+                    _model_name = self.model
+                    _hidden_base = self._hidden_params
+                    _log_obj = self.logging_obj
+                    _need_start_time = _log_obj.completion_start_time is None
+
+                    async for chunk in self.completion_stream:  # type: ignore[union-attr]
+                        if chunk is None or chunk == "None":
+                            continue
+
+                        # Extract content for tracking
+                        _choices = getattr(chunk, "choices", None)
+                        if not _choices:
+                            continue
+
+                        _choice0 = _choices[0]
+                        _delta = getattr(_choice0, "delta", None)
+                        _content = getattr(_delta, "content", None) if _delta else None
+                        _finish = getattr(_choice0, "finish_reason", None)
+
+                        if _content:
+                            self.response_uptil_now += _content
+                        if not self.sent_first_chunk:
+                            self.sent_first_chunk = True
+
+                        if _need_start_time:
+                            _log_obj._update_completion_start_time(
+                                completion_start_time=datetime.datetime.now()
+                            )
+                            _need_start_time = False
+
+                        # Track chunk ID and system fingerprint (first time only)
+                        if self.response_id is None:
+                            _chunk_id = getattr(chunk, "id", None)
+                            if _chunk_id:
+                                self.response_id = _chunk_id
+                        if self.system_fingerprint is None:
+                            _sys_fp = getattr(chunk, "system_fingerprint", None)
+                            if _sys_fp:
+                                self.system_fingerprint = _sys_fp
+
+                        # Only store the last chunk (for usage calculation).
+                        # No need to store all chunks.
+                        if _finish:
+                            self.received_finish_reason = _finish
+                            self.sent_last_chunk = True
+                            self.chunks.append(chunk)
+
+                        # Pre-serialize the chunk JSON to avoid model_dump_json
+                        # in async_data_generator. Override model name inline.
+                        _orig_model = chunk.model
+                        if _model_name:
+                            try:
+                                chunk.model = _model_name
+                            except Exception:
+                                pass
+                        _json = chunk.model_dump_json(
+                            exclude_none=True, exclude_unset=True
+                        )
+                        try:
+                            chunk.model = _orig_model
+                        except Exception:
+                            pass
+
+                        # Use a lightweight _FastStreamChunk instead of
+                        # ModelResponseStream.model_construct() to minimize
+                        # per-chunk object creation overhead.
+                        fast_response = _FastStreamChunk(_json, _model_name)
+
+                        if self.sent_last_chunk:
+                            if self.stream_options is None:
+                                usage = self._fast_calculate_usage()
+                                fast_response._usage = usage
+
+                        return fast_response
+                    raise StopAsyncIteration
+
+                # ----------------------------------------------------------------
+                # Standard path: full chunk_creator + return_processed_chunk_logic
+                # ----------------------------------------------------------------
                 async for chunk in self.completion_stream:  # type: ignore[union-attr]
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
@@ -1965,21 +2234,28 @@ class CustomStreamWrapper:
                         self.response_uptil_now += choice.delta.get("content", "") or ""
                     else:
                         self.response_uptil_now += ""
-                    self.rules.post_call_rules(
-                        input=self.response_uptil_now, model=self.model
-                    )
-                    # Store a shallow copy so usage stripping below
-                    # does not mutate the stored chunk.
-                    self.chunks.append(processed_chunk.model_copy())
+                    if _has_rules:
+                        self.rules.post_call_rules(
+                            input=self.response_uptil_now, model=self.model
+                        )
+
+                    # Check if usage is present on this chunk *before* copying,
+                    # so we can decide whether we need a copy at all.
+                    _chunk_has_usage = getattr(processed_chunk, "usage", None) is not None
+
+                    if _chunk_has_usage:
+                        # Store a shallow copy so usage stripping below
+                        # does not mutate the stored chunk.
+                        self.chunks.append(processed_chunk.model_copy())
+                    else:
+                        # No usage to strip – safe to store without copying
+                        self.chunks.append(processed_chunk)
 
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
                         self.sent_first_chunk = True
-                    if (
-                        hasattr(processed_chunk, "usage")
-                        and getattr(processed_chunk, "usage", None) is not None
-                    ):
+                    if _chunk_has_usage:
                         # Strip usage from the outgoing chunk so it's not sent twice
                         # (once in the chunk, once in _hidden_params).
                         # Create a new object without usage, matching sync behavior.
@@ -2042,12 +2318,18 @@ class CustomStreamWrapper:
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
-                # log the final chunk with accurate streaming values
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                )
+                # For the fast-path, self.chunks may contain upstream
+                # ChatCompletionChunk objects rather than ModelResponseStream.
+                # stream_chunk_builder can handle both, but if it fails we
+                # still want logging to succeed gracefully.
+                try:
+                    complete_streaming_response = litellm.stream_chunk_builder(
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                except Exception:
+                    complete_streaming_response = None
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:

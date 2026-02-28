@@ -230,11 +230,23 @@ async def create_response(
         )
 
     async def combined_generator() -> AsyncGenerator[str, None]:
-        if first_chunk_value is not None:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+        # Performance optimization: skip per-chunk DD tracing context manager
+        # overhead when Datadog tracing is not enabled (NullTracer).
+        from litellm.litellm_core_utils.dd_tracing import NullTracer
+
+        _use_dd_tracing = not isinstance(tracer, NullTracer)
+        if _use_dd_tracing:
+            if first_chunk_value is not None:
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield first_chunk_value
+            async for chunk in generator:
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield chunk
+        else:
+            # Fast path: no tracing overhead per chunk
+            if first_chunk_value is not None:
                 yield first_chunk_value
-        async for chunk in generator:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+            async for chunk in generator:
                 yield chunk
 
     return StreamingResponse(
