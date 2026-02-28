@@ -10,6 +10,9 @@ class RedactedDict(dict):
     def __str__(self) -> str:
         return "RedactedDict(REDACTED)"
 
+    def copy(self) -> "RedactedDict":
+        return RedactedDict(super().copy())
+
 
 class SecretFields(TypedDict):
     """
