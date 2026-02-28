@@ -756,6 +756,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
 
+    @staticmethod
+    def _map_reasoning_effort_to_output_config(
+        reasoning_effort: str,
+    ) -> Optional[str]:
+        """Map OpenAI reasoning_effort to Anthropic output_config effort for Claude 4.6 models."""
+        mapping = {
+            "minimal": "low",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "high",
+            "max": "max",
+        }
+        return mapping.get(reasoning_effort)
+
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
     ) -> Optional[dict]:
@@ -1006,18 +1021,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
-                # For Claude 4.6 models, effort is controlled via output_config,
-                # not thinking budget_tokens. Map reasoning_effort to output_config.
-                if AnthropicConfig._is_claude_4_6_model(model):
-                    effort_map = {
-                        "low": "low",
-                        "minimal": "low",
-                        "medium": "medium",
-                        "high": "high",
-                        "max": "max",
-                    }
-                    mapped_effort = effort_map.get(value, value)
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                if AnthropicConfig._is_claude_4_6_model(model) and value != "none":
+                    effort = AnthropicConfig._map_reasoning_effort_to_output_config(value)
+                    if effort is not None:
+                        optional_params.setdefault("output_config", {})
+                        optional_params["output_config"]["effort"] = effort
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)

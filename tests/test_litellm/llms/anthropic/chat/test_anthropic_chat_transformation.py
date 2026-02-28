@@ -1721,6 +1721,36 @@ def test_effort_with_other_features():
     assert "thinking" in result
 
 
+def test_reasoning_effort_sets_output_config_for_46():
+    """Test that reasoning_effort on Claude 4.6 models sets output_config.effort."""
+    config = AnthropicConfig()
+
+    for effort, expected_effort in [("low", "low"), ("medium", "medium"), ("high", "high"), ("minimal", "low")]:
+        optional_params = {"reasoning_effort": effort}
+        mapped = config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params=optional_params,
+            model="claude-sonnet-4-6-20260514",
+            drop_params=False,
+        )
+        assert "output_config" in mapped, f"output_config missing for effort={effort}"
+        assert mapped["output_config"]["effort"] == expected_effort
+
+
+def test_reasoning_effort_no_output_config_for_45():
+    """Test that reasoning_effort on Claude 4.5 models does NOT set output_config."""
+    config = AnthropicConfig()
+
+    optional_params = {"reasoning_effort": "high"}
+    mapped = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params=optional_params,
+        model="claude-opus-4-5-20251101",
+        drop_params=False,
+    )
+    assert "output_config" not in mapped
+
+
 def test_translate_system_message_skips_empty_string_content():
     """
     Test that translate_system_message skips system messages with empty string content.
