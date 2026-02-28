@@ -418,6 +418,8 @@ async def acompletion(  # noqa: PLR0915
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -562,6 +564,7 @@ async def acompletion(  # noqa: PLR0915
         "thinking": thinking,
         "web_search_options": web_search_options,
         "shared_session": shared_session,
+        "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
@@ -1047,6 +1050,8 @@ def completion(  # type: ignore # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
+    # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
+    enable_json_schema_validation: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
