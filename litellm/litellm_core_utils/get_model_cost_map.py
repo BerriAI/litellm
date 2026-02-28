@@ -10,6 +10,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 
 import json
 import os
+import threading
 from importlib.resources import files
 from typing import Optional
 
@@ -237,3 +238,175 @@ def get_model_cost_map(url: str) -> dict:
     _cost_map_source_info.source = "remote"
     _cost_map_source_info.fallback_reason = None
     return content
+
+
+class LazyModelCostMap(dict):
+    """A dict that loads local model cost data eagerly and defers the remote
+    HTTP fetch until the data is first accessed after import.
+
+    At import time the bundled local backup is loaded immediately (~12 ms,
+    no network).  The first dict operation after ``litellm`` is fully imported
+    triggers ``get_model_cost_map()`` which may fetch from the remote URL,
+    then re-populates the known-model sets via ``litellm.add_known_models()``.
+
+    This eliminates the blocking HTTP request during ``import litellm`` while
+    preserving the existing remote-fetch-and-validate behaviour for callers
+    that actually use the cost map.
+    """
+
+    def __init__(self, url: str):
+        # Load local backup immediately — fast (~12 ms), no network I/O.
+        local_data = GetModelCostMap.load_local_model_cost_map()
+        dict.update(self, local_data)
+        self._url = url
+        self._remote_merged = (
+            os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
+        )
+        self._lock = threading.Lock()
+        # During import, iteration should use local data without triggering
+        # the remote fetch.  Call seal_import_phase() after module init.
+        self._import_phase = True
+
+        # Track source info for local-only path
+        if self._remote_merged:
+            _cost_map_source_info.source = "local"
+            _cost_map_source_info.url = None
+            _cost_map_source_info.is_env_forced = True
+            _cost_map_source_info.fallback_reason = None
+
+    def seal_import_phase(self) -> None:
+        """Mark the end of import-time initialisation.
+
+        After this call, any dict access will trigger the deferred remote
+        fetch (if not already done and not in local-only mode).
+        """
+        self._import_phase = False
+
+    # -- lazy remote merge --------------------------------------------------
+
+    def _ensure_remote_merged(self) -> None:
+        """Fetch and merge remote cost map on first access (once only)."""
+        if self._remote_merged or self._import_phase:
+            return
+        with self._lock:
+            if self._remote_merged:  # double-check after acquiring lock
+                return
+            self._remote_merged = True
+
+            _cost_map_source_info.url = self._url
+            _cost_map_source_info.is_env_forced = False
+
+            try:
+                remote = GetModelCostMap.fetch_remote_model_cost_map(self._url)
+            except Exception as e:
+                verbose_logger.info(
+                    "LiteLLM: Deferred remote model cost map fetch failed: %s. "
+                    "Continuing with local backup.",
+                    str(e),
+                )
+                _cost_map_source_info.source = "local"
+                _cost_map_source_info.fallback_reason = (
+                    f"Remote fetch failed: {str(e)}"
+                )
+                return
+
+            if not GetModelCostMap.validate_model_cost_map(
+                fetched_map=remote,
+                backup_model_count=dict.__len__(self),
+            ):
+                verbose_logger.info(
+                    "LiteLLM: Deferred remote model cost map failed integrity "
+                    "check. Continuing with local backup. url=%s",
+                    self._url,
+                )
+                _cost_map_source_info.source = "local"
+                _cost_map_source_info.fallback_reason = (
+                    "Remote data failed integrity validation"
+                )
+                return
+
+            # Replace local data with validated remote data
+            dict.clear(self)
+            dict.update(self, remote)
+            _cost_map_source_info.source = "remote"
+            _cost_map_source_info.fallback_reason = None
+
+            # Re-populate provider model sets with remote data
+            try:
+                import litellm
+
+                litellm.add_known_models(self)
+            except Exception:
+                pass
+
+    # -- dict method overrides ---------------------------------------------
+    # These ensure the remote fetch happens transparently on first access.
+    # We use dict.xxx(self, ...) instead of super() to avoid recursion.
+
+    def __getitem__(self, key):
+        self._ensure_remote_merged()
+        return dict.__getitem__(self, key)
+
+    def __contains__(self, key):
+        self._ensure_remote_merged()
+        return dict.__contains__(self, key)
+
+    def __iter__(self):
+        self._ensure_remote_merged()
+        return dict.__iter__(self)
+
+    def __len__(self):
+        self._ensure_remote_merged()
+        return dict.__len__(self)
+
+    def __bool__(self):
+        self._ensure_remote_merged()
+        return dict.__len__(self) > 0
+
+    def get(self, key, default=None):
+        self._ensure_remote_merged()
+        return dict.get(self, key, default)
+
+    def keys(self):
+        self._ensure_remote_merged()
+        return dict.keys(self)
+
+    def values(self):
+        self._ensure_remote_merged()
+        return dict.values(self)
+
+    def items(self):
+        self._ensure_remote_merged()
+        return dict.items(self)
+
+    def __repr__(self):
+        self._ensure_remote_merged()
+        return dict.__repr__(self)
+
+    def __eq__(self, other):
+        self._ensure_remote_merged()
+        return dict.__eq__(self, other)
+
+    def copy(self):
+        self._ensure_remote_merged()
+        return dict.copy(self)
+
+    def pop(self, key, *args):
+        self._ensure_remote_merged()
+        return dict.pop(self, key, *args)
+
+    def setdefault(self, key, default=None):
+        self._ensure_remote_merged()
+        return dict.setdefault(self, key, default)
+
+    def update(self, *args, **kwargs):
+        self._ensure_remote_merged()
+        return dict.update(self, *args, **kwargs)
+
+    def __setitem__(self, key, value):
+        self._ensure_remote_merged()
+        dict.__setitem__(self, key, value)
+
+    def __delitem__(self, key):
+        self._ensure_remote_merged()
+        dict.__delitem__(self, key)
