@@ -6,7 +6,7 @@ Prometheus gauge `litellm_in_flight_requests`.
 """
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -27,7 +27,7 @@ class InFlightRequestsMiddleware:
     """
 
     _in_flight: int = 0
-    _gauge: Optional[object] = None
+    _gauge: Optional[Any] = None
     _gauge_init_attempted: bool = False
 
     def __init__(self, app: ASGIApp) -> None:
@@ -41,13 +41,13 @@ class InFlightRequestsMiddleware:
         InFlightRequestsMiddleware._in_flight += 1
         gauge = InFlightRequestsMiddleware._get_gauge()
         if gauge is not None:
-            gauge.inc()  # type: ignore[union-attr]
+            gauge.inc()
         try:
             await self.app(scope, receive, send)
         finally:
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
-                gauge.dec()  # type: ignore[union-attr]
+                gauge.dec()
 
     @staticmethod
     def get_count() -> int:
@@ -55,22 +55,25 @@ class InFlightRequestsMiddleware:
         return InFlightRequestsMiddleware._in_flight
 
     @staticmethod
-    def _get_gauge() -> Optional[object]:
+    def _get_gauge() -> Optional[Any]:
         if InFlightRequestsMiddleware._gauge_init_attempted:
             return InFlightRequestsMiddleware._gauge
         InFlightRequestsMiddleware._gauge_init_attempted = True
         try:
             from prometheus_client import Gauge
 
-            kwargs = {}
             if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
                 # livesum aggregates across all worker processes in the scrape response
-                kwargs["multiprocess_mode"] = "livesum"
-            InFlightRequestsMiddleware._gauge = Gauge(
-                "litellm_in_flight_requests",
-                "Number of HTTP requests currently in-flight on this uvicorn worker",
-                **kwargs,
-            )
+                InFlightRequestsMiddleware._gauge = Gauge(
+                    "litellm_in_flight_requests",
+                    "Number of HTTP requests currently in-flight on this uvicorn worker",
+                    multiprocess_mode="livesum",
+                )
+            else:
+                InFlightRequestsMiddleware._gauge = Gauge(
+                    "litellm_in_flight_requests",
+                    "Number of HTTP requests currently in-flight on this uvicorn worker",
+                )
         except Exception:
             InFlightRequestsMiddleware._gauge = None
         return InFlightRequestsMiddleware._gauge

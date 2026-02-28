@@ -310,7 +310,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}
         # output_config: {"format": {"type": "json_schema", "schema": {...}}}
-        output_format = anthropic_request.get("output_format")
+        output_format: Any = anthropic_request.get("output_format")
         output_config = anthropic_request.get("output_config")
         if not isinstance(output_format, dict) and isinstance(output_config, dict):
             output_format = output_config.get("format")
@@ -392,7 +392,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 content.append(
                     AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=item.call_id or item.id,
+                        id=item.call_id or item.id or "",
                         name=item.name,
                         input=input_data,
                     ).model_dump()
