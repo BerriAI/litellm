@@ -6305,3 +6305,38 @@ async def test_key_aliases_no_search_omits_ilike_filter():
     assert "ILIKE" not in count_sql
 
 
+
+class TestValidateKeyAliasFormat:
+    def test_validate_key_alias_format_valid(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+        # Valid cases
+        _validate_key_alias_format(None)  # OK
+        _validate_key_alias_format("valid-alias")
+        _validate_key_alias_format("valid_alias")
+        _validate_key_alias_format("valid.alias")
+        _validate_key_alias_format("valid/alias")
+        _validate_key_alias_format("a" * 255)
+        _validate_key_alias_format("my-key-123")
+
+    def test_validate_key_alias_format_invalid(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import _validate_key_alias_format
+        from litellm.proxy._types import ProxyException
+        
+        invalid_aliases = [
+            "",               # empty
+            " ",              # whitespace
+            "a",              # too short (min 2)
+            "!",              # special char
+            "-start",         # non-alphanumeric start
+            "end-",           # non-alphanumeric end
+            "invalid@char",   # invalid char
+            "a" * 256,        # too long
+            "  leading",
+            "trailing  ",
+        ]
+        
+        for alias in invalid_aliases:
+            with pytest.raises(ProxyException) as exc:
+                _validate_key_alias_format(alias)
+            assert str(exc.value.code) == "400"
+            assert "Invalid key_alias format" in str(exc.value.message)
