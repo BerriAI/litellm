@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    redact_user_api_key_info,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -4689,6 +4690,11 @@ class StandardLoggingPayloadSetup:
             )
             if cold_storage_object_key:
                 clean_metadata["cold_storage_object_key"] = cold_storage_object_key
+
+        # Redact user_api_key info from metadata before returning (for all loggers)
+        clean_metadata_dict: Dict[str, Any] = dict(clean_metadata)  # type: ignore
+        redacted_metadata = redact_user_api_key_info(metadata=clean_metadata_dict)
+        clean_metadata = cast(StandardLoggingMetadata, redacted_metadata)
 
         return clean_metadata
 
