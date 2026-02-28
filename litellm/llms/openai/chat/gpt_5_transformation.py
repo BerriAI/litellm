@@ -36,13 +36,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     
     @classmethod
     def is_model_gpt_5_1_model(cls, model: str) -> bool:
-        """Check if the model is a gpt-5.1 or gpt-5.2 chat variant.
-        
+        """Check if the model is a gpt-5.1 or gpt-5.2 variant that supports
+        temperature when reasoning_effort="none".
+
         gpt-5.1/5.2 support temperature when reasoning_effort="none",
         unlike base gpt-5 which only supports temperature=1. Excludes
-        pro variants which keep stricter knobs.
+        pro variants and ``-chat`` variants (e.g. ``gpt-5.2-chat``) which
+        only accept temperature=1.
         """
         model_name = model.split("/")[-1]
+        if "-chat" in model_name:
+            return False
         is_gpt_5_1 = model_name.startswith("gpt-5.1")
         is_gpt_5_2 = model_name.startswith("gpt-5.2") and "pro" not in model_name
         return is_gpt_5_1 or is_gpt_5_2

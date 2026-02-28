@@ -264,10 +264,12 @@ def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
+    # -chat variants only support temperature=1 and are excluded
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat")
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
@@ -414,3 +416,50 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_2_chat_temperature_drop(config: OpenAIConfig):
+    """Test that gpt-5.2-chat drops temperature!=1 with drop_params=True.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/21911
+    """
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.5},
+        optional_params={},
+        model="gpt-5.2-chat",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_gpt5_2_chat_temperature_error(config: OpenAIConfig):
+    """Test that gpt-5.2-chat raises error for temperature!=1 without drop_params."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="gpt-5.2-chat",
+            drop_params=False,
+        )
+
+
+def test_gpt5_2_chat_temperature_one_allowed(config: OpenAIConfig):
+    """Test that gpt-5.2-chat allows temperature=1."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 1.0},
+        optional_params={},
+        model="gpt-5.2-chat",
+        drop_params=False,
+    )
+    assert params["temperature"] == 1.0
+
+
+def test_gpt5_2_chat_latest_temperature_drop(config: OpenAIConfig):
+    """Test that gpt-5.2-chat-latest also drops temperature!=1."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.5},
+        optional_params={},
+        model="gpt-5.2-chat-latest",
+        drop_params=True,
+    )
+    assert "temperature" not in params
