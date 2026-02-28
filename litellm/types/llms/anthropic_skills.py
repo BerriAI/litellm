@@ -45,6 +45,9 @@ class Skill(BaseModel):
     display_title: Optional[str] = None
     """Display title for the skill"""
 
+    default_version: Optional[str] = None
+    """Default version of the skill (OpenAI-specific, None for Anthropic)"""
+
     latest_version: Optional[str] = None
     """The latest version identifier for the skill"""
 

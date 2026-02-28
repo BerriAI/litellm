@@ -336,6 +336,26 @@ class TestOpenAISkillCanonicalMapping:
         result = OpenAISkillsConfig._openai_skill_to_canonical(data)
         assert result.source == "custom"
 
+    def test_maps_default_version(self):
+        data = {
+            "id": "sk_1",
+            "created_at": 1709251200,
+            "default_version": "3",
+            "object": "skill",
+        }
+        result = OpenAISkillsConfig._openai_skill_to_canonical(data)
+        assert result.default_version == "3"
+
+    def test_maps_int_default_version_to_str(self):
+        data = {
+            "id": "sk_1",
+            "created_at": 1709251200,
+            "default_version": 2,
+            "object": "skill",
+        }
+        result = OpenAISkillsConfig._openai_skill_to_canonical(data)
+        assert result.default_version == "2"
+
     def test_handles_missing_optional_fields(self):
         data = {
             "id": "sk_1",
@@ -346,6 +366,7 @@ class TestOpenAISkillCanonicalMapping:
         assert result.id == "sk_1"
         assert result.display_title is None
         assert result.latest_version is None
+        assert result.default_version is None
 
 
 # ──────────────────────────────────────────────
