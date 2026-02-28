@@ -6,7 +6,7 @@ Prometheus gauge `litellm_in_flight_requests`.
 """
 
 import os
-from typing import Any, Optional
+from typing import Optional
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -27,7 +27,7 @@ class InFlightRequestsMiddleware:
     """
 
     _in_flight: int = 0
-    _gauge: Optional[Any] = None
+    _gauge: Optional[object] = None
     _gauge_init_attempted: bool = False
 
     def __init__(self, app: ASGIApp) -> None:
@@ -41,13 +41,13 @@ class InFlightRequestsMiddleware:
         InFlightRequestsMiddleware._in_flight += 1
         gauge = InFlightRequestsMiddleware._get_gauge()
         if gauge is not None:
-            gauge.inc()  # type: ignore[attr-defined]
+            gauge.inc()  # type: ignore[union-attr]
         try:
             await self.app(scope, receive, send)
         finally:
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
-                gauge.dec()  # type: ignore[attr-defined]
+                gauge.dec()  # type: ignore[union-attr]
 
     @staticmethod
     def get_count() -> int:
@@ -55,14 +55,14 @@ class InFlightRequestsMiddleware:
         return InFlightRequestsMiddleware._in_flight
 
     @staticmethod
-    def _get_gauge() -> Optional[Any]:
+    def _get_gauge() -> Optional[object]:
         if InFlightRequestsMiddleware._gauge_init_attempted:
             return InFlightRequestsMiddleware._gauge
         InFlightRequestsMiddleware._gauge_init_attempted = True
         try:
             from prometheus_client import Gauge
 
-            kwargs: dict[str, Any] = {}
+            kwargs = {}
             if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
                 # livesum aggregates across all worker processes in the scrape response
                 kwargs["multiprocess_mode"] = "livesum"
