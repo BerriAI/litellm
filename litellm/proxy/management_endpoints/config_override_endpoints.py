@@ -135,6 +135,28 @@ async def update_hashicorp_vault_config(
 
     config_data = config.model_dump(exclude_none=True)
 
+    # Validate that the config has enough fields to initialize
+    has_vault_addr = bool(config_data.get("vault_addr"))
+    has_token_auth = bool(config_data.get("vault_token"))
+    has_approle_auth = bool(
+        config_data.get("approle_role_id") and config_data.get("approle_secret_id")
+    )
+
+    if not has_vault_addr:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "vault_addr is required"},
+        )
+
+    if not has_token_auth and not has_approle_auth:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "At least one authentication method is required: "
+                "provide vault_token, or both approle_role_id and approle_secret_id"
+            },
+        )
+
     # Set environment variables
     for field_name, value in config_data.items():
         env_var_name = HASHICORP_ENV_VAR_MAPPING.get(field_name)
