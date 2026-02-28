@@ -3599,3 +3599,43 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+class TestGetResponseString:
+    """Tests for get_response_string, including the single-choice fast path."""
+
+    def test_single_streaming_choice(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.utils import get_response_string
+
+        chunk = ModelResponseStream(
+            id="chatcmpl-1",
+            choices=[StreamingChoices(delta=Delta(content="hello"), index=0)],
+            model="gpt-4.1-mini",
+        )
+        assert get_response_string(chunk) == "hello"
+
+    def test_single_streaming_choice_none_content(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.utils import get_response_string
+
+        chunk = ModelResponseStream(
+            id="chatcmpl-1",
+            choices=[StreamingChoices(delta=Delta(content=None), index=0)],
+            model="gpt-4.1-mini",
+        )
+        assert get_response_string(chunk) == ""
+
+    def test_multi_choice_streaming(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.utils import get_response_string
+
+        chunk = ModelResponseStream(
+            id="chatcmpl-1",
+            choices=[
+                StreamingChoices(delta=Delta(content="foo"), index=0),
+                StreamingChoices(delta=Delta(content="bar"), index=1),
+            ],
+            model="gpt-4.1-mini",
+        )
+        assert get_response_string(chunk) == "foobar"

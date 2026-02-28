@@ -305,6 +305,114 @@ async def test_streaming_iterator_hook_fast_path_no_callbacks():
 
 
 @pytest.mark.asyncio
+async def test_streaming_hook_skips_await_for_non_overriding_callback():
+    """
+    Callbacks that don't override async_post_call_streaming_hook should be
+    skipped (no await) — the base-class default just returns None, so calling
+    it is pure overhead.  This covers logging-only integrations.
+    """
+
+    class LoggingOnlyCallback(CustomLogger):
+        """Overrides only log_success, not the per-chunk hook."""
+
+        def __init__(self):
+            self.hook_called = False
+
+        async def async_log_success_event(
+            self, kwargs, response_obj, start_time, end_time
+        ):
+            pass
+
+    logger = LoggingOnlyCallback()
+    assert "async_post_call_streaming_hook" not in type(logger).__dict__
+
+    with patch("litellm.callbacks", [logger]):
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        original_response = ModelResponseStream(
+            id="original-stream",
+            choices=[
+                StreamingChoices(
+                    delta=Delta(content="Hello", role="assistant"),
+                    index=0,
+                )
+            ],
+            model="test-model",
+        )
+
+        data = {"model": "test-model"}
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        result = await proxy_logging.async_post_call_streaming_hook(
+            data=data,
+            response=original_response,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Original response must be unchanged (hook was not awaited)
+        assert result is original_response
+        assert logger.hook_called is False
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_uses_pre_extracted_response_str():
+    """
+    When response_str is supplied by the caller, the hook must use it without
+    calling get_response_string again — the received text in the callback should
+    match what the caller passed in.
+    """
+
+    class CapturingLogger(CustomLogger):
+        def __init__(self):
+            self.received_text: str = ""
+
+        async def async_post_call_streaming_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            response: str,
+        ):
+            self.received_text = response
+            return None
+
+    logger = CapturingLogger()
+
+    with patch("litellm.callbacks", [logger]):
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        original_response = ModelResponseStream(
+            id="original-stream",
+            choices=[
+                StreamingChoices(
+                    delta=Delta(content="actual chunk text", role="assistant"),
+                    index=0,
+                )
+            ],
+            model="test-model",
+        )
+
+        data = {"model": "test-model"}
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        # Pass pre-extracted response_str and a non-empty str_so_far
+        await proxy_logging.async_post_call_streaming_hook(
+            data=data,
+            response=original_response,
+            user_api_key_dict=user_api_key_dict,
+            str_so_far="previous text ",
+            response_str="actual chunk text",
+        )
+
+        # The callback receives str_so_far + response_str
+        assert logger.received_text == "previous text actual chunk text"
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_handles_exceptions():
     """
     Test that hook exceptions are propagated.

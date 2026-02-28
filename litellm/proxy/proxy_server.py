@@ -5278,6 +5278,11 @@ def _restamp_streaming_chunk_model(
         )
         model_mismatch_logged = True
 
+    # Short-circuit: model already matches — avoid the setattr and keep the object
+    # "clean" (not mutated), which is a prerequisite for any future JSON caching.
+    if downstream_model == requested_model_from_client:
+        return chunk, model_mismatch_logged
+
     if isinstance(chunk, dict):
         chunk["model"] = requested_model_from_client
         return chunk, model_mismatch_logged
@@ -5302,8 +5307,7 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
-        str_so_far_parts: list[str] = []
+        str_so_far: str = ""
         error_message: Optional[str] = None
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
@@ -5315,21 +5319,22 @@ async def async_data_generator(
             request_data=request_data,
         ):
             ### CALL HOOKS ### - modify outgoing data
-            # Only compute str_so_far when callbacks are registered — joining
-            # the accumulated parts on every chunk is O(n²) otherwise.
+            # Extract chunk text once; pass into hook so it doesn't re-extract.
+            # Accumulate str_so_far AFTER the hook so the hook receives text
+            # from *previous* chunks (not the current one) in str_so_far.
             if litellm.callbacks:
+                chunk_str: Optional[str] = None
+                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                    chunk_str = litellm.get_response_string(response_obj=chunk)
                 chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                     user_api_key_dict=user_api_key_dict,
                     response=chunk,
                     data=request_data,
-                    str_so_far="".join(str_so_far_parts),
+                    str_so_far=str_so_far,
+                    response_str=chunk_str,
                 )
-
-            if litellm.callbacks and isinstance(
-                chunk, (ModelResponse, ModelResponseStream)
-            ):
-                response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far_parts.append(response_str)
+                if chunk_str is not None:
+                    str_so_far += chunk_str
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,

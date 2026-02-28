@@ -4967,7 +4967,18 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
         response_obj.choices
     )
 
-    # Use list accumulation to avoid O(n^2) string concatenation across choices
+    # Fast path: single choice (overwhelmingly common for streaming proxy traffic).
+    # Avoids creating a list and calling join.
+    if len(_choices) == 1:
+        choice = _choices[0]
+        if isinstance(choice, StreamingChoices):
+            content = choice.delta.content
+            return str(content) if content is not None else ""
+        if isinstance(choice, Choices):
+            content = choice.message.content
+            return str(content) if content is not None else ""
+
+    # General path for multi-choice responses
     response_parts: List[str] = []
     for choice in _choices:
         if isinstance(choice, Choices):

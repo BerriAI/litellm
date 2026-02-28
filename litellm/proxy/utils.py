@@ -2011,6 +2011,7 @@ class ProxyLogging:
         ],
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: Optional[str] = None,
+        response_str: Optional[str] = None,
     ):
         """
         Allow user to modify outgoing streaming data -> per chunk
@@ -2022,12 +2023,11 @@ class ProxyLogging:
         if not litellm.callbacks:
             return response
 
-        from litellm.proxy.proxy_server import llm_router
-
-        response_str: Optional[str] = None
-        if isinstance(response, (ModelResponse, ModelResponseStream)):
-            response_str = litellm.get_response_string(response_obj=response)
-        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+        # Use pre-extracted string if caller already computed it to avoid re-extracting.
+        if response_str is None:
+            if isinstance(response, (ModelResponse, ModelResponseStream)):
+                response_str = litellm.get_response_string(response_obj=response)
+        if response_str is None and isinstance(response, dict) and self.is_a2a_streaming_response(response):
             from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 
             response_str = extract_text_from_a2a_response(response)
@@ -2037,6 +2037,10 @@ class ProxyLogging:
                     _callback: Optional[CustomLogger] = None
                     if isinstance(callback, CustomGuardrail):
                         # Main - V2 Guardrails implementation
+                        # llm_router import is deferred here to avoid a module-level
+                        # circular import AND to skip the lookup on every chunk when
+                        # no guardrails are registered.
+                        from litellm.proxy.proxy_server import llm_router
                         from litellm.types.guardrails import GuardrailEventHooks
 
                         ## CHECK FOR MODEL-LEVEL GUARDRAILS
@@ -2059,10 +2063,18 @@ class ProxyLogging:
                     else:
                         _callback = callback  # type: ignore
                     if _callback is not None and isinstance(_callback, CustomLogger):
-                        if str_so_far is not None:
-                            complete_response = str_so_far + response_str
-                        else:
-                            complete_response = response_str
+                        # Skip the await entirely when the callback doesn't override
+                        # async_post_call_streaming_hook — the base-class default just
+                        # returns None, so calling it is pure overhead.  This is the
+                        # common case for logging-only integrations (Datadog, OTEL, …).
+                        if (
+                            "async_post_call_streaming_hook"
+                            not in type(_callback).__dict__
+                        ):
+                            continue
+                        complete_response = (
+                            str_so_far + response_str if str_so_far else response_str
+                        )
                         callback_response = (
                             await _callback.async_post_call_streaming_hook(
                                 user_api_key_dict=user_api_key_dict,
@@ -2091,6 +2103,20 @@ class ProxyLogging:
         # Fast path: no callbacks registered — yield from the original iterator
         # directly to avoid the extra async-generator wrapper overhead per chunk.
         if not litellm.callbacks:
+            async for chunk in response:
+                yield chunk
+            return
+
+        # Fast path: if no callback overrides the iterator hook or applies a
+        # guardrail, skip the wrapping entirely — most callbacks only use the
+        # per-chunk hook, not the full-iterator hook.
+        _needs_iterator_wrap = any(
+            "async_post_call_streaming_iterator_hook" in type(cb).__dict__
+            or "apply_guardrail" in type(cb).__dict__
+            for cb in litellm.callbacks
+            if isinstance(cb, CustomLogger) or isinstance(cb, CustomGuardrail)
+        )
+        if not _needs_iterator_wrap:
             async for chunk in response:
                 yield chunk
             return

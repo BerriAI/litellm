@@ -237,6 +237,12 @@ async def create_response(
             with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
                 yield chunk
 
+    # Tell nginx/CDNs not to buffer streaming responses — without this,
+    # intermediary layers hold the entire response before forwarding it,
+    # making TTFB equal to total latency.
+    if media_type == "text/event-stream":
+        headers["X-Accel-Buffering"] = "no"
+
     return StreamingResponse(
         combined_generator(),
         media_type=media_type,
@@ -1318,7 +1324,7 @@ class ProxyBaseLLMRequestProcessing:
                 request_data=request_data,
             ):
                 verbose_proxy_logger.debug(
-                    "async_data_generator: received streaming chunk - {}".format(chunk)
+                    "async_data_generator: received streaming chunk - %s", chunk
                 )
                 chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -1340,12 +1346,11 @@ class ProxyBaseLLMRequestProcessing:
                 elif isinstance(chunk, dict):
                     str_so_far += str(chunk.get("content", ""))
 
-                model_name = request_data.get("model", "")
-                chunk = (
-                    ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                if litellm.include_cost_in_streaming_usage:
+                    model_name = request_data.get("model", "")
+                    chunk = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                         chunk, model_name
                     )
-                )
                 yield serialize_chunk(chunk)
         except Exception as e:
             verbose_proxy_logger.exception(
