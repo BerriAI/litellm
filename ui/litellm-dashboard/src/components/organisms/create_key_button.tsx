@@ -1,6 +1,7 @@
 "use client";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -146,6 +147,8 @@ export const fetchUserModels = async (
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const { data: projects, isLoading: isProjectsLoading } = useProjects();
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -692,33 +695,35 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 }}
               />
             </Form.Item>
-            <Form.Item
-              label={
-                <span>
-                  Project{" "}
-                  <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="project_id"
-              className="mt-4"
-            >
-              <ProjectDropdown
-                projects={projects}
-                teamId={selectedCreateKeyTeam?.team_id}
-                loading={isProjectsLoading || !teams}
-                onChange={(projectId) => {
-                  if (!projectId) {
-                    setSelectedProjectId(null);
-                    setSelectedCreateKeyTeam(null);
-                    form.setFieldValue("team_id", undefined);
-                    return;
-                  }
-                  setSelectedProjectId(projectId);
-                }}
-              />
-            </Form.Item>
+            {enableProjectsUI && (
+              <Form.Item
+                label={
+                  <span>
+                    Project{" "}
+                    <Tooltip title="Assign this key to a project. Selecting a project will lock the team to the project's team.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="project_id"
+                className="mt-4"
+              >
+                <ProjectDropdown
+                  projects={projects}
+                  teamId={selectedCreateKeyTeam?.team_id}
+                  loading={isProjectsLoading || !teams}
+                  onChange={(projectId) => {
+                    if (!projectId) {
+                      setSelectedProjectId(null);
+                      setSelectedCreateKeyTeam(null);
+                      form.setFieldValue("team_id", undefined);
+                      return;
+                    }
+                    setSelectedProjectId(projectId);
+                  }}
+                />
+              </Form.Item>
+            )}
           </div>
 
           {/* Show message when team selection is required */}
