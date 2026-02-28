@@ -64,7 +64,7 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _process_event(self, event: Any) -> None:
+    def _process_event(self, event: Any) -> None:  # noqa: PLR0915
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
         if event_type is None and isinstance(event, dict):
