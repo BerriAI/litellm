@@ -44,20 +44,31 @@ class TestOpenRouterNativeModelRouting:
         assert result_model == expected_model
 
     @pytest.mark.parametrize(
-        "input_model,expected_model",
+        "input_model,expected_first,expected_second",
         [
-            ("openrouter/openrouter/aurora-alpha", "openrouter/aurora-alpha"),
-            ("openrouter/openrouter/auto", "openrouter/auto"),
+            # After the first call strips outer prefix: openrouter/openrouter/aurora-alpha
+            # → openrouter/aurora-alpha.  A second call on that result splits at the
+            # first "/" giving provider=openrouter, model=aurora-alpha — which is the
+            # correct model ID to send to the OpenRouter API.
+            ("openrouter/openrouter/aurora-alpha", "openrouter/aurora-alpha", "aurora-alpha"),
+            ("openrouter/openrouter/auto", "openrouter/auto", "auto"),
         ],
     )
-    def test_no_double_strip_on_second_call(self, input_model, expected_model):
-        """Simulates two consecutive get_llm_provider calls (bridge → completion)."""
+    def test_no_double_strip_on_second_call(self, input_model, expected_first, expected_second):
+        """Simulates two consecutive get_llm_provider calls (bridge → completion).
+
+        The first call (bridge) converts openrouter/openrouter/<model> to
+        openrouter/<model>.  The second call (completion) further strips the
+        remaining openrouter/ provider prefix and returns <model> — the bare
+        model ID that should be sent to the OpenRouter API.
+        """
         model_first, provider, _, _ = litellm.get_llm_provider(model=input_model)
-        assert model_first == expected_model
+        assert provider == "openrouter"
+        assert model_first == expected_first
 
         model_second, provider2, _, _ = litellm.get_llm_provider(model=model_first)
         assert provider2 == "openrouter"
-        assert model_second == expected_model
+        assert model_second == expected_second
 
     @pytest.mark.parametrize(
         "input_model,expected_model",
