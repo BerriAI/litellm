@@ -312,24 +312,26 @@ describe("UI config and public endpoints", () => {
       writable: true,
     });
 
-    const mockFetch = setupMockFetch([
-      { url: "/.well-known/litellm-ui-config", data: uiConfig },
-    ]);
+    try {
+      const mockFetch = setupMockFetch([
+        { url: "/.well-known/litellm-ui-config", data: uiConfig },
+      ]);
 
-    await Networking.getUiConfig();
+      await Networking.getUiConfig();
 
-    // The fetch URL should be /litellm/.well-known/litellm-ui-config
-    // (derived from stripping /ui/dashboard from /litellm/ui/dashboard)
-    const configCall = mockFetch.mock.calls[0];
-    expect(configCall).toBeDefined();
-    const calledUrl = configCall[0] as string;
-    expect(calledUrl).toBe("/litellm/.well-known/litellm-ui-config");
-
-    // Restore
-    Object.defineProperty(window, "location", {
-      value: { ...window.location, pathname: originalPathname },
-      writable: true,
-    });
+      // The fetch URL should be /litellm/.well-known/litellm-ui-config
+      // (derived from stripping /ui/dashboard from /litellm/ui/dashboard)
+      const configCall = mockFetch.mock.calls[0];
+      expect(configCall).toBeDefined();
+      const calledUrl = configCall[0] as string;
+      expect(calledUrl).toBe("/litellm/.well-known/litellm-ui-config");
+    } finally {
+      // Restore
+      Object.defineProperty(window, "location", {
+        value: { ...window.location, pathname: originalPathname },
+        writable: true,
+      });
+    }
   });
 
   it("should return UI config from getUiConfig", async () => {
