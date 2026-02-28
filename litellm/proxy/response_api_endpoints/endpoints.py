@@ -219,11 +219,11 @@ async def responses_api(
         return response
     except ModifyResponseException as e:
         # Guardrail passthrough: return violation message in Responses API format (200)
-        _data = e.request_data
-        await proxy_logging_obj.post_call_failure_hook(
+        await processor._handle_modify_response_exception(
+            e=e,
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
+            proxy_logging_obj=proxy_logging_obj,
+            fastapi_response=fastapi_response,
         )
 
         violation_text = e.message

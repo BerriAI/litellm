@@ -9,6 +9,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Callable,
+    Dict,
     Literal,
     Optional,
     Tuple,
@@ -52,6 +53,7 @@ StreamChunkSerializer = Callable[[Any], str]
 StreamErrorSerializer = Callable[[ProxyException], str]
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_guardrail import ModifyResponseException
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
 
     ProxyConfig = _ProxyConfig
@@ -374,8 +376,23 @@ def _get_cost_breakdown_from_logging_obj(
 
 
 class ProxyBaseLLMRequestProcessing:
+    # Headers excluded from request_headers passed to callbacks to avoid leaking credentials
+    _SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+
     def __init__(self, data: dict):
         self.data = data
+        self._request_headers: Optional[Dict[str, str]] = None
+
+    @staticmethod
+    def _filter_sensitive_headers(
+        headers: "starlette.datastructures.Headers",
+    ) -> dict:
+        """Return a copy of request headers with sensitive values removed."""
+        return {
+            k: v
+            for k, v in headers.items()
+            if k.lower() not in ProxyBaseLLMRequestProcessing._SENSITIVE_HEADERS
+        }
 
     @staticmethod
     def get_custom_headers(
@@ -829,6 +846,8 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
+        self._request_headers = self._filter_sensitive_headers(request.headers)
+
         requested_model_from_client: Optional[str] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
@@ -934,6 +953,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=response,
+                request_headers=self._request_headers,
             )
             if callback_headers:
                 custom_headers.update(callback_headers)
@@ -1042,6 +1062,7 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             user_api_key_dict=user_api_key_dict,
             response=response,
+            request_headers=self._request_headers,
         )
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
@@ -1140,6 +1161,33 @@ class ProxyBaseLLMRequestProcessing:
             return True
         return False
 
+    async def _handle_modify_response_exception(
+        self,
+        e: "ModifyResponseException",
+        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: ProxyLogging,
+        fastapi_response: Response,
+    ):
+        """Centralized handling for ModifyResponseException (guardrail passthrough).
+
+        Calls the failure hook and injects custom response headers — mirrors
+        the pattern in ``_handle_llm_api_exception`` for error responses.
+        """
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=e.request_data,
+        )
+
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=e.request_data,
+            user_api_key_dict=user_api_key_dict,
+            response=None,
+            request_headers=self._request_headers,
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
+
     async def _handle_llm_api_exception(
         self,
         e: Exception,
@@ -1210,6 +1258,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
                 response=None,
+                request_headers=self._request_headers,
             )
             if callback_headers:
                 headers.update(callback_headers)

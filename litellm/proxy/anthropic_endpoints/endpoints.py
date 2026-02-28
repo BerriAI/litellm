@@ -72,10 +72,11 @@ async def anthropic_response(  # noqa: PLR0915
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
-        await proxy_logging_obj.post_call_failure_hook(
+        await base_llm_response_processor._handle_modify_response_exception(
+            e=e,
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
+            proxy_logging_obj=proxy_logging_obj,
+            fastapi_response=fastapi_response,
         )
 
         # Create Anthropic-formatted response with violation message
@@ -110,7 +111,7 @@ async def anthropic_response(  # noqa: PLR0915
             return await create_response(
                 generator=selected_data_generator,
                 media_type="text/event-stream",
-                headers={},
+                headers=dict(fastapi_response.headers),
             )
 
         return _anthropic_response

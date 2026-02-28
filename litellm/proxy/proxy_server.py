@@ -6479,11 +6479,13 @@ async def chat_completion(  # noqa: PLR0915
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
-        await proxy_logging_obj.post_call_failure_hook(
+        await base_llm_response_processor._handle_modify_response_exception(
+            e=e,
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
+            proxy_logging_obj=proxy_logging_obj,
+            fastapi_response=fastapi_response,
         )
+
         _chat_response = litellm.ModelResponse()
         _chat_response.model = e.model  # type: ignore
         _chat_response.choices[0].message.content = e.message  # type: ignore
@@ -6509,6 +6511,7 @@ async def chat_completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 status_code=200,  # Return 200 for passthrough mode
+                headers=dict(fastapi_response.headers),
             )
         _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         _chat_response.usage = _usage  # type: ignore
@@ -6643,10 +6646,11 @@ async def completion(  # noqa: PLR0915
     except ModifyResponseException as e:
         # Guardrail flagged content in passthrough mode - return 200 with violation message
         _data = e.request_data
-        await proxy_logging_obj.post_call_failure_hook(
+        await base_llm_response_processor._handle_modify_response_exception(
+            e=e,
             user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=_data,
+            proxy_logging_obj=proxy_logging_obj,
+            fastapi_response=fastapi_response,
         )
 
         if _data.get("stream", None) is not None and _data["stream"] is True:
@@ -6679,6 +6683,7 @@ async def completion(  # noqa: PLR0915
                 selected_data_generator,
                 media_type="text/event-stream",
                 status_code=200,  # Return 200 for passthrough mode
+                headers=dict(fastapi_response.headers),
             )
         else:
             _response = litellm.TextCompletionResponse()
