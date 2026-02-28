@@ -1,15 +1,15 @@
-# /skills - Anthropic Skills API
+# /skills - Skills API
 
 | Feature | Supported | 
 |---------|-----------|
 | Cost Tracking | ✅ |
 | Logging | ✅ |
 | Load Balancing | ✅ |
-| Supported Providers | `anthropic` |
+| Supported Providers | `anthropic`, `openai` |
 
 :::tip
 
-LiteLLM follows the [Anthropic Skills API](https://docs.anthropic.com/en/docs/build-with-claude/skills) for creating, managing, and using reusable AI capabilities.
+LiteLLM provides a unified Skills API supporting both [Anthropic Skills](https://docs.anthropic.com/en/docs/build-with-claude/skills) and [OpenAI Skills](https://platform.openai.com/docs/api-reference/skills). Use `custom_llm_provider` to select the provider.
 
 :::
 
@@ -448,4 +448,138 @@ This tells the API that `SKILL.md` belongs to the `test-skill` directory.
 | Provider | Link to Usage |
 |----------|---------------|
 | Anthropic | [Usage](#quick-start---create-a-skill) |
+| OpenAI | [Usage](#openai-skills-api) |
+
+## **OpenAI Skills API**
+
+OpenAI's Skills API supports additional endpoints beyond the basic CRUD operations shared with Anthropic.
+
+### Key Differences from Anthropic
+
+| Feature | Anthropic | OpenAI |
+|---------|-----------|--------|
+| Auth header | `x-api-key` | `Authorization: Bearer` |
+| Pagination | `page`/`next_page` | `after`/`before`/`first_id`/`last_id` |
+| Skill name field | `display_title` | `name` |
+| Timestamps | ISO 8601 strings | Unix integers |
+| Update skill | ❌ | ✅ |
+| Skill content | ❌ | ✅ |
+| Skill versions CRUD | ❌ | ✅ |
+
+### OpenAI Quick Start
+
+```python showLineNumbers title="openai_skills.py"
+import litellm
+
+# Create a skill (same as Anthropic, just change provider)
+response = litellm.create_skill(
+    display_title="My OpenAI Skill",
+    files=[open("skill.zip", "rb")],
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+print(response.id)
+```
+
+### Update Skill (OpenAI-specific)
+
+```python showLineNumbers title="update_skill.py"
+import litellm
+
+# Update the default version of a skill
+response = litellm.update_skill(
+    skill_id="sk_abc123",
+    default_version=3,
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+```
+
+### Get Skill Content (OpenAI-specific)
+
+```python showLineNumbers title="get_skill_content.py"
+import litellm
+
+response = litellm.get_skill_content(
+    skill_id="sk_abc123",
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+```
+
+### Skill Versions (OpenAI-specific)
+
+```python showLineNumbers title="skill_versions.py"
+import litellm
+
+# List versions
+versions = litellm.list_skill_versions(
+    skill_id="sk_abc123",
+    limit=10,
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+
+# Get a specific version
+version = litellm.get_skill_version(
+    skill_id="sk_abc123",
+    version="2",
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+
+# Get version content
+content = litellm.get_skill_version_content(
+    skill_id="sk_abc123",
+    version="2",
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+
+# Create a new version
+new_version = litellm.create_skill_version(
+    skill_id="sk_abc123",
+    files=[open("updated-skill.zip", "rb")],
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+
+# Delete a version
+litellm.delete_skill_version(
+    skill_id="sk_abc123",
+    version="1",
+    custom_llm_provider="openai",
+    api_key="sk-..."
+)
+```
+
+### OpenAI Proxy Endpoints
+
+```bash
+# Update skill (set default version)
+curl -X POST "http://localhost:4000/v1/skills/sk_abc123" \
+  -H "Authorization: Bearer your-litellm-key" \
+  -H "Content-Type: application/json" \
+  -d '{"default_version": 3, "custom_llm_provider": "openai"}'
+
+# Get skill content
+curl "http://localhost:4000/v1/skills/sk_abc123/content?custom_llm_provider=openai" \
+  -H "Authorization: Bearer your-litellm-key"
+
+# List skill versions
+curl "http://localhost:4000/v1/skills/sk_abc123/versions?limit=10&custom_llm_provider=openai" \
+  -H "Authorization: Bearer your-litellm-key"
+
+# Get specific version
+curl "http://localhost:4000/v1/skills/sk_abc123/versions/2?custom_llm_provider=openai" \
+  -H "Authorization: Bearer your-litellm-key"
+
+# Get version content
+curl "http://localhost:4000/v1/skills/sk_abc123/versions/2/content?custom_llm_provider=openai" \
+  -H "Authorization: Bearer your-litellm-key"
+
+# Delete a version
+curl -X DELETE "http://localhost:4000/v1/skills/sk_abc123/versions/1?custom_llm_provider=openai" \
+  -H "Authorization: Bearer your-litellm-key"
+```
 
