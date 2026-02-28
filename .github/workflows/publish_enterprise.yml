@@ -63,6 +63,7 @@ on:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           cd ..
-          git add enterprise/pyproject.toml pyproject.toml requirements.txt
+          poetry lock --no-update
+          git add enterprise/pyproject.toml pyproject.toml requirements.txt poetry.lock
           git commit -m "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
           git push
