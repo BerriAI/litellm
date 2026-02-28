@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from httpx import Response
+from httpx import Request, Response
 
 from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.types.utils import StandardLoggingPayload
@@ -84,7 +84,7 @@ async def test_extract_tags_no_team(clean_env):
 @pytest.mark.asyncio
 async def test_add_metrics_from_log(clean_env):
     """Test that _add_metrics_from_log appends the correct metric series to the queue."""
-    logger = DatadogMetricsLogger(batch_size=100)
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
 
     now = datetime.now()
     start_time = now - timedelta(seconds=2)
@@ -128,7 +128,7 @@ async def test_add_metrics_from_log(clean_env):
 @pytest.mark.asyncio
 async def test_async_log_success_event(clean_env):
     """Test that success events are added to the queue."""
-    logger = DatadogMetricsLogger(batch_size=100)
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
 
     now = datetime.now()
     start_time = now - timedelta(seconds=1)
@@ -154,7 +154,7 @@ async def test_async_log_success_event(clean_env):
 @pytest.mark.asyncio
 async def test_async_log_success_event_no_standard_logging_object(clean_env):
     """Test that events without standard_logging_object are skipped."""
-    logger = DatadogMetricsLogger(batch_size=100)
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
 
     await logger.async_log_success_event(
         kwargs={},
@@ -169,7 +169,7 @@ async def test_async_log_success_event_no_standard_logging_object(clean_env):
 @pytest.mark.asyncio
 async def test_async_log_failure_event_extracts_status_code(clean_env):
     """Test that failure events extract the error status code."""
-    logger = DatadogMetricsLogger(batch_size=100)
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
 
     now = datetime.now()
     start_time = now - timedelta(seconds=1)
@@ -200,7 +200,7 @@ async def test_async_log_failure_event_extracts_status_code(clean_env):
 @pytest.mark.asyncio
 async def test_async_log_failure_event_default_status_code(clean_env):
     """Test that failure events default to 500 when no error_code is present."""
-    logger = DatadogMetricsLogger(batch_size=100)
+    logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
 
     now = datetime.now()
 
@@ -229,9 +229,12 @@ async def test_async_log_failure_event_default_status_code(clean_env):
 @pytest.mark.asyncio
 async def test_async_send_batch(clean_env):
     """Test that async_send_batch uploads metrics to Datadog."""
-    logger = DatadogMetricsLogger()
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
     logger.async_client = AsyncMock()
-    logger.async_client.post.return_value = Response(202, json={"status": "ok"})
+    mock_request = Request("POST", "https://api.test.datadoghq.com/api/v2/series")
+    logger.async_client.post.return_value = Response(
+        202, json={"status": "ok"}, request=mock_request
+    )
 
     # Manually add a metric series to the queue
     logger.log_queue = [
@@ -262,7 +265,7 @@ async def test_async_send_batch(clean_env):
 @pytest.mark.asyncio
 async def test_async_send_batch_empty_queue(clean_env):
     """Test that async_send_batch does nothing when queue is empty."""
-    logger = DatadogMetricsLogger()
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
     logger.async_client = AsyncMock()
 
     await logger.async_send_batch()
