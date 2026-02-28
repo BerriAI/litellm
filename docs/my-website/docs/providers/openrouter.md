@@ -11,14 +11,14 @@ import os
 from litellm import completion
 
 os.environ["OPENROUTER_API_KEY"] = ""
-os.environ["OPENROUTER_API_BASE"] = "" # [OPTIONAL] defaults to https://openrouter.ai/api/v1
-os.environ["OR_SITE_URL"] = "" # [OPTIONAL]
-os.environ["OR_APP_NAME"] = "" # [OPTIONAL]
+os.environ["OPENROUTER_API_BASE"] = ""  # [OPTIONAL] defaults to https://openrouter.ai/api/v1
+os.environ["OR_SITE_URL"] = ""  # [OPTIONAL]
+os.environ["OR_APP_NAME"] = ""  # [OPTIONAL]
 
 response = completion(
-            model="openrouter/google/palm-2-chat-bison",
-            messages=messages,
-        )
+    model="openrouter/google/palm-2-chat-bison",
+    messages=messages,
+)
 ```
 
 ## Configuration with Environment Variables
@@ -72,11 +72,11 @@ from litellm import completion
 os.environ["OPENROUTER_API_KEY"] = ""
 
 response = completion(
-            model="openrouter/google/palm-2-chat-bison",
-            messages=messages,
-            transforms = [""],
-            route= ""
-        )
+    model="openrouter/google/palm-2-chat-bison",
+    messages=messages,
+    transforms = [""],
+    route= ""
+)
 ```
 
 ## Embedding
@@ -143,7 +143,7 @@ response = image_generation(
     model="openrouter/google/gemini-2.5-flash-image",
     prompt="A serene mountain landscape with a lake",
     size="1536x1024",  # Landscape format
-    quality="high",     # High quality (4K)
+    quality="high",    # High quality (4K)
 )
 
 # Access the generated image
