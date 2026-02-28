@@ -64,6 +64,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         }
         key="permissions"
         className="border-0"
+        forceRender
       >
         <div className="space-y-6 pt-4">
           <div className="flex items-start justify-between gap-4">
