@@ -1447,13 +1447,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             inputs["texts"] = masked_texts
             return inputs
 
-        except (HTTPException, GuardrailInterventionNormalStringError):
-            # Let guardrail blocking exceptions propagate as-is so the proxy
-            # can return the correct HTTP status (400) or handle the
-            # GuardrailInterventionNormalStringError for disable_exception_on_block mode.
-            # Without this, the generic except below wraps them into a plain
-            # Exception, losing the HTTP semantics and preventing the proxy
-            # from properly blocking the call.
+        except GuardrailInterventionNormalStringError as e:
+            # When disable_exception_on_block is True, use the guardrail's
+            # blocked output text as the masked text instead of raising.
+            # This mirrors the behavior of async_pre_call_hook (line ~805).
+            masked_texts = [e.message] if e.message else texts
+            inputs["texts"] = masked_texts
+            return inputs
+        except HTTPException:
+            # Let HTTP exceptions propagate so the proxy returns the
+            # correct HTTP status (400) for blocked guardrails.
             raise
         except Exception as e:
             verbose_proxy_logger.error(
