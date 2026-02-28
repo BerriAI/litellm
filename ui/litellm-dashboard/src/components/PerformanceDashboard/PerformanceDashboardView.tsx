@@ -59,9 +59,10 @@ async function runTestRequest(accessToken: string, model: string, messages: { ro
   const captured: Record<string, string> = {};
   resp.headers.forEach((v, k) => { if (k.startsWith("x-litellm")) captured[k] = v; });
   const overheadRaw = resp.headers.get("x-litellm-overhead-duration-ms");
+  const overheadParsed = overheadRaw && overheadRaw !== "None" ? parseFloat(overheadRaw) : NaN;
   return {
     status: resp.status,
-    overheadMs: overheadRaw ? Math.round(parseFloat(overheadRaw)) : null,
+    overheadMs: isNaN(overheadParsed) ? null : Math.round(overheadParsed),
     wallMs,
     model,
     responseText,
@@ -410,14 +411,39 @@ export default function PerformanceDashboardView() {
         {testResult && (
           <>
             {/* Status bar */}
-            <div className="flex items-center gap-4 py-2.5 px-3 bg-gray-50 rounded border border-gray-100 mb-6 text-sm">
-              <span className={`font-medium ${testResult.status === 200 ? "text-green-600" : "text-red-500"}`}>
-                {testResult.status === 200 ? "200 OK" : `${testResult.status} Error`}
-              </span>
-              <span className="text-gray-400">·</span>
-              <span className="text-gray-600">{testResult.wallMs}ms</span>
-              <span className="text-gray-400">·</span>
-              <span className="text-gray-500 text-xs">{testResult.model}</span>
+            <div className="flex items-center gap-0 mb-6 border border-gray-100 rounded-md overflow-hidden text-sm divide-x divide-gray-100">
+              <div className="px-4 py-2.5 bg-gray-50">
+                <span className={`font-semibold ${testResult.status === 200 ? "text-green-600" : "text-red-500"}`}>
+                  {testResult.status === 200 ? "200 OK" : `${testResult.status} Error`}
+                </span>
+              </div>
+              <div className="px-4 py-2.5 bg-white flex flex-col">
+                <span className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Total</span>
+                <span className="font-semibold text-gray-800 tabular-nums">{testResult.wallMs}ms</span>
+              </div>
+              <div className={`px-4 py-2.5 flex flex-col ${testResult.overheadMs === null ? "bg-amber-50" : overheadPctTest != null && overheadPctTest > 20 ? "bg-orange-50" : "bg-white"}`}>
+                <span className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">LiteLLM Overhead</span>
+                {testResult.overheadMs !== null ? (
+                  <span className={`font-semibold tabular-nums ${overheadPctTest != null && overheadPctTest > 20 ? "text-orange-500" : "text-gray-800"}`}>
+                    {testResult.overheadMs}ms
+                  </span>
+                ) : (
+                  <Tooltip title="x-litellm-overhead-duration-ms header not returned — upgrade to a recent proxy version">
+                    <span className="text-amber-500 text-xs font-medium cursor-help">not available ⚠</span>
+                  </Tooltip>
+                )}
+              </div>
+              {overheadPctTest !== null && testResult.overheadMs !== null && (
+                <div className={`px-4 py-2.5 flex flex-col ${overheadPctTest > 20 ? "bg-orange-50" : "bg-white"}`}>
+                  <span className="text-[10px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Overhead %</span>
+                  <span className={`font-semibold tabular-nums ${overheadPctTest > 20 ? "text-orange-500" : "text-green-600"}`}>
+                    {overheadPctTest}%
+                  </span>
+                </div>
+              )}
+              <div className="px-4 py-2.5 bg-white flex-1 flex items-center">
+                <span className="text-gray-400 text-xs truncate">{testResult.model}</span>
+              </div>
             </div>
 
             {/* OTEL-style trace waterfall */}

@@ -140,6 +140,9 @@ MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL",
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
+    "x-litellm-overhead-duration-ms",
+    "x-litellm-response-duration-ms",
+    "x-litellm-callback-duration-ms",
 ]
 
 # Gemini model-specific minimal thinking budget constants
