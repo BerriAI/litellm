@@ -157,9 +157,9 @@ export const mcpServerColumns = (
     cell: ({ row }) => {
       const isPublic = row.original.available_on_public_internet;
       return isPublic ? (
-        <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">Public</span>
+        <span className="px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">All networks</span>
       ) : (
-        <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-xs font-medium">Internal</span>
+        <span className="px-2 py-0.5 bg-orange-50 text-orange-700 rounded text-xs font-medium">Internal only</span>
       );
     },
   },
