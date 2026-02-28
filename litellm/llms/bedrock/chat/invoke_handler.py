@@ -15,12 +15,21 @@ from typing import (
     cast,
     get_args,
 )
+BEDROCK_ERROR_TYPE_TO_STATUS = {
+    "ValidationException": 400,
+    "AccessDeniedException": 403,
+    "ThrottlingException": 429,
+    "ServiceQuotaExceededException": 429,
+    "ResourceNotFoundException": 404,
+    "ModelNotReadyException": 503,
+}
 
 import httpx  # type: ignore
 
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+import json
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -68,7 +77,6 @@ from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
-
 _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
@@ -1690,7 +1698,28 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
+        is_first_chunk = True
+        
         for chunk in iterator:
+            if is_first_chunk:
+                is_first_chunk = False
+                if chunk.strip().startswith(b"{"):
+                    try:
+                        error_data = json.loads(chunk)
+                        if "message" in error_data:
+                            # Extract error type
+                            error_type = error_data.get("type") or error_data.get("__type", "")
+                            # Get status code, default to 400 if type not found
+                            status_code = BEDROCK_ERROR_TYPE_TO_STATUS.get(error_type, 400)
+                            # Raise BedrockError with correct status code
+                            raise BedrockError(
+                                status_code=status_code,
+                                message=error_data.get("message", "Unknown error"),
+                            )
+
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
                 message = self._parse_message_from_event(event)
@@ -1706,7 +1735,31 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
+        is_first_chunk = True
+
         async for chunk in iterator:
+            if is_first_chunk:
+                is_first_chunk = False
+
+                # If it starts with '{', it's a JSON error, not a binary stream
+                if chunk.strip().startswith(b"{"):
+                    try:
+                        error_data = json.loads(chunk)
+                        if "message" in error_data:
+                            # Extract error type
+                            error_type = error_data.get("type") or error_data.get("__type", "")
+                            # Get status code, default to 400 if type not found
+                            status_code = BEDROCK_ERROR_TYPE_TO_STATUS.get(error_type, 400)
+
+                            # Raise BedrockError with correct status code
+                            raise BedrockError(
+                                status_code=status_code,
+                                message=error_data.get("message", "Unknown error"),
+                            )
+
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    
             event_stream_buffer.add_data(chunk)
             for event in event_stream_buffer:
                 message = self._parse_message_from_event(event)
