@@ -2071,6 +2071,11 @@ class ProxyLogging:
 
             response_str = extract_text_from_a2a_response(response)
         if response_str is not None:
+            # Cache model-level guardrails check per-request to avoid repeated
+            # dict lookups + llm_router.get_deployment() per callback per chunk.
+            _cached_guardrail_data: Optional[dict] = None
+            _guardrail_data_computed = False
+
             for callback in litellm.callbacks:
                 try:
                     _callback: Optional[CustomLogger] = None
@@ -2078,14 +2083,16 @@ class ProxyLogging:
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
 
-                        ## CHECK FOR MODEL-LEVEL GUARDRAILS
-                        modified_data = _check_and_merge_model_level_guardrails(
-                            data=data, llm_router=llm_router
-                        )
+                        ## CHECK FOR MODEL-LEVEL GUARDRAILS (cached per-request)
+                        if not _guardrail_data_computed:
+                            _cached_guardrail_data = _check_and_merge_model_level_guardrails(
+                                data=data, llm_router=llm_router
+                            )
+                            _guardrail_data_computed = True
 
                         if (
                             callback.should_run_guardrail(
-                                data=modified_data,
+                                data=_cached_guardrail_data,
                                 event_type=GuardrailEventHooks.post_call,
                             )
                             is not True
@@ -4692,7 +4699,10 @@ async def update_spend_logs_job(
         from litellm.proxy.guardrails.usage_tracking import (
             process_spend_logs_guardrail_usage,
         )
+<<<<<<< litellm_guardrail-filtering-dispatch
 
+=======
+>>>>>>> main
         await process_spend_logs_guardrail_usage(
             prisma_client=prisma_client,
             logs_to_process=logs_to_process,

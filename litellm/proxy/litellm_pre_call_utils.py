@@ -248,13 +248,15 @@ def clean_headers(
     clean_headers = {}
     litellm_key_lower = (
         litellm_key_header_name.lower() if litellm_key_header_name is not None else None
-    )    
+    )
     for header, value in headers.items():
         header_lower = header.lower()
-        
+
         if header_lower == "authorization" and is_anthropic_oauth_key(value):
             clean_headers[header] = value
-        elif forward_llm_provider_auth_headers and header_lower in _SPECIAL_HEADERS_CACHE:
+        elif (
+            forward_llm_provider_auth_headers and header_lower in _SPECIAL_HEADERS_CACHE
+        ):
             if litellm_key_lower and header_lower == litellm_key_lower:
                 continue
             if header_lower == "authorization":
@@ -840,11 +842,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
     _raw_headers: Dict[str, str] = _safe_get_request_headers(request)
-    
+
     forward_llm_auth = False
     if general_settings:
-        forward_llm_auth = general_settings.get("forward_llm_provider_auth_headers", False)
-    
+        forward_llm_auth = general_settings.get(
+            "forward_llm_provider_auth_headers", False
+        )
+
     _headers: Dict[str, str] = clean_headers(
         request.headers,
         litellm_key_header_name=(
@@ -1019,6 +1023,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 "spend_logs_metadata"
             ]
 
+    ## PROJECT-LEVEL TAGS
+    project_metadata = user_api_key_dict.project_metadata or {}
+    if "tags" in project_metadata and project_metadata["tags"] is not None:
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=project_metadata["tags"],
+        )
+
     ## TEAM-LEVEL METADATA
     data = (
         LiteLLMProxyRequestSetup.add_management_endpoint_metadata_to_request_metadata(
@@ -1047,6 +1059,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_model_max_budget"
     ] = user_api_key_dict.model_max_budget
+    data[_metadata_variable_name][
+        "user_api_key_end_user_model_max_budget"
+    ] = user_api_key_dict.end_user_model_max_budget
 
     # User spend, budget - used by prometheus.py
     # Follow same pattern as team and API key budgets

@@ -300,7 +300,7 @@ model LiteLLM_MCPServerTable {
   token_url          String?
   registration_url   String?
   allow_all_keys Boolean @default(false)
-  available_on_public_internet Boolean @default(false)
+  available_on_public_internet Boolean @default(true)
 }
 
 // Generate Tokens for Proxy
@@ -390,6 +390,7 @@ model LiteLLM_DeletedVerificationToken {
     config                  Json     @default("{}")
     user_id                 String?
     team_id                 String?
+    agent_id   String?
     project_id              String?
     permissions             Json     @default("{}")
     max_parallel_requests   Int?
@@ -1094,4 +1095,19 @@ model LiteLLM_AccessGroupTable {
   created_by         String?
   updated_at         DateTime @default(now()) @updatedAt
   updated_by         String?
+}
+// Claude Code Plugin Marketplace table
+model LiteLLM_ClaudeCodePluginTable {
+  id            String    @id @default(uuid())
+  name          String    @unique
+  version       String?
+  description   String?
+  manifest_json String?
+  files_json    String?   @default("{}")
+  enabled       Boolean   @default(true)
+  created_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now()) @updatedAt
+  created_by    String?
+
+  @@map("LiteLLM_ClaudeCodePluginTable")
 }

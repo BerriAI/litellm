@@ -72,6 +72,9 @@ class RealTimeStreaming:
         self.request_data: Dict = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
+        # When a text message is blocked, hold the guardrail reason so the next
+        # response.create can be rewritten to include the failure context.
+        self._pending_guardrail_message: Optional[str] = None
 
     def _should_store_message(
         self,
@@ -230,9 +233,9 @@ class RealTimeStreaming:
                 message, self.model, self.session_configuration_request
             )
             for msg in transformed:
-                await self.backend_ws.send(msg)
+                await self.backend_ws.send(msg)  # type: ignore[union-attr]
         else:
-            await self.backend_ws.send(message)
+            await self.backend_ws.send(message)  # type: ignore[union-attr]
 
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
@@ -261,18 +264,12 @@ class RealTimeStreaming:
 
         When this returns True, we inject a session.update to disable the LLM's
         auto-response so the guardrail can gate it first.
-        """
-        from litellm.integrations.custom_guardrail import CustomGuardrail
-        from litellm.types.guardrails import GuardrailEventHooks
 
-        return any(
-            isinstance(cb, CustomGuardrail)
-            and cb.should_run_guardrail(
-                data=self.request_data,
-                event_type=GuardrailEventHooks.realtime_input_transcription,
-            )
-            for cb in litellm.callbacks
-        )
+        Must match the same hook criteria as run_realtime_guardrails() so that
+        any guardrail that would actually check the transcript also disables
+        auto-response before the transcript arrives.
+        """
+        return self._has_realtime_guardrails()
 
     async def run_realtime_guardrails(
         self,
@@ -335,18 +332,35 @@ class RealTimeStreaming:
                 # Use realtime_violation_message if configured; fall back to guardrail error text.
                 error_msg = getattr(callback, "realtime_violation_message", None) or safe_msg
 
-                # Return the error directly to the WebSocket consumer.
+                # Cancel any in-progress LLM response (e.g. VAD auto-response).
+                await self._send_to_backend(json.dumps({"type": "response.cancel"}))
+                # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "error": {
-                                "type": "guardrail_violation",
-                                "message": error_msg,
-                                "code": "content_policy_violation",
-                            },
-                        }
-                    )
+                    json.dumps({
+                        "type": "error",
+                        "error": {
+                            "type": "guardrail_violation",
+                            "message": error_msg,
+                            "code": "content_policy_violation",
+                        },
+                    })
+                )
+                # Ask the LLM to voice the exact guardrail message so the
+                # user hears it as audio in voice sessions (not just text).
+                guardrail_prompt = (
+                    f"Say exactly the following message to the user, word for word, "
+                    f"do not add anything else: {error_msg}"
+                )
+                await self._send_to_backend(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": guardrail_prompt}],
+                    },
+                }))
+                await self._send_to_backend(
+                    json.dumps({"type": "response.create"})
                 )
 
                 self._violation_count += 1
@@ -362,7 +376,7 @@ class RealTimeStreaming:
                         "[realtime guardrail] ending session after violation %d",
                         self._violation_count,
                     )
-                    await self.backend_ws.close()
+                    await self.backend_ws.close()  # type: ignore[union-attr]
 
                 verbose_logger.warning(
                     "[realtime guardrail] BLOCKED transcript (violation %d): %r",
@@ -502,11 +516,11 @@ class RealTimeStreaming:
         try:
             while True:
                 try:
-                    raw_response = await self.backend_ws.recv(
+                    raw_response = await self.backend_ws.recv(  # type: ignore[union-attr]
                         decode=False
                     )  # improves performance
                 except TypeError:
-                    raw_response = await self.backend_ws.recv()  # type: ignore[assignment]
+                    raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
 
                 if self.provider_config:
                     try:
@@ -559,7 +573,17 @@ class RealTimeStreaming:
                                     combined_text
                                 )
                                 if blocked:
-                                    continue  # don't forward to backend
+                                    # Store the guardrail reason so the next response.create
+                                    # (sent automatically by the client) is rewritten to
+                                    # include it as response instructions.
+                                    self._pending_guardrail_message = combined_text
+                                    continue  # don't forward the original blocked message
+
+                    if msg_type == "response.create" and self._pending_guardrail_message:
+                        # The guardrail already sent the synthetic AI bubble — drop this
+                        # response.create so OpenAI doesn't generate an additional response.
+                        self._pending_guardrail_message = None
+                        continue
 
                 except (json.JSONDecodeError, AttributeError):
                     pass
@@ -573,9 +597,9 @@ class RealTimeStreaming:
                     )
 
                     for msg in message:
-                        await self.backend_ws.send(msg)
+                        await self.backend_ws.send(msg)  # type: ignore[union-attr]
                 else:
-                    await self.backend_ws.send(message)
+                    await self.backend_ws.send(message)  # type: ignore[union-attr]
 
         except Exception as e:
             verbose_logger.debug(f"Error in client ack messages: {e}")

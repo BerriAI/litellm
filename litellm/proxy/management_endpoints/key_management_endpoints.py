@@ -3983,6 +3983,10 @@ async def list_keys(
     status: Optional[str] = Query(
         None, description="Filter by status (e.g. 'deleted')"
     ),
+    project_id: Optional[str] = Query(None, description="Filter keys by project ID"),
+    access_group_id: Optional[str] = Query(
+        None, description="Filter keys by access group ID"
+    ),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -4076,6 +4080,8 @@ async def list_keys(
             sort_order=sort_order,
             expand=expand,
             status=status,
+            project_id=project_id,
+            access_group_id=access_group_id,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -4109,13 +4115,23 @@ async def list_keys(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def key_aliases() -> Dict[str, List[str]]:
+async def key_aliases(
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(50, ge=1, le=100, description="Page size"),
+    search: Optional[str] = Query(
+        None, description="Search key aliases (case-insensitive partial match)"
+    ),
+) -> Dict[str, Any]:
     """
-    Lists all key aliases
+    Lists key aliases with pagination and optional search.
 
     Returns:
         {
-            "aliases": List[str]
+            "aliases": List[str],
+            "total_count": int,
+            "current_page": int,
+            "total_pages": int,
+            "size": int,
         }
     """
     try:
@@ -4127,36 +4143,55 @@ async def key_aliases() -> Dict[str, List[str]]:
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
 
-        where: Dict[str, Any] = {}
-        try:
-            where.update(_get_condition_to_filter_out_ui_session_tokens())
-        except NameError:
-            # Helper may not exist in some builds; ignore if missing
-            pass
+        # Build a parameterized WHERE clause to avoid loading full rows into
+        # memory. Raw SQL is used because the Prisma client wrapper does not
+        # support column-level SELECT projection on find_many.
+        #
+        # $1 is always UI_SESSION_TOKEN_TEAM_ID (filters out UI session tokens).
+        query_params: List[Any] = [UI_SESSION_TOKEN_TEAM_ID]
+        where_parts = [
+            "key_alias IS NOT NULL",
+            "key_alias != ''",
+            "(team_id IS NULL OR team_id != $1)",
+        ]
+        if search:
+            query_params.append(f"%{search}%")
+            where_parts.append(f"key_alias ILIKE ${len(query_params)}")
 
-        rows = await prisma_client.db.litellm_verificationtoken.find_many(
-            where=where,
-            order=[{"key_alias": "asc"}],
+        where_sql = " AND ".join(where_parts)
+
+        count_sql = (
+            f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
+        )
+        count_rows = await prisma_client.db.query_raw(count_sql, *query_params)
+        total_count = int(count_rows[0]["count"]) if count_rows else 0
+
+        aliases_params = query_params + [size, (page - 1) * size]
+        limit_idx = len(aliases_params) - 1
+        offset_idx = len(aliases_params)
+        aliases_sql = (
+            f"SELECT key_alias"
+            f' FROM "LiteLLM_VerificationToken"'
+            f" WHERE {where_sql}"
+            f" ORDER BY key_alias ASC"
+            f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        )
+        alias_rows = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        aliases: List[str] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+
+        total_pages = -(-total_count // size) if total_count > 0 else 0
+        verbose_proxy_logger.debug(
+            f"key_aliases: page={page}, size={size}, search={search!r}, "
+            f"total_count={total_count}, total_pages={total_pages}"
         )
 
-        seen = set()
-        aliases: List[str] = []
-        for row in rows:
-            alias = getattr(row, "key_alias", None)
-            if alias is None and isinstance(row, dict):
-                alias = row.get("key_alias")
-
-            if not alias:
-                continue
-
-            alias_str = str(alias).strip()
-            if alias_str and alias_str not in seen:
-                seen.add(alias_str)
-                aliases.append(alias_str)
-
-        verbose_proxy_logger.debug(f"Returning {len(aliases)} key aliases")
-
-        return {"aliases": aliases}
+        return {
+            "aliases": aliases,
+            "total_count": total_count,
+            "current_page": page,
+            "total_pages": total_pages,
+            "size": size,
+        }
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in key_aliases: {e}")
@@ -4223,6 +4258,8 @@ def _build_key_filter_conditions(
     admin_team_ids: Optional[List[str]],
     member_team_ids: Optional[List[str]] = None,
     include_created_by_keys: bool = False,
+    project_id: Optional[str] = None,
+    access_group_id: Optional[str] = None,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
 
@@ -4314,6 +4351,13 @@ def _build_key_filter_conditions(
     elif len(or_conditions) == 1:
         where.update(or_conditions[0])
 
+    # Apply project_id and access_group_id as global AND filters so they
+    # narrow results across all visibility conditions (own keys, team keys, etc.)
+    if project_id:
+        where = {"AND": [where, {"project_id": project_id}]}
+    if access_group_id:
+        where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
+
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
 
@@ -4340,6 +4384,8 @@ async def _list_key_helper(
     sort_order: str = "desc",
     expand: Optional[List[str]] = None,
     status: Optional[str] = None,
+    project_id: Optional[str] = None,
+    access_group_id: Optional[str] = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -4373,6 +4419,8 @@ async def _list_key_helper(
         admin_team_ids=admin_team_ids,
         member_team_ids=member_team_ids,
         include_created_by_keys=include_created_by_keys,
+        project_id=project_id,
+        access_group_id=access_group_id,
     )
 
     # Calculate skip for pagination

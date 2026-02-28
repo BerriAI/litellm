@@ -2616,11 +2616,11 @@ def test_empty_assistant_message_handling():
     empty or whitespace-only content with a placeholder to prevent AWS Bedrock
     Converse API 400 Bad Request errors.
     """
-    # Import the litellm module that factory.py uses to ensure we patch the correct reference
-    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
+    # Import the litellm module that factory.py uses to ensure we patch the correct reference
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -3135,12 +3135,7 @@ def test_native_structured_output_no_fake_stream():
 
 def test_transform_request_with_output_config():
     """Test that outputConfig flows through _transform_request_helper into the final request."""
-    from litellm.types.llms.bedrock import (
-        JsonSchemaDefinition,
-        OutputConfigBlock,
-        OutputFormat,
-        OutputFormatStructure,
-    )
+    from litellm.types.llms.bedrock import OutputConfigBlock, OutputFormat, OutputFormatStructure, JsonSchemaDefinition
 
     config = AmazonConverseConfig()
 
@@ -3382,59 +3377,78 @@ def test_output_config_applies_additional_properties():
 
 
 
-def test_parallel_tool_calls_in_request_transformation():
-    """Test that parallel_tool_calls is correctly placed in additionalModelRequestFields after full transformation"""
-    config = AmazonConverseConfig()
-    
-    messages = [
-        {"role": "user", "content": "What's the weather in SF and NYC?"}
-    ]
-    
-    non_default_params = {
-        "parallel_tool_calls": False,
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The location to get weather for"
-                            }
-                        },
-                        "required": ["location"]
+_TOOL_PARAM = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The location to get weather for",
                     }
-                }
-            }
-        ],
-        "max_tokens": 100,
+                },
+                "required": ["location"],
+            },
+        },
     }
-    
+]
+
+
+def test_parallel_tool_calls_newer_model_adds_disable_flag():
+    """Newer Claude models (4.5+) should get disable_parallel_tool_use in additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
     optional_params = config.map_openai_params(
-        non_default_params=non_default_params,
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
         optional_params={},
-        model="anthropic.claude-sonnet-4-5-v2:0",
+        model=model,
         drop_params=False,
     )
-    
-    # Transform the request
+
     request_data = config.transform_request(
-        model="anthropic.claude-sonnet-4-5-v2:0",
+        model=model,
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
         headers={},
     )
-    
-    # Verify the structure
+
     assert "additionalModelRequestFields" in request_data
     assert "tool_choice" in request_data["additionalModelRequestFields"]
-    assert "disable_parallel_tool_use" in request_data["additionalModelRequestFields"]["tool_choice"]
     assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
+    assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
+
+
+def test_parallel_tool_calls_older_model_drops_disable_flag():
+    """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    additional = request_data.get("additionalModelRequestFields", {})
+    assert "tool_choice" not in additional
+    assert "parallel_tool_calls" not in additional
 
 
 class TestBedrockMinThinkingBudgetTokens:
@@ -3479,3 +3493,262 @@ class TestBedrockMinThinkingBudgetTokens:
             drop_params=False,
         )
         assert "thinking" not in result or result.get("thinking") is None
+
+def test_transform_response_with_both_json_tool_call_and_real_tool():
+    """
+    When Bedrock returns BOTH json_tool_call AND a real tool (get_weather),
+    only the real tool should remain in tool_calls. The json_tool_call should be filtered out.
+    Fixes https://github.com/BerriAI/litellm/issues/18381
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 200},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_json_001",
+                            "name": "json_tool_call",
+                            "input": {
+                                "Current_Temperature": 62,
+                                "Weather_Explanation": "Mild and cool.",
+                            },
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_weather_001",
+                            "name": "get_weather",
+                            "input": {
+                                "location": "San Francisco, CA",
+                                "unit": "fahrenheit",
+                            },
+                        }
+                    },
+                ],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 100,
+            "outputTokens": 50,
+            "totalTokens": 150,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {"json_mode": True}
+
+    result = config._transform_response(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    # Only real tool should remain
+    assert result.choices[0].message.tool_calls is not None
+    assert len(result.choices[0].message.tool_calls) == 1
+    assert result.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert (
+        result.choices[0].message.tool_calls[0].function.arguments
+        == '{"location": "San Francisco, CA", "unit": "fahrenheit"}'
+    )
+
+    # json_tool_call content should be preserved as message text
+    content = result.choices[0].message.content
+    assert content is not None
+    parsed = json.loads(content)
+    assert parsed["Current_Temperature"] == 62
+    assert parsed["Weather_Explanation"] == "Mild and cool."
+
+
+def test_transform_response_does_not_mutate_optional_params():
+    """
+    Verify that optional_params still contains json_mode after _transform_response.
+    Previously, .pop() was used which mutated the caller's dict.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 50},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_001",
+                            "name": "json_tool_call",
+                            "input": {"result": "ok"},
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {"json_mode": True, "other_key": "value"}
+
+    config._transform_response(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    # json_mode should still be in optional_params (not popped)
+    assert "json_mode" in optional_params
+    assert optional_params["json_mode"] is True
+    assert optional_params["other_key"] == "value"
+
+
+def test_streaming_filters_json_tool_call_with_real_tools():
+    """
+    Simulate streaming chunks where both json_tool_call and a real tool arrive.
+    Verify json_tool_call chunks are converted to text content while real tool
+    chunks pass through normally.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+    from litellm.types.llms.bedrock import (
+        ContentBlockDeltaEvent,
+        ContentBlockStartEvent,
+    )
+
+    decoder = AWSEventStreamDecoder(model="test-model", json_mode=True)
+
+    # Chunk 1: json_tool_call start
+    json_start = ContentBlockStartEvent(
+        toolUse={
+            "toolUseId": "tooluse_json_001",
+            "name": "json_tool_call",
+        }
+    )
+    tool_use_1, _, _ = decoder._handle_converse_start_event(json_start)
+    # json_tool_call start should be suppressed (return None tool_use)
+    assert tool_use_1 is None
+    # tool_calls_index should NOT have been incremented
+    assert decoder.tool_calls_index is None
+
+    # Chunk 2: json_tool_call delta — should become text, not tool_use
+    json_delta = ContentBlockDeltaEvent(toolUse={"input": '{"temp": 62}'})
+    text_2, tool_use_2, _, _, _ = decoder._handle_converse_delta_event(
+        json_delta, index=0
+    )
+    assert text_2 == '{"temp": 62}'
+    assert tool_use_2 is None
+
+    # Chunk 3: json_tool_call stop
+    stop_tool = decoder._handle_converse_stop_event(index=0)
+    assert stop_tool is None
+    # _current_tool_name should be reset
+    assert decoder._current_tool_name is None
+
+    # Chunk 4: real tool start
+    real_start = ContentBlockStartEvent(
+        toolUse={
+            "toolUseId": "tooluse_weather_001",
+            "name": "get_weather",
+        }
+    )
+    tool_use_4, _, _ = decoder._handle_converse_start_event(real_start)
+    assert tool_use_4 is not None
+    assert tool_use_4["function"]["name"] == "get_weather"
+    assert decoder.tool_calls_index == 0
+
+    # Chunk 5: real tool delta
+    real_delta = ContentBlockDeltaEvent(
+        toolUse={"input": '{"location": "SF"}'}
+    )
+    text_5, tool_use_5, _, _, _ = decoder._handle_converse_delta_event(
+        real_delta, index=1
+    )
+    assert text_5 == ""
+    assert tool_use_5 is not None
+    assert tool_use_5["function"]["arguments"] == '{"location": "SF"}'
+
+
+def test_streaming_without_json_mode_passes_all_tools():
+    """
+    Verify backward compatibility: when json_mode=False, all tools
+    (including json_tool_call if present) pass through unchanged.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+    from litellm.types.llms.bedrock import (
+        ContentBlockDeltaEvent,
+        ContentBlockStartEvent,
+    )
+
+    decoder = AWSEventStreamDecoder(model="test-model", json_mode=False)
+
+    # json_tool_call start — should pass through when json_mode=False
+    json_start = ContentBlockStartEvent(
+        toolUse={
+            "toolUseId": "tooluse_json_001",
+            "name": "json_tool_call",
+        }
+    )
+    tool_use, _, _ = decoder._handle_converse_start_event(json_start)
+    assert tool_use is not None
+    assert tool_use["function"]["name"] == "json_tool_call"
+    assert decoder.tool_calls_index == 0
+
+    # json_tool_call delta — should be a tool_use, not text
+    json_delta = ContentBlockDeltaEvent(toolUse={"input": '{"data": 1}'})
+    text, tool_use_delta, _, _, _ = decoder._handle_converse_delta_event(
+        json_delta, index=0
+    )
+    assert text == ""
+    assert tool_use_delta is not None
+    assert tool_use_delta["function"]["arguments"] == '{"data": 1}'
+

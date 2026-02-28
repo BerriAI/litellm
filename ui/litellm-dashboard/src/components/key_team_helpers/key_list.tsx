@@ -30,6 +30,7 @@ export interface KeyResponse {
   config: Record<string, unknown>;
   user_id: string;
   team_id: string | null;
+  project_id: string | null;
   max_parallel_requests: number;
   metadata: Record<string, unknown>;
   tpm_limit: number;
