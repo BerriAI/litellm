@@ -23,6 +23,7 @@ vi.mock("./molecules/notifications_manager", () => ({
 vi.mock("./networking", () => ({
   modelInfoV1Call: vi.fn(),
   credentialGetCall: vi.fn(),
+  credentialListCall: vi.fn(),
   getGuardrailsList: vi.fn(),
   tagListCall: vi.fn(),
   testConnectionRequest: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
 const mockNotificationsManager = vi.mocked(NotificationsManager);
 const mockModelInfoV1Call = vi.mocked(networking.modelInfoV1Call);
 const mockCredentialGetCall = vi.mocked(networking.credentialGetCall);
+const mockCredentialListCall = vi.mocked(networking.credentialListCall);
 const mockGetGuardrailsList = vi.mocked(networking.getGuardrailsList);
 const mockTagListCall = vi.mocked(networking.tagListCall);
 const mockTestConnectionRequest = vi.mocked(networking.testConnectionRequest);
@@ -63,6 +65,7 @@ describe("ModelInfoView", () => {
       model: "gpt-4",
       api_base: "https://api.openai.com/v1",
       custom_llm_provider: "openai",
+      litellm_credential_name: "selected-credential",
     },
     model_info: {
       id: "123",
@@ -124,6 +127,15 @@ describe("ModelInfoView", () => {
       credential_name: "test-credential",
       credential_values: {},
       credential_info: {},
+    });
+    mockCredentialListCall.mockResolvedValue({
+      credentials: [
+        {
+          credential_name: "selected-credential",
+          credential_values: {},
+          credential_info: {},
+        },
+      ],
     });
 
     mockGetGuardrailsList.mockResolvedValue({
@@ -487,6 +499,57 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByText("LiteLLM Params")).toBeInTheDocument();
     });
+  });
+
+  it("should show existing credentials field in edit mode", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Existing Credentials")).toBeInTheDocument();
+    });
+  });
+
+  it("should keep selector credential and ignore litellm_credential_name from LiteLLM Params json", async () => {
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) =>
+          input.tagName === "TEXTAREA" &&
+          (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+      );
+    expect(litellmParamsInput).toBeDefined();
+    if (!litellmParamsInput) {
+      return;
+    }
+    expect((litellmParamsInput as HTMLTextAreaElement).value).not.toContain("litellm_credential_name");
+    await user.clear(litellmParamsInput);
+    await user.paste(`{"litellm_credential_name":"from-json","timeout":42}`);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.litellm_credential_name).toBe("selected-credential");
+    expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
   });
 
   it("should display health check model field for wildcard models", async () => {
