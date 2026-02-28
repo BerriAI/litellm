@@ -625,6 +625,35 @@ class ModelManagementAuthChecks:
         return True
 
 
+async def _remove_deleted_model_from_virtual_keys(
+    prisma_client: PrismaClient,
+    model_id: str,
+    model_name: str,
+) -> None:
+    """
+    Remove a deleted model from virtual key models lists.
+    Uses a single UPDATE for all affected keys (O(1) vs O(n) round-trips).
+    """
+    ids_to_remove = [model_id]
+    if model_name and model_name != model_id:
+        ids_to_remove.append(model_name)
+
+    if len(ids_to_remove) == 1:
+        sql = """
+            UPDATE "LiteLLM_VerificationToken"
+            SET models = array_remove(models, $1)
+            WHERE $1 = ANY(models)
+        """
+        await prisma_client.db.execute_raw(sql, ids_to_remove[0])
+    else:
+        sql = """
+            UPDATE "LiteLLM_VerificationToken"
+            SET models = array_remove(array_remove(models, $1), $2)
+            WHERE $1 = ANY(models) OR $2 = ANY(models)
+        """
+        await prisma_client.db.execute_raw(sql, ids_to_remove[0], ids_to_remove[1])
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/delete",
@@ -727,6 +756,12 @@ async def delete_model(
             ## DELETE FROM ROUTER ##
             if llm_router is not None:
                 llm_router.delete_deployment(id=model_info.id)
+
+            await _remove_deleted_model_from_virtual_keys(
+                prisma_client=prisma_client,
+                model_id=model_info.id,
+                model_name=model_params.model_name,
+            )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(

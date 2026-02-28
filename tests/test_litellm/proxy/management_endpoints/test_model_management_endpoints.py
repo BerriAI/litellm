@@ -20,6 +20,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    _remove_deleted_model_from_virtual_keys,
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
@@ -360,6 +361,48 @@ class TestDeleteTeamModelAlias:
         # Verify no updates were made
         mock_db = mock_prisma.db.litellm_modeltable
         assert len(mock_db.update_calls) == 0
+
+
+class TestRemoveDeletedModelFromVirtualKeys:
+    @pytest.mark.asyncio
+    async def test_remove_model_id_only_calls_execute_raw_once(self):
+        """Single UPDATE when only model_id is removed."""
+        mock_db = MagicMock()
+        mock_db.execute_raw = AsyncMock()
+        mock_prisma = MagicMock()
+        mock_prisma.db = mock_db
+
+        await _remove_deleted_model_from_virtual_keys(
+            prisma_client=mock_prisma,
+            model_id="model-123",
+            model_name="model-123",
+        )
+
+        mock_db.execute_raw.assert_called_once()
+        call_args = mock_db.execute_raw.call_args[0]
+        assert "array_remove(models, $1)" in call_args[0]
+        assert "WHERE $1 = ANY(models)" in call_args[0]
+        assert call_args[1] == "model-123"
+
+    @pytest.mark.asyncio
+    async def test_remove_model_id_and_name_calls_execute_raw_once(self):
+        """Single UPDATE when both model_id and model_name differ."""
+        mock_db = MagicMock()
+        mock_db.execute_raw = AsyncMock()
+        mock_prisma = MagicMock()
+        mock_prisma.db = mock_db
+
+        await _remove_deleted_model_from_virtual_keys(
+            prisma_client=mock_prisma,
+            model_id="model-uuid-123",
+            model_name="gpt-4-team",
+        )
+
+        mock_db.execute_raw.assert_called_once()
+        call_args = mock_db.execute_raw.call_args[0]
+        assert "array_remove(array_remove(models, $1), $2)" in call_args[0]
+        assert call_args[1] == "model-uuid-123"
+        assert call_args[2] == "gpt-4-team"
 
 
 class TestClearCache:
