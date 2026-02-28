@@ -5,7 +5,7 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import urllib.parse
-from typing import Any, Callable, List, Optional, Tuple, Union, get_args
+from typing import Any, Callable, List, Optional, Tuple, Union, cast, get_args
 
 import httpx
 
@@ -673,7 +673,7 @@ class BedrockEmbedding(BaseAWSLLM):
         client = get_async_httpx_client(llm_provider=LlmProviders.BEDROCK)
         response = await client.get(
             url=prepped.url,
-            headers=prepped.headers,
+            headers=cast(Dict[Any, Any], prepped.headers),
         )
 
         # LOGGING
