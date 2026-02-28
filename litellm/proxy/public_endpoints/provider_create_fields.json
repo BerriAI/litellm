@@ -3025,5 +3025,33 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "CURSOR",
+    "provider_display_name": "Cursor",
+    "litellm_provider": "cursor",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Cursor API Key",
+        "placeholder": "Your Cursor API key from cursor.com/settings",
+        "tooltip": "Get your API key from the Cursor Dashboard at cursor.com/settings",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.cursor.com",
+        "tooltip": "Cursor API base URL (defaults to https://api.cursor.com)",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://api.cursor.com"
+      }
+    ],
+    "default_model_placeholder": "cursor/claude-4-sonnet"
   }
 ]
