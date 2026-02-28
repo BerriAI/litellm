@@ -1,9 +1,8 @@
 """Tests for deferred (lazy) model cost map loading."""
 
-import importlib
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 class TestLazyModelCostMap(unittest.TestCase):
@@ -25,7 +24,7 @@ class TestLazyModelCostMap(unittest.TestCase):
             litellm._ensure_remote_model_cost()  # should be a no-op
             assert litellm._model_cost_remote_loaded is True
 
-    def test_ensure_remote_model_cost_is_idempotent(self):
+    def test_ensure_remote_idempotent(self):
         """Calling _ensure_remote_model_cost multiple times only fetches once."""
         import litellm
 
@@ -34,19 +33,58 @@ class TestLazyModelCostMap(unittest.TestCase):
         litellm._ensure_remote_model_cost()
         assert len(litellm.model_cost) == original_len
 
-    def test_add_known_models_triggers_remote(self):
+    def test_add_known_models_with_arg_skips_remote(self):
+        """add_known_models(explicit_map) must NOT trigger remote fetch."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        litellm.add_known_models(litellm.model_cost)
+        assert litellm._model_cost_remote_loaded is False, (
+            "passing an explicit map should NOT trigger remote fetch"
+        )
+
+    def test_add_known_models_without_arg_triggers_remote(self):
         """add_known_models() without args triggers _ensure_remote_model_cost."""
         import litellm
 
-        litellm._model_cost_remote_loaded = True  # prevent actual HTTP
-        litellm.add_known_models()
-        assert litellm._model_cost_remote_loaded is True
+        with patch.object(litellm, "_ensure_remote_model_cost") as mock_ensure:
+            litellm.add_known_models()
+            mock_ensure.assert_called_once()
+
+    def test_remote_not_fetched_at_import_time(self):
+        """The module-level add_known_models(model_cost) passes args, so
+        _ensure_remote_model_cost should NOT fire during import."""
+        import litellm
+
+        # After import, if LITELLM_LOCAL_MODEL_COST_MAP was not set,
+        # _model_cost_remote_loaded should still be False (import doesn't fetch)
+        # We can't truly test import-time behavior without reimporting,
+        # but we can verify the guard logic works correctly:
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm.get_model_cost_map") as mock_get:
+            mock_get.return_value = {"test_model": {"litellm_provider": "openai"}}
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_called_once()
+            assert "test_model" in litellm.model_cost
+            # Second call should be a no-op
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_called_once()  # still only 1 call
 
     def test_model_cost_is_plain_dict(self):
         """model_cost should be a plain dict, not a custom subclass."""
         import litellm
 
         assert type(litellm.model_cost) is dict
+
+    def test_remote_failure_keeps_local(self):
+        """If remote fetch fails, local backup data remains intact."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        original_keys = set(litellm.model_cost.keys())
+        with patch("litellm.get_model_cost_map", side_effect=Exception("network")):
+            litellm._ensure_remote_model_cost()
+        assert set(litellm.model_cost.keys()) == original_keys
 
 
 if __name__ == "__main__":
