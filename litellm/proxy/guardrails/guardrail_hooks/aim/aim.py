@@ -73,6 +73,7 @@ class AimGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
+
         return await self.call_aim_guardrail(
             data, hook="pre_call", key_alias=user_api_key_dict.key_alias
         )
@@ -84,7 +85,6 @@ class AimGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
-
         await self.call_aim_guardrail(
             data, hook="moderation", key_alias=user_api_key_dict.key_alias
         )
@@ -104,7 +104,7 @@ class AimGuardrail(CustomGuardrail):
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": data.get("messages", [])},
+            json={"messages": data.get("messages", []), "tools": data.get("tools", [])},
         )
         response.raise_for_status()
         res = response.json()
@@ -162,6 +162,7 @@ class AimGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={
+                "tools": request_data.get("tools", []),
                 "messages": request_data.get("messages", [])
                 + [{"role": "assistant", "content": output}]
             },
