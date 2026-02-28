@@ -1,4 +1,5 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
@@ -48,6 +49,7 @@ export default function KeyInfoView({
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const { teams: teamsData } = useTeams();
+  const { data: projects } = useProjects();
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -569,6 +571,20 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Team ID</Text>
                     <Text>{currentKeyData.team_id || "Not Set"}</Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Project</Text>
+                    <Text>
+                      {currentKeyData.project_id
+                        ? (() => {
+                            const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
+                            return project?.project_alias
+                              ? `${project.project_alias} (${currentKeyData.project_id})`
+                              : currentKeyData.project_id;
+                          })()
+                        : "Not Set"}
+                    </Text>
                   </div>
 
                   <div>
