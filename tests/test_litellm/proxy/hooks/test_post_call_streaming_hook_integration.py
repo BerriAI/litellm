@@ -6,16 +6,17 @@ Tests verify that the streaming hook can transform streaming responses sent to c
 
 import os
 import sys
-import pytest
 from typing import Any
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 
 class StreamingResponseTransformerLogger(CustomLogger):
@@ -46,8 +47,8 @@ async def test_streaming_hook_transforms_response():
     transformer = StreamingResponseTransformerLogger(transform_content="Modified streaming response")
 
     with patch("litellm.callbacks", [transformer]):
-        from litellm.proxy.utils import ProxyLogging
         from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -101,8 +102,8 @@ async def test_streaming_hook_returns_none_keeps_original():
     logger = NoOpLogger()
 
     with patch("litellm.callbacks", [logger]):
-        from litellm.proxy.utils import ProxyLogging
         from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -142,8 +143,8 @@ async def test_streaming_hook_works_with_sse_format():
     )
 
     with patch("litellm.callbacks", [transformer]):
-        from litellm.proxy.utils import ProxyLogging
         from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -195,8 +196,8 @@ async def test_streaming_hook_chains_multiple_callbacks():
     callback2 = AppendLogger("CB2")
 
     with patch("litellm.callbacks", [callback1, callback2]):
-        from litellm.proxy.utils import ProxyLogging
         from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -229,6 +230,81 @@ async def test_streaming_hook_chains_multiple_callbacks():
 
 
 @pytest.mark.asyncio
+async def test_streaming_hook_fast_path_no_callbacks():
+    """
+    Test that async_post_call_streaming_hook returns immediately when no callbacks
+    are registered, without doing any per-chunk work.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    with patch("litellm.callbacks", []):
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+
+        original_response = ModelResponseStream(
+            id="fast-path-stream",
+            choices=[
+                StreamingChoices(
+                    delta=Delta(content="Hello", role="assistant"),
+                    index=0,
+                )
+            ],
+            model="test-model",
+        )
+
+        data = {"model": "test-model"}
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        result = await proxy_logging.async_post_call_streaming_hook(
+            data=data,
+            response=original_response,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Should return the original response unchanged
+        assert result is original_response
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_fast_path_no_callbacks():
+    """
+    Test that async_post_call_streaming_iterator_hook yields chunks directly
+    without extra wrapping when no callbacks are registered.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    chunks = [
+        ModelResponseStream(
+            id=f"chunk-{i}",
+            choices=[StreamingChoices(delta=Delta(content=f"token{i}"), index=0)],
+            model="test-model",
+        )
+        for i in range(5)
+    ]
+
+    async def mock_response_iter():
+        for chunk in chunks:
+            yield chunk
+
+    with patch("litellm.callbacks", []):
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+        collected = []
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=mock_response_iter(),
+            user_api_key_dict=user_api_key_dict,
+            request_data={},
+        ):
+            collected.append(chunk)
+
+        assert len(collected) == 5
+        for i, chunk in enumerate(collected):
+            assert chunk.id == f"chunk-{i}"
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_handles_exceptions():
     """
     Test that hook exceptions are propagated.
@@ -245,8 +321,8 @@ async def test_streaming_hook_handles_exceptions():
     logger = FailingLogger()
 
     with patch("litellm.callbacks", [logger]):
-        from litellm.proxy.utils import ProxyLogging
         from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 

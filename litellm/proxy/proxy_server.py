@@ -5315,14 +5315,19 @@ async def async_data_generator(
             request_data=request_data,
         ):
             ### CALL HOOKS ### - modify outgoing data
-            chunk = await proxy_logging_obj.async_post_call_streaming_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=chunk,
-                data=request_data,
-                str_so_far="".join(str_so_far_parts),
-            )
+            # Only compute str_so_far when callbacks are registered — joining
+            # the accumulated parts on every chunk is O(n²) otherwise.
+            if litellm.callbacks:
+                chunk = await proxy_logging_obj.async_post_call_streaming_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=chunk,
+                    data=request_data,
+                    str_so_far="".join(str_so_far_parts),
+                )
 
-            if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+            if litellm.callbacks and isinstance(
+                chunk, (ModelResponse, ModelResponseStream)
+            ):
                 response_str = litellm.get_response_string(response_obj=chunk)
                 str_so_far_parts.append(response_str)
 
