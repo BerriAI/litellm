@@ -298,6 +298,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
                         dynamic_api_key = get_secret_str("V0_API_KEY")
+                    elif endpoint == "https://api.venice.ai/api/v1":
+                        custom_llm_provider = "veniceai"
+                        dynamic_api_key = get_secret_str("VENICE_AI_API_KEY")
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
