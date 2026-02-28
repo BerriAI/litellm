@@ -1667,6 +1667,15 @@ async def _prepare_vertex_auth_headers(
         # Add the Authorization header with vendor credentials
         headers["Authorization"] = f"Bearer {auth_header}"
 
+        # Forward Anthropic-specific headers if present in the request
+        from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
+        for header_name in ANTHROPIC_API_HEADERS:
+            if header_name in request.headers:
+                headers[header_name] = request.headers[header_name]
+                verbose_proxy_logger.debug(
+                    f"Forwarding Anthropic header {header_name}: {request.headers[header_name]}"
+                )
+
         if base_target_url is not None:
             base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
                 base_target_url, vertex_location
