@@ -5563,26 +5563,42 @@ def _get_model_info_helper(  # noqa: PLR0915
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
             )
-            if _input_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model={}, custom_llm_provider={} has no input_cost_per_token in model_cost_map. Defaulting to 0.".format(
-                        model, custom_llm_provider
+            if _input_cost_per_token is None or _input_cost_per_token == 0:
+                # Derive fallback from first tier when tiered_pricing exists (fixes budget enforcement for Dashscope etc.)
+                tiered_pricing = _model_info.get("tiered_pricing")
+                if tiered_pricing and isinstance(tiered_pricing, list) and len(tiered_pricing) > 0:
+                    first_tier = tiered_pricing[0]
+                    _fallback = first_tier.get("input_cost_per_token")
+                    if _fallback is not None and _fallback != 0:
+                        _input_cost_per_token = _fallback
+                if _input_cost_per_token is None or _input_cost_per_token == 0:
+                    verbose_logger.debug(
+                        "model={}, custom_llm_provider={} has no input_cost_per_token in model_cost_map. Defaulting to 0.".format(
+                            model, custom_llm_provider
+                        )
                     )
-                )
-                _input_cost_per_token = 0
+                    _input_cost_per_token = 0
 
             _output_cost_per_token: Optional[float] = _model_info.get(
                 "output_cost_per_token"
             )
-            if _output_cost_per_token is None:
-                # default value to 0, be noisy about this
-                verbose_logger.debug(
-                    "model={}, custom_llm_provider={} has no output_cost_per_token in model_cost_map. Defaulting to 0.".format(
-                        model, custom_llm_provider
+            if _output_cost_per_token is None or _output_cost_per_token == 0:
+                # Derive fallback from first tier when tiered_pricing exists (fixes budget enforcement for Dashscope etc.)
+                tiered_pricing = _model_info.get("tiered_pricing")
+                if tiered_pricing and isinstance(tiered_pricing, list) and len(tiered_pricing) > 0:
+                    first_tier = tiered_pricing[0]
+                    _fallback = first_tier.get("output_cost_per_token") or first_tier.get(
+                        "output_cost_per_reasoning_token"
                     )
-                )
-                _output_cost_per_token = 0
+                    if _fallback is not None and _fallback != 0:
+                        _output_cost_per_token = _fallback
+                if _output_cost_per_token is None or _output_cost_per_token == 0:
+                    verbose_logger.debug(
+                        "model={}, custom_llm_provider={} has no output_cost_per_token in model_cost_map. Defaulting to 0.".format(
+                            model, custom_llm_provider
+                        )
+                    )
+                    _output_cost_per_token = 0
 
             return ModelInfoBase(
                 key=key,
