@@ -1,12 +1,12 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Nebius AI Studio
-https://docs.nebius.com/studio/inference/quickstart
+# Nebius Token Factory
+https://tokenfactory.nebius.com/
 
 :::tip
 
-**Litellm provides support to all models from Nebius AI Studio. To use a model, set `model=nebius/<any-model-on-nebius-ai-studio>` as a prefix for litellm requests. The full list of supported models is provided at https://studio.nebius.ai/ **
+**Litellm provides support to all models from Nebius Token Factory. To use a model, set `model=nebius/<any-model-on-nebius-token-factory>` as a prefix for litellm requests. The full list of supported models is provided at https://tokenfactory.nebius.com/**
 
 :::
 
@@ -90,7 +90,7 @@ print(response)
 
 ## Usage with LiteLLM Proxy Server
 
-Here's how to call a Nebius AI Studio model with the LiteLLM Proxy Server
+Here's how to call a Nebius Token Factory model with the LiteLLM Proxy Server
 
 1. Modify the config.yaml 
 
@@ -98,7 +98,7 @@ Here's how to call a Nebius AI Studio model with the LiteLLM Proxy Server
   model_list:
     - model_name: my-model
       litellm_params:
-        model: nebius/<your-model-name>  # add nebius/ prefix to use Nebius AI Studio as provider
+        model: nebius/<your-model-name>  # add nebius/ prefix to use Nebius Token Factory as provider
         api_key: api-key                 # api key to send your model
   ```
 2. Start the proxy 
