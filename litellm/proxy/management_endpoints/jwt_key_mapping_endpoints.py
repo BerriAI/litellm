@@ -1,13 +1,9 @@
-import asyncio
-from typing import List, Optional, Union
-from fastapi import APIRouter, Depends, HTTPException, Request
-import litellm
+from fastapi import APIRouter, Depends, HTTPException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object
 
 router = APIRouter()
+
 
 @router.post("/jwt/key/mapping/new", tags=["JWT Key Mapping"])
 async def create_jwt_key_mapping(
@@ -17,7 +13,9 @@ async def create_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail="Only proxy admins can create JWT key mappings")
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can create JWT key mappings"
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -31,7 +29,7 @@ async def create_jwt_key_mapping(
                 "is_active": data.is_active,
             }
         )
-        
+
         # Invalidate cache
         cache_key = f"jwt_key_mapping:{data.jwt_claim_name}:{data.jwt_claim_value}"
         await user_api_key_cache.async_delete_cache(cache_key)
@@ -39,6 +37,7 @@ async def create_jwt_key_mapping(
         return new_mapping
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/jwt/key/mapping/update", tags=["JWT Key Mapping"])
 async def update_jwt_key_mapping(
@@ -48,28 +47,29 @@ async def update_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail="Only proxy admins can update JWT key mappings")
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can update JWT key mappings"
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
     update_data = data.model_dump(exclude_unset=True, exclude={"mapping_id"})
-    
+
     try:
         # Get old mapping for cache invalidation
         old_mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
             where={"mapping_id": data.mapping_id}
         )
-        
+
         if old_mapping:
             cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
             await user_api_key_cache.async_delete_cache(cache_key)
 
         updated_mapping = await prisma_client.db.litellm_jwtkeymapping.update(
-            where={"mapping_id": data.mapping_id},
-            data=update_data
+            where={"mapping_id": data.mapping_id}, data=update_data
         )
-        
+
         # Invalidate new cache key if claim fields changed
         cache_key = f"jwt_key_mapping:{updated_mapping.jwt_claim_name}:{updated_mapping.jwt_claim_value}"
         await user_api_key_cache.async_delete_cache(cache_key)
@@ -77,6 +77,7 @@ async def update_jwt_key_mapping(
         return updated_mapping
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/jwt/key/mapping/delete", tags=["JWT Key Mapping"])
 async def delete_jwt_key_mapping(
@@ -86,7 +87,9 @@ async def delete_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail="Only proxy admins can delete JWT key mappings")
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can delete JWT key mappings"
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -96,7 +99,7 @@ async def delete_jwt_key_mapping(
         old_mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
             where={"mapping_id": data.mapping_id}
         )
-        
+
         if old_mapping:
             cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
             await user_api_key_cache.async_delete_cache(cache_key)
@@ -108,6 +111,7 @@ async def delete_jwt_key_mapping(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/jwt/key/mapping/list", tags=["JWT Key Mapping"])
 async def list_jwt_key_mappings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -115,7 +119,9 @@ async def list_jwt_key_mappings(
     from litellm.proxy.proxy_server import prisma_client
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail="Only proxy admins can list JWT key mappings")
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can list JWT key mappings"
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -126,6 +132,7 @@ async def list_jwt_key_mappings(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/jwt/key/mapping/info", tags=["JWT Key Mapping"])
 async def info_jwt_key_mapping(
     mapping_id: str,
@@ -134,7 +141,9 @@ async def info_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(status_code=403, detail="Only proxy admins can get JWT key mapping info")
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can get JWT key mapping info"
+        )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
