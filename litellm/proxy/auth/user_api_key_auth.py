@@ -1582,7 +1582,7 @@ async def _lookup_end_user_and_apply_budget(
                 _apply_budget_limits_to_end_user_params(
                     end_user_params=end_user_params,
                     budget_info=end_user_object.litellm_budget_table,
-                    end_user_id=valid_token.end_user_id,
+                    end_user_id=valid_token.end_user_id or "",
                 )
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
@@ -1600,7 +1600,7 @@ async def _lookup_end_user_and_apply_budget(
                 _apply_budget_limits_to_end_user_params(
                     end_user_params=end_user_params,
                     budget_info=default_budget,
-                    end_user_id=valid_token.end_user_id,
+                    end_user_id=valid_token.end_user_id or "",
                 )
                 valid_token = update_valid_token_with_end_user_params(
                     valid_token=valid_token, end_user_params=end_user_params
