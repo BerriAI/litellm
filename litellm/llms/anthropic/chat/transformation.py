@@ -402,6 +402,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties
             }
+            # Recursively filter unsupported constraints (minimum, maximum, etc.)
+            # from nested schemas within properties, items, anyOf, etc.
+            input_schema_filtered = self.filter_anthropic_output_schema(
+                input_schema_filtered
+            )
             input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(
                 **input_schema_filtered
             )

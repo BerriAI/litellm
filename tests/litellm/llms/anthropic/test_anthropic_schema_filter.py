@@ -267,3 +267,135 @@ class TestToolBasedResponseFormatFiltering:
         assert input_schema["properties"]["status"]["type"] == "string"
         assert input_schema["properties"]["status"]["enum"] == ["active", "inactive"]
         assert input_schema["properties"]["status"]["description"] == "Current status"
+
+
+class TestRegularToolSchemaFiltering:
+    """Test that regular tool schemas also filter unsupported constraints.
+
+    When tools are mapped via _map_tool_helper, nested schemas within
+    properties should have unsupported constraints stripped.
+    """
+
+    def _make_openai_tool(self, name, parameters):
+        """Helper to create an OpenAI-format tool definition."""
+        return {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": f"Test tool {name}",
+                "parameters": parameters,
+            },
+        }
+
+    def test_tool_filters_nested_numeric_constraints(self):
+        """Regular tools should strip minimum/maximum from nested property schemas."""
+        config = AnthropicConfig()
+        tool = self._make_openai_tool(
+            "create_user",
+            {
+                "type": "object",
+                "properties": {
+                    "age": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 150,
+                        "description": "User age",
+                    }
+                },
+                "required": ["age"],
+            },
+        )
+
+        result, _ = config._map_tool_helper(tool)
+        assert result is not None
+        props = result["input_schema"]["properties"]
+        assert "minimum" not in props["age"]
+        assert "maximum" not in props["age"]
+        assert "User age" in props["age"]["description"]
+        assert "minimum value: 0" in props["age"]["description"]
+
+    def test_tool_filters_nested_string_constraints(self):
+        """Regular tools should strip minLength/maxLength from nested property schemas."""
+        config = AnthropicConfig()
+        tool = self._make_openai_tool(
+            "search",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500,
+                    }
+                },
+                "required": ["query"],
+            },
+        )
+
+        result, _ = config._map_tool_helper(tool)
+        assert result is not None
+        props = result["input_schema"]["properties"]
+        assert "minLength" not in props["query"]
+        assert "maxLength" not in props["query"]
+
+    def test_tool_filters_deeply_nested_constraints(self):
+        """Regular tools should strip constraints from deeply nested schemas."""
+        config = AnthropicConfig()
+        tool = self._make_openai_tool(
+            "create_order",
+            {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "quantity": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 1000,
+                                }
+                            },
+                        },
+                        "minItems": 1,
+                        "maxItems": 50,
+                    }
+                },
+                "required": ["items"],
+            },
+        )
+
+        result, _ = config._map_tool_helper(tool)
+        assert result is not None
+        items_schema = result["input_schema"]["properties"]["items"]
+        assert "minItems" not in items_schema
+        assert "maxItems" not in items_schema
+        nested_props = items_schema["items"]["properties"]
+        assert "minimum" not in nested_props["quantity"]
+        assert "maximum" not in nested_props["quantity"]
+
+    def test_tool_preserves_valid_nested_fields(self):
+        """Regular tools should preserve valid schema fields in nested schemas."""
+        config = AnthropicConfig()
+        tool = self._make_openai_tool(
+            "set_status",
+            {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["on", "off"],
+                        "description": "Device status",
+                    }
+                },
+                "required": ["status"],
+            },
+        )
+
+        result, _ = config._map_tool_helper(tool)
+        assert result is not None
+        props = result["input_schema"]["properties"]
+        assert props["status"]["type"] == "string"
+        assert props["status"]["enum"] == ["on", "off"]
+        assert props["status"]["description"] == "Device status"
