@@ -99,6 +99,7 @@ class RouterBudgetLimiting(CustomLogger):
     ):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue: List[RedisPipelineIncrementOperation] = []
+        self._redis_increment_queue_lock = asyncio.Lock()
         asyncio.create_task(self.periodic_sync_in_memory_spend_with_redis())
         self.provider_budget_config: Optional[
             GenericBudgetConfigType
@@ -414,7 +415,11 @@ class RouterBudgetLimiting(CustomLogger):
             increment_value=response_cost,
             ttl=ttl,
         )
-        self.redis_increment_operation_queue.append(increment_op)
+        async with self._get_redis_increment_queue_lock():
+            self.redis_increment_operation_queue.append(increment_op)
+
+    def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
+        return self._redis_increment_queue_lock
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
@@ -552,26 +557,37 @@ class RouterBudgetLimiting(CustomLogger):
 
         Only runs if Redis is initialized
         """
+        increment_operations_to_flush: List[RedisPipelineIncrementOperation] = []
         try:
             if not self.dual_cache.redis_cache:
                 return  # Redis is not initialized
 
+            # Snapshot pending increments and clear queue before await, so new writes are queued
+            # for the next sync cycle while this batch is flushed to Redis.
+            async with self._get_redis_increment_queue_lock():
+                increment_operations_to_flush = self.redis_increment_operation_queue
+                self.redis_increment_operation_queue = []
+
             verbose_router_logger.debug(
                 "Pushing Redis Increment Pipeline for queue: %s",
-                self.redis_increment_operation_queue,
+                increment_operations_to_flush,
             )
-            if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
+            if len(increment_operations_to_flush) > 0:
+                await self.dual_cache.redis_cache.async_increment_pipeline(
+                    increment_list=increment_operations_to_flush,
                 )
 
-            self.redis_increment_operation_queue = []
-
-        except Exception as e:
-            verbose_router_logger.error(
-                f"Error syncing in-memory cache with Redis: {str(e)}"
+        except Exception:
+            if len(increment_operations_to_flush) > 0:
+                # Retry these increments on a future sync cycle.
+                async with self._get_redis_increment_queue_lock():
+                    self.redis_increment_operation_queue = (
+                        increment_operations_to_flush
+                        + self.redis_increment_operation_queue
+                    )
+            verbose_router_logger.exception(
+                "Error pushing queued Redis increment operations to Redis",
+                exc_info=True,
             )
 
     async def _sync_in_memory_spend_with_redis(self):
