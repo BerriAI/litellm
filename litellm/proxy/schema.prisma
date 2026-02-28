@@ -871,6 +871,14 @@ model LiteLLM_GuardrailsTable {
   team_id String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+  // Submission lifecycle: pending_review (team-registered), active (approved), rejected
+  status String @default("active")
+  submitted_by_user_id String?
+  submitted_by_email String?
+  submitted_at DateTime?
+  reviewed_at DateTime?
+
+  @@index([status])
 }
 
 // Daily guardrail metrics for usage dashboard (one row per guardrail per day)
