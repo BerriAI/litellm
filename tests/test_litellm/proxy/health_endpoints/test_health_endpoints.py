@@ -374,6 +374,7 @@ def proxy_client(monkeypatch):
         yield client
 
 
+@pytest.mark.xdist_group("proxy_health")
 def test_health_liveliness_endpoint(proxy_client):
     """
     Test that /health/liveliness endpoint returns 200 OK with "I'm alive!" message.

@@ -208,6 +208,7 @@ def test_watsonx_completion_regular_model_includes_model_id(
 
 
 @pytest.mark.asyncio
+@pytest.mark.xdist_group("watsonx_heavy")
 async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     """
     Test that gpt-oss-120b model transforms messages to proper format instead of simple concatenation.
@@ -391,6 +392,7 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.xdist_group("watsonx_heavy")
 async def test_watsonx_gpt_oss_uses_async_http_handler():
     """
     Test that verifies async HTTP client is used when fetching HuggingFace templates.
