@@ -134,7 +134,7 @@ def test_config_parameter_mapping():
     # Verify parameter mapping
     assert completion_request["temperature"] == 0.8
     assert completion_request["max_tokens"] == 150
-    assert completion_request["top_p"] == 0.9
+    assert "top_p" not in completion_request  # top_p skipped when temperature is also set
     assert completion_request["stop"] == ["END", "STOP"]
 
 def test_tools_transformation():

@@ -251,7 +251,7 @@ class GoogleGenAIAdapter:
                 completion_request["temperature"] = config["temperature"]
             if "maxOutputTokens" in config:
                 completion_request["max_tokens"] = config["maxOutputTokens"]
-            if "topP" in config:
+            if "topP" in config and "temperature" not in config:  # Anthropic rejects top_p + temperature together
                 completion_request["top_p"] = config["topP"]
             if "topK" in config:
                 # OpenAI doesn't have direct topK, but we can pass it as extra
@@ -339,7 +339,12 @@ class GoogleGenAIAdapter:
                     if "description" in func_decl:
                         function_chunk["description"] = func_decl["description"]
                     if "parametersJsonSchema" in func_decl:
-                        function_chunk["parameters"] = func_decl["parametersJsonSchema"]
+                        params = func_decl["parametersJsonSchema"]
+                    # Anthropic requires 'type': 'object' for input_schema.
+                    # Especially if 'anyOf' is present but 'type' is missing at top level
+                        if isinstance(params, dict) and "type" not in params:
+                            params["type"] = "object"
+                        function_chunk["parameters"] = params
 
                     openai_tool = {"type": "function", "function": function_chunk}
                     openai_tools.append(openai_tool)
