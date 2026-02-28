@@ -3752,3 +3752,33 @@ def test_streaming_without_json_mode_passes_all_tools():
     assert tool_use_delta is not None
     assert tool_use_delta["function"]["arguments"] == '{"data": 1}'
 
+
+def test_context_management_not_in_supported_params():
+    """context_management is NOT supported on Bedrock Converse (compact beta unsupported)."""
+    config = AmazonConverseConfig()
+    params = config.get_supported_openai_params(
+        model="anthropic.claude-sonnet-4-20250514-v1:0"
+    )
+    assert "context_management" not in params
+
+
+def test_context_management_silently_dropped():
+    """context_management param should be silently dropped by map_openai_params on Converse."""
+    config = AmazonConverseConfig()
+    result = config.map_openai_params(
+        non_default_params={
+            "context_management": {
+                "edits": [
+                    {
+                        "type": "compact_20260112",
+                        "trigger": {"type": "input_tokens", "value": 200000},
+                    }
+                ]
+            },
+            "max_tokens": 512,
+        },
+        optional_params={},
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        drop_params=False,
+    )
+    assert "context_management" not in result
