@@ -91,6 +91,50 @@ async def test_bedrock_apply_guardrail_blocked():
 
 
 @pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_disable_exception_on_block():
+    """Test that apply_guardrail returns a mock_response instead of raising when
+    disable_exception_on_block=True.
+
+    Regression test for issue #22183: when using the unified guardrail path,
+    GuardrailInterventionNormalStringError was re-raised from apply_guardrail,
+    causing HTTP 500 instead of returning the guardrail's blocked text as a
+    successful response.
+    """
+    from litellm.exceptions import GuardrailInterventionNormalStringError
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="test-bedrock-guard",
+        guardrailIdentifier="test-guard-id",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True,
+    )
+
+    blocked_message = "Input blocked by AWS Bedrock Guardrail"
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api_request:
+        mock_api_request.side_effect = GuardrailInterventionNormalStringError(
+            message=blocked_message
+        )
+
+        request_data: dict = {}
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["My name is John Doe."]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+        # Should return normally (no exception raised)
+        assert result["texts"] == [blocked_message]
+
+        # Should set mock_response on request_data
+        assert "mock_response" in request_data
+        mock_response = request_data["mock_response"]
+        assert mock_response.choices[0].message.content == blocked_message
+
+
+@pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_with_masking():
     """Test that Bedrock guardrail apply_guardrail method handles content masking"""
     # Create a BedrockGuardrail instance
@@ -324,10 +368,10 @@ def test_bedrock_guardrail_filters_latest_user_message_when_enabled():
 @pytest.mark.asyncio
 async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block():
     """
-    Regression test for issue #20045: when disable_exception_on_block=True,
-    make_bedrock_api_request raises GuardrailInterventionNormalStringError.
-    apply_guardrail must let it propagate as-is so the proxy can handle it
-    properly instead of wrapping it in a generic Exception.
+    Regression test for issue #22183: when disable_exception_on_block=True,
+    apply_guardrail must catch GuardrailInterventionNormalStringError and
+    return a mock_response instead of raising, so the proxy returns a
+    successful response with the guardrail's blocked text.
     """
     from litellm.exceptions import GuardrailInterventionNormalStringError
 
@@ -341,15 +385,20 @@ async def test_bedrock_apply_guardrail_blocked_with_disable_exception_on_block()
     with patch.object(
         guardrail, "make_bedrock_api_request", new_callable=AsyncMock
     ) as mock_api:
+        blocked_msg = "Sorry, your question in its current format is unable to be answered."
         mock_api.side_effect = GuardrailInterventionNormalStringError(
-            message="Sorry, your question in its current format is unable to be answered."
+            message=blocked_msg
         )
 
-        with pytest.raises(GuardrailInterventionNormalStringError) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["harmful prompt content"]},
-                request_data={},
-                input_type="request",
-            )
+        request_data: dict = {}
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["harmful prompt content"]},
+            request_data=request_data,
+            input_type="request",
+        )
 
-        assert "unable to be answered" in str(exc_info.value.message)
+        # Should return normally (no exception)
+        assert result["texts"] == [blocked_msg]
+        # Should set mock_response so proxy returns successful response
+        assert "mock_response" in request_data
+        assert request_data["mock_response"].choices[0].message.content == blocked_msg
