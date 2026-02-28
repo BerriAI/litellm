@@ -1,17 +1,17 @@
+import importlib
 import sys
 import types
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
-import importlib
 
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
-from typing import Any, cast
-from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
+from litellm.types.utils import ModelResponse
 
 
 class _DummyMCPResult:
@@ -402,3 +402,129 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     assert mock_get_tools.await_args is not None
     assert mock_get_tools.await_args.kwargs["log_list_tools_to_spendlogs"] is True
     assert mock_get_tools.await_args.kwargs["list_tools_log_source"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_process_mcp_tools_without_openai_transform_forwards_auth_headers(
+    monkeypatch,
+):
+    """
+    Regression test for PR #22291:
+    _process_mcp_tools_without_openai_transform must pass mcp_server_auth_headers
+    through to _get_mcp_tools_from_manager so the tool fetch includes auth.
+    """
+    captured: dict = {}
+
+    async def fake_get_mcp_tools_from_manager(**kwargs):
+        captured.update(kwargs)
+        return [], []
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_get_mcp_tools_from_manager",
+        staticmethod(fake_get_mcp_tools_from_manager),
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        user_api_key_auth=None,
+        mcp_tools_with_litellm_proxy=[
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/linear_config"}
+        ],
+        mcp_auth_header="Bearer global-token",
+        mcp_server_auth_headers={"linear_config": {"Authorization": "Bearer linear-token"}},
+    )
+
+    assert captured.get("mcp_auth_header") == "Bearer global-token"
+    assert captured.get("mcp_server_auth_headers") == {
+        "linear_config": {"Authorization": "Bearer linear-token"}
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tests for _transform_self_referencing_mcp_tools
+# ---------------------------------------------------------------------------
+
+
+def test_transform_self_referencing_mcp_tools_basic():
+    """URL pointing to this proxy gets rewritten to litellm_proxy format."""
+    tools = [
+        {
+            "type": "mcp",
+            "server_label": "microsoft_learn_mcp",
+            "server_url": "https://myproxy.example.com/microsoft_learn_mcp/mcp",
+        }
+    ]
+    result = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+        tools=tools,
+        proxy_base_url="https://myproxy.example.com",
+    )
+    assert result is not None
+    assert result[0]["server_url"] == "litellm_proxy/mcp/microsoft_learn_mcp"
+    assert result[0]["server_label"] == "microsoft_learn_mcp"
+
+
+def test_transform_self_referencing_mcp_tools_trailing_slash_on_base_url():
+    """Trailing slash in proxy_base_url is handled correctly."""
+    tools = [{"type": "mcp", "server_url": "https://myproxy.example.com/my_server/mcp"}]
+    result = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+        tools=tools,
+        proxy_base_url="https://myproxy.example.com/",
+    )
+    assert result is not None
+    assert result[0]["server_url"] == "litellm_proxy/mcp/my_server"
+
+
+def test_transform_self_referencing_mcp_tools_external_url_untouched():
+    """URLs that do NOT point to this proxy are left unchanged."""
+    tools = [
+        {
+            "type": "mcp",
+            "server_url": "https://external-mcp.example.com/tools/mcp",
+        }
+    ]
+    result = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+        tools=tools,
+        proxy_base_url="https://myproxy.example.com",
+    )
+    assert result is not None
+    assert result[0]["server_url"] == "https://external-mcp.example.com/tools/mcp"
+
+
+def test_transform_self_referencing_mcp_tools_already_litellm_proxy_untouched():
+    """Tools already using litellm_proxy format are not modified."""
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/my_server"}]
+    result = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+        tools=tools,
+        proxy_base_url="https://myproxy.example.com",
+    )
+    assert result is not None
+    assert result[0]["server_url"] == "litellm_proxy/mcp/my_server"
+
+
+def test_transform_self_referencing_mcp_tools_non_mcp_tools_untouched():
+    """Non-MCP function tools pass through unchanged."""
+    tools = [{"type": "function", "function": {"name": "my_func"}}]
+    result = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+        tools=tools,
+        proxy_base_url="https://myproxy.example.com",
+    )
+    assert result is not None
+    assert result[0] == {"type": "function", "function": {"name": "my_func"}}
+
+
+def test_transform_self_referencing_mcp_tools_empty_list():
+    """Empty tools list returns empty list (not None)."""
+    result = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+        tools=[],
+        proxy_base_url="https://myproxy.example.com",
+    )
+    assert result == []
+
+
+def test_transform_self_referencing_mcp_tools_none_input():
+    """None tools input returns None."""
+    result = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+        tools=None,
+        proxy_base_url="https://myproxy.example.com",
+    )
+    assert result is None
