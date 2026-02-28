@@ -1,5 +1,6 @@
 import { Alert, Divider, Typography } from "antd";
 import React, { useEffect, useState } from "react";
+import yaml from "js-yaml";
 import ContentFilterConfiguration from "./ContentFilterConfiguration";
 import ContentFilterDisplay from "./ContentFilterDisplay";
 import type { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
@@ -265,7 +266,21 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
               setBlockedWords(blockedWords.map((w) => (w.id === id ? { ...w, [field]: value } : w)))
             }
             onFileUpload={(content: string) => {
-              console.log("File uploaded:", content);
+              try {
+                const parsed = yaml.load(content) as Record<string, unknown>;
+                if (parsed && Array.isArray(parsed.blocked_words)) {
+                  const newWords: BlockedWord[] = parsed.blocked_words.map(
+                    (entry: { keyword?: string; action?: string }, index: number) => ({
+                      id: `file-${Date.now()}-${index}`,
+                      keyword: String(entry.keyword ?? ""),
+                      action: (entry.action === "MASK" ? "MASK" : "BLOCK") as "BLOCK" | "MASK",
+                    })
+                  );
+                  setBlockedWords([...blockedWords, ...newWords]);
+                }
+              } catch {
+                // Validation already handled in ContentFilterConfiguration
+              }
             }}
             accessToken={accessToken}
             contentCategories={guardrailSettings.content_filter_settings.content_categories || []}
