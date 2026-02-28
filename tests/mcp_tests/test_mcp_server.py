@@ -395,6 +395,7 @@ async def test_mcp_http_transport_tool_not_found():
 @pytest.mark.asyncio
 async def test_streamable_http_mcp_handler_mock():
     """Test the streamable HTTP MCP handler functionality"""
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock the session manager and its methods
     mock_session_manager = AsyncMock()
@@ -413,12 +414,27 @@ async def test_streamable_http_mcp_handler_mock():
     mock_receive = AsyncMock()
     mock_send = AsyncMock()
 
+    # Mock auth context to bypass authentication
+    mock_auth_result = (
+        UserAPIKeyAuth(),
+        None,
+        None,
+        {},
+        {},
+        [],
+    )
+
     with patch(
         "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
         True,
     ), patch(
         "litellm.proxy._experimental.mcp_server.server.session_manager",
         mock_session_manager,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new=AsyncMock(return_value=mock_auth_result),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
     ):
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
