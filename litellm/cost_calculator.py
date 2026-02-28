@@ -1192,6 +1192,19 @@ def completion_cost(  # noqa: PLR0915
                                 service_tier = _map_traffic_type_to_service_tier(
                                     raw_traffic_type
                                 )
+                    # When base_model is used and its provider differs
+                    # from the deployment provider, override
+                    # custom_llm_provider so cost_per_token dispatches
+                    # to the correct provider-specific function.
+                    # Must run after hidden_params extraction above.
+                    if (
+                        base_model is not None
+                        and model == base_model
+                        and _model_contains_known_llm_provider(base_model)
+                    ):
+                        _base_provider = base_model.split("/")[0]
+                        if _base_provider != custom_llm_provider:
+                            custom_llm_provider = _base_provider
                 else:
                     if model is None:
                         raise ValueError(

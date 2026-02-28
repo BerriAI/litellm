@@ -2612,6 +2612,35 @@ def test_select_model_name_for_cost_calc():
     assert return_model == "azure_ai/mistral-large"
 
 
+def test_base_model_provider_mismatch_cost_calc():
+    """Test that base_model with a different provider than deployment model
+    correctly updates custom_llm_provider for cost calculation.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22257
+    """
+    from litellm.types.utils import ModelResponse, Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    resp = ModelResponse(
+        model="gemini-3-flash",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    # Simulate production scenario: hidden_params carries deployment provider
+    resp._hidden_params = {"custom_llm_provider": "anthropic"}
+
+    # base_model provider (gemini) differs from deployment provider (anthropic)
+    cost = litellm.completion_cost(
+        model="anthropic/gemini-3-flash",
+        completion_response=resp,
+        base_model="gemini/gemini-2.0-flash",
+    )
+    assert cost > 0, (
+        "Cost should be > 0 when base_model provider differs from deployment provider"
+    )
+
+
 def test_moderations():
     from litellm import moderation
 
