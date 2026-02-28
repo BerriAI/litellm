@@ -1003,9 +1003,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                thinking_param = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
+                optional_params["thinking"] = thinking_param
+                # For Claude 4.6 models, also set output_config with the
+                # effort level so it is forwarded to the API (not silently
+                # dropped). See: https://github.com/BerriAI/litellm/issues/22212
+                if (
+                    thinking_param is not None
+                    and AnthropicConfig._is_claude_4_6_model(model)
+                ):
+                    optional_params["output_config"] = {"effort": value}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
