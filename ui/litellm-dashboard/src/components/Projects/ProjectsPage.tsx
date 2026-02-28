@@ -198,7 +198,7 @@ export function ProjectsPage() {
       >
         <Space direction="vertical" size={0}>
           <Title level={2} style={{ margin: 0 }}>
-            Projects
+            [BETA] Projects
           </Title>
           <Text type="secondary">
             Manage projects within your teams

@@ -41,6 +41,7 @@ interface SidebarProps {
   defaultSelectedKey: string;
   collapsed?: boolean;
   enabledPagesInternalUsers?: string[] | null;
+  enableProjectsUI?: boolean;
 }
 
 // Menu item configuration
@@ -300,7 +301,11 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: <span className="flex items-center gap-4">Settings</span>,
+        label: (
+          <span className="flex items-center gap-2">
+            Settings <NewBadge />
+          </span>
+        ),
         icon: <SettingOutlined />,
         roles: all_admin_roles,
         children: [
@@ -321,7 +326,11 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: "Admin Settings",
+            label: (
+              <span className="flex items-center gap-2">
+                Admin Settings <NewBadge dot><span /></NewBadge>
+              </span>
+            ),
             icon: <SettingOutlined />,
             roles: all_admin_roles,
           },
@@ -345,7 +354,7 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers }) => {
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI }) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
 
@@ -397,6 +406,9 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           }
           return true;
         }
+
+        // Hide Projects page if enableProjectsUI is not enabled
+        if (item.key === "projects" && !enableProjectsUI) return false;
 
         // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;
