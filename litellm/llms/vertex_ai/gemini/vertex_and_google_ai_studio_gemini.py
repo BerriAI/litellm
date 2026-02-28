@@ -1242,6 +1242,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         reasoning_content_str: Optional[str] = None
 
         for part in parts:
+            # Skip parts that contain functionCall - these should not contribute to content/reasoning
+            # Function calls have their own dedicated handling and should not leak into text content
+            if "functionCall" in part:
+                continue
             _content_str = ""
             if "text" in part:
                 text_content = part["text"]
@@ -1293,6 +1297,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         thinking_blocks: List[ChatCompletionThinkingBlock] = []
         for part in parts:
+            # Skip parts that contain functionCall - these are tool calls, not thinking content
+            if "functionCall" in part:
+                continue
             if part.get("thought") is True:
                 thinking_text = part.get("text", "")
                 block: ChatCompletionThinkingBlock = {
