@@ -604,12 +604,9 @@ class LangFuseLogger:
             session_id = clean_metadata.pop("session_id", None)
             trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
             trace_id = clean_metadata.pop("trace_id", None)
-            # If session_id is provided, use it as trace_id for consistent trace mapping
-            if trace_id is None and session_id is not None:
-                trace_id = session_id
             # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
             # This allows standard trace_id to be used when provided in standard_logging_object
-            elif trace_id is None and standard_logging_object is not None:
+            if trace_id is None and standard_logging_object is not None:
                 trace_id = cast(
                     Optional[str], standard_logging_object.get("trace_id")
                 )
