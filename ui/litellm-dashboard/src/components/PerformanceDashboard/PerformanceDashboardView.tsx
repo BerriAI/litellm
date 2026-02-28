@@ -63,7 +63,7 @@ async function runTestRequest(accessToken: string, model: string, messages: { ro
   // Read overhead from captured map — forEach and get() can behave differently for exposed headers
   const overheadRaw = allHeaders["x-litellm-overhead-duration-ms"] ?? null;
   const overheadParsed = overheadRaw && overheadRaw !== "None" ? parseFloat(overheadRaw) : NaN;
-  const responseDurationRaw = captured["x-litellm-response-duration-ms"] ?? null;
+  const responseDurationRaw = allHeaders["x-litellm-response-duration-ms"] ?? null;
   const responseDurationParsed = responseDurationRaw && responseDurationRaw !== "None" ? parseFloat(responseDurationRaw) : NaN;
   // Prefer the proxy's measured total over wall clock (avoids network jitter inflating LLM API time)
   const proxyTotalMs = isNaN(responseDurationParsed) ? wallMs : Math.round(responseDurationParsed);
