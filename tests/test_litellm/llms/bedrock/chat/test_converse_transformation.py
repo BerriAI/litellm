@@ -3493,3 +3493,34 @@ class TestBedrockMinThinkingBudgetTokens:
             drop_params=False,
         )
         assert "thinking" not in result or result.get("thinking") is None
+
+
+def test_context_management_not_in_supported_params():
+    """context_management is NOT supported on Bedrock Converse (compact beta unsupported)."""
+    config = AmazonConverseConfig()
+    params = config.get_supported_openai_params(
+        model="anthropic.claude-sonnet-4-20250514-v1:0"
+    )
+    assert "context_management" not in params
+
+
+def test_context_management_silently_dropped():
+    """context_management param should be silently dropped by map_openai_params on Converse."""
+    config = AmazonConverseConfig()
+    result = config.map_openai_params(
+        non_default_params={
+            "context_management": {
+                "edits": [
+                    {
+                        "type": "compact_20260112",
+                        "trigger": {"type": "input_tokens", "value": 200000},
+                    }
+                ]
+            },
+            "max_tokens": 512,
+        },
+        optional_params={},
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        drop_params=False,
+    )
+    assert "context_management" not in result
