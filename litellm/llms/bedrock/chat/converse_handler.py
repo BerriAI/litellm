@@ -355,6 +355,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         headers = update_headers_with_filtered_beta(
             headers=headers, provider="bedrock_converse"
         )
+        # Remove anthropic-beta from HTTP headers for Bedrock Converse.
+        # Beta values are extracted and placed in additionalModelRequestFields
+        # by _process_tools_and_beta(). Bedrock Converse does not process
+        # anthropic-beta as an HTTP header — only via the request body.
+        # Case-insensitive removal since HTTP headers are case-insensitive.
+        for key in [k for k in headers if k.lower() == "anthropic-beta"]:
+            del headers[key]
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
             if isinstance(client, HTTPHandler):
