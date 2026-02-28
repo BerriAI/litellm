@@ -2369,3 +2369,57 @@ def test_get_registered_pass_through_route_with_custom_root():
 
     # Clean up
     _registered_pass_through_routes.clear()
+
+
+def test_is_registered_pass_through_route_mapped_routes_with_root_path():
+    """
+    Test that mapped pass-through routes (vertex_ai, bedrock, etc.) are matched
+    correctly when SERVER_ROOT_PATH is set.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22272.
+    When SERVER_ROOT_PATH=/litellm, request.url.path includes the prefix
+    (e.g. /litellm/vertex_ai/...) but mapped routes are bare (e.g. /vertex_ai).
+    The check must prepend the root path to mapped routes before comparison.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+
+    # Clear DB routes so only mapped routes are tested
+    _registered_pass_through_routes.clear()
+
+    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+        # With custom root path
+        mock_get_root.return_value = "/litellm"
+
+        # Should match mapped routes with root prefix
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent"
+        ) is True
+
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/bedrock/model/anthropic.claude-v2/invoke"
+        ) is True
+
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/anthropic/v1/messages"
+        ) is True
+
+        # Should NOT match without root prefix when root is set
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/vertex_ai/v1/projects/my-project/locations/us-central1"
+        ) is False
+
+        # With default root path ("/"), routes should match as before
+        mock_get_root.return_value = "/"
+
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/vertex_ai/v1/projects/my-project/locations/us-central1"
+        ) is True
+
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/bedrock/model/anthropic.claude-v2/invoke"
+        ) is True
+
+    _registered_pass_through_routes.clear()
