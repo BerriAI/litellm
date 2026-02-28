@@ -258,3 +258,40 @@ class TestKeyRotationSecretNamingStability:
             _set_key_rotation_fields(data, auto_rotate=True, rotation_interval="30d")
             assert data["auto_rotate"] is True
             assert "key_rotation_at" in data
+
+    @pytest.mark.asyncio
+    async def test_set_key_rotation_fields_with_existing_alias(self):
+        """
+        Tests that _set_key_rotation_fields allows enabling rotation
+        if the key already has an alias in the database (even if not in current request).
+        """
+        from litellm.proxy.management_endpoints.key_management_endpoints import _set_key_rotation_fields
+        from unittest.mock import MagicMock, patch
+
+        mock_settings = MagicMock()
+        mock_settings.store_virtual_keys = True
+
+        with patch("litellm._key_management_settings", mock_settings):
+            # 1. No alias in request, but HAS existing_key_alias
+            data = {"auto_rotate": True}
+            _set_key_rotation_fields(
+                data, 
+                auto_rotate=True, 
+                rotation_interval="30d", 
+                existing_key_alias="already-exists-in-db"
+            )
+            # Should NOT raise, and field should be set
+            assert data["auto_rotate"] is True
+            assert "key_rotation_at" in data
+
+            # 2. Verify it still fails if NO alias AND NO existing_key_alias
+            from litellm.proxy._types import ProxyException
+            data_fail = {"auto_rotate": True}
+            with pytest.raises(ProxyException) as exc:
+                _set_key_rotation_fields(
+                    data_fail, 
+                    auto_rotate=True, 
+                    rotation_interval="30d", 
+                    existing_key_alias=None
+                )
+            assert str(exc.value.code) == "400"
