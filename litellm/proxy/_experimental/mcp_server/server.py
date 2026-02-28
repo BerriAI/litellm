@@ -773,8 +773,9 @@ if MCP_AVAILABLE:
                 user_api_key_auth
             )
         )
-        allowed_mcp_server_ids, _ip_blocked = (
-            global_mcp_server_manager.filter_server_ids_by_ip_with_info(
+
+        allowed_mcp_server_ids, _ = (
+            await global_mcp_server_manager.filter_server_ids_by_ip_with_info(
                 allowed_mcp_server_ids, client_ip
             )
         )

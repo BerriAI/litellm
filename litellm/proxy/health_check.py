@@ -158,6 +158,23 @@ async def _run_health_checks_with_bounded_concurrency(
     return results, peak_in_flight
 
 
+async def _execute_individual_health_checks(model_list: list, max_concurrency: Optional[int] = None) -> tuple[list, int, str]:
+    dispatch_mode = "unbounded"
+    peak_in_flight = 0
+    if isinstance(max_concurrency, int) and max_concurrency > 0:
+        dispatch_mode = "bounded"
+        results, peak_in_flight = await _run_health_checks_with_bounded_concurrency(
+            model_list, max_concurrency
+        )
+    else:
+        tasks = [
+            asyncio.create_task(_run_model_health_check(model)) for model in model_list
+        ]
+        peak_in_flight = len(tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    return results, peak_in_flight, dispatch_mode
+
+
 async def _perform_health_check(
     model_list: list,
     details: Optional[bool] = True,
@@ -175,19 +192,7 @@ async def _perform_health_check(
     cycle_id = instrumentation_context.get("cycle_id", "unknown")
     source = instrumentation_context.get("source", "unknown")
 
-    dispatch_mode = "unbounded"
-    peak_in_flight = 0
-    if isinstance(max_concurrency, int) and max_concurrency > 0:
-        dispatch_mode = "bounded"
-        results, peak_in_flight = await _run_health_checks_with_bounded_concurrency(
-            model_list, max_concurrency
-        )
-    else:
-        tasks = [
-            asyncio.create_task(_run_model_health_check(model)) for model in model_list
-        ]
-        peak_in_flight = len(tasks)
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    results, peak_in_flight, dispatch_mode = await _execute_individual_health_checks(model_list, max_concurrency)
 
     if instrumentation_enabled:
         logger.debug(
@@ -201,7 +206,6 @@ async def _perform_health_check(
             threading.active_count(),
             _rss_mb_for_log(),
         )
-
     healthy_endpoints = []
     unhealthy_endpoints = []
 

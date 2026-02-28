@@ -2659,6 +2659,80 @@ class ProxyConfig:
                 premium_user = _license_check.is_premium()
         return
 
+    def _setup_cache_from_settings(self, litellm_settings: dict, blue_color_code: str, reset_color_code: str):
+        print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
+        from litellm.caching.caching import Cache
+
+        cache_params = {}
+        if "cache_params" in litellm_settings:
+            cache_params_in_config = litellm_settings["cache_params"]
+            # overwrite cache_params with cache_params_in_config
+            cache_params.update(cache_params_in_config)
+
+        cache_type = cache_params.get("type", "redis")
+
+        verbose_proxy_logger.debug("passed cache type=%s", cache_type)
+
+        if (
+            cache_type == "redis" or cache_type == "redis-semantic"
+        ) and len(cache_params.keys()) == 0:
+            cache_host = get_secret("REDIS_HOST", None)
+            cache_port = get_secret("REDIS_PORT", None)
+            cache_password = None
+            cache_params.update(
+                {
+                    "type": cache_type,
+                    "host": cache_host,
+                    "port": cache_port,
+                }
+            )
+
+            if get_secret("REDIS_PASSWORD", None) is not None:
+                cache_password = get_secret("REDIS_PASSWORD", None)
+                cache_params.update(
+                    {
+                        "password": cache_password,
+                    }
+                )
+
+            # Assuming cache_type, cache_host, cache_port, and cache_password are strings
+            verbose_proxy_logger.debug(
+                "%sCache Type:%s %s",
+                blue_color_code,
+                reset_color_code,
+                cache_type,
+            )
+            verbose_proxy_logger.debug(
+                "%sCache Host:%s %s",
+                blue_color_code,
+                reset_color_code,
+                cache_host,
+            )
+            verbose_proxy_logger.debug(
+                "%sCache Port:%s %s",
+                blue_color_code,
+                reset_color_code,
+                cache_port,
+            )
+            verbose_proxy_logger.debug(
+                "%sCache Password:%s %s",
+                blue_color_code,
+                reset_color_code,
+                cache_password,
+            )
+
+        # users can pass os.environ/ variables on the proxy - we should read them from the env
+        for _key, _value in cache_params.items():
+            if isinstance(_value, str) and _value.startswith("os.environ/"):
+                cache_params[_key] = get_secret(_value)
+
+        ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
+        self._init_cache(cache_params=cache_params)
+        if litellm.cache is not None:
+            verbose_proxy_logger.debug(
+                f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
+            )
+
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
     ):
@@ -2686,78 +2760,7 @@ class ProxyConfig:
             reset_color_code = "\033[0m"
             for key, value in litellm_settings.items():
                 if key == "cache" and value is True:
-                    print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
-                    from litellm.caching.caching import Cache
-
-                    cache_params = {}
-                    if "cache_params" in litellm_settings:
-                        cache_params_in_config = litellm_settings["cache_params"]
-                        # overwrite cache_params with cache_params_in_config
-                        cache_params.update(cache_params_in_config)
-
-                    cache_type = cache_params.get("type", "redis")
-
-                    verbose_proxy_logger.debug("passed cache type=%s", cache_type)
-
-                    if (
-                        cache_type == "redis" or cache_type == "redis-semantic"
-                    ) and len(cache_params.keys()) == 0:
-                        cache_host = get_secret("REDIS_HOST", None)
-                        cache_port = get_secret("REDIS_PORT", None)
-                        cache_password = None
-                        cache_params.update(
-                            {
-                                "type": cache_type,
-                                "host": cache_host,
-                                "port": cache_port,
-                            }
-                        )
-
-                        if get_secret("REDIS_PASSWORD", None) is not None:
-                            cache_password = get_secret("REDIS_PASSWORD", None)
-                            cache_params.update(
-                                {
-                                    "password": cache_password,
-                                }
-                            )
-
-                        # Assuming cache_type, cache_host, cache_port, and cache_password are strings
-                        verbose_proxy_logger.debug(
-                            "%sCache Type:%s %s",
-                            blue_color_code,
-                            reset_color_code,
-                            cache_type,
-                        )
-                        verbose_proxy_logger.debug(
-                            "%sCache Host:%s %s",
-                            blue_color_code,
-                            reset_color_code,
-                            cache_host,
-                        )
-                        verbose_proxy_logger.debug(
-                            "%sCache Port:%s %s",
-                            blue_color_code,
-                            reset_color_code,
-                            cache_port,
-                        )
-                        verbose_proxy_logger.debug(
-                            "%sCache Password:%s %s",
-                            blue_color_code,
-                            reset_color_code,
-                            cache_password,
-                        )
-
-                    # users can pass os.environ/ variables on the proxy - we should read them from the env
-                    for key, value in cache_params.items():
-                        if isinstance(value, str) and value.startswith("os.environ/"):
-                            cache_params[key] = get_secret(value)
-
-                    ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-                    self._init_cache(cache_params=cache_params)
-                    if litellm.cache is not None:
-                        verbose_proxy_logger.debug(
-                            f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
-                        )
+                    self._setup_cache_from_settings(litellm_settings, blue_color_code, reset_color_code)
                 elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":

@@ -660,8 +660,8 @@ async def test_list_tools_rest_api_server_not_found():
             return_value=["non_existent_server_id"]
         )
         # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-        mock_manager.filter_server_ids_by_ip = MagicMock(
-            side_effect=lambda server_ids, client_ip: server_ids
+        mock_manager.filter_server_ids_by_ip = AsyncMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, False)
         )
         # Return None when trying to get the server (server doesn't exist)
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=None)
@@ -733,8 +733,8 @@ async def test_list_tools_rest_api_success():
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-        mock_manager.filter_server_ids_by_ip = MagicMock(
-            side_effect=lambda server_ids, client_ip: server_ids
+        mock_manager.filter_server_ids_by_ip = AsyncMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, False)
         )
 
         # Mock the _get_tools_for_single_server function
@@ -815,8 +815,8 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else mock_server_2
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
         # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-        mock_manager.filter_server_ids_by_ip = MagicMock(
-            side_effect=lambda server_ids, client_ip: server_ids
+        mock_manager.filter_server_ids_by_ip = AsyncMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, False)
         )
 
         with patch(
@@ -854,8 +854,8 @@ async def test_get_tools_from_mcp_servers():
                 side_effect=mock_get_tools_side_effect
             )
             # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-            mock_manager_2.filter_server_ids_by_ip = MagicMock(
-                side_effect=lambda server_ids, client_ip: server_ids
+            mock_manager_2.filter_server_ids_by_ip = AsyncMock(
+                side_effect=lambda server_ids, client_ip: (server_ids, False)
             )
 
         with patch(
@@ -882,8 +882,8 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_mcp_server_by_id = lambda server_id: mock_server_1 if server_id == "server1_id" else (mock_server_2 if server_id == "server2_id" else mock_server_3)
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
         # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-        mock_manager.filter_server_ids_by_ip = MagicMock(
-            side_effect=lambda server_ids, client_ip: server_ids
+        mock_manager.filter_server_ids_by_ip = AsyncMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, False)
         )
 
         with patch(
@@ -1818,8 +1818,8 @@ async def test_list_tool_rest_api_with_server_specific_auth():
 
                 mock_manager.get_mcp_server_by_id.return_value = mock_server
                 # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-                mock_manager.filter_server_ids_by_ip = MagicMock(
-                    side_effect=lambda server_ids, client_ip: server_ids
+                mock_manager.filter_server_ids_by_ip = AsyncMock(
+                    side_effect=lambda server_ids, client_ip: (server_ids, False)
                 )
 
                 mock_user_api_key_dict = UserAPIKeyAuth(
@@ -1912,8 +1912,8 @@ async def test_list_tool_rest_api_with_default_auth():
 
                 mock_manager.get_mcp_server_by_id.return_value = mock_server
                 # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-                mock_manager.filter_server_ids_by_ip = MagicMock(
-                    side_effect=lambda server_ids, client_ip: server_ids
+                mock_manager.filter_server_ids_by_ip = AsyncMock(
+                    side_effect=lambda server_ids, client_ip: (server_ids, False)
                 )
 
                 mock_user_api_key_dict = UserAPIKeyAuth(
@@ -2022,8 +2022,8 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     )
                 )
                 # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-                mock_manager.filter_server_ids_by_ip = MagicMock(
-                    side_effect=lambda server_ids, client_ip: server_ids
+                mock_manager.filter_server_ids_by_ip = AsyncMock(
+                    side_effect=lambda server_ids, client_ip: (server_ids, False)
                 )
 
                 mock_user_api_key_dict = UserAPIKeyAuth(
@@ -2155,8 +2155,8 @@ async def test_filter_tools_by_allowed_tools_integration():
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-        mock_manager.filter_server_ids_by_ip = MagicMock(
-            side_effect=lambda server_ids, client_ip: server_ids
+        mock_manager.filter_server_ids_by_ip = AsyncMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, False)
         )
 
         # Mock the _get_tools_from_server method to return all tools
@@ -2269,8 +2269,8 @@ async def test_filter_tools_by_disallowed_tools_integration():
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-        mock_manager.filter_server_ids_by_ip = MagicMock(
-            side_effect=lambda server_ids, client_ip: server_ids
+        mock_manager.filter_server_ids_by_ip = AsyncMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, False)
         )
         # Mock the _get_tools_from_server method to return all tools
         mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
@@ -2369,8 +2369,8 @@ async def test_filter_tools_no_restrictions_integration():
         )
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=mock_server)
         # Mock filter_server_ids_by_ip to return input unchanged (no IP filtering in test)
-        mock_manager.filter_server_ids_by_ip = MagicMock(
-            side_effect=lambda server_ids, client_ip: server_ids
+        mock_manager.filter_server_ids_by_ip = AsyncMock(
+            side_effect=lambda server_ids, client_ip: (server_ids, False)
         )
 
         # Mock the _get_tools_from_server method to return all tools
