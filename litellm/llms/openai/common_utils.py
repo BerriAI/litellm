@@ -32,6 +32,20 @@ def _get_client_init_params(cls: type) -> Tuple[str, ...]:
 _OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(OpenAI)
 _AZURE_OPENAI_INIT_PARAMS: Tuple[str, ...] = _get_client_init_params(AzureOpenAI)
 
+# Ordered params included in the cache key (excluding api_key which is hashed separately).
+# get_openai_client_cache_key iterates this tuple; safety-net tests use it to detect drift.
+_CACHE_KEY_IDENTITY_PARAMS = (
+    "is_async",
+    "api_base",
+    "api_version",
+    "timeout",
+    "max_retries",
+    "organization",
+)
+
+# Full set of params that affect client identity (includes api_key).
+_CACHE_KEY_PARAMS = frozenset(_CACHE_KEY_IDENTITY_PARAMS) | {"api_key"}
+
 
 class OpenAIError(BaseLLMException):
     def __init__(
@@ -155,38 +169,14 @@ class BaseOpenAILLM:
         client_initialization_params: dict, client_type: Literal["openai", "azure"]
     ) -> str:
         """Creates a cache key for the OpenAI client based on the client initialization parameters"""
-        hashed_api_key = None
-        if client_initialization_params.get("api_key") is not None:
-            hash_object = hashlib.sha256(
-                client_initialization_params.get("api_key", "").encode()
-            )
-            # Hexadecimal representation of the hash
-            hashed_api_key = hash_object.hexdigest()
-
-        # Create a more readable cache key using a list of key-value pairs
-        key_parts = [
-            f"hashed_api_key={hashed_api_key}",
-            f"is_async={client_initialization_params.get('is_async')}",
-        ]
-
-        LITELLM_CLIENT_SPECIFIC_PARAMS = (
-            "timeout",
-            "max_retries",
-            "organization",
-            "api_base",
+        api_key = client_initialization_params.get("api_key")
+        hashed_api_key = (
+            hashlib.sha256(api_key.encode()).hexdigest() if api_key else None
         )
-        openai_client_fields = (
-            BaseOpenAILLM.get_openai_client_initialization_param_fields(
-                client_type=client_type
-            )
-            + LITELLM_CLIENT_SPECIFIC_PARAMS
+        return (
+            f"{client_type},{hashed_api_key},"
+            + ",".join(str(client_initialization_params.get(p)) for p in _CACHE_KEY_IDENTITY_PARAMS)
         )
-
-        for param in openai_client_fields:
-            key_parts.append(f"{param}={client_initialization_params.get(param)}")
-
-        _cache_key = ",".join(key_parts)
-        return _cache_key
 
     @staticmethod
     def get_openai_client_initialization_param_fields(
