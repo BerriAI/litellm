@@ -1109,6 +1109,8 @@ s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requestin
 
 Anthropic’s [context editing](https://docs.claude.com/en/docs/build-with-claude/context-editing) API lets you automatically clear older tool results or thinking blocks. LiteLLM now forwards the native `context_management` payload when you call Anthropic models, and automatically attaches the required `context-management-2025-06-27` beta header.
 
+> For a cross-provider overview including OpenAI, Bedrock, and Vertex AI, see [Context Management (Compaction)](/docs/context_management).
+
 ```python
 from litellm import completion
 

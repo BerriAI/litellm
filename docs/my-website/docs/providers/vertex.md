@@ -1920,6 +1920,28 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Usage - Context Management (Beta)
+
+LiteLLM supports context management for Vertex AI Anthropic models (`vertex_ai/claude-*`). Pass `context_management` in the OpenAI format and LiteLLM transforms it to Anthropic's native `edits` format with the required beta headers.
+
+> For the full cross-provider guide, see [Context Management (Compaction)](/docs/context_management).
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Summarise the conversation so far"}],
+    context_management=[
+        {"type": "compaction", "compact_threshold": 200000}
+    ],
+)
+```
+
+:::info
+Context management on Vertex AI is only supported for Anthropic models (`vertex_ai/claude-*`). Gemini models do not support this parameter.
+:::
+
 ## Usage - Function Calling 
 
 LiteLLM supports Function Calling for Vertex AI gemini models. 
