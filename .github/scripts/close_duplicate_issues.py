@@ -41,14 +41,11 @@ def gh(*args: str) -> str:
 
 def fetch_open_issues(repo: str | None) -> list[dict]:
     """Fetch all open issues (excluding PRs) via gh api --paginate."""
-    endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-    cmd = ["api", "--paginate", endpoint]
     if repo:
-        cmd.extend(["-f", f"owner={repo.split('/')[0]}", "-f", f"repo={repo.split('/')[1]}"])
         endpoint = f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
-        cmd = ["api", "--paginate", endpoint]
     else:
-        cmd = ["api", "--paginate", "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"]
+        endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
+    cmd = ["api", "--paginate", endpoint]
 
     raw = gh(*cmd)
     # gh --paginate concatenates JSON arrays, so we may get multiple arrays
