@@ -173,7 +173,7 @@ def test_convert_to_gemini_with_embedded_signature():
 
     # Verify thought signature is extracted and sent to Gemini
     assert len(gemini_parts) == 1
-    assert "function_call" in gemini_parts[0]
+    assert "functionCall" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     assert gemini_parts[0]["thoughtSignature"] == test_signature
 
