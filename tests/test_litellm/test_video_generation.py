@@ -1256,6 +1256,35 @@ class TestVideoListTransformation:
         assert params["after"] == "video_bbb"
 
 
+class TestAvideListProviderFallback:
+    """Regression test for https://github.com/BerriAI/litellm/issues/22130.
+
+    avideo_list must not raise BadRequestError when custom_llm_provider is
+    omitted.  It should fall back to DEFAULT_VIDEO_ENDPOINT_MODEL instead of
+    passing model="" to get_llm_provider.
+    """
+
+    @pytest.mark.asyncio
+    async def test_avideo_list_no_provider_does_not_raise(self):
+        """avideo_list with custom_llm_provider=None should resolve the
+        provider via DEFAULT_VIDEO_ENDPOINT_MODEL, not fail on model=""."""
+        mock_videos = [
+            {
+                "id": "video_123",
+                "object": "video",
+                "model": "sora-2",
+                "status": "completed",
+                "created_at": 1700000000,
+            }
+        ]
+        from litellm.videos.main import avideo_list
+
+        # Patch the sync video_list that avideo_list delegates to
+        with patch("litellm.videos.main.video_list", return_value=mock_videos):
+            result = await avideo_list(custom_llm_provider=None)
+            assert result == mock_videos
+
+
 class TestVideoEndpointsProxyLitellmParams:
     """Test that video proxy endpoints (status, content, remix) respect litellm_params from proxy config."""
 
