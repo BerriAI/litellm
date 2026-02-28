@@ -10035,3 +10035,29 @@ export const updateToolPolicy = async (
   }
   return response.json();
 };
+
+
+export const getPerformanceSummaryCall = async (accessToken: string) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/performance/summary`
+    : `/v1/performance/summary`;
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to get performance summary:", error);
+    throw error;
+  }
+};
