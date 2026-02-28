@@ -164,7 +164,7 @@ def _get_bearer_token(
 def _apply_budget_limits_to_end_user_params(
     end_user_params: dict,
     budget_info: LiteLLM_BudgetTable,
-    end_user_id: str,
+    end_user_id: Optional[str],
 ) -> None:
     """
     Helper function to apply budget limits to end user parameters.

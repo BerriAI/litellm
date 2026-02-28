@@ -9,6 +9,7 @@ export enum Providers {
   Azure_AI_Studio = "Azure AI Foundry (Studio)",
   Cerebras = "Cerebras",
   Cohere = "Cohere",
+  Cursor = "Cursor",
   Dashscope = "Dashscope",
   Databricks = "Databricks (Qwen API)",
   DeepInfra = "DeepInfra",
@@ -60,6 +61,7 @@ export const provider_map: Record<string, string> = {
   MiniMax: "minimax",
   MistralAI: "mistral",
   Cohere: "cohere",
+  Cursor: "cursor",
   OpenAI_Compatible: "openai",
   OpenAI_Text_Compatible: "text-completion-openai",
   Vertex_AI: "vertex_ai",
@@ -107,6 +109,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
   [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
   [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
+  [Providers.Cursor]: `${asset_logos_folder}cursor.svg`,
   [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
   [Providers.Dashscope]: `${asset_logos_folder}dashscope.svg`,
   [Providers.Deepseek]: `${asset_logos_folder}deepseek.svg`,
@@ -206,6 +209,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "runwayml/gen4_turbo";
   } else if (selectedProvider === Providers.Watsonx) {
     return "watsonx/ibm/granite-3-3-8b-instruct";
+  } else if (selectedProvider === Providers.Cursor) {
+    return "cursor/claude-4-sonnet";
   } else {
     return "gpt-3.5-turbo";
   }

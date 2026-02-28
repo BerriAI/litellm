@@ -807,7 +807,7 @@ def test_add_deployment(model_list):
     deployment = router.get_deployment_by_model_group_name(
         model_group_name="gpt-3.5-turbo"
     )
-    deployment["model_info"]["id"] = 100
+    deployment["model_info"]["id"] = "100"
     ## Test 1: call user facing function
     router.add_deployment(deployment=deployment)
 

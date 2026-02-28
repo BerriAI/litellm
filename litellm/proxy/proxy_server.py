@@ -2166,22 +2166,24 @@ async def _run_background_health_check():
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = (
-                    await _run_direct_health_check_with_instrumentation(
-                        _llm_model_list,
-                        health_check_details,
-                        health_check_concurrency,
-                        instrumentation_context,
-                    )
-                )
-        else:
-            healthy_endpoints, unhealthy_endpoints = (
-                await _run_direct_health_check_with_instrumentation(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
                     health_check_concurrency,
                     instrumentation_context,
                 )
+        else:
+            (
+                healthy_endpoints,
+                unhealthy_endpoints,
+            ) = await _run_direct_health_check_with_instrumentation(
+                _llm_model_list,
+                health_check_details,
+                health_check_concurrency,
+                instrumentation_context,
             )
 
         # Update the global variable with the health check results
@@ -3506,7 +3508,15 @@ class ProxyConfig:
                 combined_id_list.append(model_info.id)
 
         ## CONFIG MODELS ##
-        config = await self.get_config(config_file_path=user_config_file_path)
+        try:
+            config = await self.get_config(config_file_path=user_config_file_path)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to load config in _delete_deployment: %s. "
+                "Skipping deployment cleanup to avoid removing valid models.",
+                str(e),
+            )
+            return 0
         model_list = config.get("model_list", None)
         if model_list:
             for model in model_list:
@@ -3624,8 +3634,20 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
     ):
         global llm_router, llm_model_list, master_key, general_settings
-        config_data = await proxy_config.get_config()
-        search_tools = self.parse_search_tools(config_data)
+
+        # Load config separately so a timeout here doesn't block model loading
+        config_data: dict = {}
+        search_tools = None
+        try:
+            config_data = await proxy_config.get_config()
+            search_tools = self.parse_search_tools(config_data)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to load config in _update_llm_router: %s. "
+                "Proceeding with model loading using cached/empty config.",
+                str(e),
+            )
+
         try:
             models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
@@ -7138,6 +7160,11 @@ async def audio_speech(
         )
 
     except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(
                 str(e)

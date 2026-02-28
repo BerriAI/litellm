@@ -14,6 +14,7 @@ from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 from litellm.proxy.proxy_server import app
 
 
+@pytest.mark.xdist_group("swagger")
 class TestSwaggerChatCompletions:
     """Test suite for validating /chat/completions schema in Swagger documentation."""
 
