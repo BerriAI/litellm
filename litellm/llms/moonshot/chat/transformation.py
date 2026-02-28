@@ -94,7 +94,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
             if (
                 message.get("role") == "assistant"
                 and message.get("tool_calls")
-                and not message.get("reasoning_content")
+                and message.get("reasoning_content") is None
             ):
                 raise litellm.BadRequestError(
                     message=(
