@@ -596,6 +596,10 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     if _budget_id is not None:
         data_json["budget_id"] = _budget_id
 
+    # Only set budget_duration on key when explicitly provided. Keys with budget_id
+    # but no explicit budget_duration follow their linked budget tier's schedule;
+    # reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    # This avoids duplicating budget_duration on keys so tier updates apply automatically.
     if "budget_duration" in data_json:
         data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 

@@ -5610,6 +5610,136 @@ async def test_validate_key_list_check_key_hash_not_found():
 
 
 @pytest.mark.asyncio
+async def test_key_with_budget_id_does_not_store_budget_duration():
+    """
+    Test that when a key is created with budget_id but without explicit
+    budget_duration, the key does NOT get budget_duration stored on it.
+
+    Keys with budget_id follow their linked budget tier's reset schedule;
+    reset_budget_for_keys_linked_to_budgets() resets them when the tier resets.
+    This avoids duplicating budget_duration on keys so tier updates apply
+    automatically to all linked keys.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_prisma = MagicMock()
+
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "test-user",
+            "team_id": None,
+        }
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router", None
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        mock_generate_key,
+    ):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                budget_id="7d-budget-tier",
+                max_budget=10.0,
+                # NOTE: budget_duration is intentionally NOT set here
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin-user",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    mock_generate_key.assert_awaited_once()
+    call_kwargs = mock_generate_key.call_args.kwargs
+
+    # Key should NOT have key_budget_duration - it follows the budget tier's schedule
+    assert call_kwargs.get("key_budget_duration") is None, (
+        "key_budget_duration should be None for budget-linked keys without explicit "
+        f"budget_duration; got: {call_kwargs.get('key_budget_duration')}"
+    )
+
+    # No budget tier lookup - we don't copy budget_duration onto the key
+    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_key_does_not_override_explicit_budget_duration():
+    """
+    Test that when a key is created with both budget_id and an explicit
+    budget_duration, the explicit budget_duration takes precedence over
+    the budget tier's budget_duration.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    mock_prisma = MagicMock()
+    # The budget tier has budget_duration="7d"
+    mock_budget_row = MagicMock()
+    mock_budget_row.budget_duration = "7d"
+    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=mock_budget_row
+    )
+
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "test-user",
+            "team_id": None,
+        }
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router", None
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user", False
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        mock_generate_key,
+    ):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                budget_id="7d-budget-tier",
+                max_budget=10.0,
+                budget_duration="30d",  # explicit budget_duration should take precedence
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="admin-user",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    mock_generate_key.assert_awaited_once()
+    call_kwargs = mock_generate_key.call_args.kwargs
+
+    # The explicit budget_duration should take precedence
+    assert call_kwargs.get("key_budget_duration") == "30d", (
+        "Explicit budget_duration should take precedence over the budget tier's value "
+        f"but got: {call_kwargs.get('key_budget_duration')}"
+    )
+
+    # The budget tier should NOT have been looked up since budget_duration was explicit
+    mock_prisma.db.litellm_budgettable.find_unique.assert_not_called()
+              
+              
+@pytest.mark.asyncio
 @patch(
     "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
 )
