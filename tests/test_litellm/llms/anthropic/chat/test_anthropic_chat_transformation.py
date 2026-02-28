@@ -1560,12 +1560,16 @@ def test_effort_output_config_preservation():
 
 
 def test_effort_beta_header_injection():
-    """Test that effort beta header is automatically added when output_config is detected."""
+    """Test that effort beta header is NOT added for output_config (Claude 4.6 adaptive thinking).
+    
+    Per the Anthropic docs, no beta header is required for adaptive thinking.
+    The effort-2025-11-24 beta header is only needed for reasoning_effort on Opus 4.5.
+    """
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     model_info = AnthropicModelInfo()
 
-    # Test with effort parameter
+    # output_config.effort should NOT trigger the beta header
     optional_params = {
         "output_config": {
             "effort": "low"
@@ -1573,13 +1577,19 @@ def test_effort_beta_header_injection():
     }
 
     effort_used = model_info.is_effort_used(optional_params=optional_params)
-    assert effort_used is True
+    assert effort_used is False
+
+    # reasoning_effort on Opus 4.5 SHOULD trigger the beta header
+    optional_params_opus = {"reasoning_effort": "high"}
+    effort_used_opus = model_info.is_effort_used(
+        optional_params=optional_params_opus, model="claude-opus-4-5-20251101"
+    )
+    assert effort_used_opus is True
 
     headers = model_info.get_anthropic_headers(
         api_key="test-key",
-        effort_used=effort_used
+        effort_used=effort_used_opus
     )
-
     assert "anthropic-beta" in headers
     assert "effort-2025-11-24" in headers["anthropic-beta"]
 
@@ -1662,10 +1672,27 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is only supported by Claude 4.6 models"):
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={}
+        )
+
+
+def test_max_effort_rejected_for_sonnet_46():
+    """Test that effort='max' is rejected for Sonnet 4.6 (only Opus 4.6 supports it)."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(ValueError, match="effort='max' is only supported by Claude Opus 4.6"):
+        optional_params = {"output_config": {"effort": "max"}}
+        config.transform_request(
+            model="claude-sonnet-4-6-20260205",
             messages=messages,
             optional_params=optional_params,
             litellm_params={},

@@ -228,24 +228,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
         """
-        Check if effort parameter is being used.
+        Check if effort parameter is being used in a way that requires the
+        effort-2025-11-24 beta header.
 
-        Returns True if effort-related parameters are present.
+        Returns True only for reasoning_effort on Claude Opus 4.5, which is
+        the only path that requires the beta header. The output_config.effort
+        parameter used with Claude 4.6 models does NOT require a beta header
+        per the Anthropic docs.
         """
         if not optional_params:
             return False
 
-        # Check if reasoning_effort is provided for Claude Opus 4.5
+        # Only Opus 4.5 reasoning_effort needs the beta header
         if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
-                return True
-
-        # Check if output_config is directly provided
-        output_config = optional_params.get("output_config")
-        if output_config and isinstance(output_config, dict):
-            effort = output_config.get("effort")
-            if effort and isinstance(effort, str):
                 return True
 
         return False
