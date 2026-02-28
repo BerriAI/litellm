@@ -508,7 +508,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         masked_entity_count[entity_type] = (
                             masked_entity_count.get(entity_type, 0) + 1
                         )
-                return redacted_text["text"]
+                # When output_parse_pii is True, new_text contains UUID-suffixed
+                # tokens that match the keys in pii_tokens.  Returning
+                # redacted_text["text"] (Presidio's original output) would send
+                # un-suffixed tokens to the LLM, making unmasking impossible.
+                # When output_parse_pii is False, new_text == redacted_text["text"]
+                # because no UUID suffix is appended.
+                return new_text
             else:
                 raise Exception("Invalid anonymizer response: received None")
         except Exception as e:
