@@ -8,6 +8,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -47,6 +48,12 @@ class ResetBudgetJob:
 
             ### RESET ENDUSER (Customer) BUDGET and corresponding Budget duration ###
             await self.reset_budget_for_litellm_budget_table()
+
+            ##Reset The organization Budget
+            await self.reset_budget_for_litellm_organizations() 
+
+
+            
 
     async def reset_budget_for_litellm_team_members(
         self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
@@ -480,6 +487,79 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for teams: %s", e)
+
+
+    async def reset_budget_for_litellm_organizations(self):
+        """
+        Resets spend for LiteLLM Organizations whose linked budget has expired. 
+
+        NOTE: Must run AFTER reset_budget_for_litellm_budget_table() to capture
+        first-time budgets that had budget_reset_at computed.
+        """
+        now = datetime.now(timezone.utc)
+        start_time = time.time()
+        budgets_to_reset: Optional[List[LiteLLM_BudgetTableFull]] = None
+
+        try:
+            # Find budgets whose budget_reset_at is due
+            budgets_to_reset = await self.prisma_client.get_data(
+                table_name="budget", query_type="find_all", reset_at=now
+            )
+
+            budget_ids: List[str] = []
+            if budgets_to_reset:
+                
+                from typing import cast
+                budget_ids = [
+                    cast(str, b.budget_id)
+                    for b in budgets_to_reset
+                    if b.budget_id is not None
+                ]
+
+            if not budget_ids:
+                return
+
+            #Reset org spend for orgs linked to these budgets
+            await self.prisma_client.db.litellm_organizationtable.update_many(
+                where={"budget_id": {"in": budget_ids}},
+                data={
+                    "spend": 0.0,
+                    "model_spend": {},
+                },
+            )
+
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    call_type="reset_budget_organizations",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_budgets_found": len(budgets_to_reset) if budgets_to_reset else 0,
+                        "budget_ids_reset": json.dumps(budget_ids),
+                    },
+                )
+            )
+        except Exception as e:
+            end_time = time.time()
+            asyncio.create_task(
+                self.proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+                    service=ServiceTypes.RESET_BUDGET_JOB,
+                    duration=end_time - start_time,
+                    error=e,
+                    call_type="reset_budget_organizations",
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={
+                        "num_budgets_found": len(budgets_to_reset) if budgets_to_reset else 0,
+                    },
+                )
+            )
+            verbose_proxy_logger.exception(
+                "Failed to reset budget for organizations: %s", e
+            )
 
     @staticmethod
     async def _reset_budget_common(
