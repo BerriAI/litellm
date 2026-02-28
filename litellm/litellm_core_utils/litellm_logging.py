@@ -133,6 +133,7 @@ from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
+from ..integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
@@ -3661,6 +3662,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _datadog_logger = DataDogLogger()
             _in_memory_loggers.append(_datadog_logger)
             return _datadog_logger  # type: ignore
+        elif logging_integration == "datadog_metrics":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DatadogMetricsLogger):
+                    return callback  # type: ignore
+
+            _datadog_metrics_logger = DatadogMetricsLogger()
+            _in_memory_loggers.append(_datadog_metrics_logger)
+            return _datadog_metrics_logger  # type: ignore
         elif logging_integration == "datadog_llm_observability":
             _datadog_llm_obs_logger = DataDogLLMObsLogger()
             _in_memory_loggers.append(_datadog_llm_obs_logger)
@@ -4267,6 +4276,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
+                    return callback
+        elif logging_integration == "datadog_metrics":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DatadogMetricsLogger):
                     return callback
         elif logging_integration == "datadog_llm_observability":
             for callback in _in_memory_loggers:
