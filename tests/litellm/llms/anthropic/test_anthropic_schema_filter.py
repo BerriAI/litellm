@@ -4,7 +4,6 @@ Tests for Anthropic JSON schema filtering.
 Related to: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
 """
 
-import pytest
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
@@ -399,3 +398,312 @@ class TestRegularToolSchemaFiltering:
         assert props["status"]["type"] == "string"
         assert props["status"]["enum"] == ["on", "off"]
         assert props["status"]["description"] == "Device status"
+
+
+class TestAdditionalSDKTransformations:
+    """Test additional SDK transformations: additionalProperties, string formats, pattern.
+
+    Mirrors the Anthropic Python SDK's transform_schema() behavior:
+    - Add additionalProperties: false to all object schemas
+    - Filter string format to supported values only
+    - Strip pattern constraint (move to description)
+    See: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/lib/_parse/_transform.py
+    """
+
+    def test_adds_additional_properties_false_to_objects(self):
+        """Object schemas should get additionalProperties: false."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "required": ["name"],
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False
+
+    def test_overrides_additional_properties_true(self):
+        """additionalProperties: true should be overridden to false for objects."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "additionalProperties": True,
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False
+
+    def test_preserves_additional_properties_false(self):
+        """additionalProperties: false should remain false."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "additionalProperties": False,
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False
+
+    def test_no_additional_properties_for_non_object(self):
+        """Non-object schemas should NOT get additionalProperties."""
+        schema = {"type": "string"}
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "additionalProperties" not in result
+
+    def test_additional_properties_on_nested_objects(self):
+        """Nested object schemas should also get additionalProperties: false."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                    },
+                }
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False
+        assert result["properties"]["address"]["additionalProperties"] is False
+
+    def test_preserves_supported_string_format(self):
+        """Supported string formats (date-time, email, uuid, etc.) should be preserved."""
+        for fmt in ["date-time", "date", "time", "email", "uri", "uuid", "ipv4", "ipv6", "hostname", "duration"]:
+            schema = {"type": "string", "format": fmt}
+            result = AnthropicConfig.filter_anthropic_output_schema(schema)
+            assert result.get("format") == fmt, f"Format {fmt} should be preserved"
+
+    def test_strips_unsupported_string_format(self):
+        """Unsupported string formats should be removed and added to description."""
+        schema = {
+            "type": "string",
+            "format": "phone-number",
+            "description": "Contact phone",
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "format" not in result
+        assert "phone-number" in result["description"]
+        assert "Contact phone" in result["description"]
+
+    def test_strips_unsupported_format_no_existing_description(self):
+        """Unsupported format stripped without existing description."""
+        schema = {"type": "string", "format": "binary"}
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "format" not in result
+        assert "binary" in result["description"]
+
+    def test_format_preserved_for_non_string_types(self):
+        """Format on non-string types should pass through unchanged."""
+        schema = {"type": "integer", "format": "int64"}
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result.get("format") == "int64"
+
+    def test_strips_pattern_constraint(self):
+        """pattern constraint should be stripped and moved to description."""
+        schema = {
+            "type": "string",
+            "pattern": "^[A-Z]{2}\\d{4}$",
+            "description": "Product code",
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "pattern" not in result
+        assert "Product code" in result["description"]
+        assert "pattern:" in result["description"]
+
+    def test_combined_transformations(self):
+        """Test all transformations together on a complex schema."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "format": "email",
+                    "minLength": 5,
+                },
+                "phone": {
+                    "type": "string",
+                    "format": "phone-number",
+                    "pattern": "^\\+\\d+$",
+                },
+                "age": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 150,
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 50},
+                    "minItems": 1,
+                    "maxItems": 10,
+                },
+            },
+            "required": ["email", "phone", "age", "tags"],
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        # Object gets additionalProperties: false
+        assert result["additionalProperties"] is False
+
+        # email: supported format preserved, minLength stripped
+        assert result["properties"]["email"]["format"] == "email"
+        assert "minLength" not in result["properties"]["email"]
+        assert "minimum length: 5" in result["properties"]["email"]["description"]
+
+        # phone: unsupported format and pattern stripped
+        assert "format" not in result["properties"]["phone"]
+        assert "pattern" not in result["properties"]["phone"]
+        assert "phone-number" in result["properties"]["phone"]["description"]
+
+        # age: numeric constraints stripped
+        assert "minimum" not in result["properties"]["age"]
+        assert "maximum" not in result["properties"]["age"]
+
+        # tags: array constraints stripped, nested string constraint stripped
+        assert "minItems" not in result["properties"]["tags"]
+        assert "maxItems" not in result["properties"]["tags"]
+        assert "maxLength" not in result["properties"]["tags"]["items"]
+
+
+class TestTupleAndPrefixItemsFiltering:
+    """Tests for tuple-style items (list) and prefixItems filtering."""
+
+    def test_tuple_style_items_list_filtered(self):
+        """Tuple-style items (list of schemas) should be recursively filtered."""
+        schema = {
+            "type": "array",
+            "items": [
+                {"type": "number", "minimum": -90, "maximum": 90},
+                {"type": "number", "minimum": -180, "maximum": 180},
+            ],
+        }
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+        for item in result["items"]:
+            assert "minimum" not in item
+            assert "maximum" not in item
+            assert "description" in item
+
+    def test_prefix_items_filtered(self):
+        """prefixItems (JSON Schema 2020-12) should be recursively filtered."""
+        schema = {
+            "type": "array",
+            "prefixItems": [
+                {"type": "string", "minLength": 1, "maxLength": 10},
+                {"type": "integer", "minimum": 0},
+            ],
+        }
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+        for item in result["prefixItems"]:
+            assert "minLength" not in item
+            assert "maxLength" not in item
+            assert "minimum" not in item
+
+
+class TestEnforceAdditionalPropertiesFlag:
+    """Test the enforce_additional_properties parameter."""
+
+    def test_enforce_false_preserves_additional_properties_true(self):
+        """When enforce_additional_properties=False, user's additionalProperties: true is preserved."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "additionalProperties": True,
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(
+            schema, enforce_additional_properties=False
+        )
+
+        assert result["additionalProperties"] is True
+
+    def test_enforce_false_does_not_add_additional_properties(self):
+        """When enforce_additional_properties=False, additionalProperties is NOT injected."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(
+            schema, enforce_additional_properties=False
+        )
+
+        assert "additionalProperties" not in result
+
+    def test_enforce_false_still_filters_constraints(self):
+        """Constraint filtering still works when enforce_additional_properties=False."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "age": {"type": "integer", "minimum": 0, "maximum": 150}
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(
+            schema, enforce_additional_properties=False
+        )
+
+        assert "minimum" not in result["properties"]["age"]
+        assert "maximum" not in result["properties"]["age"]
+        assert "additionalProperties" not in result
+
+    def test_enforce_false_nested_objects(self):
+        """Nested objects also respect enforce_additional_properties=False."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"}
+                    },
+                    "additionalProperties": True,
+                }
+            },
+            "additionalProperties": True,
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(
+            schema, enforce_additional_properties=False
+        )
+
+        assert result["additionalProperties"] is True
+        assert result["properties"]["address"]["additionalProperties"] is True
+
+    def test_enforce_true_is_default(self):
+        """Default behavior (enforce_additional_properties=True) forces false."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "additionalProperties": True,
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["additionalProperties"] is False
