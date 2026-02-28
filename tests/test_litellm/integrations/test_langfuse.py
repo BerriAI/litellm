@@ -468,6 +468,207 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         assert self.last_trace_kwargs.get("id") == "call-id-xyz"
 
 
+    def test_log_langfuse_v2_session_id_passed_as_trace_session_id(self):
+        """
+        Test that metadata.session_id is correctly passed as trace_params["session_id"]
+        for Langfuse session grouping, and does NOT override trace_id.
+        Each LLM call should get its own unique trace_id while sharing the session_id.
+        """
+        payload = self._build_standard_logging_payload(trace_id="std-trace-123")
+        kwargs = self._build_langfuse_kwargs(payload)
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={"session_id": "my-session-abc"},
+                litellm_params={"metadata": {"session_id": "my-session-abc"}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="INFO",
+                litellm_call_id="call-id-456",
+            )
+
+        # session_id should be set for Langfuse session grouping
+        assert self.last_trace_kwargs.get("session_id") == "my-session-abc"
+        # trace_id should remain the standard trace_id, NOT the session_id
+        assert self.last_trace_kwargs.get("id") == "std-trace-123"
+
+    def test_log_langfuse_v2_session_id_preserved_for_error_level(self):
+        """
+        Test that session_id is correctly passed in trace_params even when
+        the log level is ERROR (failure case). This verifies the fix for
+        failed requests losing session_id mapping in Langfuse.
+        """
+        payload = self._build_standard_logging_payload(trace_id="std-trace-err")
+        kwargs = self._build_langfuse_kwargs(payload)
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={"session_id": "error-session-xyz"},
+                litellm_params={"metadata": {"session_id": "error-session-xyz"}},
+                output="BadRequestError: model not found",
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input={"messages": [{"role": "user", "content": "test"}]},
+                response_obj=None,
+                level="ERROR",
+                litellm_call_id="call-id-err-789",
+            )
+
+        # session_id must be preserved even for ERROR level logs
+        assert self.last_trace_kwargs.get("session_id") == "error-session-xyz"
+        # trace_id should be the standard trace_id, not the session_id
+        assert self.last_trace_kwargs.get("id") == "std-trace-err"
+        # status_message should be set for error traces
+        assert self.last_trace_kwargs.get("status_message") is not None
+
+    def test_log_langfuse_v2_explicit_trace_id_takes_priority_over_session_id(self):
+        """
+        Test that when both trace_id and session_id are provided in metadata,
+        trace_id takes priority as the trace identifier.
+        """
+        payload = self._build_standard_logging_payload()
+        kwargs = self._build_langfuse_kwargs(payload)
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={
+                    "session_id": "session-999",
+                    "trace_id": "explicit-trace-id-777",
+                },
+                litellm_params={
+                    "metadata": {
+                        "session_id": "session-999",
+                        "trace_id": "explicit-trace-id-777",
+                    }
+                },
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="DEFAULT",
+                litellm_call_id="call-id-aaa",
+            )
+
+        # Explicit trace_id must take priority
+        assert self.last_trace_kwargs.get("id") == "explicit-trace-id-777"
+        # session_id must still be set for session grouping
+        assert self.last_trace_kwargs.get("session_id") == "session-999"
+
+
+def test_failure_handler_langfuse_kwargs_excludes_original_response():
+    """
+    Test that the actual Logging.failure_handler() passes kwargs without
+    'original_response' to the Langfuse logger. Exercises the real code path
+    rather than simulating the filtering logic.
+    """
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    # Create a Logging instance
+    logging_obj = Logging(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.utcnow(),
+        litellm_call_id="test-call-id-failure",
+        function_id="test-function-id",
+    )
+
+    # Set up model_call_details with original_response (simulates a coroutine)
+    mock_coroutine = MagicMock()
+    logging_obj.model_call_details["original_response"] = mock_coroutine
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {"session_id": "test-session-failure"},
+        "litellm_session_id": None,
+    }
+    logging_obj.model_call_details["optional_params"] = {}
+
+    # Capture what gets passed to log_event_on_langfuse
+    captured_kwargs = {}
+    mock_langfuse_logger = MagicMock()
+
+    def capture_log_event(**log_kwargs):
+        captured_kwargs.update(log_kwargs)
+        return {"trace_id": "mock-trace-id", "generation_id": "mock-gen-id"}
+
+    mock_langfuse_logger.log_event_on_langfuse.side_effect = capture_log_event
+
+    # Set "langfuse" as a failure callback so the failure_handler processes it
+    original_failure_callback = litellm.failure_callback
+    litellm.failure_callback = ["langfuse"]
+
+    try:
+        # Mock LangFuseHandler to return our capturing mock logger
+        with patch(
+            "litellm.litellm_core_utils.litellm_logging.LangFuseHandler"
+        ) as mock_handler_class:
+            mock_handler_class.get_langfuse_logger_for_request.return_value = (
+                mock_langfuse_logger
+            )
+
+            # Call the actual failure_handler
+            test_exception = Exception("TestError: model not found")
+            logging_obj.failure_handler(
+                exception=test_exception,
+                traceback_exception="Traceback: test",
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+            )
+
+        # Verify log_event_on_langfuse was actually called
+        assert mock_langfuse_logger.log_event_on_langfuse.called, (
+            "log_event_on_langfuse was not called"
+        )
+
+        # Verify original_response is NOT in the kwargs passed to Langfuse
+        langfuse_kwargs = captured_kwargs.get("kwargs", {})
+        assert "original_response" not in langfuse_kwargs, (
+            "original_response should be excluded from kwargs passed to Langfuse"
+        )
+
+        # Verify session_id metadata is preserved in the kwargs
+        langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get(
+            "metadata", {}
+        )
+        assert langfuse_metadata.get("session_id") == "test-session-failure", (
+            "session_id should be preserved in kwargs passed to Langfuse"
+        )
+
+        # Verify level is ERROR
+        assert captured_kwargs.get("level") == "ERROR"
+    finally:
+        litellm.failure_callback = original_failure_callback
+
+
 def test_max_langfuse_clients_limit():
     """
     Test that the max langfuse clients limit is respected when initializing multiple clients
