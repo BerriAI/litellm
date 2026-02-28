@@ -552,7 +552,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             entity_type = item.get("entity_type")
 
             str_entity_type = str(
-                entity_type.value if hasattr(entity_type, "value") else entity_type
+                entity_type.value if hasattr(entity_type, "value") else entity_type  # type: ignore[union-attr]
             )
             if entity_type and str_entity_type in deny_list_strings:
                 continue
@@ -1135,7 +1135,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ) and remaining_chunks:
                 last_chunk = remaining_chunks[-1]
                 if hasattr(last_chunk, "usage") and last_chunk.usage:
-                    assembled_model_response.usage = last_chunk.usage
+                    assembled_model_response.usage = last_chunk.usage  # type: ignore[attr-defined]
 
             # Apply PII unmasking to assembled content (unmasking tokens back to original text)
             await self._process_response_for_pii(

@@ -300,7 +300,7 @@ async def health_services_endpoint(  # noqa: PLR0915
                 datadog_metrics_logger = DatadogMetricsLogger(
                     start_periodic_flush=False
                 )
-            response = await datadog_metrics_logger.async_health_check()
+            response = await datadog_metrics_logger.async_health_check()  # type: ignore[attr-defined]
             return {
                 "status": response["status"],
                 "message": (
