@@ -35,6 +35,7 @@ export enum Providers {
   Perplexity = "Perplexity",
   RunwayML = "RunwayML",
   Sambanova = "Sambanova",
+  Scaleway = "Scaleway",
   Snowflake = "Snowflake",
   TogetherAI = "TogetherAI",
   Triton = "Triton",
@@ -84,6 +85,7 @@ export const provider_map: Record<string, string> = {
   ElevenLabs: "elevenlabs",
   FalAI: "fal_ai",
   SageMaker: "sagemaker_chat",
+  Scaleway: "scaleway",
   Voyage: "voyage",
   JinaAI: "jina_ai",
   VolcEngine: "volcengine",
@@ -127,6 +129,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
   [Providers.RunwayML]: `${asset_logos_folder}runwayml.png`,
   [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
+  [Providers.Scaleway]: `${asset_logos_folder}scaleway.png`,
   [Providers.Snowflake]: `${asset_logos_folder}snowflake.svg`,
   [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
   [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
@@ -206,6 +209,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "runwayml/gen4_turbo";
   } else if (selectedProvider === Providers.Watsonx) {
     return "watsonx/ibm/granite-3-3-8b-instruct";
+  } else if (selectedProvider === Providers.Scaleway) {
+    return "scaleway/qwen3-235b-a22b-instruct-2507";
   } else {
     return "gpt-3.5-turbo";
   }
