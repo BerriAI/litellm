@@ -878,6 +878,11 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
         await ProxyStartupEvent._update_default_team_member_budget()
 
+        await ProxyStartupEvent._write_model_cost_map_reload_config_to_db(
+            general_settings=general_settings,
+            prisma_client=prisma_client,
+        )
+
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
         asyncio.create_task(
@@ -5584,6 +5589,38 @@ class ProxyStartupEvent:
             teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
             await update_default_team_member_budget(
                 teams=teams_pydantic_obj, user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key))  # type: ignore
+            )
+
+    @staticmethod
+    async def _write_model_cost_map_reload_config_to_db(
+        general_settings: dict,
+        prisma_client: PrismaClient,
+    ):
+        """
+        If model_cost_map_reload_interval_hours is set in general_settings,
+        upsert it into the DB so the background task picks it up.
+        """
+        reload_hours = general_settings.get("model_cost_map_reload_interval_hours")
+        if reload_hours is not None and reload_hours > 0:
+            await prisma_client.db.litellm_config.upsert(
+                where={"param_name": "model_cost_map_reload_config"},
+                data={
+                    "create": {
+                        "param_name": "model_cost_map_reload_config",
+                        "param_value": safe_dumps(
+                            {"interval_hours": reload_hours, "force_reload": False}
+                        ),
+                    },
+                    "update": {
+                        "param_value": safe_dumps(
+                            {"interval_hours": reload_hours, "force_reload": False}
+                        ),
+                    },
+                },
+            )
+            verbose_proxy_logger.info(
+                "Model cost map reload scheduled from config: every %s hours",
+                reload_hours,
             )
 
     @classmethod
