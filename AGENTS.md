@@ -217,6 +217,7 @@ See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
 - The `--timeout` pytest flag is NOT available; don't pass it.
 - Unit tests: `poetry run pytest tests/test_litellm/ -x -vv -n 4`
 - Black `--check` may report pre-existing formatting issues; this does not block test runs.
+- Some test files under `tests/test_litellm/proxy/client/` may fail to collect due to the `responses` module lazy-loading behavior; ignore or skip those directories if collection errors appear.
 
 ### Lint
 
