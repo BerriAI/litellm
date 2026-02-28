@@ -25,6 +25,7 @@ from typing import (
     AsyncGenerator,
     Callable,
     Dict,
+    Generator,
     List,
     Literal,
     Optional,
@@ -1327,6 +1328,11 @@ class Router:
         model_name = None
         deployment = None
         try:
+            # Capture kwargs before deployment selection so the streaming
+            # fallback iterator can re-dispatch with the original model group.
+            input_kwargs_for_streaming_fallback = kwargs.copy()
+            input_kwargs_for_streaming_fallback["model"] = model
+
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
                 model=model,
@@ -1397,6 +1403,15 @@ class Router:
                         model=model,
                         llm_provider="",
                     )
+
+            # Wrap streaming responses so MidStreamFallbackError (raised
+            # during iteration) triggers the Router's fallback chain.
+            if isinstance(response, CustomStreamWrapper):
+                return self._completion_streaming_iterator(
+                    model_response=response,
+                    messages=messages,
+                    initial_kwargs=input_kwargs_for_streaming_fallback,
+                )
 
             return response
         except Exception as e:
@@ -1597,17 +1612,24 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    initial_kwargs["messages"] = messages + [
-                        {
-                            "role": "system",
-                            "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
-                        },
-                        {
-                            "role": "assistant",
-                            "content": e.generated_content,
-                            "prefix": True,
-                        },
-                    ]
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content was generated before the error (e.g. a
+                        # rate-limit 429 on the very first chunk).  Retry with
+                        # the original messages — adding a continuation prompt
+                        # would waste tokens and confuse the model.
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
                     self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
@@ -1695,6 +1717,164 @@ class Router:
                             )
 
         return FallbackStreamWrapper(stream_with_fallbacks())
+
+    def _completion_streaming_iterator(
+        self,
+        model_response: CustomStreamWrapper,
+        messages: List[Dict[str, str]],
+        initial_kwargs: dict,
+    ) -> CustomStreamWrapper:
+        """
+        Sync equivalent of _acompletion_streaming_iterator.
+
+        Wraps a sync streaming response so that MidStreamFallbackError
+        (raised by CustomStreamWrapper.__next__) triggers the Router's
+        fallback chain instead of surfacing directly to the caller.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        class SyncFallbackStreamWrapper(CustomStreamWrapper):
+            def __init__(self, sync_generator: Generator):
+                super().__init__(
+                    completion_stream=sync_generator,
+                    model=model_response.model,
+                    custom_llm_provider=model_response.custom_llm_provider,
+                    logging_obj=model_response.logging_obj,
+                )
+                self._sync_generator = sync_generator
+                if hasattr(model_response, "_hidden_params"):
+                    self._hidden_params = model_response._hidden_params.copy()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._sync_generator)
+
+        router_self = self
+
+        def stream_with_fallbacks():
+            fallback_response = None
+            try:
+                for item in model_response:
+                    yield item
+            except MidStreamFallbackError as e:
+                from litellm.main import stream_chunk_builder
+
+                complete_response_object = stream_chunk_builder(
+                    chunks=model_response.chunks
+                )
+                complete_response_object_usage = cast(
+                    Optional[Usage],
+                    getattr(complete_response_object, "usage", None),
+                )
+                try:
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", router_self.fallbacks
+                    )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks",
+                        router_self.context_window_fallbacks,
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks",
+                        router_self.content_policy_fallbacks,
+                    )
+                    initial_kwargs["original_function"] = router_self._completion
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        initial_kwargs["messages"] = messages
+                    else:
+                        initial_kwargs["messages"] = messages + [
+                            {
+                                "role": "system",
+                                "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": e.generated_content,
+                                "prefix": True,
+                            },
+                        ]
+                    router_self._update_kwargs_before_fallbacks(
+                        model=model_group, kwargs=initial_kwargs
+                    )
+                    fallback_response = (
+                        router_self.function_with_fallbacks(
+                            **initial_kwargs,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                        )
+                    )
+
+                    if hasattr(fallback_response, "__iter__"):
+                        for fallback_item in fallback_response:
+                            if (
+                                fallback_item
+                                and isinstance(fallback_item, ModelResponseStream)
+                                and hasattr(fallback_item, "usage")
+                            ):
+                                from litellm.cost_calculator import (
+                                    BaseTokenUsageProcessor,
+                                )
+
+                                usage = cast(
+                                    Optional[Usage],
+                                    getattr(fallback_item, "usage", None),
+                                )
+                                if usage is not None:
+                                    usage_objects = [usage]
+                                else:
+                                    usage_objects = []
+
+                                if (
+                                    complete_response_object_usage is not None
+                                    and hasattr(
+                                        complete_response_object_usage, "usage"
+                                    )
+                                    and complete_response_object_usage.usage is not None  # type: ignore
+                                ):
+                                    usage_objects.append(
+                                        complete_response_object_usage
+                                    )
+
+                                combined_usage = (
+                                    BaseTokenUsageProcessor.combine_usage_objects(
+                                        usage_objects=usage_objects
+                                    )
+                                )
+                                setattr(fallback_item, "usage", combined_usage)
+                            yield fallback_item
+                    else:
+                        yield None
+
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        f"Fallback also failed: {fallback_error}"
+                    )
+                    raise fallback_error
+            finally:
+                if hasattr(model_response, "close"):
+                    try:
+                        model_response.close()
+                    except BaseException as close_err:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks: error closing model_response: %s",
+                            close_err,
+                        )
+                if fallback_response is not None and hasattr(
+                    fallback_response, "close"
+                ):
+                    try:
+                        fallback_response.close()
+                    except BaseException as close_err:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks: error closing fallback_response: %s",
+                            close_err,
+                        )
+
+        return SyncFallbackStreamWrapper(stream_with_fallbacks())
 
     async def _silent_experiment_acompletion(
         self, silent_model: str, messages: List[Any], **kwargs
