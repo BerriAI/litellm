@@ -22,21 +22,6 @@ vi.mock("antd", () => ({
   ),
 }));
 
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Switch: ({ checked, onChange }: any) => (
-      <input
-        type="checkbox"
-        role="switch"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    ),
-  };
-});
-
 vi.mock("@/components/networking", () => ({
   getCallbacksCall: vi.fn(),
   getRouterSettingsCall: vi.fn(),
