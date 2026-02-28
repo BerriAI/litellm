@@ -191,13 +191,20 @@ def _get_token_base_cost(
         if output_image_cost is not None:
             completion_base_cost = cast(float, output_image_cost)
     cache_creation_cost = cast(
-        float, _get_cost_per_unit(model_info, cache_creation_cost_key)
+        float,
+        _get_cost_per_unit(model_info, cache_creation_cost_key, prompt_base_cost),
     )
     cache_creation_cost_above_1hr = cast(
         float,
-        _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
+        _get_cost_per_unit(
+            model_info,
+            "cache_creation_input_token_cost_above_1hr",
+            cache_creation_cost,
+        ),
     )
-    cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
+    cache_read_cost = cast(
+        float, _get_cost_per_unit(model_info, cache_read_cost_key, prompt_base_cost)
+    )
 
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
