@@ -1290,9 +1290,6 @@ class Router:
             if litellm.redact_user_api_key_info:
                 masker = SensitiveDataMasker(visible_prefix=2, visible_suffix=0)
                 _deployment_copy["litellm_params"] = masker.mask_dict(litellm_params)
-            elif "api_key" in litellm_params:
-                litellm_params["api_key"] = litellm_params["api_key"][:2] + "*" * 10
-
             return _deployment_copy
         except Exception as e:
             verbose_router_logger.debug(
