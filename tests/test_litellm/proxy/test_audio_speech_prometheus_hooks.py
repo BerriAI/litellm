@@ -1,8 +1,3 @@
-"""
-Regression tests: proxy /v1/audio/speech (TTS) must call proxy-level success/failure
-hooks so Prometheus metrics (litellm_proxy_total_requests_metric, litellm_proxy_failed_requests_metric)
-and other callbacks see TTS requests.
-"""
 import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-# Import after path setup so proxy_server is loadable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 
@@ -21,7 +15,7 @@ def _mock_user_api_key_auth():
 
 
 def _make_mock_tts_response():
-    """Mock response for handler: llm_call = await route_request(), response = await llm_call, then _audio_speech_chunk_generator does await response.aiter_bytes() and async for chunk in it."""
+    """Mock response that simulates HttpxBinaryResponseContent with aiter_bytes."""
 
     async def _chunks():
         yield b"\xff\xfb"
@@ -55,8 +49,15 @@ def client_no_auth():
 
 @pytest.mark.asyncio
 @pytest.mark.retry(retries=0)
-async def test_audio_speech_success_calls_post_call_success_hook(client_no_auth):
-    """TTS success path must call proxy_logging_obj.post_call_success_hook (Prometheus total requests)."""
+async def test_audio_speech_success_does_not_call_post_call_success_hook(
+    client_no_auth,
+):
+    """TTS success path must NOT call post_call_success_hook.
+
+    TTS returns a streaming binary response (HttpxBinaryResponseContent) which
+    is not in LLMResponseTypes. Prometheus metrics for successful requests are
+    tracked at the litellm level via async_log_success_event, not here.
+    """
     mock_success_hook = AsyncMock()
     mock_failure_hook = AsyncMock()
     mock_pre_call = AsyncMock(side_effect=lambda *, data, **kw: data)
@@ -91,11 +92,8 @@ async def test_audio_speech_success_calls_post_call_success_hook(client_no_auth)
         app.dependency_overrides = original_overrides
 
     assert response.status_code == 200
-    mock_success_hook.assert_awaited_once()
+    mock_success_hook.assert_not_called()
     mock_failure_hook.assert_not_called()
-    # Ensure we passed through the right call type
-    call_kw = mock_success_hook.call_args.kwargs
-    assert "data" in call_kw and "user_api_key_dict" in call_kw
 
 
 @pytest.mark.asyncio

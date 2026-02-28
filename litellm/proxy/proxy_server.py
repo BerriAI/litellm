@@ -2162,22 +2162,24 @@ async def _run_background_health_check():
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = (
-                    await _run_direct_health_check_with_instrumentation(
-                        _llm_model_list,
-                        health_check_details,
-                        health_check_concurrency,
-                        instrumentation_context,
-                    )
-                )
-        else:
-            healthy_endpoints, unhealthy_endpoints = (
-                await _run_direct_health_check_with_instrumentation(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
                     health_check_concurrency,
                     instrumentation_context,
                 )
+        else:
+            (
+                healthy_endpoints,
+                unhealthy_endpoints,
+            ) = await _run_direct_health_check_with_instrumentation(
+                _llm_model_list,
+                health_check_details,
+                health_check_concurrency,
+                instrumentation_context,
             )
 
         # Update the global variable with the health check results
@@ -7124,13 +7126,6 @@ async def audio_speech(
                 media_type = (
                     "audio/wav"  # Gemini TTS returns WAV format after conversion
                 )
-
-        # Proxy-level success hook (e.g. Prometheus litellm_proxy_total_requests_metric)
-        await proxy_logging_obj.post_call_success_hook(
-            data=data,
-            response=response,  # type: ignore[arg-type]
-            user_api_key_dict=user_api_key_dict,
-        )
 
         return StreamingResponse(
             _audio_speech_chunk_generator(response),  # type: ignore[arg-type]
