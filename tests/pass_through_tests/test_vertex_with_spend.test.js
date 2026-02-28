@@ -100,21 +100,19 @@ describe('Vertex AI Tests', () => {
         const callId = lastCallId;
         console.log("Captured Call ID:", callId);
 
-        // Wait for spend to be logged
-        await new Promise(resolve => setTimeout(resolve, 15000));
+        // Poll for spend data with retries (DB writes can be slow in CI)
+        let spendData = null;
+        for (let attempt = 0; attempt < 6; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            const spendResponse = await fetch(
+                `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
+                { headers: { 'Authorization': 'Bearer sk-1234' } }
+            );
+            spendData = await spendResponse.json();
+            console.log(`spendData (attempt ${attempt + 1}):`, spendData);
+            if (spendData && spendData.length > 0 && spendData[0] && spendData[0].request_id) break;
+        }
 
-        // Check spend logs
-        const spendResponse = await fetch(
-            `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
-            {
-                headers: {
-                    'Authorization': 'Bearer sk-1234'
-                }
-            }
-        );
-        
-        const spendData = await spendResponse.json();
-        console.log("spendData", spendData)
         expect(spendData).toBeDefined();
         expect(spendData[0].request_id).toBe(callId);
         expect(spendData[0].call_type).toBe('pass_through_endpoint');
@@ -123,7 +121,7 @@ describe('Vertex AI Tests', () => {
         expect(spendData[0].model).toContain('gemini');
         expect(spendData[0].spend).toBeGreaterThan(0);
         expect(spendData[0].custom_llm_provider).toBe('vertex_ai');
-    }, 25000);
+    }, 90000);
 
     test('should successfully generate streaming content with tags', async () => {
         const vertexAI = new VertexAI({
@@ -170,21 +168,19 @@ describe('Vertex AI Tests', () => {
         const callId = lastCallId;
         console.log("Captured Call ID:", callId);
 
-        // Wait for spend to be logged
-        await new Promise(resolve => setTimeout(resolve, 15000));
+        // Poll for spend data with retries (DB writes can be slow in CI)
+        let spendData = null;
+        for (let attempt = 0; attempt < 6; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            const spendResponse = await fetch(
+                `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
+                { headers: { 'Authorization': 'Bearer sk-1234' } }
+            );
+            spendData = await spendResponse.json();
+            console.log(`spendData (attempt ${attempt + 1}):`, spendData);
+            if (spendData && spendData.length > 0 && spendData[0] && spendData[0].request_id) break;
+        }
 
-        // Check spend logs
-        const spendResponse = await fetch(
-            `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
-            {
-                headers: {
-                    'Authorization': 'Bearer sk-1234'
-                }
-            }
-        );
-        
-        const spendData = await spendResponse.json();
-        console.log("spendData", spendData)
         expect(spendData).toBeDefined();
         expect(spendData[0].request_id).toBe(callId);
         expect(spendData[0].call_type).toBe('pass_through_endpoint');
@@ -193,5 +189,5 @@ describe('Vertex AI Tests', () => {
         expect(spendData[0].model).toContain('gemini');
         expect(spendData[0].spend).toBeGreaterThan(0);
         expect(spendData[0].custom_llm_provider).toBe('vertex_ai');
-    }, 25000);
+    }, 90000);
 });
