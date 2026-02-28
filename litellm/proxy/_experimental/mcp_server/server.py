@@ -2184,10 +2184,14 @@ if MCP_AVAILABLE:
         return {"enabled": MCP_AVAILABLE}
 
     # Mount the MCP handlers
-    app.mount("/", handle_streamable_http_mcp)
-    app.mount("/mcp", handle_streamable_http_mcp)
-    app.mount("/{mcp_server_name}/mcp", handle_streamable_http_mcp)
+    # IMPORTANT: /sse must be mounted before the "/" catch-all, because
+    # Starlette checks mounts sequentially and "/" would shadow everything.
+    # The extraneous "/mcp" and "/{mcp_server_name}/mcp" mounts have been
+    # removed: "/mcp" mapped to external path "/mcp/mcp" (wrong double-prefix)
+    # and Starlette mounts don't support path parameters.
+    # See https://github.com/BerriAI/litellm/issues/22074
     app.mount("/sse", handle_sse_mcp)
+    app.mount("/", handle_streamable_http_mcp)
     app.add_middleware(AuthContextMiddleware)
 
     ########################################################
