@@ -2825,7 +2825,37 @@ def test_cost_calculator_with_base_model_with_router_embedding(base_model_arg):
     assert resp._hidden_params["response_cost"] > 0
 
 
-def test_cost_calculator_with_custom_pricing():
+def test_cost_calculator_base_model_cross_provider():
+    """When base_model has a different provider than the deployment model,
+    cost should be calculated using the base_model's provider."""
+    from litellm.cost_calculator import (
+        _model_contains_known_llm_provider,
+        _select_model_name_for_cost_calc,
+    )
+
+    # Simulate: deployed as anthropic/gemini-3-flash but base_model is gemini/gemini-2.0-flash
+    base_model = "gemini/gemini-2.0-flash"
+    assert _model_contains_known_llm_provider(base_model) is True
+
+    selected = _select_model_name_for_cost_calc(
+        model="anthropic/gemini-3-flash",
+        completion_response=None,
+        base_model=base_model,
+        custom_llm_provider="anthropic",
+    )
+    # base_model already has provider prefix, so it should be returned as-is
+    assert selected == "gemini/gemini-2.0-flash"
+
+    # Verify cost calculation uses base_model pricing (gemini provider, not anthropic)
+    resp = litellm.completion(
+        model="anthropic/random-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        base_model="gemini/gemini-2.0-flash",
+        mock_response="Hello",
+    )
+    assert resp._hidden_params["response_cost"] > 0
+
+
     resp = litellm.completion(
         model="bedrock/random-model",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
