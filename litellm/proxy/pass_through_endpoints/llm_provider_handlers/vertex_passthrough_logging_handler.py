@@ -555,6 +555,7 @@ class VertexPassthroughLoggingHandler:
         logging_obj.model = litellm_model_response.model or model
         logging_obj.model_call_details["model"] = logging_obj.model
         logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+        logging_obj.model_call_details["response_cost"] = response_cost
         return kwargs
 
     @staticmethod
