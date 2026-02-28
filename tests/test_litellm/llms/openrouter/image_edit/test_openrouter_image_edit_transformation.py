@@ -194,6 +194,20 @@ class TestOpenRouterImageEditTransformation:
 
         assert result["Authorization"] == "Bearer secret_api_key"
 
+    @patch("litellm.llms.openrouter.image_edit.transformation.litellm")
+    @patch("litellm.llms.openrouter.image_edit.transformation.get_secret_str")
+    def test_validate_environment_missing_api_key_raises(self, mock_get_secret, mock_litellm):
+        """Test that validate_environment raises ValueError when no API key is available."""
+        mock_get_secret.return_value = None
+        mock_litellm.api_key = None
+
+        with pytest.raises(ValueError, match="OPENROUTER_API_KEY is not set"):
+            self.config.validate_environment(
+                headers={},
+                model=self.model,
+                api_key=None,
+            )
+
     # Request transformation tests
 
     def test_transform_image_edit_request_basic(self):

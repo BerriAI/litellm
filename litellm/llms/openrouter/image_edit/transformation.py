@@ -114,6 +114,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             or litellm.api_key
             or get_secret_str("OPENROUTER_API_KEY")
         )
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY is not set")
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
