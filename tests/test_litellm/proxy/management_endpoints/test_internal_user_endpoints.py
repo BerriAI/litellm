@@ -647,6 +647,73 @@ async def test_new_user_default_teams_flow(mocker):
         litellm.default_internal_user_params = original_default_params
 
 
+@pytest.mark.asyncio
+async def test_new_user_strips_user_email_before_save(mocker):
+    """
+    Test that /user/new strips leading/trailing spaces from user_email
+    before passing it to key generation (DB persistence path).
+    """
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None
+
+    async def mock_check_duplicate_user_id(*args, **kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check_duplicate_user_email,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check_duplicate_user_id,
+    )
+
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    mock_generate_key_helper_fn = mocker.AsyncMock()
+    mock_generate_key_helper_fn.return_value = {
+        "user_id": "test-user-123",
+        "token": "sk-test-token-123",
+        "expires": None,
+        "max_budget": 100,
+    }
+
+    mock_user_created_hook = mocker.AsyncMock()
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key_helper_fn,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+        mock_user_created_hook,
+    )
+
+    user_request = NewUserRequest(
+        user_email="  test@example.com  ", user_role="internal_user"
+    )
+    mock_user_api_key_dict = UserAPIKeyAuth(user_id="test_admin")
+
+    await new_user(data=user_request, user_api_key_dict=mock_user_api_key_dict)
+
+    mock_generate_key_helper_fn.assert_called_once()
+    call_kwargs = mock_generate_key_helper_fn.call_args.kwargs
+    assert call_kwargs["user_email"] == "test@example.com"
+
+
 def test_update_internal_new_user_params_proxy_admin_role():
     """
     Test that default_internal_user_params are NOT applied when user_role is PROXY_ADMIN

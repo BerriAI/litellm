@@ -403,6 +403,10 @@ async def new_user(
                 status_code=500,
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
+
+        if isinstance(data.user_email, str):
+            data = data.model_copy(update={"user_email": data.user_email.strip()})
+
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
