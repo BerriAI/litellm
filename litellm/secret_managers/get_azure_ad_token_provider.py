@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
@@ -34,6 +34,7 @@ def infer_credential_type_from_environment() -> AzureCredentialType:
 def get_azure_ad_token_provider(
     azure_scope: Optional[str] = None,
     azure_credential: Optional[AzureCredentialType] = None,
+    azure_default_credential_options: Optional[Dict[str, Any]] = None,
 ) -> Callable[[], str]:
     """
     Get Azure AD token provider based on Service Principal with Secret workflow.
@@ -47,6 +48,14 @@ def get_azure_ad_token_provider(
         azure_scope (str, optional): The Azure scope to request token for.
                                     Defaults to environment variable AZURE_SCOPE or
                                     "https://cognitiveservices.azure.com/.default".
+        azure_credential (AzureCredentialType, optional): The credential type to use.
+        azure_default_credential_options (dict, optional): Options to pass to DefaultAzureCredential.
+            Supports all DefaultAzureCredential kwargs including:
+            - managed_identity_client_id: Client ID for user-assigned managed identity
+            - exclude_cli_credential: Skip Azure CLI credential
+            - exclude_managed_identity_credential: Skip managed identity
+            - exclude_environment_credential: Skip environment credential
+            - etc. (see azure-identity docs)
 
     Returns:
         Callable that returns a temporary authentication token.
@@ -110,7 +119,22 @@ def get_azure_ad_token_provider(
     elif cred == AzureCredentialType.DefaultAzureCredential:
         # DefaultAzureCredential doesn't require explicit environment variables
         # It automatically discovers credentials from the environment (managed identity, CLI, etc.)
-        credential = DefaultAzureCredential()
+        # 
+        # Configuration via azure_default_credential_options from litellm_params (YAML or SDK call)
+        # 
+        # Default timeout for CLI-based credentials to prevent slow failures on machines
+        # without Azure credentials configured
+        dac_options = dict(azure_default_credential_options or {})
+        if "process_timeout" not in dac_options:
+            dac_options["process_timeout"] = 10  # 10 second timeout for CLI credentials
+        
+        if dac_options:
+            verbose_logger.debug(
+                f"Creating DefaultAzureCredential with options: {list(dac_options.keys())}"
+            )
+            credential = DefaultAzureCredential(**dac_options)
+        else:
+            credential = DefaultAzureCredential()
     else:
         cred_cls = getattr(identity, cred)
         credential = cred_cls()
