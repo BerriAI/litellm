@@ -3,9 +3,11 @@ Semantic MCP Tool Filtering using semantic-router
 
 Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -83,7 +85,7 @@ class SemanticMCPToolFilter:
         """Extract name and description from MCP tool or OpenAI function dict."""
         name: str
         description: str
-        
+
         if isinstance(tool, dict):
             # OpenAI function format
             name = tool.get("name", "")
@@ -92,7 +94,7 @@ class SemanticMCPToolFilter:
             # MCPTool object
             name = str(tool.name)
             description = str(tool.description) if tool.description else str(tool.name)
-        
+
         return name, description
 
     def _build_router(self, tools: List) -> None:
@@ -136,9 +138,7 @@ class SemanticMCPToolFilter:
                 auto_sync="local",
             )
 
-            verbose_logger.info(
-                f"Built semantic router with {len(routes)} tools"
-            )
+            verbose_logger.info(f"Built semantic router with {len(routes)} tools")
 
         except Exception as e:
             verbose_logger.error(f"Failed to build semantic router: {e}")
@@ -165,10 +165,10 @@ class SemanticMCPToolFilter:
         # Early returns for cases where we can't/shouldn't filter
         if not self.enabled:
             return available_tools
-            
+
         if not available_tools:
             return available_tools
-            
+
         if not query or not query.strip():
             return available_tools
 
@@ -182,10 +182,10 @@ class SemanticMCPToolFilter:
             limit = top_k or self.top_k
             matches = self.tool_router(text=query, limit=limit)
             matched_tool_names = self._extract_tool_names_from_matches(matches)
-            
+
             if not matched_tool_names:
                 return available_tools
-            
+
             return self._get_tools_by_names(matched_tool_names, available_tools)
 
         except Exception as e:
@@ -196,31 +196,43 @@ class SemanticMCPToolFilter:
         """Extract tool names from semantic router match results."""
         if not matches:
             return []
-        
+
         # Handle single match
         if hasattr(matches, "name") and matches.name:
             return [matches.name]
-        
+
         # Handle list of matches
         if isinstance(matches, list):
             return [m.name for m in matches if hasattr(m, "name") and m.name]
-        
+
         return []
 
-    def _get_tools_by_names(
-        self, tool_names: List[str], available_tools: List[Any]
-    ) -> List[Any]:
-        """Get tools from available_tools by their names, preserving order."""
-        # Match tools from available_tools (preserves format - dict or MCPTool)
-        matched_tools = []
+    def _get_tools_by_names(self, tool_names: List[str], available_tools: List[Any]) -> List[Any]:
+        """Get tools from available_tools by their names, preserving order.
+
+        Handles the case where the semantic router indexes tools with raw MCP
+        names (e.g. ``get_transcript``) but the expanded OpenAI-format tools
+        carry a server-name prefix (e.g. ``youtube-get_transcript``).  When an
+        exact match is not found the method falls back to suffix matching so
+        that ``get_transcript`` matches ``youtube-get_transcript``.
+        """
+        tool_name_set = set(tool_names)
+
+        # Build a map from matched router name → available tool
+        matched: Dict[str, Any] = {}
         for tool in available_tools:
             tool_name, _ = self._extract_tool_info(tool)
-            if tool_name in tool_names:
-                matched_tools.append(tool)
-        
-        # Reorder to match semantic router's ordering
-        tool_map = {self._extract_tool_info(t)[0]: t for t in matched_tools}
-        return [tool_map[name] for name in tool_names if name in tool_map]
+            if tool_name in tool_name_set:
+                # Exact match (unprefixed name or already matching)
+                matched[tool_name] = tool
+            else:
+                # Suffix match: tool_name may be "server<sep>raw_name"
+                raw_name, server_prefix = split_server_prefix_from_name(tool_name)
+                suffix = raw_name if server_prefix else None
+                if suffix and suffix in tool_name_set and suffix not in matched:
+                    matched[suffix] = tool
+
+        return [matched[name] for name in tool_names if name in matched]
 
     def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
         """
