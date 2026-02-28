@@ -1824,7 +1824,6 @@ class ModelResponse(ModelResponseBase):
             created = int(time.time())
         else:
             created = created
-        model = model
         if usage is not None:
             if isinstance(usage, dict):
                 usage = Usage(**usage)
@@ -1943,7 +1942,6 @@ class EmbeddingResponse(OpenAIObject):
         if _response_headers:
             self._response_headers = _response_headers
 
-        model = model
         super().__init__(model=model, object=object, data=data, usage=usage)  # type: ignore
 
         if hidden_params:
@@ -2092,7 +2090,6 @@ class TextCompletionResponse(OpenAIObject):
         else:
             created = created
 
-        model = model
         if usage:
             usage = usage
         else:
