@@ -62,7 +62,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         api_base = None
         if litellm_params:
             api_base = litellm_params.api_base
-        return api_base or DEFAULT_OPENAI_API_BASE
+        return (api_base or DEFAULT_OPENAI_API_BASE).rstrip("/")
 
     def get_api_base(
         self, litellm_params: Optional[GenericLiteLLMParams]
@@ -80,7 +80,6 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             raise ValueError("OPENAI_API_KEY is required for OpenAI Skills API")
 
         headers["Authorization"] = f"Bearer {api_key}"
-        headers["Content-Type"] = "application/json"
 
         return headers
 
@@ -93,6 +92,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         """Get complete URL for OpenAI Skills API."""
         if api_base is None:
             api_base = DEFAULT_OPENAI_API_BASE
+        api_base = api_base.rstrip("/")
 
         if skill_id:
             return f"{api_base}/v1/skills/{skill_id}"
@@ -413,7 +413,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             id=data["id"],
             created_at=created_at_str,
             display_title=data.get("name"),
-            latest_version=data.get("latest_version"),
+            latest_version=str(data["latest_version"]) if data.get("latest_version") is not None else None,
             source="custom",
             type=data.get("object", "skill"),
             updated_at=created_at_str,  # OpenAI doesn't have updated_at; use created_at

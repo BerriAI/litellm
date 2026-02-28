@@ -76,13 +76,13 @@ class OpenAISkill(BaseModel):
     created_at: int
     """Unix timestamp (seconds) for when the skill was created."""
 
-    default_version: Optional[str] = None
+    default_version: Optional[int] = None
     """Default version for the skill."""
 
     description: Optional[str] = None
     """Description of the skill (from SKILL.md front matter)."""
 
-    latest_version: Optional[str] = None
+    latest_version: Optional[int] = None
     """Latest version for the skill."""
 
     name: Optional[str] = None
@@ -150,7 +150,7 @@ class OpenAISkillVersion(BaseModel):
     skill_id: str
     """Identifier of the skill for this version."""
 
-    version: str
+    version: int
     """Version number for this skill."""
 
 
@@ -185,5 +185,5 @@ class OpenAIDeletedSkillVersion(BaseModel):
     object: str = "skill.version.deleted"
     """The object type, always 'skill.version.deleted'."""
 
-    version: str
+    version: int
     """The deleted skill version number."""
