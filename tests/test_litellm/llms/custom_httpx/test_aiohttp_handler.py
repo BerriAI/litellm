@@ -337,19 +337,24 @@ class TestBaseLLMAIOHTTPHandler:
         mock_client_session.assert_called_once_with()
         assert result is mock_session_instance
 
-    @patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler._create_aiohttp_transport"
-    )
-    def test_get_or_create_transport(self, mock_create_transport):
+    def test_get_or_create_transport(self):
         """Test transport creation when none provided"""
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
         mock_transport_instance = Mock(spec=LiteLLMAiohttpTransport)
-        mock_create_transport.return_value = mock_transport_instance
 
         handler = BaseLLMAIOHTTPHandler()
 
-        result = handler._get_or_create_transport()
+        # Patch the static method directly on the class object that aiohttp_handler.py uses
+        with patch.object(
+            AsyncHTTPHandler,
+            '_create_aiohttp_transport',
+            return_value=mock_transport_instance,
+        ) as mock_create_transport:
+            result = handler._get_or_create_transport()
 
-        mock_create_transport.assert_called_once()
+            mock_create_transport.assert_called_once()
+
         assert result is mock_transport_instance
         assert handler.transport is mock_transport_instance
         assert handler._owns_transport is True
