@@ -329,7 +329,9 @@ async def perform_health_check(
 
     # Filter by model_id first so a single deployment is checked when id is specified
     if model_id is not None:
-        _by_id = [x for x in model_list if (x.get("model_info") or {}).get("id") == model_id]
+        _by_id = [
+            x for x in model_list if (x.get("model_info") or {}).get("id") == model_id
+        ]
         if _by_id:
             model_list = _by_id
     elif model is not None:
