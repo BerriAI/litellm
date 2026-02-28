@@ -191,8 +191,8 @@ class AnthropicResponsesStreamWrapper:
                     cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
                     cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
                     # Prefer direct cache fields if present
-                    cache_creation_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
-                    cache_read_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
+                    cache_creation_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+                    cache_read_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
 
             # Check if tool_use was in the output to override stop_reason
             if response_obj is not None:

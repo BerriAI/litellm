@@ -11,6 +11,8 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    NewProjectRequest,
+    UpdateProjectRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import _premium_user_check
