@@ -6882,7 +6882,20 @@ async def embeddings(  # noqa: PLR0915
             version=version,
         )
 
-        return response
+        # Return ORJSONResponse directly to bypass FastAPI's jsonable_encoder.
+        # Embedding responses contain large float arrays (N embeddings x dims),
+        # and jsonable_encoder recursively processes every float value, causing
+        # severe CPU overhead (~75ms per 100 embeddings). ORJSONResponse with a
+        # pre-serialized dict avoids this entirely.
+        if hasattr(response, "model_dump"):
+            response_dict = response.model_dump()
+        elif isinstance(response, dict):
+            response_dict = response
+        else:
+            response_dict = dict(response)
+        return ORJSONResponse(
+            content=response_dict, headers=dict(fastapi_response.headers)
+        )
     except Exception as e:
         # Use unified error handler
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
