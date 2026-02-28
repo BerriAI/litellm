@@ -33,13 +33,17 @@ jobs:
       - name: Scan for duplicate issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_THRESHOLD: ${{ inputs.threshold }}
+          INPUT_CLOSE: ${{ inputs.close }}
         run: |
           CLOSE_FLAG=""
-          if [ "${{ inputs.close }}" = "true" ]; then
+          if [ "$INPUT_CLOSE" = "true" ]; then
             CLOSE_FLAG="--close"
           fi
           python3 .github/scripts/close_duplicate_issues.py \
             --scan \
             --repo ${{ github.repository }} \
-            --threshold ${{ inputs.threshold }} \
+            --threshold "$INPUT_THRESHOLD" \
             $CLOSE_FLAG
