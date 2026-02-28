@@ -61,6 +61,10 @@ context_window_test_cases = [
     ),
     # Test case insensitivity
     ("ERROR: THIS MODEL'S MAXIMUM CONTEXT LENGTH IS 1024.", True),
+    # Mistral context window error
+    ("The input is too large for model with context length 4096", True),
+    # Perplexity context window error  
+    ("Error: the total length of all messages is too long.", True),
     # Cerebras context window error format
     # See: https://github.com/BerriAI/litellm/issues/XXXX
     (
