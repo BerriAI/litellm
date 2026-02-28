@@ -10,6 +10,7 @@ Requires LiteLLM v1.63.0+
 :::
 
 Supported Providers:
+- OpenAI o-series (`openai/` — o1, o3, o4-mini, GPT-5+ via Responses API)
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek + GPT-OSS) (`bedrock/`)
@@ -28,11 +29,12 @@ LiteLLM will standardize the `reasoning_content` in the response and `thinking_b
 "message": {
     ...
     "reasoning_content": "The capital of France is Paris.",
-    "thinking_blocks": [ # only returned for Anthropic models
+    "thinking_blocks": [ # returned for Anthropic and OpenAI o-series models
         {
             "type": "thinking",
             "thinking": "The capital of France is Paris.",
-            "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+..."
+            "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+...",  # Anthropic
+            "encrypted_content": "...",  # OpenAI o-series (via Responses API)
         }
     ]
 }
@@ -109,6 +111,120 @@ curl http://0.0.0.0:4000/v1/chat/completions \
     "service_tier": null
 }
 ```
+
+## OpenAI Multi-Turn Reasoning Chain (thinking_blocks)
+
+:::info
+
+Requires LiteLLM v1.73.0+
+
+:::
+
+For OpenAI o-series models (o1, o3, o4-mini, GPT-5+), LiteLLM can preserve reasoning context across turns via `thinking_blocks` with `encrypted_content`. This uses the Responses API's `reasoning` input items under the hood.
+
+### How It Works
+
+1. The response includes `thinking_blocks` with `encrypted_content` (an opaque blob from OpenAI)
+2. Pass these `thinking_blocks` back on the assistant message in the next turn
+3. LiteLLM automatically converts them to Responses API `reasoning` input items
+4. LiteLLM auto-injects `include: ["reasoning.encrypted_content"]` so the response also returns `encrypted_content`
+
+### Example
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+
+# First turn
+response = completion(
+    model="openai/o4-mini",
+    messages=[
+        {"role": "user", "content": "Solve step by step: what is 2^10?"},
+    ],
+)
+
+# Extract thinking_blocks (includes encrypted_content)
+thinking_blocks = response.choices[0].message.thinking_blocks
+
+# Second turn — pass thinking_blocks back for reasoning continuity
+response2 = completion(
+    model="openai/o4-mini",
+    messages=[
+        {"role": "user", "content": "Solve step by step: what is 2^10?"},
+        {
+            "role": "assistant",
+            "content": response.choices[0].message.content,
+            "thinking_blocks": thinking_blocks,
+        },
+        {"role": "user", "content": "Now compute 2^20 using the previous result."},
+    ],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+```bash
+# First turn
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/o4-mini",
+    "messages": [{"role": "user", "content": "Solve step by step: what is 2^10?"}]
+  }'
+
+# Second turn — include thinking_blocks from first response
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/o4-mini",
+    "messages": [
+      {"role": "user", "content": "Solve step by step: what is 2^10?"},
+      {
+        "role": "assistant",
+        "content": "2^10 = 1024",
+        "thinking_blocks": [
+          {
+            "type": "thinking",
+            "thinking": "...",
+            "encrypted_content": "<opaque blob from previous response>",
+            "id": "rs_xxx"
+          }
+        ]
+      },
+      {"role": "user", "content": "Now compute 2^20 using the previous result."}
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Response Format
+
+```python
+# thinking_blocks on the response message
+response.choices[0].message.thinking_blocks = [
+    {
+        "type": "thinking",
+        "thinking": "I need to compute 2^20...",
+        "encrypted_content": "<new opaque blob for next turn>",
+        "id": "rs_yyy"
+    }
+]
+```
+
+### Supported Models
+
+| Provider | Models | Field |
+|---|---|---|
+| OpenAI (via Responses API) | o1, o3, o3-mini, o4-mini, GPT-5+ | `encrypted_content` |
+| Anthropic | Claude 3.5+, Claude 4 | `signature` |
+| Google/Vertex | Gemini 2+ | `provider_specific_fields.thought_signatures` |
 
 ## Tool Calling with `thinking`
 
@@ -466,10 +582,12 @@ response = litellm.completion(
 These fields can be accessed via `response.choices[0].message.reasoning_content` and `response.choices[0].message.thinking_blocks`.
 
 - `reasoning_content` - str: The reasoning content from the model. Returned across all providers.
-- `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Only returned for Anthropic models.
+- `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Returned for Anthropic and OpenAI o-series models.
   - `type` - str: The type of thinking block.
   - `thinking` - str: The thinking from the model.
-  - `signature` - str: The signature delta from the model.
+  - `signature` - str: The signature delta from the model (Anthropic).
+  - `encrypted_content` - str: Opaque encrypted reasoning blob (OpenAI o-series via Responses API).
+  - `id` - str: The reasoning item ID (OpenAI o-series).
 
 
 
