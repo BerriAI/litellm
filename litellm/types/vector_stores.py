@@ -258,7 +258,8 @@ class VectorStoreToolParams:
     filters: Optional[Dict] = None
     max_num_results: Optional[int] = None
     ranking_options: Optional[Dict] = None
-    
+    rewrite_query: Optional[bool] = None
+
     def to_dict(self) -> Dict:
         """Convert to dict, excluding None values"""
         return {
@@ -267,6 +268,7 @@ class VectorStoreToolParams:
                 "filters": self.filters,
                 "max_num_results": self.max_num_results,
                 "ranking_options": self.ranking_options,
+                "rewrite_query": self.rewrite_query,
             }.items()
             if v is not None
         }
