@@ -17,7 +17,7 @@ def schema_setup(postgresql_my):
     return postgresql_my
 
 
-@pytest.mark.xdist_group("schema_migration")
+@pytest.mark.xdist_group("proxy_heavy")
 def test_aaaasschema_migration_check(schema_setup, monkeypatch):
     """Test to check if schema requires migration"""
     # Set test database URL
