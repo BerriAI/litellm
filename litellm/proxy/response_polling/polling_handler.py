@@ -35,6 +35,53 @@ class ResponsePollingHandler:
     def get_cache_key(cls, polling_id: str) -> str:
         """Get Redis cache key for a polling ID"""
         return f"{cls.CACHE_KEY_PREFIX}{polling_id}"
+
+    @staticmethod
+    def _normalize_cached_state(
+        cached_state: Any, polling_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Normalize cached response state to a dictionary.
+
+        Different cache backends can return:
+        - dict (already parsed)
+        - str/bytes JSON payload
+        """
+        if cached_state is None:
+            return None
+
+        if isinstance(cached_state, dict):
+            return cached_state
+
+        if isinstance(cached_state, (bytes, bytearray)):
+            cached_state = cached_state.decode("utf-8")
+
+        if isinstance(cached_state, str):
+            try:
+                parsed_state = json.loads(cached_state)
+            except json.JSONDecodeError:
+                verbose_proxy_logger.warning(
+                    "Invalid cached polling state for %s: expected JSON string.",
+                    polling_id,
+                )
+                return None
+
+            if isinstance(parsed_state, dict):
+                return parsed_state
+
+            verbose_proxy_logger.warning(
+                "Invalid cached polling state for %s: expected JSON object, got %s.",
+                polling_id,
+                type(parsed_state).__name__,
+            )
+            return None
+
+        verbose_proxy_logger.warning(
+            "Invalid cached polling state type for %s: %s.",
+            polling_id,
+            type(cached_state).__name__,
+        )
+        return None
     
     async def create_initial_state(
         self,
@@ -141,14 +188,16 @@ class ResponsePollingHandler:
         
         # Get current state
         cached_state = await self.redis_cache.async_get_cache(cache_key)
-        if not cached_state:
+        if cached_state is None:
             verbose_proxy_logger.warning(
                 f"No cached state found for polling_id: {polling_id}"
             )
             return
-        
+
         # Parse existing ResponsesAPIResponse from cache
-        state = json.loads(cached_state)
+        state = self._normalize_cached_state(cached_state, polling_id=polling_id)
+        if state is None:
+            return
         
         # Update status (using OpenAI native status values)
         if status:
@@ -223,10 +272,10 @@ class ResponsePollingHandler:
         cache_key = self.get_cache_key(polling_id)
         cached_state = await self.redis_cache.async_get_cache(cache_key)
         
-        if cached_state:
-            return json.loads(cached_state)
-        
-        return None
+        if cached_state is None:
+            return None
+
+        return self._normalize_cached_state(cached_state, polling_id=polling_id)
     
     async def cancel_polling(self, polling_id: str) -> bool:
         """
@@ -326,4 +375,3 @@ def should_use_polling_for_request(
                 )
     
     return False
-
