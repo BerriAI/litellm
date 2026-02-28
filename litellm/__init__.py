@@ -105,6 +105,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "prometheus",
     "otel",
     "datadog",
+    "datadog_metrics",
     "datadog_llm_observability",
     "galileo",
     "braintrust",
