@@ -280,6 +280,158 @@ class TestMoonshotConfig:
         assert len(result["messages"]) == 2
         assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
 
+    def test_reasoning_content_validation_raises_on_missing(self):
+        """Test that missing reasoning_content in tool-call assistant messages raises for reasoning models."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What is the weather in Beijing?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"location":"Beijing"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "content": '{"temp": 25}', "tool_call_id": "call_1"},
+        ]
+
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            config.transform_request(
+                model="kimi-k2.5",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+        assert "reasoning_content" in str(exc_info.value)
+        assert "index 1" in str(exc_info.value)
+
+    def test_reasoning_content_validation_passes_when_present(self):
+        """Test that reasoning_content present in messages passes validation."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "What is the weather in Beijing?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": "Let me think about the weather...",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"location":"Beijing"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "content": '{"temp": 25}', "tool_call_id": "call_1"},
+        ]
+
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][1]["reasoning_content"] == "Let me think about the weather..."
+
+    def test_reasoning_content_validation_skips_non_reasoning_models(self):
+        """Test that non-reasoning models skip reasoning_content validation."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "test", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "content": "result", "tool_call_id": "call_1"},
+        ]
+
+        # Should NOT raise for non-reasoning models
+        result = config.transform_request(
+            model="moonshot-v1-8k",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert len(result["messages"]) == 3
+
+    def test_reasoning_content_validation_no_tool_calls_skips(self):
+        """Test that assistant messages without tool_calls skip validation."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+        ]
+
+        # Should NOT raise even for reasoning models when no tool_calls
+        result = config.transform_request(
+            model="kimi-k2.5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert len(result["messages"]) == 2
+
+    def test_reasoning_content_validation_rejects_none_value(self):
+        """Test that reasoning_content=None is caught as missing."""
+        config = MoonshotChatConfig()
+
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning_content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "test", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "content": "result", "tool_call_id": "call_1"},
+        ]
+
+        with pytest.raises(litellm.BadRequestError):
+            config.transform_request(
+                model="kimi-k2.5",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+    def test_is_reasoning_model_detection(self):
+        """Test _is_reasoning_model detects reasoning models correctly."""
+        assert MoonshotChatConfig._is_reasoning_model("kimi-k2.5") is True
+        assert MoonshotChatConfig._is_reasoning_model("kimi-k2.5-0514") is True
+        assert MoonshotChatConfig._is_reasoning_model("moonshot-v1-auto-8k-reasoning-v4") is True
+        assert MoonshotChatConfig._is_reasoning_model("kimi-thinking-preview") is True
+        assert MoonshotChatConfig._is_reasoning_model("kimi-k2-5") is True
+        assert MoonshotChatConfig._is_reasoning_model("moonshot-v1-8k") is False
+        assert MoonshotChatConfig._is_reasoning_model("moonshot-v1-32k") is False
+
     def test_tool_choice_non_required_preserved(self):
         """Test that non-'required' tool_choice values are preserved"""
         config = MoonshotChatConfig()
