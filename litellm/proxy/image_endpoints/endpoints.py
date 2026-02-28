@@ -1,10 +1,11 @@
 import asyncio
+import json
 import traceback
 from typing import List
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, status
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -137,6 +138,29 @@ async def image_generation(
             user_model=user_model,
         )
         response = await llm_call
+
+        # Check if response is a streaming iterator
+        is_streaming = hasattr(response, '__aiter__') and not isinstance(response, (dict, list, str))
+
+        if is_streaming:
+            # Handle streaming response using the same pattern as responses API
+            from litellm.proxy.proxy_server import select_data_generator
+            
+            selected_data_generator = select_data_generator(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+            
+            return StreamingResponse(
+                selected_data_generator,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                }
+            )
 
         ### ALERTING ###
         asyncio.create_task(

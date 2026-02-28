@@ -1415,6 +1415,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             response = await openai_aclient.images.generate(**data, timeout=timeout)  # type: ignore
+            
+            # Check if response is a stream
+            is_stream = data.get("stream", False)
+            if is_stream:
+                # Return the stream object directly for streaming responses
+                return response
+            
             stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
@@ -1446,10 +1453,18 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client=None,
         aimg_generation=None,
         organization: Optional[str] = None,
+        stream: Optional[bool] = False,
+        partial_images: Optional[bool] = None,
     ) -> ImageResponse:
         data = {}
         try:
             data = {"model": model, "prompt": prompt, **optional_params}
+            
+            # Add stream and partial_images if provided
+            if stream is not None:
+                data["stream"] = stream
+            if partial_images is not None:
+                data["partial_images"] = partial_images
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
@@ -1481,6 +1496,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             ## COMPLETION CALL
             _response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
+
+            # Check if response is a stream
+            is_stream = data.get("stream", False)
+            if is_stream:
+                # Return the stream object directly for streaming responses
+                return _response
 
             response = _response.model_dump()
             ## LOGGING
