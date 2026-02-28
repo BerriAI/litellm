@@ -14,7 +14,6 @@ TEST_PDF_URL = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9U
 
 
 class HealthCheckHelpers:
-
     @staticmethod
     async def ahealth_check_wildcard_models(
         model: str,
@@ -44,7 +43,9 @@ class HealthCheckHelpers:
         model_params["model"] = cheapest_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
-        model_params["max_tokens"] = 10  # gpt-5-nano throws errors for max_tokens=1
+        model_params["max_tokens"] = model_params.get(
+            "max_tokens", 10
+        )  # gpt-5-nano throws errors for max_tokens=1
         await acompletion(**model_params)
         return {}
 
@@ -130,7 +131,7 @@ class HealthCheckHelpers:
         Callable,
     ]:
         """
-        Returns a dictionary of mode handlers for health check calls. 
+        Returns a dictionary of mode handlers for health check calls.
 
         Mode Handlers are Callables that need to be run for execution of the health check call.
 

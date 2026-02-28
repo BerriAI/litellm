@@ -46,7 +46,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
       }
     } else {
       form.setFieldValue("allow_all_keys", false);
-      form.setFieldValue("available_on_public_internet", false);
+      form.setFieldValue("available_on_public_internet", true);
     }
   }, [mcpServer, form]);
 
@@ -64,6 +64,7 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         }
         key="permissions"
         className="border-0"
+        forceRender
       >
         <div className="space-y-6 pt-4">
           <div className="flex items-start justify-between gap-4">
@@ -89,17 +90,19 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
           <div className="flex items-start justify-between gap-4">
             <div>
               <span className="text-sm font-medium text-gray-700 flex items-center">
-                Available on Public Internet
-                <Tooltip title="When enabled, this MCP server is accessible from external/public IPs (e.g., ChatGPT). When disabled, only callers from internal/private networks can access it.">
+                Internal network only
+                <Tooltip title="When on, only requests from within your internal network are accepted. Turn off to allow external clients (other clusters, ChatGPT, etc). API key authentication is always required regardless of this setting.">
                   <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                 </Tooltip>
               </span>
-              <p className="text-sm text-gray-600 mt-1">Enable if this server should be reachable from the public internet.</p>
+              <p className="text-sm text-gray-600 mt-1">Turn on to restrict access to callers within your internal network only.</p>
             </div>
             <Form.Item
               name="available_on_public_internet"
               valuePropName="checked"
-              initialValue={mcpServer?.available_on_public_internet ?? false}
+              getValueProps={(value) => ({ checked: !value })}
+              getValueFromEvent={(checked: boolean) => !checked}
+              initialValue={true}
               className="mb-0"
             >
               <Switch />
