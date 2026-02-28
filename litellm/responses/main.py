@@ -507,6 +507,246 @@ async def aresponses(
         )
 
 
+async def aresponses_compact(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    include: Optional[List[ResponseIncludable]] = None,
+    instructions: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    parallel_tool_calls: Optional[bool] = None,
+    previous_response_id: Optional[str] = None,
+    reasoning: Optional[Reasoning] = None,
+    store: Optional[bool] = None,
+    background: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    temperature: Optional[float] = None,
+    text: Optional["ResponseText"] = None,
+    text_format: Optional[Union[Type["BaseModel"], dict]] = None,
+    tool_choice: Optional[ToolChoice] = None,
+    tools: Optional[Iterable[ToolParam]] = None,
+    top_p: Optional[float] = None,
+    truncation: Optional[Literal["auto", "disabled"]] = None,
+    user: Optional[str] = None,
+    service_tier: Optional[str] = None,
+    safety_identifier: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Async: Handles responses/compact API requests for running a compaction pass over a conversation.
+    
+    This endpoint runs a compaction pass over a conversation, returning encrypted, opaque items.
+    The underlying logic may evolve over time.
+    
+    Args:
+        input: The input conversation to compact
+        model: The model to use for compaction
+        **kwargs: Additional parameters for the compaction process
+        
+    Returns:
+        ResponsesAPIResponse with compacted conversation data
+    """
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["aresponses_compact"] = True
+
+        # Convert text_format to text parameter if provided
+        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
+            text_format=text_format, text=text
+        )
+        if text is not None:
+            # Update local_vars to include the converted text parameter
+            local_vars["text"] = text
+
+        # get custom llm provider so we can use this for mapping exceptions
+        custom_llm_provider = kwargs.get("custom_llm_provider", None)
+        if custom_llm_provider is None:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+
+        # For compact endpoint, we'll use the same base URL but different path
+        # This is a placeholder implementation - actual compaction logic would go here
+        # For now, we'll call the regular responses endpoint with compact-specific handling
+        
+        # Set the compact endpoint path
+        original_path = kwargs.get("path", "/v1/responses")
+        kwargs["path"] = "/v1/responses/compact"
+        
+        # Call the regular responses API with compact endpoint
+        response = await aresponses(
+            input=input,
+            model=model,
+            include=include,
+            instructions=instructions,
+            max_output_tokens=max_output_tokens,
+            prompt=prompt,
+            metadata=metadata,
+            parallel_tool_calls=parallel_tool_calls,
+            previous_response_id=previous_response_id,
+            reasoning=reasoning,
+            store=store,
+            background=background,
+            stream=stream,
+            temperature=temperature,
+            text=text,
+            text_format=text_format,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_p=top_p,
+            truncation=truncation,
+            user=user,
+            service_tier=service_tier,
+            safety_identifier=safety_identifier,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+        
+        # Restore original path
+        kwargs["path"] = original_path
+        
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+def responses_compact(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    include: Optional[List[ResponseIncludable]] = None,
+    instructions: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    parallel_tool_calls: Optional[bool] = None,
+    previous_response_id: Optional[str] = None,
+    reasoning: Optional[Reasoning] = None,
+    store: Optional[bool] = None,
+    background: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    temperature: Optional[float] = None,
+    text: Optional["ResponseText"] = None,
+    text_format: Optional[Union[Type["BaseModel"], dict]] = None,
+    tool_choice: Optional[ToolChoice] = None,
+    tools: Optional[Iterable[ToolParam]] = None,
+    top_p: Optional[float] = None,
+    truncation: Optional[Literal["auto", "disabled"]] = None,
+    user: Optional[str] = None,
+    service_tier: Optional[str] = None,
+    safety_identifier: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    allowed_openai_params: Optional[List[str]] = None,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Synchronous version of the Responses Compact API.
+    Runs a compaction pass over a conversation, returning encrypted, opaque items.
+    The underlying logic may evolve over time.
+    """
+    local_vars = locals()
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+        _is_async = kwargs.pop("aresponses_compact", False) is True
+
+        # Convert text_format to text parameter if provided
+        text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
+            text_format=text_format, text=text
+        )
+        if text is not None:
+            # Update local_vars to include the converted text parameter
+            local_vars["text"] = text
+
+        # get custom llm provider so we can use this for mapping exceptions
+        custom_llm_provider = kwargs.get("custom_llm_provider", None)
+        if custom_llm_provider is None:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+
+        # For compact endpoint, we'll use the same base URL but different path
+        original_path = kwargs.get("path", "/v1/responses")
+        kwargs["path"] = "/v1/responses/compact"
+        
+        # Call the regular responses API with compact endpoint
+        response = responses(
+            input=input,
+            model=model,
+            include=include,
+            instructions=instructions,
+            max_output_tokens=max_output_tokens,
+            prompt=prompt,
+            metadata=metadata,
+            parallel_tool_calls=parallel_tool_calls,
+            previous_response_id=previous_response_id,
+            reasoning=reasoning,
+            store=store,
+            background=background,
+            stream=stream,
+            temperature=temperature,
+            text=text,
+            text_format=text_format,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_p=top_p,
+            truncation=truncation,
+            user=user,
+            service_tier=service_tier,
+            safety_identifier=safety_identifier,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            allowed_openai_params=allowed_openai_params,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+        
+        # Restore original path
+        kwargs["path"] = original_path
+        
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
 @client
 def responses(
     input: Union[str, ResponseInputParam],
