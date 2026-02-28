@@ -7,9 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    get_request_base_url,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.responses.main import DeleteResponseResult
 
@@ -84,7 +88,14 @@ async def responses_api(
     )
 
     data = await _read_request_body(request=request)
-    
+
+    # Transform MCP tools with URLs pointing to this proxy into 'litellm_proxy' format
+    if data.get("tools"):
+        data["tools"] = LiteLLM_Proxy_MCP_Handler._transform_self_referencing_mcp_tools(
+            tools=data["tools"],
+            proxy_base_url=get_request_base_url(request),
+        )
+
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
         should_use_polling_for_request,
