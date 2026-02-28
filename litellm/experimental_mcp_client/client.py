@@ -30,6 +30,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_CLIENT_TIMEOUT
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -63,7 +64,7 @@ class MCPClient:
         transport_type: MCPTransportType = MCPTransport.http,
         auth_type: MCPAuthType = None,
         auth_value: Optional[Union[str, Dict[str, str]]] = None,
-        timeout: float = 60.0,
+        timeout: Optional[float] = None,
         stdio_config: Optional[MCPStdioConfig] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         ssl_verify: Optional[VerifyTypes] = None,
@@ -71,7 +72,7 @@ class MCPClient:
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
-        self.timeout: float = timeout
+        self.timeout: float = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
         self._mcp_auth_value: Optional[Union[str, Dict[str, str]]] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
