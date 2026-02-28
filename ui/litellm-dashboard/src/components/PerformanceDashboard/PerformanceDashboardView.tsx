@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useCallback, useRef, useState, useEffect } from "react";
-import { Collapse, Select, Spin, Tabs, Tag } from "antd";
+import { Collapse, Select, Spin, Tabs, Tag, Tooltip } from "antd";
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   DashboardOutlined,
+  InfoCircleOutlined,
   PlayCircleOutlined,
 } from "@ant-design/icons";
 import { LineChart, Card } from "@tremor/react";
@@ -68,28 +69,50 @@ async function runTestRequest(accessToken: string, model: string, messages: { ro
   };
 }
 
-// Postman-style waterfall row
-function WaterfallRow({ label, startMs, durationMs, totalMs, color }: {
-  label: string;
+// OTEL-style trace span row
+function WaterfallRow({ label, startMs, durationMs, totalMs, color, tooltip }: {
+  label: React.ReactNode;
   startMs: number;
   durationMs: number;
   totalMs: number;
   color: string;
+  tooltip?: string;
 }) {
   const startPct = totalMs > 0 ? (startMs / totalMs) * 100 : 0;
   const widthPct = totalMs > 0 ? (durationMs / totalMs) * 100 : 0;
+  const isWide = widthPct > 12;
   return (
-    <tr className="border-b border-gray-50">
-      <td className="py-2.5 pr-4 text-sm text-gray-500 w-48 whitespace-nowrap">{label}</td>
-      <td className="py-2.5 pr-4">
-        <div className="relative h-4 bg-gray-50 rounded overflow-hidden">
+    <tr className="border-b border-gray-100 hover:bg-gray-50/40 transition-colors group">
+      <td className="py-3 pr-4 text-sm text-gray-600 w-48 whitespace-nowrap">
+        <span className="flex items-center gap-1.5">
+          {label}
+          {tooltip && (
+            <Tooltip title={tooltip} placement="right">
+              <InfoCircleOutlined className="text-gray-300 text-xs cursor-help group-hover:text-gray-400 transition-colors" />
+            </Tooltip>
+          )}
+        </span>
+      </td>
+      <td className="py-3 pr-4">
+        <div className="relative h-6 rounded overflow-hidden" style={{ background: "transparent" }}>
+          {/* Timeline grid */}
+          {[25, 50, 75].map((pct) => (
+            <div key={pct} className="absolute top-0 h-full w-px bg-gray-100" style={{ left: `${pct}%` }} />
+          ))}
+          {/* Span bar */}
           <div
-            className={`absolute top-0 h-full rounded ${color}`}
-            style={{ left: `${startPct}%`, width: `${Math.max(widthPct, 0.5)}%` }}
-          />
+            className={`absolute top-0.5 h-5 rounded ${color} shadow-sm transition-all`}
+            style={{ left: `${startPct}%`, width: `${Math.max(widthPct, 0.4)}%`, minWidth: "4px" }}
+          >
+            {isWide && (
+              <span className="absolute inset-0 flex items-center justify-center text-xs font-medium text-white/90 tabular-nums">
+                {durationMs}ms
+              </span>
+            )}
+          </div>
         </div>
       </td>
-      <td className="py-2.5 text-sm text-gray-700 text-right w-20 tabular-nums">{durationMs}ms</td>
+      <td className="py-3 text-sm text-gray-700 text-right w-20 tabular-nums font-mono">{durationMs}ms</td>
     </tr>
   );
 }
@@ -397,38 +420,76 @@ export default function PerformanceDashboardView() {
               <span className="text-gray-500 text-xs">{testResult.model}</span>
             </div>
 
-            {/* Waterfall timing */}
+            {/* OTEL-style trace waterfall */}
             <div className="mb-6">
-              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-3">Response Time Breakdown</p>
-              <table className="w-full">
-                <tbody>
-                  <WaterfallRow
-                    label="LiteLLM Processing"
-                    startMs={0}
-                    durationMs={testResult.overheadMs ?? 0}
-                    totalMs={testResult.wallMs}
-                    color={overheadPctTest != null && overheadPctTest > 20 ? "bg-orange-300" : "bg-blue-300"}
-                  />
-                  <WaterfallRow
-                    label="LLM API (waiting)"
-                    startMs={testResult.overheadMs ?? 0}
-                    durationMs={llmApiMs}
-                    totalMs={testResult.wallMs}
-                    color="bg-gray-300"
-                  />
-                  <tr>
-                    <td className="py-2.5 pr-4 text-sm font-medium text-gray-700 w-48">Total</td>
-                    <td className="py-2.5 pr-4">
-                      <div className="h-4 bg-gray-100 rounded" />
-                    </td>
-                    <td className="py-2.5 text-sm font-semibold text-gray-900 text-right w-20 tabular-nums">{testResult.wallMs}ms</td>
-                  </tr>
-                </tbody>
-              </table>
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Response Time Breakdown</p>
+
+              {/* Time axis */}
+              <div className="flex items-center mb-1">
+                <div className="w-48 flex-shrink-0" />
+                <div className="flex-1 pr-4 relative h-4">
+                  {[0, 25, 50, 75, 100].map((pct) => (
+                    <span
+                      key={pct}
+                      className="absolute text-[10px] text-gray-300 tabular-nums select-none"
+                      style={{
+                        left: `${pct}%`,
+                        transform: pct === 0 ? "none" : pct === 100 ? "translateX(-100%)" : "translateX(-50%)",
+                      }}
+                    >
+                      {Math.round((pct / 100) * testResult.wallMs)}ms
+                    </span>
+                  ))}
+                </div>
+                <div className="w-20" />
+              </div>
+
+              {/* Span rows */}
+              <div className="border border-gray-100 rounded-md overflow-hidden">
+                <table className="w-full">
+                  <tbody>
+                    <WaterfallRow
+                      label="LiteLLM Processing"
+                      startMs={0}
+                      durationMs={testResult.overheadMs ?? 0}
+                      totalMs={testResult.wallMs}
+                      color={overheadPctTest != null && overheadPctTest > 20 ? "bg-orange-400" : "bg-blue-500"}
+                      tooltip="Time LiteLLM spends on auth, routing, request transformation, and logging — excludes time waiting for the LLM API to respond."
+                    />
+                    <WaterfallRow
+                      label="LLM API (waiting)"
+                      startMs={testResult.overheadMs ?? 0}
+                      durationMs={llmApiMs}
+                      totalMs={testResult.wallMs}
+                      color="bg-teal-400"
+                    />
+                    {/* Total footer row */}
+                    <tr className="bg-gray-50/50">
+                      <td className="py-3 pr-4 text-sm font-semibold text-gray-700 w-48 pl-2">Total</td>
+                      <td className="py-3 pr-4">
+                        <div className="relative h-6 bg-gray-100 rounded">
+                          {[25, 50, 75].map((pct) => (
+                            <div key={pct} className="absolute top-0 h-full w-px bg-gray-200" style={{ left: `${pct}%` }} />
+                          ))}
+                          <div className="absolute top-0.5 left-0 h-5 w-full rounded bg-gradient-to-r from-blue-100 to-teal-100 opacity-70" />
+                        </div>
+                      </td>
+                      <td className="py-3 text-sm font-semibold text-gray-900 text-right w-20 tabular-nums font-mono">{testResult.wallMs}ms</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
               {overheadPctTest != null && (
                 <p className="text-xs text-gray-400 mt-2">
-                  LiteLLM overhead is {overheadPctTest}% of total response time
+                  LiteLLM overhead:{" "}
+                  <span className={overheadPctTest > 20 ? "text-orange-500 font-medium" : "text-gray-600 font-medium"}>
+                    {overheadPctTest}% of total
+                  </span>
                   {overheadPctTest > 20 && <span className="text-orange-500"> — higher than expected</span>}
+                  {testResult.overheadMs === null && (
+                    <span className="text-amber-500 ml-1">— overhead header not returned (check proxy version)</span>
+                  )}
                 </p>
               )}
             </div>
