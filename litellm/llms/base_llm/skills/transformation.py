@@ -53,6 +53,24 @@ class BaseSkillsAPIConfig(ABC):
         """
         return headers
 
+    def get_api_base(
+        self, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> str:
+        """
+        Resolve the API base URL for this provider.
+        
+        Subclasses should override to provide provider-specific defaults.
+        
+        Args:
+            litellm_params: LiteLLM parameters (may contain api_base override)
+            
+        Returns:
+            API base URL string
+        """
+        if litellm_params and litellm_params.api_base:
+            return litellm_params.api_base
+        raise ValueError("api_base is required")
+
     @abstractmethod
     def get_complete_url(
         self,
