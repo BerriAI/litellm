@@ -170,13 +170,15 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
         # --- Assertions ---
         event_types = [e.get("type") for e in client_events]
 
-        # 1. Must have received guardrail error
+        # 1. Must have received guardrail error (may not be the first error event
+        #    if the OpenAI session emits other errors, e.g. missing parameters)
         error_events = [e for e in client_events if e.get("type") == "error"]
-        assert len(error_events) >= 1, (
-            f"Expected at least one error event but got: {event_types}"
-        )
-        assert error_events[0]["error"]["type"] == "guardrail_violation", (
-            f"Wrong error type: {error_events[0]}"
+        guardrail_errors = [
+            e for e in error_events
+            if e.get("error", {}).get("type") == "guardrail_violation"
+        ]
+        assert len(guardrail_errors) >= 1, (
+            f"Expected at least one guardrail_violation error but got: {[e.get('error', {}).get('type') for e in error_events]}"
         )
 
         # 2. Must have the guardrail message surfaced as an AI transcript delta

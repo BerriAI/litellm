@@ -1270,27 +1270,34 @@ async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
         make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_api_key),
     )
 
-    start_date, end_date = _default_date_range()
-
-    # Make the request with key_hash filter
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "api_key": "sk-test-key-1",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
-    # Assert response
-    assert response.status_code == 200
-    data = response.json()
+    try:
+        start_date, end_date = _default_date_range()
 
-    # Verify the filtered data
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["api_key"] == "sk-test-key-1"
+        # Make the request with key_hash filter
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "api_key": "sk-test-key-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        # Assert response
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify the filtered data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["api_key"] == "sk-test-key-1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
@@ -2129,29 +2136,36 @@ async def test_ui_view_spend_logs_with_error_code(client):
                     return [mock_spend_logs[1]]
         return mock_spend_logs
 
-    with patch.object(
-        ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code)
-    ):
-        start_date, end_date = _default_date_range()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-        response = client.get(
-            "/spend/logs/ui",
-            params={
-                "error_code": "404",
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            headers={"Authorization": "Bearer sk-test"},
-        )
+    try:
+        with patch.object(
+            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code)
+        ):
+            start_date, end_date = _default_date_range()
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert len(data["data"]) == 1
-        assert data["data"][0]["id"] == "log1"
-        metadata = json.loads(data["data"][0]["metadata"])
-        assert "error_information" in metadata
-        assert metadata["error_information"]["error_code"] == "404"
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "error_code": "404",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 1
+            assert len(data["data"]) == 1
+            assert data["data"][0]["id"] == "log1"
+            metadata = json.loads(data["data"][0]["metadata"])
+            assert "error_information" in metadata
+            assert metadata["error_information"]["error_code"] == "404"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -2193,29 +2207,36 @@ async def test_ui_view_spend_logs_with_error_message(client):
                     return [mock_spend_logs[1]]
         return mock_spend_logs
 
-    with patch.object(
-        ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_message)
-    ):
-        start_date, end_date = _default_date_range()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-        response = client.get(
-            "/spend/logs/ui",
-            params={
-                "error_message": "Rate limit",
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            headers={"Authorization": "Bearer sk-test"},
-        )
+    try:
+        with patch.object(
+            ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_message)
+        ):
+            start_date, end_date = _default_date_range()
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert len(data["data"]) == 1
-        assert data["data"][0]["id"] == "log1"
-        metadata = json.loads(data["data"][0]["metadata"])
-        assert "error_information" in metadata
-        assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "error_message": "Rate limit",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 1
+            assert len(data["data"]) == 1
+            assert data["data"][0]["id"] == "log1"
+            metadata = json.loads(data["data"][0]["metadata"])
+            assert "error_information" in metadata
+            assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -2271,34 +2292,41 @@ async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
                 return [mock_spend_logs[2]]
         return mock_spend_logs
 
-    with patch.object(
-        ps,
-        "prisma_client",
-        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code_and_key_alias),
-    ):
-        start_date, end_date = _default_date_range()
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
-        response = client.get(
-            "/spend/logs/ui",
-            params={
-                "error_code": "500",
-                "key_alias": "test-key-1",
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            headers={"Authorization": "Bearer sk-test"},
-        )
+    try:
+        with patch.object(
+            ps,
+            "prisma_client",
+            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_error_code_and_key_alias),
+        ):
+            start_date, end_date = _default_date_range()
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert len(data["data"]) == 1
-        assert data["data"][0]["id"] == "log3"
-        metadata = json.loads(data["data"][0]["metadata"])
-        assert "user_api_key_alias" in metadata
-        assert metadata["user_api_key_alias"] == "test-key-1"
-        assert "error_information" in metadata
-        assert metadata["error_information"]["error_code"] == "500"
+            response = client.get(
+                "/spend/logs/ui",
+                params={
+                    "error_code": "500",
+                    "key_alias": "test-key-1",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 1
+            assert len(data["data"]) == 1
+            assert data["data"][0]["id"] == "log3"
+            metadata = json.loads(data["data"][0]["metadata"])
+            assert "user_api_key_alias" in metadata
+            assert metadata["user_api_key_alias"] == "test-key-1"
+            assert "error_information" in metadata
+            assert metadata["error_information"]["error_code"] == "500"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
