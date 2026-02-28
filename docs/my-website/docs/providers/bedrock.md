@@ -800,6 +800,132 @@ Beta features may require special access or permissions in your AWS account. Som
 :::
 
 
+## Usage - Context Management (Beta)
+
+LiteLLM supports Anthropic's [context editing](https://docs.claude.com/en/docs/build-with-claude/context-editing) API on Bedrock. This lets you automatically compact or clear older tool results and thinking blocks when conversations grow large.
+
+> For a cross-provider overview including OpenAI, Anthropic, and Vertex AI, see [Context Management (Compaction)](/docs/context_management).
+
+Both the **Invoke** and **Messages API** paths are supported. The required beta headers (`compact-2026-01-12` or `context-management-2025-06-27`) are attached automatically.
+
+:::info
+Context management is **not** supported on the Bedrock **Converse** API (`bedrock/converse/...`).
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**Compaction (auto-summarise old messages)**
+
+```python
+from litellm import completion
+import os
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+    model="bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+    messages=[{"role": "user", "content": "Summarise the conversation so far"}],
+    context_management={
+        "edits": [
+            {
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 200000},
+            }
+        ]
+    },
+)
+```
+
+**Clear tool uses**
+
+```python
+response = completion(
+    model="bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+    messages=[{"role": "user", "content": "Summarise the latest tool results"}],
+    context_management={
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+            }
+        ]
+    },
+)
+```
+
+**OpenAI-compatible format**
+
+```python
+response = completion(
+    model="bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+    messages=[{"role": "user", "content": "Hello"}],
+    context_management=[
+        {"type": "compaction", "compact_threshold": 200000}
+    ],
+)
+```
+
+</TabItem>
+<TabItem value="messages_api" label="Messages API">
+
+```python
+response = completion(
+    model="bedrock/messages/anthropic.claude-sonnet-4-20250514-v1:0",
+    messages=[{"role": "user", "content": "Hello"}],
+    context_management={
+        "edits": [
+            {
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 200000},
+            }
+        ]
+    },
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-bedrock
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-4-20250514-v1:0
+```
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="claude-sonnet-bedrock",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={
+        "context_management": {
+            "edits": [
+                {
+                    "type": "compact_20260112",
+                    "trigger": {"type": "input_tokens", "value": 200000},
+                }
+            ]
+        }
+    },
+)
+```
+
+</TabItem>
+</Tabs>
+
 ## Usage - Structured Output / JSON mode 
 
 <Tabs>
