@@ -76,7 +76,7 @@ _ENDPOINT_METADATA: Dict[str, Dict[str, str]] = {
 _SLUG_SUFFIX_RE = re.compile(r"\s*\(`[^`]+`\)\s*$")
 
 # Loaded once on first request; never invalidated (local file, no TTL needed).
-_cached_endpoints: Optional[List[Dict[str, Any]]] = None
+_cached_endpoints: Optional[SupportedEndpointsResponse] = None
 
 
 def _clean_display_name(raw: str) -> str:
