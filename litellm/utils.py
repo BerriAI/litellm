@@ -3169,7 +3169,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     optional_params = {}
     if (
         custom_llm_provider is not None
-        and custom_llm_provider in LlmProviders._member_map_.values()
+        and custom_llm_provider in LlmProvidersSet
     ):
         provider_config = ProviderConfigManager.get_provider_embedding_config(
             model=model,

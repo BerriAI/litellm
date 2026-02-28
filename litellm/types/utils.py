@@ -3449,8 +3449,13 @@ class DynamicPromptManagementParamLiteral(str, Enum):
     VECTOR_STORE_IDS = "vector_store_ids"
 
     @classmethod
-    def list_all_params(cls):
-        return [param.value for param in cls]
+    def list_all_params(cls) -> frozenset:
+        return _DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+
+
+_DYNAMIC_PROMPT_MANAGEMENT_PARAMS: frozenset = frozenset(
+    param.value for param in DynamicPromptManagementParamLiteral
+)
 
 
 class CallbacksByType(TypedDict):
