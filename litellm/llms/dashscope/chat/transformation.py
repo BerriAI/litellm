@@ -2,25 +2,27 @@
 Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
+from typing import TYPE_CHECKING, Any, Coroutine, List, Literal, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import ChatCompletionToolParam
+
 
 class DashScopeChatConfig(OpenAIGPTConfig):
-    @overload
-    def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    """
+    DashScope configuration.
 
-    @overload
-    def _transform_messages(
+    DashScope supports content in list format with cache_control metadata.
+    See: https://github.com/BerriAI/litellm/issues/18165
+    """
+
+    def remove_cache_control_flag_from_messages_and_tools(
         self,
-        messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
     ) -> List[AllMessageValues]:
