@@ -3594,6 +3594,7 @@ class ProxyConfig:
                     getattr(m, "model_name", "unknown"),
                     getattr(m, "model_id", "unknown"),
                     str(e),
+                    exc_info=True,
                 )
 
         if failed_models > 0:
