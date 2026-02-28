@@ -17,6 +17,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     db_health_cache,
     get_callback_identifier,
+    health_endpoint,
     health_license_endpoint,
     health_services_endpoint,
 )
@@ -612,3 +613,80 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     result = get_callback_identifier(my_callback_function)
     # Should fall back to callback_name() which returns __name__
     assert result == "my_callback_function"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_simple_mode_returns_minimal_response():
+    """
+    Test that when health_check_mode is set to 'simple', the /health endpoint
+    returns a minimal {'status': 'healthy'} response without running any
+    model health checks. This is useful for liveness probes.
+    """
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.models = []
+
+    with patch(
+        "litellm.proxy.proxy_server.health_check_mode",
+        "simple",
+    ):
+        result = await health_endpoint(
+            user_api_key_dict=mock_user_api_key_dict,
+            model=None,
+            model_id=None,
+        )
+
+    assert result == {"status": "healthy"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_detailed_mode_runs_health_checks():
+    """
+    Test that when health_check_mode is 'detailed' (default), the /health endpoint
+    runs the full model health check logic instead of returning a minimal response.
+    """
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.models = []
+
+    mock_health_results = {
+        "healthy_endpoints": [{"model": "gpt-4", "status": "healthy"}],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    with patch(
+        "litellm.proxy.proxy_server.health_check_mode",
+        "detailed",
+    ), patch(
+        "litellm.proxy.proxy_server.llm_model_list",
+        [{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+    ), patch(
+        "litellm.proxy.proxy_server.use_background_health_checks",
+        True,
+    ), patch(
+        "litellm.proxy.proxy_server.health_check_results",
+        mock_health_results,
+    ):
+        result = await health_endpoint(
+            user_api_key_dict=mock_user_api_key_dict,
+            model=None,
+            model_id=None,
+        )
+
+    # In detailed mode with background health checks, it returns health_check_results
+    assert result == mock_health_results
+    assert "healthy_endpoints" in result
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_default_mode_is_detailed():
+    """
+    Test that the default health_check_mode is 'detailed', meaning the /health
+    endpoint does NOT short-circuit with a simple response by default.
+    """
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    # Verify the default value at module level
+    assert proxy_server_module.health_check_mode == "detailed"

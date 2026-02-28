@@ -2155,6 +2155,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    health_check_mode: Optional[Literal["simple", "detailed"]] = Field(
+        None,
+        description="Controls the /health endpoint behavior. 'simple' returns a minimal {'status': 'healthy'} response without running model health checks (ideal for liveness probes). 'detailed' (default) runs full model health checks.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
