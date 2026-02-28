@@ -135,6 +135,24 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    def log_retry_event(
+        self,
+        kwargs: dict,
+        exception: Optional[BaseException],
+        retry_count: int,
+        max_retries: int,
+    ):
+        """
+        Called when a retry is about to occur.
+
+        Args:
+            kwargs: The original request kwargs being retried
+            exception: The exception that triggered the retry
+            retry_count: Current retry attempt number (1-indexed)
+            max_retries: Maximum number of retries configured
+        """
+        pass
+
     #### ASYNC ####
 
     async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
@@ -175,6 +193,24 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    async def async_log_retry_event(
+        self,
+        kwargs: dict,
+        exception: Optional[BaseException],
+        retry_count: int,
+        max_retries: int,
+    ):
+        """
+        Async version of log_retry_event. Called when a retry is about to occur.
+
+        Args:
+            kwargs: The original request kwargs being retried
+            exception: The exception that triggered the retry
+            retry_count: Current retry attempt number (1-indexed)
+            max_retries: Maximum number of retries configured
+        """
         pass
 
     #### PROMPT MANAGEMENT HOOKS ####
