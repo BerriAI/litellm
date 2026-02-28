@@ -53,6 +53,24 @@ class BaseSkillsAPIConfig(ABC):
         """
         return headers
 
+    def get_api_base(
+        self, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> str:
+        """
+        Resolve the API base URL for this provider.
+        
+        Subclasses should override to provide provider-specific defaults.
+        
+        Args:
+            litellm_params: LiteLLM parameters (may contain api_base override)
+            
+        Returns:
+            API base URL string
+        """
+        if litellm_params and litellm_params.api_base:
+            return litellm_params.api_base
+        raise ValueError("api_base is required")
+
     @abstractmethod
     def get_complete_url(
         self,
@@ -230,6 +248,207 @@ class BaseSkillsAPIConfig(ABC):
             DeleteSkillResponse object
         """
         pass
+
+    # ──────────────────────────────────────────────
+    # Optional methods for providers that support them
+    # (OpenAI-specific: update, content, versions)
+    # Default: raise NotImplementedError
+    # ──────────────────────────────────────────────
+
+    def transform_update_skill_request(
+        self,
+        skill_id: str,
+        update_data: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """
+        Transform update skill request (e.g. set default_version).
+        
+        Returns:
+            Tuple of (url, headers, request_body)
+        """
+        raise NotImplementedError(
+            f"update_skill is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_update_skill_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Skill:
+        """Transform update skill response to Skill object."""
+        raise NotImplementedError(
+            f"update_skill is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_get_skill_content_request(
+        self,
+        skill_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform get skill content request.
+        
+        Returns:
+            Tuple of (url, headers)
+        """
+        raise NotImplementedError(
+            f"get_skill_content is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_get_skill_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        """Transform get skill content response."""
+        raise NotImplementedError(
+            f"get_skill_content is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_create_skill_version_request(
+        self,
+        skill_id: str,
+        create_request: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """
+        Transform create skill version request.
+        
+        Returns:
+            Tuple of (url, headers, request_body)
+        """
+        raise NotImplementedError(
+            f"create_skill_version is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_create_skill_version_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        """Transform create skill version response."""
+        raise NotImplementedError(
+            f"create_skill_version is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_list_skill_versions_request(
+        self,
+        skill_id: str,
+        list_params: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict, Dict]:
+        """
+        Transform list skill versions request.
+        
+        Returns:
+            Tuple of (url, headers, query_params)
+        """
+        raise NotImplementedError(
+            f"list_skill_versions is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_list_skill_versions_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        """Transform list skill versions response."""
+        raise NotImplementedError(
+            f"list_skill_versions is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_get_skill_version_request(
+        self,
+        skill_id: str,
+        version: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform get skill version request.
+        
+        Returns:
+            Tuple of (url, headers)
+        """
+        raise NotImplementedError(
+            f"get_skill_version is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_get_skill_version_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        """Transform get skill version response."""
+        raise NotImplementedError(
+            f"get_skill_version is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_delete_skill_version_request(
+        self,
+        skill_id: str,
+        version: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform delete skill version request.
+        
+        Returns:
+            Tuple of (url, headers)
+        """
+        raise NotImplementedError(
+            f"delete_skill_version is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_delete_skill_version_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        """Transform delete skill version response."""
+        raise NotImplementedError(
+            f"delete_skill_version is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_get_skill_version_content_request(
+        self,
+        skill_id: str,
+        version: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform get skill version content request.
+        
+        Returns:
+            Tuple of (url, headers)
+        """
+        raise NotImplementedError(
+            f"get_skill_version_content is not supported for {self.custom_llm_provider}"
+        )
+
+    def transform_get_skill_version_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> Dict:
+        """Transform get skill version content response."""
+        raise NotImplementedError(
+            f"get_skill_version_content is not supported for {self.custom_llm_provider}"
+        )
 
     def get_error_class(
         self,
