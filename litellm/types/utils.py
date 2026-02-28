@@ -1651,6 +1651,7 @@ class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
         super().__init__(**kwargs)
 
 
+
 class ModelResponseBase(OpenAIObject):
     id: str
     """A unique identifier for the completion."""
@@ -1759,7 +1760,7 @@ class ModelResponseStream(ModelResponseBase):
 
 
 class ModelResponse(ModelResponseBase):
-    choices: List[Union[Choices, StreamingChoices]]
+    choices: List[Choices]
     """The list of completion choices the model generated for the input prompt."""
 
     def __init__(  # noqa: PLR0915
@@ -1778,44 +1779,27 @@ class ModelResponse(ModelResponseBase):
         _response_headers=None,
         **params,
     ) -> None:
-        if stream is not None and stream is True:
-            object = "chat.completion.chunk"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    _new_choice = None
-                    if isinstance(choice, StreamingChoices):
-                        _new_choice = choice
-                    elif isinstance(choice, dict):
-                        _new_choice = StreamingChoices(**choice)
-                    elif isinstance(choice, BaseModel):
-                        _new_choice = StreamingChoices(**choice.model_dump())
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [StreamingChoices()]
+        object = "chat.completion"
+        if choices is not None and isinstance(choices, list):
+            new_choices = []
+            for choice in choices:
+                if isinstance(choice, Choices):
+                    _new_choice = choice  # type: ignore
+                elif isinstance(choice, dict):
+                    _new_choice = Choices(**choice)  # type: ignore
+                elif isinstance(choice, BaseModel):
+                    dump = (
+                        choice.model_dump()
+                        if hasattr(choice, "model_dump")
+                        else choice.dict()
+                    )
+                    _new_choice = Choices(**dump)  # type: ignore
+                else:
+                    _new_choice = choice
+                new_choices.append(_new_choice)
+            choices = new_choices
         else:
-            object = "chat.completion"
-            if choices is not None and isinstance(choices, list):
-                new_choices = []
-                for choice in choices:
-                    if isinstance(choice, Choices):
-                        _new_choice = choice  # type: ignore
-                    elif isinstance(choice, dict):
-                        _new_choice = Choices(**choice)  # type: ignore
-                    elif isinstance(choice, BaseModel):
-                        dump = (
-                            choice.model_dump()
-                            if hasattr(choice, "model_dump")
-                            else choice.dict()
-                        )
-                        _new_choice = Choices(**dump)  # type: ignore
-                    else:
-                        _new_choice = choice
-                    new_choices.append(_new_choice)
-                choices = new_choices
-            else:
-                choices = [Choices()]
+            choices = [Choices()]
         if id is None:
             id = _generate_id()
         else:

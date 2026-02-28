@@ -61,7 +61,6 @@ from litellm.utils import (
     ImageResponse,
     ModelResponse,
     ModelResponseStream,
-    StreamingChoices,
 )
 
 
@@ -863,9 +862,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
-        if isinstance(response, ModelResponse) and not isinstance(
-            response.choices[0], StreamingChoices
-        ):  # /chat/completions requests
+        if isinstance(response, ModelResponse):  # /chat/completions requests
             if isinstance(response.choices[0].message.content, str):
                 verbose_proxy_logger.debug(
                     f"self.pii_tokens: {self.pii_tokens}; initial response: {response.choices[0].message.content}"
@@ -888,7 +885,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return response
 
         # skip streaming here; handled in async_post_call_streaming_iterator_hook
-        if response.choices and isinstance(response.choices[0], StreamingChoices):
+        if isinstance(response, ModelResponseStream):
             return response
 
         presidio_config = self.get_presidio_settings_from_request_data(
@@ -896,10 +893,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
 
         for choice in response.choices:
-            # Type narrowing: StreamingChoices doesn't have .message attribute
-            if not hasattr(choice, "message"):
-                continue
-            content = getattr(choice.message, "content", None)  # type: ignore
+            content = getattr(choice.message, "content", None)
             if content is None:
                 continue
             if isinstance(content, str):

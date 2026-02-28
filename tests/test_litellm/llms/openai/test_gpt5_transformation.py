@@ -414,3 +414,174 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
+
+
+# GPT-5-Search specific tests
+def test_gpt5_search_model_detection(gpt5_config: OpenAIGPT5Config):
+    """Test that GPT-5 search models are correctly detected."""
+    assert gpt5_config.is_model_gpt_5_search_model("gpt-5-search-api")
+    assert gpt5_config.is_model_gpt_5_search_model("gpt-5-search-mini-api")
+
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5")
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5-codex")
+    assert not gpt5_config.is_model_gpt_5_search_model("gpt-5-mini")
+
+
+def test_gpt5_search_supported_params(gpt5_config: OpenAIGPT5Config):
+    """Test that search models do NOT list reasoning/tool params as supported."""
+    supported = gpt5_config.get_supported_openai_params(model="gpt-5-search-api")
+    rejected = [
+        "logit_bias",
+        "modalities",
+        "prediction",
+        "n",
+        "seed",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "function_call",
+        "functions",
+        "parallel_tool_calls",
+        "audio",
+        "reasoning_effort",
+    ]
+    for param in rejected:
+        assert param not in supported, f"{param} should not be supported for search models"
+
+
+def test_gpt5_search_has_expected_params(gpt5_config: OpenAIGPT5Config):
+    """Test that search models DO list the correct supported params."""
+    supported = gpt5_config.get_supported_openai_params(model="gpt-5-search-api")
+    expected = [
+        "max_tokens",
+        "max_completion_tokens",
+        "stream",
+        "stream_options",
+        "web_search_options",
+        "service_tier",
+        "response_format",
+        "user",
+        "store",
+        "verbosity",
+        "extra_headers",
+    ]
+    for param in expected:
+        assert param in supported, f"{param} should be supported for search models"
+
+
+def test_gpt5_search_maps_max_tokens(config: OpenAIConfig):
+    """Test that search models map max_tokens -> max_completion_tokens."""
+    params = config.map_openai_params(
+        non_default_params={"max_tokens": 200},
+        optional_params={},
+        model="gpt-5-search-api",
+        drop_params=False,
+    )
+    assert params["max_completion_tokens"] == 200
+    assert "max_tokens" not in params
+
+
+def test_gpt5_search_drops_unsupported_params(config: OpenAIConfig):
+    """Test that search models drop unsupported params via map_openai_params."""
+    params = config.map_openai_params(
+        non_default_params={"n": 2, "temperature": 0.7, "tools": [{"type": "function"}]},
+        optional_params={},
+        model="gpt-5-search-api",
+        drop_params=True,
+    )
+    assert "n" not in params
+    assert "temperature" not in params
+    assert "tools" not in params
+# GPT-5 unsupported params audit (validated via direct API calls)
+def test_gpt5_rejects_params_unsupported_by_openai(config: OpenAIConfig):
+    """Params that OpenAI rejects for all GPT-5 reasoning models."""
+    rejected_params = [
+        "logit_bias",
+        "modalities",
+        "prediction",
+        "audio",
+        "web_search_options",
+    ]
+    for model in ["gpt-5", "gpt-5-mini", "gpt-5-codex", "gpt-5.1", "gpt-5.2"]:
+        supported = config.get_supported_openai_params(model=model)
+        for param in rejected_params:
+            assert param not in supported, (
+                f"{param} should not be supported for {model}"
+            )
+
+
+def test_gpt5_1_supports_logprobs_top_p(config: OpenAIConfig):
+    """gpt-5.1/5.2 support logprobs, top_p, top_logprobs when reasoning_effort='none'."""
+    for model in ["gpt-5.1", "gpt-5.2"]:
+        supported = config.get_supported_openai_params(model=model)
+        assert "logprobs" in supported, f"logprobs should be supported for {model}"
+        assert "top_p" in supported, f"top_p should be supported for {model}"
+        assert "top_logprobs" in supported, f"top_logprobs should be supported for {model}"
+
+
+def test_gpt5_base_does_not_support_logprobs_top_p(config: OpenAIConfig):
+    """Base gpt-5/gpt-5-mini do NOT support logprobs, top_p, top_logprobs."""
+    for model in ["gpt-5", "gpt-5-mini", "gpt-5-codex"]:
+        supported = config.get_supported_openai_params(model=model)
+        assert "logprobs" not in supported, f"logprobs should not be supported for {model}"
+        assert "top_p" not in supported, f"top_p should not be supported for {model}"
+        assert "top_logprobs" not in supported, f"top_logprobs should not be supported for {model}"
+
+
+def test_gpt5_1_logprobs_passthrough(config: OpenAIConfig):
+    """Test that logprobs passes through for gpt-5.1."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_logprobs": 3},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["logprobs"] is True
+    assert params["top_logprobs"] == 3
+
+
+def test_gpt5_1_top_p_passthrough(config: OpenAIConfig):
+    """Test that top_p passes through for gpt-5.1."""
+    params = config.map_openai_params(
+        non_default_params={"top_p": 0.9},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["top_p"] == 0.9
+
+
+def test_gpt5_1_logprobs_rejected_with_reasoning_effort(config: OpenAIConfig):
+    """logprobs/top_p/top_logprobs are rejected when reasoning_effort != 'none'."""
+    for effort in ["low", "medium", "high"]:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"logprobs": True, "reasoning_effort": effort},
+                optional_params={},
+                model="gpt-5.1",
+                drop_params=False,
+            )
+
+
+def test_gpt5_1_top_p_rejected_with_reasoning_effort(config: OpenAIConfig):
+    """top_p is rejected when reasoning_effort != 'none'."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"top_p": 0.9, "reasoning_effort": "high"},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_1_logprobs_dropped_with_reasoning_effort(config: OpenAIConfig):
+    """logprobs/top_p are dropped when reasoning_effort != 'none' and drop_params=True."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_p": 0.9, "reasoning_effort": "high"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "logprobs" not in params
+    assert "top_p" not in params
+    assert params["reasoning_effort"] == "high"
