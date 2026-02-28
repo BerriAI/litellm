@@ -4469,10 +4469,15 @@ async def _list_key_helper(
     # Fetch user information if expand includes "user"
     user_map = {}
     if expand and "user" in expand:
-        user_ids = [key.user_id for key in keys if key.user_id]
-        if user_ids:
+        all_user_ids: set = set()
+        for key in keys:
+            if key.user_id:
+                all_user_ids.add(key.user_id)
+            if key.created_by:
+                all_user_ids.add(key.created_by)
+        if all_user_ids:
             users = await prisma_client.db.litellm_usertable.find_many(
-                where={"user_id": {"in": list(set(user_ids))}}  # Remove duplicates
+                where={"user_id": {"in": list(all_user_ids)}}
             )
             user_map = {user.user_id: user for user in users}
 
@@ -4495,6 +4500,19 @@ async def _list_key_helper(
                 key_dict["user"] = user_map[key.user_id].model_dump()
             except Exception:
                 key_dict["user"] = user_map[key.user_id].dict()
+
+        # Include created_by user information if expand includes "user"
+        if (
+            expand
+            and "user" in expand
+            and key.created_by
+            and key.created_by in user_map
+        ):
+            created_by_user_obj = user_map[key.created_by]
+            key_dict["created_by_user"] = {
+                "user_id": created_by_user_obj.user_id,
+                "user_email": created_by_user_obj.user_email,
+            }
 
         if return_full_object is True or (expand and "user" in expand):
             if use_deleted_table:

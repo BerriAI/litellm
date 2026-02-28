@@ -98,6 +98,11 @@ export interface KeyResponse {
     user_id: string;
     user_email: string;
   };
+  created_by?: string;
+  created_by_user?: {
+    user_id: string;
+    user_email: string;
+  };
 }
 
 interface KeyListResponse {

@@ -108,9 +108,11 @@ export const useKeys = (
 ): UseQueryResult<KeysResponse> => {
   const { accessToken } = useAuthorized();
 
+  const mergedOptions = { expand: "user", ...options };
+
   return useQuery<KeysResponse>({
-    queryKey: keyKeys.list({ page, limit: pageSize, ...options }),
-    queryFn: async () => await keyListCall(accessToken!, page, pageSize, options),
+    queryKey: keyKeys.list({ page, limit: pageSize, ...mergedOptions }),
+    queryFn: async () => await keyListCall(accessToken!, page, pageSize, mergedOptions),
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,
@@ -125,9 +127,11 @@ export const useDeletedKeys = (
 ): UseQueryResult<KeysResponse> => {
   const { accessToken } = useAuthorized();
 
+  const mergedOptions = { expand: "user", ...options, status: "deleted" as const };
+
   return useQuery<KeysResponse>({
-    queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...options }),
-    queryFn: async () => await keyListCall(accessToken!, page, pageSize, { ...options, status: "deleted" }),
+    queryKey: deletedKeyKeys.list({ page, limit: pageSize, ...mergedOptions }),
+    queryFn: async () => await keyListCall(accessToken!, page, pageSize, mergedOptions),
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,

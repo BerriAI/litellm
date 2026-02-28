@@ -189,14 +189,21 @@ export function DeletedKeysTable({
       id: "created_by",
       accessorKey: "created_by",
       header: "Created By",
-      size: 120,
-      maxSize: 180,
+      size: 150,
+      maxSize: 200,
       cell: (info) => {
         const value = (info.row.original as any).created_by as string | null | undefined;
+        const createdByUser = (info.row.original as any).created_by_user as { user_id: string; user_email: string } | undefined;
+        const displayValue = value === "default_user_id"
+          ? "Default Proxy Admin"
+          : createdByUser?.user_email ?? value;
+        const tooltipValue = createdByUser?.user_email && value
+          ? `${createdByUser.user_email} (${value})`
+          : (displayValue ?? undefined);
         return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
-              {value || "-"}
+          <Tooltip title={tooltipValue}>
+            <span className="text-xs truncate block max-w-[200px]">
+              {displayValue || "-"}
             </span>
           </Tooltip>
         );

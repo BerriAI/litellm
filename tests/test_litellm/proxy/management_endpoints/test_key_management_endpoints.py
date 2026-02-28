@@ -4085,6 +4085,117 @@ async def test_list_keys_with_expand_user():
 
 
 @pytest.mark.asyncio
+async def test_list_keys_with_expand_user_includes_created_by_user():
+    """
+    Test that expand=user also resolves created_by user IDs into created_by_user objects.
+    """
+    mock_prisma_client = AsyncMock()
+
+    # Key where created_by differs from user_id
+    key1_dict = {
+        "token": "token1",
+        "user_id": "owner1",
+        "created_by": "creator1",
+        "key_alias": "key1",
+        "models": ["gpt-4"],
+    }
+    mock_key1 = MagicMock()
+    mock_key1.token = "token1"
+    mock_key1.user_id = "owner1"
+    mock_key1.created_by = "creator1"
+    mock_key1.model_dump = MagicMock(return_value=dict(key1_dict))
+    mock_key1.dict = MagicMock(return_value=dict(key1_dict))
+
+    # Key where created_by is same as user_id
+    key2_dict = {
+        "token": "token2",
+        "user_id": "owner2",
+        "created_by": "owner2",
+        "key_alias": "key2",
+        "models": ["gpt-3.5-turbo"],
+    }
+    mock_key2 = MagicMock()
+    mock_key2.token = "token2"
+    mock_key2.user_id = "owner2"
+    mock_key2.created_by = "owner2"
+    mock_key2.model_dump = MagicMock(return_value=dict(key2_dict))
+    mock_key2.dict = MagicMock(return_value=dict(key2_dict))
+
+    mock_find_many_keys = AsyncMock(return_value=[mock_key1, mock_key2])
+    mock_count_keys = AsyncMock(return_value=2)
+
+    # Create mock users (including the creator)
+    mock_owner1 = MagicMock()
+    mock_owner1.user_id = "owner1"
+    mock_owner1.user_email = "owner1@example.com"
+    mock_owner1.model_dump = MagicMock(
+        return_value={"user_id": "owner1", "user_email": "owner1@example.com"}
+    )
+
+    mock_creator1 = MagicMock()
+    mock_creator1.user_id = "creator1"
+    mock_creator1.user_email = "creator1@example.com"
+    mock_creator1.model_dump = MagicMock(
+        return_value={"user_id": "creator1", "user_email": "creator1@example.com"}
+    )
+
+    mock_owner2 = MagicMock()
+    mock_owner2.user_id = "owner2"
+    mock_owner2.user_email = "owner2@example.com"
+    mock_owner2.model_dump = MagicMock(
+        return_value={"user_id": "owner2", "user_email": "owner2@example.com"}
+    )
+
+    mock_find_many_users = AsyncMock(
+        return_value=[mock_owner1, mock_creator1, mock_owner2]
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many_keys
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_count_keys
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many_users
+
+    async def mock_attach_object_permission(d, _):
+        return d
+
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.attach_object_permission_to_dict",
+        side_effect=mock_attach_object_permission,
+    ):
+        args = {
+            "prisma_client": mock_prisma_client,
+            "page": 1,
+            "size": 50,
+            "user_id": None,
+            "team_id": None,
+            "organization_id": None,
+            "key_alias": None,
+            "key_hash": None,
+            "exclude_team_id": None,
+            "return_full_object": False,
+            "admin_team_ids": None,
+            "include_created_by_keys": False,
+            "expand": ["user"],
+        }
+
+        result = await _list_key_helper(**args)
+
+        # Verify user_ids include both user_id and created_by IDs
+        call_args = mock_find_many_users.call_args
+        user_ids_in_query = set(call_args.kwargs["where"]["user_id"]["in"])
+        assert user_ids_in_query == {"owner1", "owner2", "creator1"}
+
+        # Verify created_by_user is attached
+        assert result["keys"][0].created_by_user == {
+            "user_id": "creator1",
+            "user_email": "creator1@example.com",
+        }
+        assert result["keys"][1].created_by_user == {
+            "user_id": "owner2",
+            "user_email": "owner2@example.com",
+        }
+
+
+@pytest.mark.asyncio
 async def test_list_keys_with_status_deleted():
     """
     Test that status="deleted" parameter correctly queries the deleted keys table.

@@ -2334,6 +2334,7 @@ class UserAPIKeyAuth(
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
+    created_by_user: Optional[Any] = None  # Expanded created_by user when expand=user
     end_user_object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -269,15 +269,22 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       id: "created_by",
       accessorKey: "created_by",
       header: "Created By",
-      size: 70,
+      size: 150,
       enableSorting: false,
       cell: (info) => {
         const value = info.getValue() as string | null;
-        const displayValue = value === "default_user_id" ? "Default Proxy Admin" : value;
+        const row = info.row.original;
+        const createdByUser = row.created_by_user;
+        const displayValue = value === "default_user_id"
+          ? "Default Proxy Admin"
+          : createdByUser?.user_email ?? value;
+        const tooltipValue = createdByUser?.user_email && value
+          ? `${createdByUser.user_email} (${value})`
+          : (displayValue ?? undefined);
         const width = info.cell.column.getSize();
         return (
-          <Tooltip title={displayValue}>
-            <span className={`font-mono text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
+          <Tooltip title={tooltipValue}>
+            <span className={`text-xs truncate block`} style={{ maxWidth: width, overflow: "hidden" }}>
               {displayValue ?? "-"}
             </span>
           </Tooltip>

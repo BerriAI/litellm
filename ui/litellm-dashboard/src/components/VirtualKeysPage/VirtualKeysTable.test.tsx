@@ -539,6 +539,89 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
   });
 });
 
+it("should display user email in Created By column when created_by_user is available", async () => {
+  const keyWithCreatedByUser = {
+    ...mockKey,
+    created_by: "some-uuid-1234",
+    created_by_user: {
+      user_id: "some-uuid-1234",
+      user_email: "creator@example.com",
+    },
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithCreatedByUser],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("creator@example.com")).toBeInTheDocument();
+  });
+});
+
+it("should fall back to raw UUID in Created By column when created_by_user is not available", async () => {
+  const keyWithoutCreatedByUser = {
+    ...mockKey,
+    created_by: "some-raw-uuid-5678",
+    created_by_user: undefined,
+  };
+
+  mockUseFilterLogic.mockReturnValue({
+    filters: {
+      "Team ID": "",
+      "Organization ID": "",
+      "Key Alias": "",
+      "User ID": "",
+      "Sort By": "created_at",
+      "Sort Order": "desc",
+    },
+    filteredKeys: [keyWithoutCreatedByUser],
+    allTeams: [mockTeam],
+    allOrganizations: [mockOrganization],
+    handleFilterChange: vi.fn(),
+    handleFilterReset: vi.fn(),
+  });
+
+  const mockProps = {
+    teams: [mockTeam],
+    organizations: [mockOrganization],
+    onSortChange: vi.fn(),
+    currentSort: {
+      sortBy: "created_at",
+      sortOrder: "desc" as const,
+    },
+  };
+
+  renderWithProviders(<VirtualKeysTable {...mockProps} />);
+
+  await waitFor(() => {
+    expect(screen.getByText("some-raw-uuid-5678")).toBeInTheDocument();
+  });
+});
+
 
 it("should render table without crashing when models is null", async () => {
   const keyWithNullModels = {
