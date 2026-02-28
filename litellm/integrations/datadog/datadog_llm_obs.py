@@ -27,6 +27,9 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_tags,
     get_datadog_base_url_from_env,
 )
+from litellm.integrations.datadog.datadog_llm_obs_apm_patch import (
+    _get_apm_trace_context,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
@@ -301,9 +304,20 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             ),
         )
 
+        # Get APM trace context for correlation with Datadog APM traces
+        apm_trace_id, apm_span_id = _get_apm_trace_context()
+
+        # Use APM trace context if available, otherwise fall back to standard logging or UUID
+        if apm_trace_id is not None and apm_span_id is not None:
+            trace_id = apm_trace_id
+            parent_id = apm_span_id
+        else:
+            trace_id = standard_logging_payload.get("trace_id", str(uuid.uuid4()))
+            parent_id = metadata_parent_id if metadata_parent_id else "undefined"
+
         payload: LLMObsPayload = LLMObsPayload(
-            parent_id=metadata_parent_id if metadata_parent_id else "undefined",
-            trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
+            parent_id=parent_id,
+            trace_id=trace_id,
             span_id=metadata.get("span_id", str(uuid.uuid4())),
             name=metadata.get("name", "litellm_llm_call"),
             meta=meta,
@@ -314,25 +328,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             tags=[get_datadog_tags(standard_logging_object=standard_logging_payload)],
         )
 
-        apm_trace_id = self._get_apm_trace_id()
+        # Set apm_id for correlation in the Datadog UI
         if apm_trace_id is not None:
             payload["apm_id"] = apm_trace_id
 
         return payload
-
-    def _get_apm_trace_id(self) -> Optional[str]:
-        """Retrieve the current APM trace ID if available."""
-        try:
-            current_span_fn = getattr(tracer, "current_span", None)
-            if callable(current_span_fn):
-                current_span = current_span_fn()
-                if current_span is not None:
-                    trace_id = getattr(current_span, "trace_id", None)
-                    if trace_id is not None:
-                        return str(trace_id)
-        except Exception:
-            pass
-        return None
 
     def _assemble_error_info(
         self, standard_logging_payload: StandardLoggingPayload
