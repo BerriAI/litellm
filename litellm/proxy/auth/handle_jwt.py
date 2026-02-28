@@ -244,8 +244,7 @@ class JWTHandler:
                         return default_value
                     verbose_proxy_logger.debug(
                         f"JWT Auth: team_id_jwt_field '{self.litellm_jwtauth.team_id_jwt_field}' "
-                        f"returned a list {team_id}; using first element '{team_id[0]}'. "
-                        f"Use bracket notation (e.g. 'roles[0]') to silence this message."
+                        f"returned a list {team_id}; using first element '{team_id[0]}' automatically."
                     )
                     team_id = team_id[0]
                 return team_id  # type: ignore[return-value]
@@ -484,6 +483,10 @@ class JWTHandler:
             f"JWT Auth: Fetching OIDC discovery document from {url}"
         )
         response = await self.http_handler.get(url)
+        if response.status_code != 200:
+            raise Exception(
+                f"JWT Auth: OIDC discovery endpoint {url} returned status {response.status_code}: {response.text}"
+            )
         try:
             discovery = response.json()
         except Exception as e:
