@@ -73,6 +73,11 @@ class GradientAIConfig(OpenAILikeChatConfig):
             "include_guardrails_info",
             "provide_citations",
             "retrieval_method",
+            # Tool calling support
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "response_format",
         ]
         return supported_params
 
@@ -124,24 +129,3 @@ class GradientAIConfig(OpenAILikeChatConfig):
 
         dynamic_api_key = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         return api_base, dynamic_api_key
-
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool = False,
-        replace_max_completion_tokens_with_max_tokens: bool = False,
-    ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model=model)
-        for param, value in non_default_params.items():
-            if param in supported_openai_params:
-                optional_params[param] = value
-            elif not drop_params:
-                from litellm.utils import UnsupportedParamsError
-                raise UnsupportedParamsError(
-                    status_code=400,
-                    message=f"GradientAI does not support parameter '{param}'. To drop unsupported params, set `drop_params=True`."
-                )
-
-        return optional_params
