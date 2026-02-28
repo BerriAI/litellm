@@ -7,10 +7,10 @@ interface TeamDropdownProps {
   value?: string;
   onChange?: (value: string) => void;
   disabled?: boolean;
+  loading?: boolean;
 }
 
-const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange, disabled }) => {
-  console.log("disabled", disabled);
+const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange, disabled, loading }) => {
   return (
     <Select
       showSearch
@@ -18,6 +18,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({ teams, value, onChange, dis
       value={value}
       onChange={onChange}
       disabled={disabled}
+      loading={loading}
       allowClear
       filterOption={(input, option) => {
         if (!option) return false;
