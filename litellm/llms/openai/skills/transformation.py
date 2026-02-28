@@ -104,11 +104,15 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
-        """Transform create skill request for OpenAI (multipart passthrough)."""
-        verbose_logger.debug(
-            "Transforming OpenAI create skill request: %s", create_request
-        )
-        return {k: v for k, v in create_request.items() if v is not None}
+        """Transform create skill request for OpenAI (multipart passthrough).
+        
+        Maps canonical fields to OpenAI format:
+        - display_title is Anthropic-specific; OpenAI derives name from SKILL.md frontmatter
+        """
+        result = {k: v for k, v in create_request.items() if v is not None}
+        # Remove Anthropic-specific field that OpenAI doesn't accept
+        result.pop("display_title", None)
+        return result
 
     def transform_create_skill_response(
         self,
@@ -237,6 +241,9 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             api_base=api_base, endpoint="skills", skill_id=skill_id
         )
         body = {k: v for k, v in update_data.items() if v is not None}
+        # OpenAI expects default_version as string
+        if "default_version" in body and isinstance(body["default_version"], int):
+            body["default_version"] = str(body["default_version"])
         verbose_logger.debug("OpenAI update skill request - URL: %s, body: %s", url, body)
         return url, headers, body
 
@@ -267,8 +274,15 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> Dict:
-        """Return skill content response as-is (binary/text payload)."""
-        return raw_response.json()
+        """Return skill content response. Content may be binary (zip) or JSON."""
+        content_type = raw_response.headers.get("content-type", "")
+        if "json" in content_type:
+            return raw_response.json()
+        return {
+            "content": raw_response.content,
+            "content_type": content_type,
+            "status_code": raw_response.status_code,
+        }
 
     def transform_create_skill_version_request(
         self,
@@ -382,8 +396,15 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> Dict:
-        """Transform get skill version content response."""
-        return raw_response.json()
+        """Transform get skill version content response. Content may be binary (zip) or JSON."""
+        content_type = raw_response.headers.get("content-type", "")
+        if "json" in content_type:
+            return raw_response.json()
+        return {
+            "content": raw_response.content,
+            "content_type": content_type,
+            "status_code": raw_response.status_code,
+        }
 
     # ──────────────────────────────────────────────
     # Internal helpers
@@ -413,7 +434,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
             id=data["id"],
             created_at=created_at_str,
             display_title=data.get("name"),
-            latest_version=str(data["latest_version"]) if data.get("latest_version") is not None else None,
+            latest_version=data.get("latest_version"),
             source="custom",
             type=data.get("object", "skill"),
             updated_at=created_at_str,  # OpenAI doesn't have updated_at; use created_at
