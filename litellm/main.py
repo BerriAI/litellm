@@ -1459,6 +1459,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
             "reasoning_effort": reasoning_effort,
+            "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,
             "safety_identifier": safety_identifier,

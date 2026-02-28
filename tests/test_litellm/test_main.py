@@ -1547,3 +1547,19 @@ class TestCallTypesOCR:
 
         call_type = CallTypes("aocr")
         assert call_type == CallTypes.aocr
+
+
+def test_gpt5_completion_verbosity_parameter():
+    """Test that verbosity parameter is passed to optional_params for GPT-5 models"""
+    with patch("litellm.main.openai_chat_completions.completion") as mock_completion:
+        mock_completion.return_value = MagicMock()
+
+        litellm.completion(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "Hi"}],
+            verbosity="low",
+        )
+
+        mock_completion.assert_called_once()
+        optional_params = mock_completion.call_args.kwargs["optional_params"]
+        assert optional_params.get("verbosity") == "low"
