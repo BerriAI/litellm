@@ -14,7 +14,7 @@ sys.path.insert(
 import pytest, litellm
 import httpx
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_end_user_object
+from litellm.proxy.auth.auth_checks import get_end_user_object, _check_end_user_budget
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
@@ -37,8 +37,11 @@ from litellm.proxy.utils import CallInfo
 @pytest.mark.asyncio
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
-    Scenario 1: normal
-    Scenario 2: user over budget
+    Scenario 1: normal — get_end_user_object returns the object,
+                 _check_end_user_budget does not raise.
+    Scenario 2: user over budget — get_end_user_object still returns the
+                 object (it no longer enforces budgets), but
+                 _check_end_user_budget raises BudgetExceededError.
     """
     end_user_id = "my-test-customer"
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
@@ -51,31 +54,29 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     _cache = DualCache()
     _key = "end_user_id:{}".format(end_user_id)
     _cache.set_cache(key=_key, value=end_user_obj.model_dump())
-    try:
-        await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client="RANDOM VALUE",  # type: ignore
-            user_api_key_cache=_cache,
+
+    # get_end_user_object should always return the object without raising
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client="RANDOM VALUE",  # type: ignore
+        user_api_key_cache=_cache,
+        route="/v1/chat/completions",
+    )
+    assert result is not None
+    assert result.user_id == end_user_id
+
+    # Budget enforcement is now handled by _check_end_user_budget
+    if customer_spend > customer_budget:
+        with pytest.raises(litellm.BudgetExceededError):
+            await _check_end_user_budget(
+                end_user_obj=result,
+                route="/v1/chat/completions",
+            )
+    else:
+        await _check_end_user_budget(
+            end_user_obj=result,
             route="/v1/chat/completions",
         )
-        if customer_spend > customer_budget:
-            pytest.fail(
-                "Expected call to fail. Customer Spend={}, Customer Budget={}".format(
-                    customer_spend, customer_budget
-                )
-            )
-    except Exception as e:
-        if (
-            isinstance(e, litellm.BudgetExceededError)
-            and customer_spend > customer_budget
-        ):
-            pass
-        else:
-            pytest.fail(
-                "Expected call to work. Customer Spend={}, Customer Budget={}, Error={}".format(
-                    customer_spend, customer_budget, str(e)
-                )
-            )
 
 
 @pytest.mark.parametrize(

@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
-from litellm.proxy.auth.auth_checks import get_end_user_object
+from litellm.proxy.auth.auth_checks import get_end_user_object, _check_end_user_budget
 from litellm.caching import DualCache
 
 
@@ -136,17 +136,20 @@ async def test_budget_enforcement_blocks_over_budget_users():
     """
     Core scenario: Budget limits are actually enforced.
     Users who exceed their budget should be blocked.
+
+    get_end_user_object returns the object (data-fetch only), then
+    _check_end_user_budget raises BudgetExceededError.
     """
     end_user_id = f"test_user_{uuid.uuid4().hex}"
     default_budget_id = str(uuid.uuid4())
     litellm.max_end_user_budget_id = default_budget_id
-    
+
     default_budget = LiteLLM_BudgetTable(
         budget_id=default_budget_id,
         max_budget=10.0,
         rpm_limit=2,
     )
-    
+
     # Mock end user who has already spent more than budget
     mock_end_user_data = {
         "user_id": end_user_id,
@@ -157,7 +160,7 @@ async def test_budget_enforcement_blocks_over_budget_users():
         "default_model": None,
         "blocked": False,
     }
-    
+
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: mock_end_user_data)
@@ -165,23 +168,31 @@ async def test_budget_enforcement_blocks_over_budget_users():
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=MagicMock(dict=lambda: default_budget.dict())
     )
-    
+
     mock_cache = AsyncMock(spec=DualCache)
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
-    
-    # Should raise BudgetExceededError
+
+    # get_end_user_object should return the object without raising
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        route="/chat/completions",
+    )
+    assert result is not None
+    assert result.litellm_budget_table is not None
+
+    # Budget enforcement happens via _check_end_user_budget
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=mock_cache,
+        await _check_end_user_budget(
+            end_user_obj=result,
             route="/chat/completions",
         )
-    
+
     assert "ExceededBudget" in str(exc_info.value)
     assert end_user_id in str(exc_info.value)
-    
+
     litellm.max_end_user_budget_id = None
 
 
