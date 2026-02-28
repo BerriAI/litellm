@@ -193,3 +193,116 @@ class TestElevenLabsTextToSpeechTransformation:
 
         assert voice_id in url
         assert "output_format=pcm_44100" in url
+
+    def test_with_timestamps_parameter(self, config):
+        """Test that with_timestamps parameter is properly handled"""
+        kwargs: Dict[str, Any] = {}
+        voice_id, optional_params = config.map_openai_params(
+            model="eleven_multilingual_v2",
+            optional_params={
+                "with_timestamps": True,
+                "model_id": "eleven_multilingual_v2",
+            },
+            voice="alloy",
+            kwargs=kwargs,
+        )
+
+        # Check that with_timestamps is stored in kwargs
+        assert config.ELEVENLABS_WITH_TIMESTAMPS_KEY in kwargs
+        assert kwargs[config.ELEVENLABS_WITH_TIMESTAMPS_KEY] is True
+
+        litellm_params: Dict[str, Any] = {
+            config.ELEVENLABS_VOICE_ID_KEY: voice_id,
+            config.ELEVENLABS_WITH_TIMESTAMPS_KEY: True,
+        }
+
+        # Test URL generation with timestamps
+        url = config.get_complete_url(
+            model="eleven_multilingual_v2",
+            api_base=None,
+            litellm_params=litellm_params,
+        )
+
+        assert voice_id in url
+        assert "/with-timestamps" in url
+
+    def test_without_timestamps_parameter(self, config):
+        """Test that URL is correct when with_timestamps is False or not provided"""
+        kwargs: Dict[str, Any] = {}
+        voice_id, optional_params = config.map_openai_params(
+            model="eleven_multilingual_v2",
+            optional_params={
+                "model_id": "eleven_multilingual_v2",
+            },
+            voice="alloy",
+            kwargs=kwargs,
+        )
+
+        litellm_params: Dict[str, Any] = {
+            config.ELEVENLABS_VOICE_ID_KEY: voice_id,
+            config.ELEVENLABS_WITH_TIMESTAMPS_KEY: False,
+        }
+
+        # Test URL generation without timestamps
+        url = config.get_complete_url(
+            model="eleven_multilingual_v2",
+            api_base=None,
+            litellm_params=litellm_params,
+        )
+
+        assert voice_id in url
+        assert "/with-timestamps" not in url
+    
+    def test_transform_response_json(self, config):
+        """Test that JSON responses (with timestamps) are handled correctly"""
+        # Mock JSON response from ElevenLabs with-timestamps endpoint
+        mock_response = MagicMock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "audio_base_64": "base64encodedaudio==",
+            "alignment": {
+                "characters": ["H", "e", "l", "l", "o"],
+                "character_start_times_seconds": [0.0, 0.1, 0.2, 0.3, 0.4],
+                "character_end_times_seconds": [0.1, 0.2, 0.3, 0.4, 0.5],
+            },
+            "normalized_alignment": {
+                "characters": [
+                    {"character": "H", "start_time_seconds": 0.0, "duration_seconds": 0.1},
+                    {"character": "e", "start_time_seconds": 0.1, "duration_seconds": 0.1},
+                ],
+                "max_character_duration_seconds": 0.1,
+            },
+        }
+
+        mock_logging_obj = MagicMock()
+        
+        result = config.transform_text_to_speech_response(
+            model="eleven_multilingual_v2",
+            raw_response=mock_response,
+            logging_obj=mock_logging_obj,
+        )
+
+        # Check that we get a dict response
+        assert isinstance(result, dict)
+        assert "audio_base_64" in result
+        assert "alignment" in result
+        assert "normalized_alignment" in result
+
+    def test_transform_response_binary(self, config):
+        """Test that binary responses (regular TTS) are handled correctly"""
+        # Mock binary audio response
+        mock_response = MagicMock()
+        mock_response.headers = {"content-type": "audio/mpeg"}
+        mock_response.content = b"fake audio data"
+
+        mock_logging_obj = MagicMock()
+        
+        result = config.transform_text_to_speech_response(
+            model="eleven_multilingual_v2",
+            raw_response=mock_response,
+            logging_obj=mock_logging_obj,
+        )
+
+        # Check that we get HttpxBinaryResponseContent
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+        assert isinstance(result, HttpxBinaryResponseContent)

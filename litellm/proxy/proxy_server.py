@@ -7113,6 +7113,29 @@ async def audio_speech(
             hidden_params=hidden_params,
         )
 
+        # Check if response is a dict (e.g., ElevenLabs with_timestamps returns JSON)
+        if isinstance(response, dict):
+            select_data_generator(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+            return ORJSONResponse(
+                content=response,
+                headers=custom_headers,
+            )
+
+        # Printing each chunk size for binary audio response
+        async def generate(_response: HttpxBinaryResponseContent):
+            _generator = await _response.aiter_bytes(chunk_size=1024)
+            async for chunk in _generator:
+                yield chunk
+
+        select_data_generator(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            request_data=data,
+        )
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
