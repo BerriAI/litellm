@@ -2439,6 +2439,9 @@ class TestCursorProxyRoute:
         with patch(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
             return_value=None,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+            [],
         ):
             with pytest.raises(Exception) as exc_info:
                 await cursor_proxy_route(
@@ -2448,6 +2451,50 @@ class TestCursorProxyRoute:
                     user_api_key_dict=mock_user_api_key_dict,
                 )
             assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_uses_ui_credential(self):
+        """should use credentials added via UI (litellm.credential_list) when env var is not set"""
+        from litellm.types.utils import CredentialItem
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        ui_credential = CredentialItem(
+            credential_name="my-cursor-key",
+            credential_values={"api_key": "crsr_ui_test_key", "api_base": "https://api.cursor.com"},
+            credential_info={"custom_llm_provider": "cursor"},
+        )
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+            [ui_credential],
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(return_value={"models": []})
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await cursor_proxy_route(
+                endpoint="v0/models",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.cursor.com/v0/models"
+
+            import base64
+            expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
+            assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
 
     @pytest.mark.asyncio
     async def test_cursor_proxy_route_custom_api_base(self):
