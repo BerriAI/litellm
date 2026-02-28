@@ -11959,6 +11959,20 @@ async def delete_callback(
                 },
             )
 
+        # Get environment variables for this callback
+        from litellm.integrations.custom_logger import CustomLogger
+
+        callback_env_vars = CustomLogger.get_callback_env_vars(callback_name)
+
+        # Remove callback's environment variables (both uppercase and lowercase)
+        if callback_env_vars and "environment_variables" in config:
+            env_vars = config["environment_variables"]
+            for var_name in callback_env_vars:
+                # Remove both uppercase and lowercase versions to handle duplicates
+                env_vars.pop(var_name, None)
+                env_vars.pop(var_name.lower(), None)
+            config["environment_variables"] = env_vars
+
         # Remove callback from success_callback list
         success_callbacks.remove(callback_name)
         config.setdefault("litellm_settings", {})[
