@@ -2008,12 +2008,17 @@ def test_calculate_usage_completion_tokens_details_with_reasoning():
 
 def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
     """
-    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models.
-
-    For Claude Opus 4.6 and Claude Sonnet 4.6, reasoning_effort should map to {"type": "adaptive"}
-    regardless of the effort level specified.
+    Test that reasoning_effort maps to adaptive thinking type for Claude 4.6 models,
+    and also sets output_config with the effort level.
     """
     config = AnthropicConfig()
+
+    effort_map = {
+        "low": "low",
+        "minimal": "low",
+        "medium": "medium",
+        "high": "high",
+    }
 
     # Test with different reasoning_effort values - all should map to adaptive
     for model in ["claude-opus-4-6-20250514", "claude-sonnet-4-6-20260219"]:
@@ -2035,6 +2040,9 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert "budget_tokens" not in result["thinking"]
             # reasoning_effort should not be in the result (it's transformed to thinking)
             assert "reasoning_effort" not in result
+            # Should set output_config with the mapped effort value
+            assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
+            assert result["output_config"]["effort"] == effort_map[effort]
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
