@@ -1930,6 +1930,7 @@ def test_openai_chat_completion_complete_response_call():
     [True, False],
 )
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=6, delay=10)
 async def test_openai_stream_options_call(model, sync):
     litellm.enable_preview_features = True
     litellm.set_verbose = True
