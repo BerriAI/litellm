@@ -73,13 +73,43 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             litellm_params,
             headers,
         )
+
+        # The ChatGPT backend rejects "system" and "developer" roles in input.
+        # Per OpenAI's spec, the `instructions` field serves the same purpose as
+        # a system/developer message ("A system (or developer) message inserted
+        # into the model's context"), so we extract them into `instructions`.
+        raw_input = request.get("input")
+        system_parts: list[str] = []
+        if isinstance(raw_input, list):
+            filtered: list[Any] = []
+            for item in raw_input:
+                if isinstance(item, dict) and item.get("role") in (
+                    "system",
+                    "developer",
+                ):
+                    content = item.get("content")
+                    if isinstance(content, str):
+                        system_parts.append(content)
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and "text" in block:
+                                system_parts.append(block["text"])
+                else:
+                    filtered.append(item)
+            if system_parts or len(filtered) != len(raw_input):
+                request["input"] = filtered
+
+        system_text = "\n\n".join(system_parts) if system_parts else None
         base_instructions = get_chatgpt_default_instructions()
         existing_instructions = request.get("instructions")
         if existing_instructions:
-            if base_instructions not in existing_instructions:
-                request["instructions"] = (
-                    f"{base_instructions}\n\n{existing_instructions}"
-                )
+            parts = [base_instructions] if base_instructions not in existing_instructions else []
+            if system_text:
+                parts.append(system_text)
+            parts.append(existing_instructions)
+            request["instructions"] = "\n\n".join(parts) if parts else existing_instructions
+        elif system_text:
+            request["instructions"] = f"{base_instructions}\n\n{system_text}"
         else:
             request["instructions"] = base_instructions
         request["store"] = False

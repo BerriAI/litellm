@@ -13,6 +13,7 @@ ChatGPT subscription access is native to the Responses API. Chat Completions req
 
 Notes:
 - The ChatGPT subscription backend rejects token limit fields (`max_tokens`, `max_output_tokens`, `max_completion_tokens`) and `metadata`. LiteLLM strips these fields for this provider.
+- When using `chatgpt/`, `system` and `developer` roles in `input` are not accepted. LiteLLM automatically extracts these messages and moves them to the `instructions` field, which serves the same function per the [OpenAI Responses API spec](https://platform.openai.com/docs/api-reference/responses/create) (*"A system (or developer) message inserted into the model's context"*).
 - `/v1/chat/completions` honors `stream`. When `stream` is false (default), LiteLLM aggregates the Responses stream into a single JSON response.
 
 ## Authentication
