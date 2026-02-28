@@ -1,3 +1,4 @@
+from collections import deque
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 from litellm._logging import verbose_logger
@@ -273,12 +274,12 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.finished = False
 
         # Event queues and generation flags
-        self.mcp_discovery_events: List[
+        self.mcp_discovery_events: deque[
             ResponsesAPIStreamingResponse
-        ] = mcp_events  # Pre-generated MCP discovery events
-        self.tool_execution_events: List[ResponsesAPIStreamingResponse] = []
+        ] = deque(mcp_events)  # Pre-generated MCP discovery events
+        self.tool_execution_events: deque[ResponsesAPIStreamingResponse] = deque()
         self.mcp_discovery_generated = True  # Events are already generated
-        self.mcp_events = (
+        self.mcp_events = deque(
             mcp_events  # Store the initial MCP events for backward compatibility
         )
         self.tool_server_map = tool_server_map
@@ -402,7 +403,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             # Emit MCP discovery events
             if self.mcp_discovery_events:
-                return self.mcp_discovery_events.pop(0)
+                return self.mcp_discovery_events.popleft()
 
             # All MCP discovery events emitted, move to next phase
             verbose_logger.debug(
@@ -458,7 +459,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if self.phase == "tool_execution":
             # Emit any queued tool execution events
             if self.tool_execution_events:
-                return self.tool_execution_events.pop(0)
+                return self.tool_execution_events.popleft()
 
             # Move to follow-up response phase
             self.phase = "follow_up_response"
@@ -703,7 +704,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __next__(self) -> ResponsesAPIStreamingResponse:
         # First, emit any queued MCP events
         if self.mcp_events:  # type: ignore[attr-defined]
-            return self.mcp_events.pop(0)  # type: ignore[attr-defined]
+            return self.mcp_events.popleft()  # type: ignore[attr-defined]
 
         # Then delegate to the base iterator
         if not self.is_async:
