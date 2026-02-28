@@ -53,11 +53,3 @@ body:
         - "Yes"
     validations:
       required: true
-  - type: input
-    id: contact
-    attributes:
-      label: Twitter / LinkedIn details 
-      description: We announce new features on Twitter + LinkedIn. When this is announced, and you'd like a mention, we'll gladly shout you out!
-      placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
-    validations:
-      required: false
