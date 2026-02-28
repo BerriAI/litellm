@@ -1,4 +1,5 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { useFetchWithLoadingManager } from "@/hooks/useFetchWithLoadingManager";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   BarChart,
@@ -22,9 +23,10 @@ import {
   Text,
   Title,
 } from "@tremor/react";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
 import { UsageExportHeader } from "../../../EntityUsageExport";
+import { LoadingOverlay } from "../../../shared/loading_overlay";
 import type { EntityType } from "../../../EntityUsageExport/types";
 import {
   agentDailyActivityCall,
@@ -105,13 +107,21 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
+  const [apiCallsInFlight, setApiCallsInFlight] = useState(0);
 
-  const fetchSpendData = async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
+  const fetchSpendData = useCallback(async (
+    options: { trackInFlight?: boolean; applyData?: boolean } = {}
+  ): Promise<EntitySpendData | undefined> => {
+    const { trackInFlight = true, applyData = true } = options;
+    if (!accessToken || !dateValue.from || !dateValue.to) return undefined;
+    if (trackInFlight) {
+      setApiCallsInFlight((count) => count + 1);
+    }
     // Create new Date objects to avoid mutating the original dates
     const startTime = new Date(dateValue.from);
     const endTime = new Date(dateValue.to);
 
+    try {
     if (entityType === "tag") {
       const data = await tagDailyActivityCall(
         accessToken,
@@ -120,7 +130,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
+      return data;
     } else if (entityType === "team") {
       const data = await teamDailyActivityCall(
         accessToken,
@@ -129,7 +142,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
+      return data;
     } else if (entityType === "organization") {
       const data = await organizationDailyActivityCall(
         accessToken,
@@ -138,7 +154,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
+      return data;
     } else if (entityType === "customer") {
       const data = await customerDailyActivityCall(
         accessToken,
@@ -147,7 +166,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
+      return data;
     } else if (entityType === "agent") {
       const data = await agentDailyActivityCall(
         accessToken,
@@ -156,7 +178,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
+      return data;
     } else if (entityType === "user") {
       const data = await userDailyActivityCall(
         accessToken,
@@ -165,15 +190,106 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         1,
         selectedTags.length > 0 ? selectedTags[0] : null,
       );
-      setSpendData(data);
+      if (applyData) {
+        setSpendData(data);
+      }
+      return data;
     } else {
       throw new Error("Invalid entity type");
     }
-  };
+    } catch (error) {
+      console.error("Error fetching entity spend data:", error);
+      return undefined;
+    } finally {
+      if (trackInFlight) {
+        setApiCallsInFlight((count) => Math.max(0, count - 1));
+      }
+    }
+  }, [accessToken, dateValue.from, dateValue.to, entityType, entityId, selectedTags]);
+
+  const { loading, requestFetch } = useFetchWithLoadingManager(fetchSpendData);
+  const effectiveLoading = loading || apiCallsInFlight > 0;
 
   useEffect(() => {
-    fetchSpendData();
-  }, [accessToken, dateValue, entityId, selectedTags]);
+    requestFetch();
+  }, [requestFetch]);
+
+  // Poll for updates.
+  // Keep a fast cadence while data may still be settling, then back off once stable.
+  const POLL_FAST_MS = 3_000;
+  const POLL_SLOW_MS = 30_000;
+  const UNCHANGED_POLLS_BEFORE_SLOW = 3;
+  const ACTIVE_UPDATE_WINDOW_MS = 60_000;
+  const STABLE_POLLS_TO_EXIT_ACTIVE_WINDOW = 8;
+  const prevDataRef = useRef<string | null>(null);
+  const unchangedPollsRef = useRef(0);
+  const activeWindowUntilRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!accessToken || !dateValue.from || !dateValue.to) return;
+
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const schedulePoll = (intervalMs: number) => {
+      if (cancelled) return;
+      timeoutId = setTimeout(async () => {
+        if (document.visibilityState !== "visible") {
+          schedulePoll(intervalMs);
+          return;
+        }
+        const newData = await fetchSpendData({ trackInFlight: false, applyData: false });
+        if (cancelled) return;
+        const dataSignature = newData
+          ? `${newData.metadata?.total_spend ?? 0}-${newData.metadata?.total_api_requests ?? 0}-${newData.metadata?.total_successful_requests ?? 0}-${newData.metadata?.total_failed_requests ?? 0}-${newData.metadata?.total_tokens ?? 0}-${newData.results?.length ?? 0}`
+          : null;
+        const hasPrevious = prevDataRef.current !== null;
+        const changed = hasPrevious && dataSignature !== prevDataRef.current;
+        prevDataRef.current = dataSignature;
+        const inActiveUpdateWindow =
+          activeWindowUntilRef.current !== null && Date.now() < activeWindowUntilRef.current;
+        if (!hasPrevious) {
+          unchangedPollsRef.current = 0;
+          schedulePoll(POLL_FAST_MS);
+          return;
+        }
+        if (changed) {
+          activeWindowUntilRef.current = Date.now() + ACTIVE_UPDATE_WINDOW_MS;
+          unchangedPollsRef.current = 0;
+          if (newData) {
+            setSpendData(newData);
+          }
+          if (cancelled) return;
+          schedulePoll(POLL_FAST_MS);
+          return;
+        }
+        if (inActiveUpdateWindow) {
+          unchangedPollsRef.current += 1;
+          if (unchangedPollsRef.current >= STABLE_POLLS_TO_EXIT_ACTIVE_WINDOW) {
+            activeWindowUntilRef.current = null;
+            unchangedPollsRef.current = 0;
+            schedulePoll(POLL_SLOW_MS);
+            return;
+          }
+          schedulePoll(POLL_FAST_MS);
+          return;
+        }
+        activeWindowUntilRef.current = null;
+        unchangedPollsRef.current += 1;
+        const nextIntervalMs =
+          unchangedPollsRef.current >= UNCHANGED_POLLS_BEFORE_SLOW ? POLL_SLOW_MS : POLL_FAST_MS;
+        schedulePoll(nextIntervalMs);
+      }, intervalMs);
+    };
+
+    schedulePoll(POLL_FAST_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+      unchangedPollsRef.current = 0;
+      activeWindowUntilRef.current = null;
+    };
+  }, [accessToken, dateValue.from, dateValue.to, fetchSpendData]);
 
   const getTopModels = () => {
     const modelSpend: { [key: string]: any } = {};
@@ -391,10 +507,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
 
   return (
     <div style={{ width: "100%" }} className="relative">
+      <LoadingOverlay loading={effectiveLoading} message="Updating data..." minDisplayMs={1000}>
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
+        onRefresh={requestFetch}
+        isRefreshing={effectiveLoading}
         showFilters={entityList !== null && entityList.length > 0}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
@@ -704,6 +823,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      </LoadingOverlay>
     </div>
   );
 };

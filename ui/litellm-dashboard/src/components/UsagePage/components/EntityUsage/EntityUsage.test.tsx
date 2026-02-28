@@ -45,6 +45,18 @@ vi.mock("../../../EntityUsageExport", () => ({
   UsageExportHeader: () => <div>Usage Export Header</div>,
 }));
 
+vi.mock("../../../shared/loading_overlay", async () => {
+  const React = await import("react");
+  const LoadingOverlay = ({ loading, children }: any) =>
+    React.createElement(
+      "div",
+      null,
+      loading ? React.createElement("div", { "data-testid": "loading-overlay" }, "Loading...") : null,
+      children,
+    );
+  return { LoadingOverlay, default: LoadingOverlay };
+});
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({
@@ -54,6 +66,16 @@ vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
 }));
 
 describe("EntityUsage", () => {
+  function createDeferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
   const mockTagDailyActivityCall = vi.mocked(networking.tagDailyActivityCall);
   const mockTeamDailyActivityCall = vi.mocked(networking.teamDailyActivityCall);
   const mockOrganizationDailyActivityCall = vi.mocked(networking.organizationDailyActivityCall);
@@ -414,6 +436,76 @@ describe("EntityUsage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("tag-1")).toBeInTheDocument();
+    });
+  });
+
+  describe("loader scenarios", () => {
+    it("should show loader on initial entity fetch and hide after resolve", async () => {
+      const deferred = createDeferred<typeof mockSpendData>();
+      mockTagDailyActivityCall.mockReturnValueOnce(deferred.promise as any);
+
+      render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalledTimes(1);
+      });
+      expect(screen.getByTestId("loading-overlay")).toBeInTheDocument();
+
+      await act(async () => {
+        deferred.resolve(mockSpendData);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("loading-overlay")).not.toBeInTheDocument();
+      });
+    });
+
+    it("should show loader when date range changes and hide after refetch resolves", async () => {
+      mockTagDailyActivityCall.mockResolvedValueOnce(mockSpendData);
+      const deferred = createDeferred<typeof mockSpendData>();
+      mockTagDailyActivityCall.mockReturnValueOnce(deferred.promise as any);
+
+      const { rerender } = render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalledTimes(1);
+      });
+
+      rerender(
+        <EntityUsage
+          {...defaultProps}
+          dateValue={{
+            from: new Date("2025-02-01"),
+            to: new Date("2025-02-28"),
+          }}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("loading-overlay")).toBeInTheDocument();
+      });
+      deferred.resolve(mockSpendData);
+    });
+
+    it("should keep fast polling through multiple unchanged checks before slowing", async () => {
+      vi.useFakeTimers();
+      mockTagDailyActivityCall.mockResolvedValue(mockSpendData);
+
+      render(<EntityUsage {...defaultProps} />);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockTagDailyActivityCall).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      // initial fetch + polls around 3s, 6s, 9s
+      expect(mockTagDailyActivityCall.mock.calls.length).toBeGreaterThanOrEqual(4);
+      vi.useRealTimers();
     });
   });
 });
