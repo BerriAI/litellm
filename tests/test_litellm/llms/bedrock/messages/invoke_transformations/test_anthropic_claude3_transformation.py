@@ -178,3 +178,121 @@ def test_remove_ttl_from_cache_control():
     request5 = {}
     cfg._remove_ttl_from_cache_control(request5)
     assert request5 == {}
+
+
+# ---------------------------------------------------------------------------
+# Context Management on Bedrock Messages API
+# ---------------------------------------------------------------------------
+
+
+def _sample_context_management_payload():
+    """Anthropic-format context management with non-compact edits."""
+    return {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+                "clear_tool_inputs": False,
+            }
+        ]
+    }
+
+
+def _sample_compact_context_management_payload():
+    """Anthropic-format context management with compact edits."""
+    return {
+        "edits": [
+            {
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 150000},
+            }
+        ]
+    }
+
+
+def _sample_openai_context_management_payload():
+    """OpenAI-format context management (list of entries)."""
+    return [{"type": "compaction", "compact_threshold": 200000}]
+
+
+def test_messages_api_includes_context_management():
+    """context_management payload must appear in the Bedrock Messages API request body."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    payload = _sample_context_management_payload()
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "context_management": payload,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "context_management" in result
+    assert result["context_management"] == payload
+
+
+def test_messages_api_adds_compact_beta_header():
+    """Compact edits must inject compact-2026-01-12 into anthropic_beta for Messages API."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "context_management": _sample_compact_context_management_payload(),
+        },
+        litellm_params={},
+        headers={},
+    )
+    beta_list = result.get("anthropic_beta", [])
+    assert "compact-2026-01-12" in beta_list, (
+        f"compact-2026-01-12 should be in anthropic_beta, got: {beta_list}"
+    )
+
+
+def test_messages_api_adds_context_management_beta_header():
+    """Non-compact edits must inject context-management-2025-06-27 into anthropic_beta."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "context_management": _sample_context_management_payload(),
+        },
+        litellm_params={},
+        headers={},
+    )
+    beta_list = result.get("anthropic_beta", [])
+    assert "context-management-2025-06-27" in beta_list, (
+        f"context-management-2025-06-27 should be in anthropic_beta, got: {beta_list}"
+    )
+
+
+def test_messages_api_openai_format_transformation():
+    """OpenAI-format context_management must be transformed to Anthropic format in Messages API."""
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    openai_payload = _sample_openai_context_management_payload()
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 512,
+            "context_management": openai_payload,
+        },
+        litellm_params={},
+        headers={},
+    )
+    cm = result.get("context_management")
+    assert cm is not None, "context_management should be in the response"
+    assert "edits" in cm, "should be converted to Anthropic format with 'edits' key"
+    assert cm["edits"][0]["type"] == "compact_20260112"
+    assert cm["edits"][0]["trigger"] == {"type": "input_tokens", "value": 200000}
+    # Compact beta must also be injected
+    beta_list = result.get("anthropic_beta", [])
+    assert "compact-2026-01-12" in beta_list
