@@ -13,16 +13,27 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from .base_cache import BaseCache
+from .json_utils import TimedeltaJSONEncoder
 
 
 class GCSCache(BaseCache):
-    def __init__(self, bucket_name: Optional[str] = None, path_service_account: Optional[str] = None, gcs_path: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        bucket_name: Optional[str] = None,
+        path_service_account: Optional[str] = None,
+        gcs_path: Optional[str] = None,
+    ) -> None:
         super().__init__()
         self.bucket_name = bucket_name or GCSBucketBase(bucket_name=None).BUCKET_NAME
-        self.path_service_account = path_service_account or GCSBucketBase(bucket_name=None).path_service_account_json
+        self.path_service_account = (
+            path_service_account
+            or GCSBucketBase(bucket_name=None).path_service_account_json
+        )
         self.key_prefix = gcs_path.rstrip("/") + "/" if gcs_path else ""
         # create httpx clients
-        self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self.async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.sync_client = _get_httpx_client()
 
     def _construct_headers(self) -> dict:
@@ -38,7 +49,7 @@ class GCSCache(BaseCache):
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
-            data = json.dumps(value)
+            data = json.dumps(value, cls=TimedeltaJSONEncoder)
             self.sync_client.post(url=url, data=data, headers=headers)
         except Exception as e:
             print_verbose(f"GCS Caching: set_cache() - Got exception from GCS: {e}")
@@ -49,10 +60,12 @@ class GCSCache(BaseCache):
             object_name = self.key_prefix + key
             bucket_name = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
-            data = json.dumps(value)
+            data = json.dumps(value, cls=TimedeltaJSONEncoder)
             await self.async_client.post(url=url, data=data, headers=headers)
         except Exception as e:
-            print_verbose(f"GCS Caching: async_set_cache() - Got exception from GCS: {e}")
+            print_verbose(
+                f"GCS Caching: async_set_cache() - Got exception from GCS: {e}"
+            )
 
     def get_cache(self, key, **kwargs):
         try:
@@ -69,7 +82,9 @@ class GCSCache(BaseCache):
                 return cached_response
             return None
         except Exception as e:
-            verbose_logger.error(f"GCS Caching: get_cache() - Got exception from GCS: {e}")
+            verbose_logger.error(
+                f"GCS Caching: get_cache() - Got exception from GCS: {e}"
+            )
 
     async def async_get_cache(self, key, **kwargs):
         try:
@@ -82,7 +97,9 @@ class GCSCache(BaseCache):
                 return json.loads(response.text)
             return None
         except Exception as e:
-            verbose_logger.error(f"GCS Caching: async_get_cache() - Got exception from GCS: {e}")
+            verbose_logger.error(
+                f"GCS Caching: async_get_cache() - Got exception from GCS: {e}"
+            )
 
     def flush_cache(self):
         pass
