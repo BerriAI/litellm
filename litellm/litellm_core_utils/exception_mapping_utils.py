@@ -27,6 +27,25 @@ from ..exceptions import (
 )
 
 
+def _get_response_from_exception(
+    original_exception: Exception, status_code: int
+) -> Optional[httpx.Response]:
+    """
+    Safely extract an httpx.Response from an exception.
+
+    Some exceptions (e.g. botocore.exceptions.ClientError) have a `.response`
+    attribute that is a dict, not an httpx.Response. In those cases, return None
+    so the caller can fall back to creating a default httpx.Response.
+    """
+    response = getattr(original_exception, "response", None)
+    if response is None:
+        return None
+    if isinstance(response, httpx.Response):
+        return response
+    # response is not an httpx.Response (e.g. botocore dict) - return None
+    return None
+
+
 class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
@@ -987,7 +1006,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"BedrockException - {error_str}\n. Enable 'litellm.modify_params=True' (for PROXY do: `litellm_settings::modify_params: True`) to insert a dummy assistant message and fix this error.",
                         model=model,
                         llm_provider="bedrock",
-                        response=getattr(original_exception, "response", None),
+                        response=_get_response_from_exception(
+                            original_exception, 400
+                        ),
                     )
                 elif "Malformed input request" in error_str:
                     exception_mapping_worked = True
@@ -995,7 +1016,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"BedrockException - {error_str}",
                         model=model,
                         llm_provider="bedrock",
-                        response=getattr(original_exception, "response", None),
+                        response=_get_response_from_exception(
+                            original_exception, 400
+                        ),
                     )
                 elif "A conversation must start with a user message." in error_str:
                     exception_mapping_worked = True
@@ -1003,7 +1026,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"BedrockException - {error_str}\n. Pass in default user message via `completion(..,user_continue_message=)` or enable `litellm.modify_params=True`.\nFor Proxy: do via `litellm_settings::modify_params: True` or user_continue_message under `litellm_params`",
                         model=model,
                         llm_provider="bedrock",
-                        response=getattr(original_exception, "response", None),
+                        response=_get_response_from_exception(
+                            original_exception, 400
+                        ),
                     )
                 elif (
                     "Unable to locate credentials" in error_str
@@ -1015,7 +1040,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"BedrockException Invalid Authentication - {error_str}",
                         model=model,
                         llm_provider="bedrock",
-                        response=getattr(original_exception, "response", None),
+                        response=_get_response_from_exception(
+                            original_exception, 401
+                        ),
                     )
                 elif "AccessDeniedException" in error_str:
                     exception_mapping_worked = True
@@ -1023,7 +1050,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"BedrockException PermissionDeniedError - {error_str}",
                         model=model,
                         llm_provider="bedrock",
-                        response=getattr(original_exception, "response", None),
+                        response=_get_response_from_exception(
+                            original_exception, 403
+                        ),
                     )
                 elif (
                     "throttlingException" in error_str
@@ -1034,7 +1063,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"BedrockException: Rate Limit Error - {error_str}",
                         model=model,
                         llm_provider="bedrock",
-                        response=getattr(original_exception, "response", None),
+                        response=_get_response_from_exception(
+                            original_exception, 429
+                        ),
                     )
                 elif (
                     "Connect timeout on endpoint URL" in error_str
@@ -1073,7 +1104,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
                             model=model,
-                            response=getattr(original_exception, "response", None),
+                            response=_get_response_from_exception(
+                                original_exception, 401
+                            ),
                         )
                     elif original_exception.status_code == 400:
                         exception_mapping_worked = True
@@ -1081,7 +1114,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
                             model=model,
-                            response=getattr(original_exception, "response", None),
+                            response=_get_response_from_exception(
+                                original_exception, 400
+                            ),
                         )
                     elif original_exception.status_code == 404:
                         exception_mapping_worked = True
@@ -1089,7 +1124,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
                             model=model,
-                            response=getattr(original_exception, "response", None),
+                            response=_get_response_from_exception(
+                                original_exception, 404
+                            ),
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True

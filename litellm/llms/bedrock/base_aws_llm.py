@@ -70,7 +70,6 @@ class BaseAWSLLM:
             "aws_role_name",
             "aws_web_identity_token",
             "aws_sts_endpoint",
-            "aws_bedrock_runtime_endpoint",
             "aws_external_id",
         ]
 
@@ -139,6 +138,10 @@ class BaseAWSLLM:
                 key = self.aws_authentication_params[i]
                 if key.upper() in os.environ:
                     params_to_check[i] = os.getenv(key.upper())
+
+        # Normalize empty strings to None to enable ambient credential detection
+        # (ECS task roles, EC2 instance profiles, etc.)
+        params_to_check = [p if p else None for p in params_to_check]
 
         # Assign updated values back to parameters
         (
