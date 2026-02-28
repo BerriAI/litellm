@@ -2319,6 +2319,48 @@ def test_is_registered_pass_through_route_with_custom_root():
     _registered_pass_through_routes.clear()
 
 
+def test_is_registered_pass_through_route_mapped_routes_with_root():
+    """
+    Test that mapped pass-through routes (e.g. /vertex_ai, /bedrock) match
+    correctly when SERVER_ROOT_PATH is set.
+
+    Regression test for #22272: built-in passthrough routes failed with 404
+    when SERVER_ROOT_PATH was set because mapped routes were not prepended
+    with the root path prefix.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+        # With custom root path /litellm
+        mock_get_root.return_value = "/litellm"
+
+        # Built-in mapped routes should match with root prefix
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/vertex_ai/v1/projects/my-project/locations/us/publishers/google/models/gemini-pro:generateContent"
+        ) is True
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/bedrock/model/invoke"
+        ) is True
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/litellm/anthropic/v1/messages"
+        ) is True
+
+        # Without root prefix should NOT match when root is set
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/vertex_ai/v1/projects/my-project"
+        ) is False
+
+        # Default root path
+        mock_get_root.return_value = "/"
+
+        # Without prefix should match when root is /
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+            "/vertex_ai/v1/projects/my-project"
+        ) is True
+
+
 def test_get_registered_pass_through_route_with_custom_root():
     """
     Test get_registered_pass_through_route correctly handles server root path
