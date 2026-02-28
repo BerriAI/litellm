@@ -2166,22 +2166,24 @@ async def _run_background_health_check():
                     "Error in shared health check, falling back to direct health check: %s",
                     str(e),
                 )
-                healthy_endpoints, unhealthy_endpoints = (
-                    await _run_direct_health_check_with_instrumentation(
-                        _llm_model_list,
-                        health_check_details,
-                        health_check_concurrency,
-                        instrumentation_context,
-                    )
-                )
-        else:
-            healthy_endpoints, unhealthy_endpoints = (
-                await _run_direct_health_check_with_instrumentation(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                ) = await _run_direct_health_check_with_instrumentation(
                     _llm_model_list,
                     health_check_details,
                     health_check_concurrency,
                     instrumentation_context,
                 )
+        else:
+            (
+                healthy_endpoints,
+                unhealthy_endpoints,
+            ) = await _run_direct_health_check_with_instrumentation(
+                _llm_model_list,
+                health_check_details,
+                health_check_concurrency,
+                instrumentation_context,
             )
 
         # Update the global variable with the health check results
@@ -3506,7 +3508,15 @@ class ProxyConfig:
                 combined_id_list.append(model_info.id)
 
         ## CONFIG MODELS ##
-        config = await self.get_config(config_file_path=user_config_file_path)
+        try:
+            config = await self.get_config(config_file_path=user_config_file_path)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to load config in _delete_deployment: %s. "
+                "Skipping deployment cleanup to avoid removing valid models.",
+                str(e),
+            )
+            return 0
         model_list = config.get("model_list", None)
         if model_list:
             for model in model_list:
@@ -3624,8 +3634,20 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
     ):
         global llm_router, llm_model_list, master_key, general_settings
-        config_data = await proxy_config.get_config()
-        search_tools = self.parse_search_tools(config_data)
+
+        # Load config separately so a timeout here doesn't block model loading
+        config_data: dict = {}
+        search_tools = None
+        try:
+            config_data = await proxy_config.get_config()
+            search_tools = self.parse_search_tools(config_data)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to load config in _update_llm_router: %s. "
+                "Proceeding with model loading using cached/empty config.",
+                str(e),
+            )
+
         try:
             models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
@@ -5302,13 +5324,15 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
-        # Use a list to accumulate response segments to avoid O(n^2) string concatenation
-        str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
         )
         model_mismatch_logged = False
+        # Use a running string instead of list + join to avoid O(n^2) overhead.
+        # Previously "".join(str_so_far_parts) was called every chunk, re-joining
+        # the entire accumulated response. String += is O(n) amortized total.
+        _str_so_far: str = ""
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -5319,12 +5343,12 @@ async def async_data_generator(
                 user_api_key_dict=user_api_key_dict,
                 response=chunk,
                 data=request_data,
-                str_so_far="".join(str_so_far_parts),
+                str_so_far=_str_so_far if _str_so_far else None,
             )
 
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
-                str_so_far_parts.append(response_str)
+                _str_so_far += response_str
 
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
@@ -7136,6 +7160,11 @@ async def audio_speech(
         )
 
     except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(
                 str(e)
