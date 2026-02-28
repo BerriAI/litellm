@@ -276,7 +276,7 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
                       action: (entry.action === "MASK" ? "MASK" : "BLOCK") as "BLOCK" | "MASK",
                     })
                   );
-                  setBlockedWords([...blockedWords, ...newWords]);
+                  setBlockedWords(prev => [...prev, ...newWords]);
                 }
               } catch {
                 // Validation already handled in ContentFilterConfiguration

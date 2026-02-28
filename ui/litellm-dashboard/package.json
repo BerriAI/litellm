@@ -44,7 +44,8 @@
     "react-markdown": "^9.0.1",
     "react-syntax-highlighter": "^15.6.6",
     "tailwind-merge": "^3.2.0",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "js-yaml": "^4.1.0"
   },
   "devDependencies": {
     "@neondatabase/api-client": "^2.6.0",
@@ -77,7 +78,8 @@
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3",
     "vite": "^7.1.11",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@types/js-yaml": "^4.0.9"
   },
   "overrides": {
     "diff": ">=8.0.3",
