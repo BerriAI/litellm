@@ -281,6 +281,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if supports_reasoning(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+        if "tts" in model:
+            supported_params.append("audio")            
         return supported_params
 
     def map_tool_choice_values(
