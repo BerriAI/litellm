@@ -34,7 +34,7 @@ export default function AuditLogs({
 
   const actionFilterRef = useRef<HTMLDivElement>(null);
   const tableFilterRef = useRef<HTMLDivElement>(null);
-  const [clientCurrentPage, setClientCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [selectedTeamId, setSelectedTeamId] = useState("");
@@ -45,43 +45,60 @@ export default function AuditLogs({
   const [actionFilterOpen, setActionFilterOpen] = useState(false);
   const [tableFilterOpen, setTableFilterOpen] = useState(false);
 
-  const allLogsQuery = useQuery<AuditLogEntry[]>({
-    queryKey: ["all_audit_logs", accessToken, token, userRole, userID, startTime],
+  // Map UI table filter values to backend table_name values
+  const getBackendTableName = (uiFilter: string): string | undefined => {
+    switch (uiFilter) {
+      case "keys":
+        return "litellm_verificationtoken";
+      case "teams":
+        return "litellm_teamtable";
+      case "users":
+        return "litellm_usertable";
+      default:
+        return undefined;
+    }
+  };
+
+  // Fetch only the current page from the backend (server-side pagination + filtering)
+  const auditLogsQuery = useQuery({
+    queryKey: [
+      "audit_logs",
+      accessToken, token, userRole, userID, startTime,
+      currentPage, pageSize,
+      selectedActionFilter, selectedTableFilter, objectIdSearch,
+    ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
-        return [];
+        return { audit_logs: [] as AuditLogEntry[], total_pages: 1, total: 0 };
       }
 
       const formattedStartTimeStr = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTimeStr = moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
-      let accumulatedLogs: AuditLogEntry[] = [];
-      let currentPageToFetch = 1;
-      let totalPagesFromBackend = 1;
-      const backendPageSize = 50;
+      // Build server-side filter parameters
+      const actionParam = selectedActionFilter !== "all" ? selectedActionFilter : undefined;
+      const tableNameParam = selectedTableFilter !== "all" ? getBackendTableName(selectedTableFilter) : undefined;
+      const objectIdParam = objectIdSearch || undefined;
 
-      do {
-        const response = await uiAuditLogsCall(
-          accessToken,
-          formattedStartTimeStr,
-          formattedEndTimeStr,
-          currentPageToFetch,
-          backendPageSize,
-        );
-        accumulatedLogs = accumulatedLogs.concat(response.audit_logs);
-        totalPagesFromBackend = response.total_pages;
-        currentPageToFetch++;
-      } while (currentPageToFetch <= totalPagesFromBackend);
-
-      return accumulatedLogs;
+      const response = await uiAuditLogsCall(
+        accessToken,
+        formattedStartTimeStr,
+        formattedEndTimeStr,
+        currentPage,
+        pageSize,
+        actionParam,
+        tableNameParam,
+        objectIdParam,
+      );
+      return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && isActive,
-    refetchInterval: 5000,
-    refetchIntervalInBackground: true,
+    // No automatic refetching - use the manual Refresh button instead
+    refetchOnWindowFocus: false,
   });
 
   const handleRefresh = () => {
-    allLogsQuery.refetch();
+    auditLogsQuery.refetch();
   };
 
   const handleFilterChange = (newFilters: Record<string, string>) => {
@@ -95,7 +112,7 @@ export default function AuditLogs({
     setObjectIdSearch("");
     setSelectedActionFilter("all");
     setSelectedTableFilter("all");
-    setClientCurrentPage(1);
+    setCurrentPage(1);
   };
 
   const fetchKeyHashForAlias = useCallback(
@@ -153,12 +170,12 @@ export default function AuditLogs({
     }
 
     if (teamIdChanged || keyHashChanged) {
-      setClientCurrentPage(1);
+      setCurrentPage(1);
     }
   }, [filters, accessToken, fetchKeyHashForAlias, selectedTeamId, selectedKeyHash]);
 
   useEffect(() => {
-    setClientCurrentPage(1);
+    setCurrentPage(1);
   }, [selectedTeamId, selectedKeyHash, startTime, objectIdSearch, selectedActionFilter, selectedTableFilter]);
 
   useEffect(() => {
@@ -175,14 +192,14 @@ export default function AuditLogs({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const completeFilteredLogs = useMemo(() => {
-    if (!allLogsQuery.data) return [];
-    return allLogsQuery.data.filter((log) => {
+  // Client-side filtering for team/key (these require inspecting nested JSON fields
+  // that the backend doesn't support filtering on directly)
+  const filteredLogs = useMemo(() => {
+    const logs = auditLogsQuery.data?.audit_logs;
+    if (!logs) return [];
+    return logs.filter((log) => {
       let matchesTeam = true;
       let matchesKey = true;
-      let matchesObjectId = true;
-      let matchesAction = true;
-      let matchesTable = true;
 
       if (selectedTeamId) {
         const beforeTeamId =
@@ -211,48 +228,15 @@ export default function AuditLogs({
         }
       }
 
-      if (objectIdSearch) {
-        matchesObjectId = log.object_id?.toLowerCase().includes(objectIdSearch.toLowerCase());
-      }
-
-      if (selectedActionFilter !== "all") {
-        matchesAction = log.action?.toLowerCase() === selectedActionFilter.toLowerCase();
-      }
-
-      if (selectedTableFilter !== "all") {
-        let tableMatchName = "";
-        switch (selectedTableFilter) {
-          case "keys":
-            tableMatchName = "litellm_verificationtoken";
-            break;
-          case "teams":
-            tableMatchName = "litellm_teamtable";
-            break;
-          case "users":
-            tableMatchName = "litellm_usertable";
-            break;
-          // Add other direct table names if needed, or rely on a more generic match
-          default:
-            tableMatchName = selectedTableFilter; // Should not happen with current UI options
-        }
-        matchesTable = log.table_name?.toLowerCase() === tableMatchName;
-      }
-
-      return matchesTeam && matchesKey && matchesObjectId && matchesAction && matchesTable;
+      return matchesTeam && matchesKey;
     });
-  }, [allLogsQuery.data, selectedTeamId, selectedKeyHash, objectIdSearch, selectedActionFilter, selectedTableFilter]);
+  }, [auditLogsQuery.data, selectedTeamId, selectedKeyHash]);
 
-  const totalFilteredItems = completeFilteredLogs.length;
-  const totalFilteredPages = Math.ceil(totalFilteredItems / pageSize) || 1;
-
-  const paginatedViewOfFilteredLogs = useMemo(() => {
-    const start = (clientCurrentPage - 1) * pageSize;
-    const end = start + pageSize;
-    return completeFilteredLogs.slice(start, end);
-  }, [completeFilteredLogs, clientCurrentPage, pageSize]);
+  const totalCount = auditLogsQuery.data?.total ?? 0;
+  const totalPagesFromBackend = auditLogsQuery.data?.total_pages ?? 1;
 
   // Check if audit logs are empty (not loading and no data)
-  const showAuditLogsInfo = !allLogsQuery.data || allLogsQuery.data.length === 0;
+  const showAuditLogsInfo = !auditLogsQuery.data || auditLogsQuery.data.audit_logs.length === 0;
 
   // Custom AuditLogsInfoMessage component
   const AuditLogsInfoMessage = ({ show }: { show: boolean }) => {
@@ -454,8 +438,8 @@ export default function AuditLogs({
     );
   }
 
-  const currentDisplayItemsStart = totalFilteredItems > 0 ? (clientCurrentPage - 1) * pageSize + 1 : 0;
-  const currentDisplayItemsEnd = Math.min(clientCurrentPage * pageSize, totalFilteredItems);
+  const currentDisplayItemsStart = totalCount > 0 ? (currentPage - 1) * pageSize + 1 : 0;
+  const currentDisplayItemsEnd = Math.min(currentPage * pageSize, totalCount);
 
   return (
     <>
@@ -487,7 +471,7 @@ export default function AuditLogs({
                   title="Refresh data"
                 >
                   <svg
-                    className={`w-4 h-4 ${allLogsQuery.isFetching ? "animate-spin" : ""}`}
+                    className={`w-4 h-4 ${auditLogsQuery.isFetching ? "animate-spin" : ""}`}
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -618,25 +602,25 @@ export default function AuditLogs({
               </div>
 
               <span className="text-sm text-gray-700">
-                Showing {allLogsQuery.isLoading ? "..." : currentDisplayItemsStart} -{" "}
-                {allLogsQuery.isLoading ? "..." : currentDisplayItemsEnd} of{" "}
-                {allLogsQuery.isLoading ? "..." : totalFilteredItems} results
+                Showing {auditLogsQuery.isLoading ? "..." : currentDisplayItemsStart} -{" "}
+                {auditLogsQuery.isLoading ? "..." : currentDisplayItemsEnd} of{" "}
+                {auditLogsQuery.isLoading ? "..." : totalCount} results
               </span>
               <div className="flex items-center space-x-2">
                 <span className="text-sm text-gray-700">
-                  Page {allLogsQuery.isLoading ? "..." : clientCurrentPage} of{" "}
-                  {allLogsQuery.isLoading ? "..." : totalFilteredPages}
+                  Page {auditLogsQuery.isLoading ? "..." : currentPage} of{" "}
+                  {auditLogsQuery.isLoading ? "..." : totalPagesFromBackend}
                 </span>
                 <button
-                  onClick={() => setClientCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={allLogsQuery.isLoading || clientCurrentPage === 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={auditLogsQuery.isLoading || currentPage === 1}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Previous
                 </button>
                 <button
-                  onClick={() => setClientCurrentPage((p) => Math.min(totalFilteredPages, p + 1))}
-                  disabled={allLogsQuery.isLoading || clientCurrentPage === totalFilteredPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPagesFromBackend, p + 1))}
+                  disabled={auditLogsQuery.isLoading || currentPage === totalPagesFromBackend}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Next
@@ -647,7 +631,7 @@ export default function AuditLogs({
         </div>
         <DataTable
           columns={auditLogColumns}
-          data={paginatedViewOfFilteredLogs}
+          data={filteredLogs}
           renderSubComponent={renderSubComponent}
           getRowCanExpand={() => true}
         />
