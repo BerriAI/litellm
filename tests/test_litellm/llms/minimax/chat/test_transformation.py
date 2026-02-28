@@ -204,29 +204,58 @@ def test_minimax_chat_completion_streaming():
 
 
 def test_minimax_map_reasoning_details_to_reasoning_content():
-    """Test that reasoning_details is mapped to reasoning_content in streaming chunks."""
-    config = MinimaxChatConfig()
+    """Test that reasoning_details list is mapped to reasoning_content in streaming chunks."""
+    from litellm.llms.minimax.chat.transformation import MinimaxChatCompletionStreamingHandler
 
-    # Simulate MiniMax streaming chunk with reasoning_details
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+
+    # MiniMax returns reasoning_details as a list of objects
     choices = [
-        {"delta": {"reasoning_details": "Let me think step by step..."}}
+        {"delta": {"reasoning_details": [{"text": "Let me think "}, {"text": "step by step..."}]}}
     ]
-    result = config._map_reasoning_to_reasoning_content(choices)
+    result = handler._map_reasoning_to_reasoning_content(choices)
 
     assert "reasoning_content" in result[0]["delta"]
     assert result[0]["delta"]["reasoning_content"] == "Let me think step by step..."
     assert "reasoning_details" not in result[0]["delta"]
 
 
+def test_minimax_map_reasoning_details_string_format():
+    """Test that reasoning_details as string is also handled."""
+    from litellm.llms.minimax.chat.transformation import MinimaxChatCompletionStreamingHandler
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+
+    choices = [
+        {"delta": {"reasoning_details": "Plain string reasoning"}}
+    ]
+    result = handler._map_reasoning_to_reasoning_content(choices)
+
+    assert result[0]["delta"]["reasoning_content"] == "Plain string reasoning"
+
+
 def test_minimax_map_reasoning_details_preserves_standard_reasoning():
     """Test that standard reasoning field still works for MiniMax."""
-    config = MinimaxChatConfig()
+    from litellm.llms.minimax.chat.transformation import MinimaxChatCompletionStreamingHandler
 
-    # Simulate chunk with standard 'reasoning' field
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+
     choices = [
         {"delta": {"reasoning": "Standard reasoning content"}}
     ]
-    result = config._map_reasoning_to_reasoning_content(choices)
+    result = handler._map_reasoning_to_reasoning_content(choices)
 
     assert "reasoning_content" in result[0]["delta"]
     assert result[0]["delta"]["reasoning_content"] == "Standard reasoning content"
@@ -234,23 +263,44 @@ def test_minimax_map_reasoning_details_preserves_standard_reasoning():
 
 def test_minimax_map_reasoning_details_no_reasoning():
     """Test that chunks without reasoning fields are unchanged."""
-    config = MinimaxChatConfig()
+    from litellm.llms.minimax.chat.transformation import MinimaxChatCompletionStreamingHandler
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
 
     choices = [
         {"delta": {"content": "Normal content"}}
     ]
-    result = config._map_reasoning_to_reasoning_content(choices)
+    result = handler._map_reasoning_to_reasoning_content(choices)
 
     assert result[0]["delta"] == {"content": "Normal content"}
 
 
-def test_extract_reasoning_content_with_reasoning_details():
-    """Test that _extract_reasoning_content handles reasoning_details field."""
+def test_extract_reasoning_content_with_reasoning_details_list():
+    """Test that _extract_reasoning_content handles reasoning_details as list of objects."""
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         _extract_reasoning_content,
     )
 
-    # MiniMax non-streaming response with reasoning_details
+    message = {
+        "content": "The answer is 4.",
+        "reasoning_details": [{"text": "2+2=4 because "}, {"text": "addition..."}]
+    }
+    reasoning, content = _extract_reasoning_content(message)
+
+    assert reasoning == "2+2=4 because addition..."
+    assert content == "The answer is 4."
+
+
+def test_extract_reasoning_content_with_reasoning_details_string():
+    """Test that _extract_reasoning_content handles reasoning_details as plain string."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
     message = {
         "content": "The answer is 4.",
         "reasoning_details": "2+2=4 because addition..."
@@ -279,9 +329,12 @@ if __name__ == "__main__":
     test_minimax_provider_config_manager()
     print("✓ Provider config manager test passed")
 
-    print("\nTesting MiniMax reasoning_details mapping...")
+    print("\nTesting MiniMax reasoning_details mapping (list format)...")
     test_minimax_map_reasoning_details_to_reasoning_content()
-    print("✓ reasoning_details mapping test passed")
+    print("✓ reasoning_details list mapping test passed")
+
+    test_minimax_map_reasoning_details_string_format()
+    print("✓ reasoning_details string mapping test passed")
 
     test_minimax_map_reasoning_details_preserves_standard_reasoning()
     print("✓ standard reasoning mapping test passed")
@@ -289,8 +342,11 @@ if __name__ == "__main__":
     test_minimax_map_reasoning_details_no_reasoning()
     print("✓ no reasoning test passed")
 
-    test_extract_reasoning_content_with_reasoning_details()
-    print("✓ extract reasoning content test passed")
+    test_extract_reasoning_content_with_reasoning_details_list()
+    print("✓ extract reasoning content (list) test passed")
+
+    test_extract_reasoning_content_with_reasoning_details_string()
+    print("✓ extract reasoning content (string) test passed")
     
     print("\n✅ All basic tests passed!")
 

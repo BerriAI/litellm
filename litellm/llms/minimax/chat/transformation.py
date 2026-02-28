@@ -1,12 +1,31 @@
 """
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
-from typing import List, Optional, Tuple
+from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import litellm
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ModelResponse
+
+
+def _extract_reasoning_text(reasoning_details: Any) -> Optional[str]:
+    """Extract reasoning text from MiniMax's reasoning_details field.
+
+    MiniMax returns reasoning_details as a list of objects like
+    ``[{"text": "..."}]``.  This helper converts it to a plain string.
+    """
+    if isinstance(reasoning_details, str):
+        return reasoning_details
+    if isinstance(reasoning_details, list):
+        return "".join(
+            item.get("text", "") for item in reasoning_details if isinstance(item, dict)
+        )
+    return None
 
 
 class MinimaxChatConfig(OpenAIGPTConfig):
@@ -105,17 +124,29 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         
         return base_params + additional_params
 
-    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
-        """
-        Map MiniMax's 'reasoning_details' and 'reasoning' fields to 'reasoning_content'.
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return MinimaxChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
-        MiniMax returns reasoning content in delta.reasoning_details when
-        reasoning_split=True is passed. LiteLLM expects delta.reasoning_content.
-        """
+
+class MinimaxChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    """Streaming handler that maps MiniMax reasoning fields to reasoning_content."""
+
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         for choice in choices:
             delta = choice.get("delta", {})
             if "reasoning_details" in delta:
-                delta["reasoning_content"] = delta.pop("reasoning_details")
+                delta["reasoning_content"] = _extract_reasoning_text(
+                    delta.pop("reasoning_details")
+                )
             elif "reasoning" in delta:
                 delta["reasoning_content"] = delta.pop("reasoning")
         return choices
