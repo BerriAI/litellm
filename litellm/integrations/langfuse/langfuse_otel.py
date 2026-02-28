@@ -104,6 +104,8 @@ class LangfuseOtelLogger(OpenTelemetry):
             "existing_trace_id": LangfuseSpanAttributes.EXISTING_TRACE_ID,
             "update_trace_keys": LangfuseSpanAttributes.UPDATE_TRACE_KEYS,
             "debug_langfuse": LangfuseSpanAttributes.DEBUG_LANGFUSE,
+            "prompt_name": LangfuseSpanAttributes.PROMPT_NAME,
+            "prompt_version": LangfuseSpanAttributes.PROMPT_VERSION,
         }
 
         for key, enum_attr in mapping.items():
