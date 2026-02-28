@@ -662,7 +662,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         api_base = (
             api_base
             or get_secret("DEEPSEEK_API_BASE")
-            or "https://api.deepseek.com/beta"
+            or "https://api.deepseek.com/v1"
         )  # type: ignore
 
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
