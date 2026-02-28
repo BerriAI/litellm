@@ -14,6 +14,7 @@ interface SidebarProviderProps {
 const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: SidebarProviderProps) => {
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
+  const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
 
   useEffect(() => {
     const fetchUISettings = async () => {
@@ -34,6 +35,10 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
         } else {
           console.log("[SidebarProvider] No enabled_ui_pages_internal_users in response (all pages visible by default)");
         }
+
+        if (settings?.values?.enable_projects_ui !== undefined) {
+          setEnableProjectsUI(Boolean(settings.values.enable_projects_ui));
+        }
       } catch (error) {
         console.error("[SidebarProvider] Failed to fetch UI settings:", error);
       }
@@ -48,6 +53,7 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
       defaultSelectedKey={defaultSelectedKey}
       collapsed={sidebarCollapsed}
       enabledPagesInternalUsers={enabledPagesInternalUsers}
+      enableProjectsUI={enableProjectsUI}
     />
   );
 };
