@@ -1497,8 +1497,9 @@ def test_build_vertex_schema_nested_jsonvalue_in_anyof():
 
     # The 'data' property should be nullable but NOT narrowed to type: object
     data_schema = result["properties"]["data"]
-    assert "type" not in data_schema or data_schema.get("type") != "object", (
-        f"Optional[JsonValue] should not lose 'any type' semantics, got: {data_schema}"
+    # A strong assertion: 'type' key should not be present at all for 'any JSON value'
+    assert "type" not in data_schema, (
+        f"Optional[JsonValue] should not have 'type' set (any value semantics), got: {data_schema}"
     )
 
 
