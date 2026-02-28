@@ -573,6 +573,44 @@ def get_key_model_tpm_limit(
     return None
 
 
+def get_key_model_max_parallel_requests(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    """
+    Get the max_parallel_requests per model for a given API key.
+
+    Checks in order:
+    1. Key metadata (model_max_parallel_requests)
+    2. Key model_max_budget (max_parallel_requests per model)
+    3. Team metadata (model_max_parallel_requests)
+
+    Note: Uses `(dict or {}).get()` pattern to avoid short-circuit issues where
+    an empty dict would skip fallback checks in if/elif chains.
+    """
+    # Check key metadata
+    result = (user_api_key_dict.metadata or {}).get("model_max_parallel_requests")
+    if result is not None:
+        return result
+
+    # Check model_max_budget
+    if user_api_key_dict.model_max_budget:
+        model_limits: Dict[str, int] = {}
+        for model, budget in user_api_key_dict.model_max_budget.items():
+            if isinstance(budget, dict):
+                limit = budget.get("max_parallel_requests")
+                if limit is not None:
+                    model_limits[model] = limit
+        if model_limits:
+            return model_limits
+
+    # Check team metadata
+    result = (user_api_key_dict.team_metadata or {}).get("model_max_parallel_requests")
+    if result is not None:
+        return result
+
+    return None
+
+
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_accessor_key: Literal["team_metadata", "organization_metadata"],

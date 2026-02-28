@@ -14,6 +14,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
+    get_key_model_max_parallel_requests,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
@@ -298,6 +299,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if (
             get_key_model_tpm_limit(user_api_key_dict) is not None
             or get_key_model_rpm_limit(user_api_key_dict) is not None
+            or get_key_model_max_parallel_requests(user_api_key_dict) is not None
         ):
             _model = data.get("model", None)
             request_count_api_key = (
@@ -305,8 +307,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
             _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
             _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
+            _max_parallel_for_key_model = get_key_model_max_parallel_requests(user_api_key_dict)
             tpm_limit_for_model = None
             rpm_limit_for_model = None
+            max_parallel_for_model = None
 
             if _model is not None:
                 if _tpm_limit_for_key_model:
@@ -315,12 +319,15 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 if _rpm_limit_for_key_model:
                     rpm_limit_for_model = _rpm_limit_for_key_model.get(_model)
 
+                if _max_parallel_for_key_model:
+                    max_parallel_for_model = _max_parallel_for_key_model.get(_model)
+
             new_val = await self.check_key_in_limits(
                 user_api_key_dict=user_api_key_dict,
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a model
+                max_parallel_requests=max_parallel_for_model or sys.maxsize,
                 current=cache_objects["request_count_api_key_model"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=tpm_limit_for_model or sys.maxsize,
@@ -351,10 +358,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if user_id is not None:
             user_tpm_limit = user_api_key_dict.user_tpm_limit
             user_rpm_limit = user_api_key_dict.user_rpm_limit
+            user_max_parallel = user_api_key_dict.user_max_parallel_requests
             if user_tpm_limit is None:
                 user_tpm_limit = sys.maxsize
             if user_rpm_limit is None:
                 user_rpm_limit = sys.maxsize
+            if user_max_parallel is None:
+                user_max_parallel = sys.maxsize
 
             request_count_api_key = f"{user_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
@@ -363,7 +373,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a user
+                max_parallel_requests=user_max_parallel,
                 current=cache_objects["request_count_user_id"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=user_tpm_limit,
@@ -378,11 +388,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if team_id is not None:
             team_tpm_limit = user_api_key_dict.team_tpm_limit
             team_rpm_limit = user_api_key_dict.team_rpm_limit
+            team_max_parallel = user_api_key_dict.team_max_parallel_requests
 
             if team_tpm_limit is None:
                 team_tpm_limit = sys.maxsize
             if team_rpm_limit is None:
                 team_rpm_limit = sys.maxsize
+            if team_max_parallel is None:
+                team_max_parallel = sys.maxsize
 
             request_count_api_key = f"{team_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
@@ -391,7 +404,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a team
+                max_parallel_requests=team_max_parallel,
                 current=cache_objects["request_count_team_id"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=team_tpm_limit,
