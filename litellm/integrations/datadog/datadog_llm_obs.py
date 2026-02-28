@@ -263,15 +263,15 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
         input_meta = InputMeta(
-            messages=handle_any_messages_to_chat_completion_str_messages_conversion(
+            messages=(handle_any_messages_to_chat_completion_str_messages_conversion(
                 messages
-            )
+                        ) if not self.turn_off_message_logging else [{"role": "user", "content": "redacted-by-litellm"}])
         )
         output_meta = OutputMeta(
-            messages=self._get_response_messages(
+            messages=(self._get_response_messages(
                 standard_logging_payload=standard_logging_payload,
                 call_type=standard_logging_payload.get("call_type"),
-            )
+                    ) if not self.turn_off_message_logging else [{"role": "assistant", "content": "redacted-by-litellm"}])
         )
 
         error_info = self._assemble_error_info(standard_logging_payload)
