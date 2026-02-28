@@ -2366,10 +2366,13 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
+                            text_value = cast(str, m.get("text", ""))
+                            if not text_value:  # don't pass empty text blocks. anthropic api raises errors.
+                                continue
                             _anthropic_text_content_element = (
                                 AnthropicMessagesTextParam(
                                     type="text",
-                                    text=m["text"],
+                                    text=text_value,
                                 )
                             )
                             _content_element = add_cache_control_to_content(
