@@ -6256,8 +6256,13 @@ class Router:
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.exception(
-                    f"Error creating deployment: {e}, ignoring and continuing with other deployments."
+                verbose_router_logger.warning(
+                    "Failed to create deployment model_name=%s, model_id=%s: %s. "
+                    "Skipping this deployment and continuing with others.",
+                    deployment.model_name,
+                    deployment.model_info.id,
+                    str(e),
+                    exc_info=True,
                 )
                 return None
             else:
@@ -6810,8 +6815,12 @@ class Router:
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.debug(
-                    f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
+                verbose_router_logger.warning(
+                    "Failed to upsert deployment model_name=%s, model_id=%s: %s. "
+                    "Skipping this deployment and continuing with others.",
+                    deployment.model_name,
+                    deployment.model_info.id,
+                    str(e),
                 )
                 return None
             else:
