@@ -5,26 +5,65 @@ import TabItem from '@theme/TabItem';
 # Evaluate LLMs - MLflow Evals, Auto Eval
 
 ## Using LiteLLM with MLflow
-MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
+
+[MLflow](https://mlflow.org/docs/latest/genai/eval-monitor.html) provides a powerful capability for evaluating your LLM applications and agents with 50+ built-in quality metrics and custom scoring criteria. This tutorial shows how to use MLflow to evaluate LLM applications and agents powered by LiteLLM.
+
+<Image img={require('../../img/mlflow_evaluation_results.png')} />
 
 ### Pre Requisites
 ```shell
-pip install litellm
+pip install litellm mlflow>=3.3
 ```
+
+### Step 1: Configure MLflow
+
+In a terminal, start the MLflow server.
+
 ```shell
-pip install mlflow
+mlflow server --port 5000
 ```
 
+Then create a new notebook or a Python script to run the evaluation. Import MLflow and set the tracking URI and experiment name.
 
-### Step 1: Start LiteLLM Proxy on the CLI
-LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
+- **Tracking URI**: The URL of the MLflow server. MLflow will determine where to send evaluation result based on this URI.
+- **Experiment**: Experiment is a container in MLflow that groups evaluation runs, metrics, traces, etc. You can think of it as sort of a folder or a project.
+
+```python evaluation.py
+
+import mlflow
+
+mlflow.set_tracking_uri("http://localhost:5000") # <- The MLflow server URL
+mlflow.set_experiment("LiteLLM Evaluation") # <- Specify any name you want for your experiment and MLflow will create it if it doesn't exist.
+```
+
+### Step 2: Define your inference logic with LiteLLM
+
+First, define a simple function that generates responses by invoking LLM API through LiteLLM.
+
+```python
+def predict_fn(question: str) -> str:
+    response = litellm.completion(
+        model="gpt-5.1-mini",
+        messages=[
+            {"role": "system", "content": "Answer the following question in two sentences."},
+            {"role": "user", "content": question},
+        ],
+    )
+    return response.choices[0].message.content
+```
+
+:::info
+
+During evaluation, MLflow will automatically **[trace](https://mlflow.org/docs/latest/llms/tracing/index.html)** the LiteLLM calls and store them in the evaluation run. These traces are useful for debugging the root cause of low-quality responses and improve the model performance.
+
+:::
+
+Alternatively, you can use the LiteLLM proxy to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
 
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
-
 #INFO: Proxy running on http://0.0.0.0:8000
 ```
-
 **Here's how you can create the proxy for other supported llms**
 <Tabs>
 <TabItem value="bedrock" label="Bedrock">
@@ -152,72 +191,82 @@ $ litellm --model command-nightly
 
 </Tabs>
 
-
-### Step 2: Run MLflow
-Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
-
-```python
-openai.api_base = "http://0.0.0.0:8000"
-```
-
 ```python
 import openai
-import pandas as pd
-openai.api_key = "anything"             # this can be anything, we set the key on the proxy
-openai.api_base = "http://0.0.0.0:8000" # set api base to the proxy from step 1
 
-
-import mlflow
-eval_data = pd.DataFrame(
-    {
-        "inputs": [
-            "What is the largest country",
-            "What is the weather in sf?",
-        ],
-        "ground_truth": [
-            "India is a large country",
-            "It's cold in SF today"
-        ],
-    }
+client = openai.OpenAI(
+    api_key="anything",            # this can be anything, we set the key on the proxy
+    base_url="http://0.0.0.0:8000" # your proxy url
 )
 
-with mlflow.start_run() as run:
-    system_prompt = "Answer the following question in two sentences"
-    logged_model_info = mlflow.openai.log_model(
-        model="gpt-3.5",
-        task=openai.ChatCompletion,
-        artifact_path="model",
+def predict_fn(question: str) -> str:
+    response = client.chat.completions.create(
+        model="<your-model-name>",
         messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "{question}"},
-        ],
-    )
-
-    # Use predefined question-answering metrics to evaluate our model.
-    results = mlflow.evaluate(
-        logged_model_info.model_uri,
-        eval_data,
-        targets="ground_truth",
-        model_type="question-answering",
-    )
-    print(f"See aggregated evaluation results below: \n{results.metrics}")
-
-    # Evaluation result for each data record is available in `results.tables`.
-    eval_table = results.tables["eval_results_table"]
-    print(f"See evaluation table below: \n{eval_table}")
-
-
+            {"role": "system", "content": "Answer the following question in two sentences."},
+            {"role": "user", "content": question},
+    ])
+    return response.choices[0].message.content
 ```
 
-### MLflow Output
+### Step 3: Prepare the evaluation dataset
+
+Define the evaluation dataset with input questions, and optional expectations (= ground truth answers).
+
+```python
+eval_data = [
+    {
+        "inputs": {"question": "What is the largest country?"},
+        "expectations": {"expected_response": "Russia is the largest country by area."},
+    },
+    {
+        "inputs": {"question": "What is the weather in SF?"},
+        "expectations": {"expected_response": "I cannot provide real-time weather information."},
+    },
+]
 ```
-{'toxicity/v1/mean': 0.00014476531214313582, 'toxicity/v1/variance': 2.5759661361262862e-12, 'toxicity/v1/p90': 0.00014604929747292773, 'toxicity/v1/ratio': 0.0, 'exact_match/v1': 0.0}
-Downloading artifacts: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 1890.18it/s]
-See evaluation table below:
-                        inputs              ground_truth                                            outputs  token_count  toxicity/v1/score
-0  What is the largest country  India is a large country   Russia is the largest country in the world in...           14           0.000146
-1   What is the weather in sf?     It's cold in SF today   I'm sorry, I cannot provide the current weath...           36           0.000143
+
+
+### Step 4: Define evaluation metrics
+
+MLflow provides 50+ built-in evaluation metrics and a flexible API for defining custom ones.
+
+In MLflow, a **scorer** is a class or a function that generates evaluation metrics for a given data record. In this example, we will use two built-in scorers:
+
+- `Correctness`: LLM-as-a-Judge metric to check if the response is correct according to the expectation.
+- `Guidelines`: Flexible built-in metric that allow you to define custom LLM-as-a-Judge with a simple natural language guidelines.
+
+```python
+from mlflow.genai.scorers import Correctness, Guidelines
+
+scorers = [
+    Correctness(),
+    Guidelines(name="is_concise", guidelines="The answer must be concise and no longer than two sentences."),
+]
 ```
+
+See [MLflow documentation](https://mlflow.org/docs/latest/genai/eval-monitor/scorers/) for more details about supported scorers.
+
+### Step 5: Run the evaluation
+
+Now we are ready to run the evaluation. Pass the evaluation dataset, prediction function, and scorers to the `mlflow.genai.evaluate` function.
+
+```python
+results = mlflow.genai.evaluate(
+    data=eval_data,
+    predict_fn=predict_fn,
+    scorers=scorers,
+)
+```
+
+### Review the Results
+
+When the evaluation is complete, MLflow will show the link to the evaluation run in the terminal. Open the link in your browser to see the evaluation run and detailed results for each data record.
+
+### Next Steps
+
+- Check out [MLflow LiteLLM Integration](../observability/mlflow.md) for more details about MLflow LiteLLM integration.
+- Visit [Scorers Documentation](https://mlflow.org/docs/latest/genai/eval-monitor/scorers/) for the full list of supported scorers and find the one that fits your needs.
 
 
 ## Using LiteLLM with AutoEval

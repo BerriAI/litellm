@@ -10,6 +10,7 @@ This section covers integrations with various tools and services that can be use
 
 ## Observability & Monitoring
 - **[Langfuse](../observability/langfuse_integration.md)** - LLM observability and analytics
+- **[MLflow](../observability/mlflow.md)** - LLM observability, evaluation, and prompt management
 - **[Prometheus](../proxy/prometheus.md)** - Metrics collection and monitoring
 - **[PagerDuty](../proxy/pagerduty.md)** - Incident response and alerting
 - **[Datadog](../observability/datadog.md)**
