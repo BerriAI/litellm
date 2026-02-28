@@ -130,10 +130,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 server_url = (
                     _tool.get("server_url", "") if isinstance(_tool, dict) else ""
                 )
-        if isinstance(server_url, str) and server_url.startswith(
-            LITELLM_PROXY_MCP_SERVER_URL_PREFIX
-        ):
-            mcp_servers.append(server_url.split("/")[-1])
+                if isinstance(server_url, str) and server_url.startswith(
+                    LITELLM_PROXY_MCP_SERVER_URL_PREFIX
+                ):
+                    mcp_servers.append(server_url.split("/")[-1])
 
         tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
