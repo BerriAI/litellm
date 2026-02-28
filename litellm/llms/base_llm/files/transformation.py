@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import httpx
 from openai.types.file_deleted import FileDeleted
 
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -20,6 +19,7 @@ from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     Router = _Router
 else:
     LiteLLMLoggingObj = Any
+    UserAPIKeyAuth = Any
     Span = Any
     Router = Any
 

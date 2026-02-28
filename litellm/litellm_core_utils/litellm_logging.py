@@ -138,7 +138,6 @@ from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
-from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from ..integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
@@ -3683,6 +3682,8 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_azure_sentinel_logger)
             return _azure_sentinel_logger  # type: ignore
         elif logging_integration == "gcs_bucket":
+            from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, GCSBucketLogger):
                     return callback  # type: ignore
@@ -4290,6 +4291,8 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, AzureSentinelLogger):
                     return callback
         elif logging_integration == "gcs_bucket":
+            from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, GCSBucketLogger):
                     return callback

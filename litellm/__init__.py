@@ -444,9 +444,33 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    get_model_cost_map,
+)
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+# Load local backup instantly (no network I/O) then fetch remote in background
+model_cost = GetModelCostMap.load_local_model_cost_map()
+if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() != "true":
+    import threading
+
+    def _fetch_remote_model_cost_map():
+        try:
+            remote = GetModelCostMap.fetch_remote_model_cost_map(model_cost_map_url)
+            if GetModelCostMap.validate_model_cost_map(
+                fetched_map=remote,
+                backup_model_count=len(model_cost),
+            ):
+                globals()["model_cost"] = {**globals()["model_cost"], **remote}
+                try:
+                    from litellm.utils import _invalidate_model_cost_lowercase_map
+                    _invalidate_model_cost_lowercase_map()
+                except Exception as e:
+                    verbose_logger.debug("failed to invalidate model cost cache: %s", e)
+        except Exception as e:
+            verbose_logger.debug("background model cost fetch failed: %s", e)
+
+    threading.Thread(target=_fetch_remote_model_cost_map, daemon=True).start()
 cost_discount_config: Dict[str, float] = (
     {}
 )  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -1226,7 +1250,6 @@ from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
-from . import interactions
 from .skills.main import (
     create_skill,
     acreate_skill,
@@ -1652,6 +1675,13 @@ def __getattr__(name: str) -> Any:
         from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
         register_async_client_cleanup()
         _async_client_cleanup_registered = True
+
+    # Lazy load interactions module
+    if name == "interactions":
+        import importlib
+        _interactions = importlib.import_module(".interactions", __name__)
+        globals()["interactions"] = _interactions
+        return _interactions
 
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
