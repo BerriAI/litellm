@@ -285,7 +285,7 @@ class PassThroughEndpointLogging:
                 is not True
             ):
                 return
-            self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
+            await self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
                 httpx_response=httpx_response,
                 response_body=response_body or {},
                 logging_obj=logging_obj,
