@@ -1569,6 +1569,14 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
+        ## OPENAI MAPPING - populate _cache_read_input_tokens from prompt_tokens_details.cached_tokens ##
+        if (
+            self._cache_read_input_tokens == 0
+            and _prompt_tokens_details is not None
+            and _prompt_tokens_details.cached_tokens is not None
+        ):
+            self._cache_read_input_tokens = _prompt_tokens_details.cached_tokens
+
         for k, v in params.items():
             setattr(self, k, v)
 
