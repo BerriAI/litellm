@@ -186,3 +186,155 @@ async def test_slack_gif_skill_creates_gif(prisma_client):
     
     finally:
         await LiteLLMSkillsHandler.delete_skill(skill_id=created_skill.skill_id)
+
+
+# ──────────────────────────────────────────────────────────────
+# OpenAI Skills API E2E Tests
+# ──────────────────────────────────────────────────────────────
+
+from typing import Optional
+
+from litellm.types.llms.anthropic_skills import ListSkillsResponse
+
+
+class TestOpenAISkillsAPI:
+    """
+    E2E tests for OpenAI Skills API.
+
+    Requires OPENAI_API_KEY environment variable.
+    Tests OpenAI-specific endpoints (update, content, versions).
+    """
+
+    def get_api_key(self) -> Optional[str]:
+        return os.environ.get("OPENAI_API_KEY")
+
+    def get_api_base(self) -> Optional[str]:
+        return os.environ.get("OPENAI_API_BASE")
+
+    def test_update_skill(self):
+        """Test updating a skill's default version (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available to update")
+
+        skill_id = list_response.data[0].id
+        response = litellm.update_skill(
+            skill_id=skill_id,
+            default_version=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        print(f"Updated skill: {response}")
+
+    def test_get_skill_content(self):
+        """Test getting skill content (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available")
+
+        skill_id = list_response.data[0].id
+        response = litellm.get_skill_content(
+            skill_id=skill_id,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        print(f"Skill content: {response}")
+
+    def test_list_skill_versions(self):
+        """Test listing skill versions (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available")
+
+        skill_id = list_response.data[0].id
+        response = litellm.list_skill_versions(
+            skill_id=skill_id,
+            limit=10,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        assert "data" in response
+        print(f"Skill versions: {response}")
+
+    def test_get_skill_version(self):
+        """Test getting a specific skill version (OpenAI-specific)."""
+        api_key = self.get_api_key()
+        if not api_key:
+            pytest.skip("No OPENAI_API_KEY provided")
+
+        litellm.set_verbose = True
+
+        list_response = litellm.list_skills(
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert isinstance(list_response, ListSkillsResponse)
+        if not list_response.data:
+            pytest.skip("No skills available")
+
+        skill_id = list_response.data[0].id
+
+        versions_response = litellm.list_skill_versions(
+            skill_id=skill_id,
+            limit=1,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        if not versions_response.get("data"):
+            pytest.skip("No versions available")
+
+        version = versions_response["data"][0]["version"]
+        response = litellm.get_skill_version(
+            skill_id=skill_id,
+            version=version,
+            custom_llm_provider="openai",
+            api_key=api_key,
+            api_base=self.get_api_base(),
+        )
+        assert response is not None
+        print(f"Skill version: {response}")

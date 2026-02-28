@@ -433,6 +433,7 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         return Skill(
             id=data["id"],
             created_at=created_at_str,
+            default_version=str(data["default_version"]) if data.get("default_version") is not None else None,
             display_title=data.get("name"),
             latest_version=data.get("latest_version"),
             source="custom",
