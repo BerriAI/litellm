@@ -41,13 +41,13 @@ class InFlightRequestsMiddleware:
         InFlightRequestsMiddleware._in_flight += 1
         gauge = InFlightRequestsMiddleware._get_gauge()
         if gauge is not None:
-            gauge.inc()  # type: ignore[union-attr]
+            gauge.inc()  # type: ignore[attr-defined]
         try:
             await self.app(scope, receive, send)
         finally:
             InFlightRequestsMiddleware._in_flight -= 1
             if gauge is not None:
-                gauge.dec()  # type: ignore[union-attr]
+                gauge.dec()  # type: ignore[attr-defined]
 
     @staticmethod
     def get_count() -> int:
@@ -69,7 +69,7 @@ class InFlightRequestsMiddleware:
             InFlightRequestsMiddleware._gauge = Gauge(
                 "litellm_in_flight_requests",
                 "Number of HTTP requests currently in-flight on this uvicorn worker",
-                **kwargs,
+                **kwargs,  # type: ignore[arg-type]
             )
         except Exception:
             InFlightRequestsMiddleware._gauge = None

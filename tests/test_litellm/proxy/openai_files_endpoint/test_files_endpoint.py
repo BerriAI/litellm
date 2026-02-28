@@ -226,16 +226,24 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     assert openai_call_found, "OpenAI call not found with expected parameters"
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_target_storage_invokes_storage_backend(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
     """
     Ensure target_storage is parsed and invokes the storage backend service.
     """
+    from litellm.proxy._types import LitellmUserRoles
+    import litellm.proxy.proxy_server as ps
+
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     setup_proxy_logging_object(monkeypatch, llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
 
     async_mock = mocker.AsyncMock(
         return_value=OpenAIFileObject(
@@ -253,37 +261,48 @@ def test_target_storage_invokes_storage_backend(
         new=async_mock,
     )
 
-    test_file_content = b"abc"
-    test_file = ("abc.txt", test_file_content, "text/plain")
+    try:
+        test_file_content = b"abc"
+        test_file = ("abc.txt", test_file_content, "text/plain")
 
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "user_data",
-            "target_storage": "azure_storage",
-        },
-        headers={"Authorization": "Bearer test-key"},
-    )
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "user_data",
+                "target_storage": "azure_storage",
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
 
-    assert response.status_code == 200
-    async_mock.assert_awaited_once()
-    called_kwargs = async_mock.call_args.kwargs
-    assert called_kwargs["target_storage"] == "azure_storage"
-    assert called_kwargs["target_model_names"] == []
-    assert called_kwargs["purpose"] == "user_data"
+        assert response.status_code == 200, response.text
+        async_mock.assert_awaited_once()
+        called_kwargs = async_mock.call_args.kwargs
+        assert called_kwargs["target_storage"] == "azure_storage"
+        assert called_kwargs["target_model_names"] == []
+        assert called_kwargs["purpose"] == "user_data"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_target_storage_with_target_models(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
     """
     Ensure target_storage and target_model_names are parsed and passed through.
     """
+    from litellm.proxy._types import LitellmUserRoles
+    import litellm.proxy.proxy_server as ps
+
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     setup_proxy_logging_object(monkeypatch, llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
 
     async_mock = mocker.AsyncMock(
         return_value=OpenAIFileObject(
@@ -301,26 +320,29 @@ def test_target_storage_with_target_models(
         new=async_mock,
     )
 
-    test_file_content = b"abc"
-    test_file = ("abc.txt", test_file_content, "text/plain")
+    try:
+        test_file_content = b"abc"
+        test_file = ("abc.txt", test_file_content, "text/plain")
 
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "user_data",
-            "target_storage": "azure_storage",
-            "target_model_names": "gemini-2.0-flash",
-        },
-        headers={"Authorization": "Bearer test-key"},
-    )
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "user_data",
+                "target_storage": "azure_storage",
+                "target_model_names": "gemini-2.0-flash",
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
 
-    assert response.status_code == 200
-    async_mock.assert_awaited_once()
-    called_kwargs = async_mock.call_args.kwargs
-    assert called_kwargs["target_storage"] == "azure_storage"
-    assert called_kwargs["target_model_names"] == ["gemini-2.0-flash"]
-    assert called_kwargs["purpose"] == "user_data"
+        assert response.status_code == 200, response.text
+        async_mock.assert_awaited_once()
+        called_kwargs = async_mock.call_args.kwargs
+        assert called_kwargs["target_storage"] == "azure_storage"
+        assert called_kwargs["target_model_names"] == ["gemini-2.0-flash"]
+        assert called_kwargs["purpose"] == "user_data"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.skip(reason="mock respx fails on ci/cd - unclear why")

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         ALL_RESPONSES_API_TOOL_PARAMS,
         AllMessageValues,
         ChatCompletionImageObject,
+        ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
@@ -579,7 +580,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         content: Optional[
             Union[
                 str,
-                Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock"]],
+                List[Any],
+                Iterable[Union["OpenAIMessageContentListBlock", "ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]],
             ]
         ],
         role: str,

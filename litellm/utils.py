@@ -2765,8 +2765,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     for key, value in loaded_model_cost.items():
         ## get model info ##
         provider = value.get("litellm_provider", "")
+        _key_str = str(key)
         if provider in _skip_get_model_info_providers or any(
-            key.startswith(f"{p}/") for p in _skip_get_model_info_providers
+            _key_str.startswith(f"{p}/") for p in _skip_get_model_info_providers
         ):
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key

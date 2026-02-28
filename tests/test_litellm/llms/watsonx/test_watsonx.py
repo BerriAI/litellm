@@ -208,7 +208,8 @@ def test_watsonx_completion_regular_model_includes_model_id(
 
 
 @pytest.mark.asyncio
-async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
+@pytest.mark.xdist_group("watsonx_heavy")
+async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):  # noqa: PLR0915
     """
     Test that gpt-oss-120b model transforms messages to proper format instead of simple concatenation.
 
@@ -309,6 +310,11 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     }
     mock_token_get_response.raise_for_status = Mock()
 
+    # Pre-populate the WatsonX IAM token cache to avoid any HTTP calls for token generation.
+    # This prevents parallel test interference with litellm.module_level_client.
+    from litellm.llms.watsonx.common_utils import iam_token_cache
+    iam_token_cache.set_cache(key="test_api_key", value="mock_access_token", ttl=3600)
+
     with patch.object(client, "post", side_effect=mock_post_func) as mock_post, patch.object(
         litellm.module_level_client, "post", return_value=mock_token_get_response
     ), patch(
@@ -391,6 +397,7 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.xdist_group("watsonx_heavy")
 async def test_watsonx_gpt_oss_uses_async_http_handler():
     """
     Test that verifies async HTTP client is used when fetching HuggingFace templates.
