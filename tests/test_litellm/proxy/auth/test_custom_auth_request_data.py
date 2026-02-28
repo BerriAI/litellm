@@ -8,10 +8,11 @@ with custom_auth functions that only accept (request, api_key).
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
+from fastapi.testclient import TestClient
 from starlette.datastructures import URL
 
 sys.path.insert(
@@ -177,3 +178,53 @@ async def test_custom_auth_with_kwargs_receives_request_data():
         assert received_kwargs["request_data"] == test_data
     finally:
         _restore_proxy_server_attrs(_proxy_server_mod, original_values)
+
+
+# ------------------------------------------------------------------ #
+# E2E test: TestClient -> /chat/completions -> custom_auth
+# ------------------------------------------------------------------ #
+
+
+def test_e2e_custom_auth_request_data_via_http(monkeypatch):
+    """
+    E2E: Send a real HTTP POST to /chat/completions through TestClient and
+    verify that the custom_auth function receives the parsed request_data
+    (including the model name from the request body).
+
+    We only assert that the auth layer correctly passes request_data;
+    the downstream LLM call is mocked out.
+    """
+    from litellm.proxy.proxy_server import app
+
+    captured = {}
+
+    async def custom_auth_e2e(request, api_key, request_data):
+        captured["model"] = request_data.get("model")
+        captured["messages"] = request_data.get("messages")
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_auth", custom_auth_e2e)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.open_telemetry_logger", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.model_max_budget_limiter", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    monkeypatch.setattr("litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth", None)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    client.post(
+        "/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]},
+        headers={"Authorization": "Bearer sk-test-key"},
+    )
+
+    # The custom_auth should have been called with request_data
+    assert "model" in captured, f"custom_auth was not called with request_data. captured={captured}"
+    assert captured["model"] == "gpt-4"
+    assert captured["messages"] == [{"role": "user", "content": "hello"}]
