@@ -1006,6 +1006,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
+                if AnthropicConfig._is_claude_4_6_model(model) and value != "none":
+                    optional_params.setdefault("output_config", {})["effort"] = value
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
