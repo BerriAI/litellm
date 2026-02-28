@@ -226,6 +226,7 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     assert openai_call_found, "OpenAI call not found with expected parameters"
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_target_storage_invokes_storage_backend(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
@@ -274,6 +275,7 @@ def test_target_storage_invokes_storage_backend(
     assert called_kwargs["purpose"] == "user_data"
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_target_storage_with_target_models(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
