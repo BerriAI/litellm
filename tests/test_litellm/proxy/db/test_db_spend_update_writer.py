@@ -374,6 +374,20 @@ async def test_update_daily_spend_with_none_values_in_sorting_fields():
             "successful_requests": 1,
             "failed_requests": 0,
         },
+        "key6": {
+            "user_id": "user6",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "mcp_namespaced_tool_name": None,  # None mcp_namespaced_tool_name
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        },
     }
 
     # Call the method - this should not raise TypeError
@@ -388,8 +402,8 @@ async def test_update_daily_spend_with_none_values_in_sorting_fields():
         unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
     )
 
-    # Verify that table.upsert was called (should be called 5 times, once for each transaction)
-    assert mock_table.upsert.call_count == 5
+    # Verify that table.upsert was called (should be called 6 times, once for each transaction)
+    assert mock_table.upsert.call_count == 6
 
 
 # Tag Spend Tracking Tests

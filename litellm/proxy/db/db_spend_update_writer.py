@@ -1457,6 +1457,7 @@ class DBSpendUpdateWriter:
                                 x[1].get("api_key") or "",
                                 x[1].get("model") or "",
                                 x[1].get("custom_llm_provider") or "",
+                                x[1].get("mcp_namespaced_tool_name") or "",
                             ),
                         )[:BATCH_SIZE]
                     )
