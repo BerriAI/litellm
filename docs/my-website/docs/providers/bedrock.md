@@ -804,6 +804,8 @@ Beta features may require special access or permissions in your AWS account. Som
 
 LiteLLM supports Anthropic's [context editing](https://docs.claude.com/en/docs/build-with-claude/context-editing) API on Bedrock. This lets you automatically compact or clear older tool results and thinking blocks when conversations grow large.
 
+> For a cross-provider overview including OpenAI, Anthropic, and Vertex AI, see [Context Management (Compaction)](/docs/context_management).
+
 Both the **Invoke** and **Messages API** paths are supported. The required beta headers (`compact-2026-01-12` or `context-management-2025-06-27`) are attached automatically.
 
 :::info
