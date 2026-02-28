@@ -299,6 +299,39 @@ describe("UI config and public endpoints", () => {
     expect(calledUrl).toBe("https://example.com/public/providers/fields");
   });
 
+  it("should derive base path from window.location.pathname when SERVER_ROOT_PATH is set", async () => {
+    const uiConfig = {
+      server_root_path: "/litellm",
+      proxy_base_url: "https://example.com",
+    };
+
+    // Simulate the browser being at /litellm/ui/dashboard (as when SERVER_ROOT_PATH=/litellm)
+    const originalPathname = window.location.pathname;
+    Object.defineProperty(window, "location", {
+      value: { ...window.location, pathname: "/litellm/ui/dashboard" },
+      writable: true,
+    });
+
+    const mockFetch = setupMockFetch([
+      { url: "/.well-known/litellm-ui-config", data: uiConfig },
+    ]);
+
+    await Networking.getUiConfig();
+
+    // The fetch URL should be /litellm/.well-known/litellm-ui-config
+    // (derived from stripping /ui/dashboard from /litellm/ui/dashboard)
+    const configCall = mockFetch.mock.calls[0];
+    expect(configCall).toBeDefined();
+    const calledUrl = configCall[0] as string;
+    expect(calledUrl).toBe("/litellm/.well-known/litellm-ui-config");
+
+    // Restore
+    Object.defineProperty(window, "location", {
+      value: { ...window.location, pathname: originalPathname },
+      writable: true,
+    });
+  });
+
   it("should return UI config from getUiConfig", async () => {
     const uiConfig = {
       server_root_path: "/api/v1",
