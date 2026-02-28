@@ -463,8 +463,8 @@ model_cost = GetModelCostMap.load_local_model_cost_map()
 def _ensure_remote_model_cost() -> None:
     """Fetch and merge the remote model cost map on first use (once only).
 
-    No threading, no locks — simply fetches on first call and replaces the
-    dict contents in place so all existing references stay valid.
+    No threading, no locks — simply fetches on first call and merges
+    remote data into the existing dict so all references stay valid.
     """
     global _model_cost_remote_loaded
     if _model_cost_remote_loaded:
@@ -472,8 +472,7 @@ def _ensure_remote_model_cost() -> None:
     _model_cost_remote_loaded = True
     try:
         remote = get_model_cost_map(url=_model_cost_url)
-        model_cost.clear()
-        model_cost.update(remote)
+        model_cost.update(remote)  # merge remote on top of local; no clear() needed
     except Exception:
         pass  # keep using local backup
 
@@ -886,7 +885,7 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             llamagate_models.add(key)
 
 
-add_known_models()
+add_known_models(model_cost)  # use local backup — remote fetch deferred to first external call
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping
