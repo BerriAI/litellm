@@ -1,6 +1,6 @@
-import io
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.abspath("../.."))
 
@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, Mock
 verbose_logger.setLevel(logging.DEBUG)
 
 litellm.set_verbose = True
-import time
 
 @pytest.mark.asyncio
 async def test_opik_logging_http_request():
@@ -306,5 +305,79 @@ def test_opik_create_new_trace():
         assert "test-new-trace" in trace_payload['tags'], f"Expected 'test-new-trace' tag in trace tags"
         assert "test-new-trace" in span_payload['tags'], f"Expected 'test-new-trace' tag in span tags"
         
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_opik__init_periodic_flush_task__started_correctly_outside_asyncio_context():
+    """
+    Tests the initialization of `OpikLogger` to ensure that the periodic flush task is
+    started correctly without errors even if the OpikLogger was created outside of asyncio
+    context.
+
+    Raises:
+        pytest.fail: If an exception occurs during the initialization of `OpikLogger`.
+    """
+    try:
+        from litellm.integrations.opik.opik import OpikLogger
+
+        os.environ["OPIK_URL_OVERRIDE"] = "https://fake.comet.com/opik/api"
+        os.environ["OPIK_API_KEY"] = "anything"
+        os.environ["OPIK_WORKSPACE"] = "anything"
+
+        # Initialize OpikLogger outside of asyncio context
+        flush_interval = 5
+        test_opik_logger = OpikLogger(flush_interval=flush_interval)
+        litellm.callbacks = [test_opik_logger]
+        litellm.set_verbose = True
+
+        # Create a mock for the async_client's POST method
+        mock_post = AsyncMock()
+        mock_post.return_value.status_code = 202
+        mock_post.return_value.text = "Accepted"
+        test_opik_logger.async_httpx_client.post = mock_post
+
+        async def completion(request_count: int) -> None:
+            # Log a chat completion calls within asyncio context
+            for _ in range(request_count):
+                response = await litellm.acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "What LLM are you ?"}],
+                    max_tokens=10,
+                    temperature=0.2,
+                    metadata={"opik": {"custom_field": "custom_value"}},
+                    mock_response="This is a mock response",
+                )
+                print("Non-streaming response:", response)
+
+                stream_response = await litellm.acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "What LLM are you ?"}],
+                    max_tokens=10,
+                    temperature=0.2,
+                    stream=True,
+                    metadata={"opik": {"custom_field": "custom_value"}},
+                    mock_response="This is a mock response",
+                )
+                print("Streaming response:")
+                async for chunk in stream_response:
+                    print(chunk.choices[0].delta.content, end='', flush=True)
+                print()  # New line after streaming response
+
+            await asyncio.sleep(1)
+
+            # check that the log queue contains the expected number of events
+            assert len(test_opik_logger.log_queue) == request_count * 2 * 2
+
+            # Wait for the periodic flush task to complete
+            await asyncio.sleep(flush_interval + 1)
+            assert len(test_opik_logger.log_queue) == 0
+
+        count = 5
+        asyncio.run(completion(count))
+
+        # check that a periodic flush task was initialized properly
+        assert test_opik_logger.periodic_started is True
+        assert test_opik_logger.periodic_failed is False
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
