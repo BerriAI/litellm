@@ -1968,22 +1968,24 @@ class CustomStreamWrapper:
                     self.rules.post_call_rules(
                         input=self.response_uptil_now, model=self.model
                     )
-                    # Store a shallow copy so usage stripping below
-                    # does not mutate the stored chunk.
-                    self.chunks.append(processed_chunk.model_copy())
-
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
                         self.sent_first_chunk = True
-                    if (
+
+                    _has_usage = (
                         hasattr(processed_chunk, "usage")
                         and getattr(processed_chunk, "usage", None) is not None
-                    ):
+                    )
+
+                    if _has_usage:
+                        # Store a copy ONLY when usage stripping below will mutate
+                        # the chunk. For non-usage chunks (vast majority), store
+                        # directly to avoid expensive model_copy() per chunk.
+                        self.chunks.append(processed_chunk.model_copy())
+
                         # Strip usage from the outgoing chunk so it's not sent twice
                         # (once in the chunk, once in _hidden_params).
-                        # Create a new object without usage, matching sync behavior.
-                        # The copy in self.chunks retains usage for calculate_total_usage().
                         obj_dict = processed_chunk.model_dump()
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
@@ -1995,6 +1997,9 @@ class CustomStreamWrapper:
                         )
                         if is_empty:
                             continue
+                    else:
+                        # No usage data — safe to store directly without copying
+                        self.chunks.append(processed_chunk)
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
