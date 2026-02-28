@@ -4,13 +4,17 @@ organizations, teams, and keys.
 """
 
 import json
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+from fastapi import HTTPException, status
 from litellm._uuid import uuid
-from typing import Dict, Optional, Union
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-        
 
 
 async def attach_object_permission_to_dict(
@@ -178,3 +182,184 @@ async def _set_object_permission(
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
     return data_json
+
+
+async def get_allowed_mcp_access_groups_for_user(
+    user_api_key_dict: "UserAPIKeyAuth",
+    prisma_client: Optional[PrismaClient],
+    auth_contexts: Optional[list] = None,
+) -> Optional[set]:
+    """
+    Return the set of MCP access group IDs the user can assign (via teams or key).
+    Returns None if user is admin (can assign any) or if MCP modules are unavailable.
+
+    Args:
+        user_api_key_dict: The user's API key auth context.
+        prisma_client: Database client.
+        auth_contexts: Optional pre-resolved auth contexts. If provided, avoids
+            redundant build_effective_auth_contexts call.
+    """
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    if _user_has_admin_view(user_api_key_dict):
+        return None  # Admin can assign any
+
+    try:
+        from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+            build_effective_auth_contexts,
+        )
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import user_api_key_cache, proxy_logging_obj
+    except ImportError:
+        return set()  # No MCP - user has no access
+
+    if prisma_client is None or user_api_key_cache is None:
+        return set()
+
+    allowed_access_group_ids: set = set()
+    if auth_contexts is None:
+        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+    for auth_context in auth_contexts:
+        if auth_context.team_id:
+            try:
+                team_obj = await get_team_object(
+                    team_id=auth_context.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=getattr(
+                        user_api_key_dict, "parent_otel_span", None
+                    ),
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except HTTPException:
+                # Team not found (e.g. deleted) - skip gracefully
+                continue
+            if team_obj and team_obj.object_permission:
+                groups = team_obj.object_permission.mcp_access_groups or []
+                allowed_access_group_ids.update(groups)
+
+    if user_api_key_dict.object_permission:
+        key_groups = user_api_key_dict.object_permission.mcp_access_groups or []
+        allowed_access_group_ids.update(key_groups)
+
+    return allowed_access_group_ids
+
+
+async def validate_mcp_object_permission_for_key(
+    user_api_key_dict: "UserAPIKeyAuth",
+    object_permission: Optional[Union[Dict[str, Any], Any]],
+    prisma_client: Optional[PrismaClient],
+) -> None:
+    """
+    Validate that a non-admin user can only assign MCP servers and access groups
+    they have access to (via their teams or key). With view_all mode, users see
+    all servers but must not be able to assign servers/groups they lack access to.
+
+    Raises:
+        HTTPException: 403 if user tries to assign MCP servers or access groups
+            they do not have access to.
+    """
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    if object_permission is None:
+        return
+
+    # Admins can assign any MCP servers/groups
+    if _user_has_admin_view(user_api_key_dict):
+        return
+
+    # Extract mcp_servers and mcp_access_groups from object_permission
+    mcp_servers: list = []
+    mcp_access_groups: list = []
+    if isinstance(object_permission, dict):
+        mcp_servers = object_permission.get("mcp_servers") or []
+        mcp_access_groups = object_permission.get("mcp_access_groups") or []
+    else:
+        mcp_servers = getattr(object_permission, "mcp_servers", None) or []
+        mcp_access_groups = getattr(object_permission, "mcp_access_groups", None) or []
+
+    if not mcp_servers and not mcp_access_groups:
+        return
+
+    try:
+        from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+            build_effective_auth_contexts,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.proxy_server import user_api_key_cache
+    except ImportError:
+        verbose_proxy_logger.warning(
+            "MCP modules not available, cannot validate MCP object permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "MCP object permission validation is unavailable. "
+                    "Cannot assign mcp_servers or mcp_access_groups to this key."
+                )
+            },
+        )
+
+    if prisma_client is None or user_api_key_cache is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "MCP object permission validation is unavailable (missing dependencies). "
+                    "Cannot assign mcp_servers or mcp_access_groups to this key."
+                )
+            },
+        )
+
+    auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+    allowed_server_ids: set = set()
+    for auth_context in auth_contexts:
+        server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(
+            auth_context
+        )
+        allowed_server_ids.update(server_ids)
+
+    allowed_access_group_ids = await get_allowed_mcp_access_groups_for_user(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        auth_contexts=auth_contexts,
+    )
+    if allowed_access_group_ids is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "Unable to determine allowed MCP access groups."},
+        )
+
+    # Validate requested mcp_servers
+    disallowed_servers = [
+        s for s in mcp_servers if s not in allowed_server_ids
+    ]
+    if disallowed_servers:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"You do not have access to assign the following MCP servers to this key: {disallowed_servers}. "
+                    "You can only assign MCP servers that your teams have access to."
+                )
+            },
+        )
+
+    # Validate requested mcp_access_groups
+    disallowed_groups = [
+        g for g in mcp_access_groups if g not in allowed_access_group_ids
+    ]
+    if disallowed_groups:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"You do not have access to assign the following MCP access groups to this key: {disallowed_groups}. "
+                    "You can only assign MCP access groups that your teams have access to."
+                )
+            },
+        )

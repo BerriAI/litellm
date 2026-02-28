@@ -455,10 +455,14 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Get all available MCP access groups from the database AND config
+        Get MCP access groups available to the user. Non-admins only see groups
+        they have access to via their teams; admins see all groups.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
+        )
+        from litellm.proxy.management_helpers.object_permission_utils import (
+            get_allowed_mcp_access_groups_for_user,
         )
         from litellm.proxy.proxy_server import prisma_client
 
@@ -481,6 +485,14 @@ if MCP_AVAILABLE:
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+
+        # Filter for non-admins: only return groups the user has access to
+        allowed_groups = await get_allowed_mcp_access_groups_for_user(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+        if allowed_groups is not None:
+            access_groups = access_groups & allowed_groups
 
         # Convert to sorted list
         access_groups_list = sorted(list(access_groups))
