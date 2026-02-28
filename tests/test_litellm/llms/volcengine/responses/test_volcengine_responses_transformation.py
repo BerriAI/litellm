@@ -258,6 +258,33 @@ class TestVolcengineResponsesAPITransformation:
         assert result._hidden_params["headers"].get("x-test") == "1"
         assert "additional_headers" in result._hidden_params
 
+    def test_context_management_in_supported_params(self):
+        """context_management must be advertised as a supported Volcengine param."""
+        config = VolcEngineResponsesAPIConfig()
+        supported = config.get_supported_openai_params("volcengine/demo-model")
+        assert "context_management" in supported
+
+    def test_context_management_passthrough_in_request(self):
+        """context_management should pass through unchanged in the Volcengine request body."""
+        config = VolcEngineResponsesAPIConfig()
+        cm_payload = [{"type": "compaction", "compact_threshold": 200000}]
+
+        result = config.transform_responses_api_request(
+            model="volcengine/demo-model",
+            input="Hello",
+            response_api_optional_request_params={
+                "temperature": 0.5,
+                "context_management": cm_payload,
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "context_management" in result
+        assert result["context_management"] == cm_payload
+        assert result["context_management"][0]["type"] == "compaction"
+        assert result["context_management"][0]["compact_threshold"] == 200000
+
     def test_transform_delete_response_api_response_parses_json(self):
         """DELETE response parsing should return DeleteResponseResult."""
         config = VolcEngineResponsesAPIConfig()
