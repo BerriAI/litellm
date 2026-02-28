@@ -1,6 +1,4 @@
 import Image from '@theme/IdealImage';
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 
 # Cursor Cloud Agents
 
@@ -38,45 +36,11 @@ Navigate to **Models + Endpoints → LLM Credentials** and click **Add Credentia
 
 <Image img={require('../../img/cursor_add_credential.png')} alt="Add Cursor credential with logo" style={{maxWidth: '800px'}} />
 
-### 2. Start LiteLLM Proxy
-
-<Tabs>
-<TabItem value="env" label="Environment Variable">
-
-```bash
-export CURSOR_API_KEY="crsr_..."
-
-litellm
-
-# RUNNING on http://0.0.0.0:4000
-```
-
-</TabItem>
-<TabItem value="config" label="Config File">
-
-```yaml
-model_list:
-  - model_name: cursor-agents
-    litellm_params:
-      model: cursor/claude-4-sonnet
-      api_key: os.environ/CURSOR_API_KEY
-
-general_settings:
-  master_key: sk-1234
-```
-
-```bash
-litellm --config config.yaml
-```
-
-</TabItem>
-</Tabs>
-
-### 3. Launch a Cursor Agent
+### 2. Launch a Cursor Agent
 
 ```bash
 curl -X POST http://0.0.0.0:4000/cursor/v0/agents \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer <your-litellm-key>" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": {
@@ -112,7 +76,7 @@ curl -X POST http://0.0.0.0:4000/cursor/v0/agents \
 }
 ```
 
-### 4. View Logs
+### 3. View Logs
 
 Navigate to **Logs** in the sidebar. Filter by "cursor" to see your agent requests. Each request shows the operation type (e.g., `cursor/cursor:agent:create`), status, duration, and cost.
 
@@ -129,44 +93,34 @@ Anything after `http://0.0.0.0:4000/cursor` is treated as a provider-specific ro
 | **Original Endpoint** | **Replace With** |
 |---|---|
 | `https://api.cursor.com` | `http://0.0.0.0:4000/cursor` (LITELLM_PROXY_BASE_URL) |
-| `-u YOUR_API_KEY:` (Basic Auth) | `-H "Authorization: Bearer sk-1234"` (LiteLLM Virtual Key) |
+| `-u YOUR_API_KEY:` (Basic Auth) | `-H "Authorization: Bearer <your-litellm-key>"` (LiteLLM Virtual Key) |
 
 ### List Available Models
 
 ```bash
 curl http://0.0.0.0:4000/cursor/v0/models \
-  -H "Authorization: Bearer sk-1234"
-```
-
-```json
-{
-  "models": [
-    "claude-4-sonnet-thinking",
-    "gpt-5.2",
-    "claude-4.5-sonnet-thinking"
-  ]
-}
+  -H "Authorization: Bearer <your-litellm-key>"
 ```
 
 ### Check Agent Status
 
 ```bash
 curl http://0.0.0.0:4000/cursor/v0/agents/bc_abc123 \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer <your-litellm-key>"
 ```
 
 ### List All Agents
 
 ```bash
 curl http://0.0.0.0:4000/cursor/v0/agents \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer <your-litellm-key>"
 ```
 
 ### Add Follow-up to Agent
 
 ```bash
 curl -X POST http://0.0.0.0:4000/cursor/v0/agents/bc_abc123/followup \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer <your-litellm-key>" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": {
@@ -179,78 +133,21 @@ curl -X POST http://0.0.0.0:4000/cursor/v0/agents/bc_abc123/followup \
 
 ```bash
 curl -X POST http://0.0.0.0:4000/cursor/v0/agents/bc_abc123/stop \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer <your-litellm-key>"
 ```
 
 ### Delete an Agent
 
 ```bash
 curl -X DELETE http://0.0.0.0:4000/cursor/v0/agents/bc_abc123 \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer <your-litellm-key>"
 ```
 
 ### Get API Key Info
 
 ```bash
 curl http://0.0.0.0:4000/cursor/v0/me \
-  -H "Authorization: Bearer sk-1234"
-```
-
-```json
-{
-  "apiKeyName": "Production API Key",
-  "createdAt": "2024-01-15T10:30:00Z",
-  "userEmail": "developer@example.com"
-}
-```
-
-## Advanced — Use with Virtual Keys
-
-Pre-requisites:
-- [Setup proxy with DB](../proxy/virtual_keys.md#setup)
-
-Use this to avoid giving developers the raw Cursor API key, but still letting them use Cursor endpoints.
-
-### Usage
-
-1. Setup environment
-
-```bash
-export DATABASE_URL=""
-export LITELLM_MASTER_KEY=""
-export CURSOR_API_KEY=""
-```
-
-```bash
-litellm
-
-# RUNNING on http://0.0.0.0:4000
-```
-
-2. Generate virtual key
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/key/generate' \
-  -H 'Authorization: Bearer sk-1234' \
-  -H 'Content-Type: application/json' \
-  -d '{}'
-```
-
-3. Launch an agent using the virtual key
-
-```bash
-curl -X POST http://0.0.0.0:4000/cursor/v0/agents \
-  -H "Authorization: Bearer sk-1234ewknldferwedojwojw" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": {
-      "text": "Fix the failing test in test_utils.py"
-    },
-    "source": {
-      "repository": "https://github.com/your-org/your-repo",
-      "ref": "main"
-    }
-  }'
+  -H "Authorization: Bearer <your-litellm-key>"
 ```
 
 ## Related
