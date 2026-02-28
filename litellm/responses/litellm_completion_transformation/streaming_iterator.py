@@ -1,5 +1,6 @@
 import time
 import uuid
+from collections import deque
 from typing import Any, Dict, List, Optional, Union, cast
 
 import litellm
@@ -87,7 +88,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.final_text: str = ""
         self._cached_item_id: Optional[str] = None
         self._cached_response_id: Optional[str] = None
-        self._pending_tool_events: List[BaseLiteLLMOpenAIResponseObject] = []
+        self._pending_tool_events: deque[BaseLiteLLMOpenAIResponseObject] = deque()
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
         self._tool_call_id_by_index: dict[int, str] = {}
@@ -100,7 +101,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sent_reasoning_summary_part_done_event: bool = False
         self._reasoning_summary_text: str = ""
         # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
-        self._pending_response_events: List[BaseLiteLLMOpenAIResponseObject] = []
+        self._pending_response_events: deque[BaseLiteLLMOpenAIResponseObject] = deque()
         self._reasoning_active = False
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
@@ -721,7 +722,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if isinstance(self.litellm_model_response, ModelResponse):
                 self._queue_final_tool_call_done_events(self.litellm_model_response)
             if self._pending_tool_events:
-                return self._pending_tool_events.pop(0)
+                return self._pending_tool_events.popleft()
 
             done_event = self.return_default_done_events(self.litellm_model_response)
             if done_event:
@@ -818,10 +819,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return result
                 # Emit any pending output_item or other response events before reading a new chunk
                 if self._pending_response_events:
-                    return self._pending_response_events.pop(0)
+                    return self._pending_response_events.popleft()
                 # Emit any pending tool events before reading a new chunk
                 if self._pending_tool_events:
-                    return self._pending_tool_events.pop(0)
+                    return self._pending_tool_events.popleft()
 
                 try:
                     chunk = await self.litellm_custom_stream_wrapper.__anext__()
@@ -883,7 +884,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             self._pending_response_events.append(response_api_chunk)
                 
                     if self._pending_response_events:
-                        return self._pending_response_events.pop(0)
+                        return self._pending_response_events.popleft()
 
                 except StopAsyncIteration:
                     return self.common_done_event_logic(sync_mode=False)
@@ -912,16 +913,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return result
                 # Emit any pending output_item or other response events before reading a new chunk
                 if self._pending_response_events:
-                    return self._pending_response_events.pop(0)
+                    return self._pending_response_events.popleft()
                 # Emit any pending tool events before reading a new chunk
                 if self._pending_tool_events:
-                    return self._pending_tool_events.pop(0)
+                    return self._pending_tool_events.popleft()
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
                     self._ensure_output_item_for_chunk(chunk)
                     # Emit any just-queued output_item event
                     if self._pending_response_events:
-                        return self._pending_response_events.pop(0)
+                        return self._pending_response_events.popleft()
                     self.collected_chat_completion_chunks.append(
                         self._snapshot_chunk_for_stream_chunk_builder(
                             cast(ModelResponseStream, chunk)
@@ -968,7 +969,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
                         annotations=annotations
                     )                    
-                    self._pending_annotation_events = []
+                    self._pending_annotation_events: deque[BaseLiteLLMOpenAIResponseObject] = deque()
                     for idx, annotation in enumerate(response_annotations):
                         annotation_dict = annotation.model_dump() if hasattr(annotation, 'model_dump') else dict(annotation)
                         event = OutputTextAnnotationAddedEvent(
@@ -1019,17 +1020,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._queue_tool_call_delta_events(chunk.choices[0].delta.tool_calls)
             # Return one pending tool event at a time
             if self._pending_tool_events:
-                return self._pending_tool_events.pop(0)
+                return self._pending_tool_events.popleft()
         
         # Priority 4: If we have pending annotation events, emit the next one
         # This happens when the current chunk has no text/reasoning content
         if hasattr(self, '_pending_annotation_events') and self._pending_annotation_events:
-            event = self._pending_annotation_events.pop(0)
+            event = self._pending_annotation_events.popleft()
             return event
 
         # Priority 5: If we have pending tool events (from earlier chunk), emit the next one
         if self._pending_tool_events:
-            return self._pending_tool_events.pop(0)
+            return self._pending_tool_events.popleft()
 
         return None
 
