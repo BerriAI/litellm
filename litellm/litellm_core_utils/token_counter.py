@@ -31,6 +31,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
+    AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
 )
@@ -625,6 +626,7 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     mapping = {
         "tool_use": AnthropicMessagesToolUseParam,
         "tool_result": AnthropicMessagesToolResultParam,
+        "image": AnthropicMessagesImageParam,
     }
 
     expected_cls = mapping.get(content_type)
@@ -659,7 +661,29 @@ def _count_anthropic_content(
     """
     typeddict_cls = _validate_anthropic_content(content)
     type_hints = getattr(typeddict_cls, "__annotations__", {})
+    content_type = content.get("type")
     tokens = 0
+
+    # For image type, extract and count actual image data
+    if content_type == "image":
+        source = content.get("source", {})
+        source_type = source.get("type")
+        
+        # Extract image data based on source type
+        if source_type == "base64":
+            media_type = source.get("media_type", "image/png")
+            data = source.get("data", "")
+            image_data = f"data:{media_type};base64,{data}"
+        elif source_type == "url":
+            image_data = source.get("url", "")
+        else:
+            image_data = None  # Use default
+        
+        return calculate_img_tokens(
+            data=image_data,
+            mode="auto",
+            use_default_image_token_count=use_default_image_token_count,
+        )
 
     # Fields to skip (metadata/identifiers that don't contribute to prompt tokens)
     skip_fields = {"type", "id", "tool_use_id", "cache_control", "is_error"}
@@ -712,7 +736,7 @@ def _count_content_list(
                 num_tokens += _count_image_tokens(
                     image_url, use_default_image_token_count
                 )
-            elif c["type"] in ("tool_use", "tool_result"):
+            elif c["type"] in ("tool_use", "tool_result", "image"):
                 num_tokens += _count_anthropic_content(
                     c,
                     count_function,
