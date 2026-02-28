@@ -158,12 +158,24 @@ def test_get_additional_headers():
     additional_logging_headers = StandardLoggingPayloadSetup.get_additional_headers(
         additional_headers
     )
-    assert additional_logging_headers == {
-        "x_ratelimit_limit_requests": 2000,
-        "x_ratelimit_remaining_requests": 1999,
-        "x_ratelimit_limit_tokens": 160000,
-        "x_ratelimit_remaining_tokens": 160000,
-    }
+
+    # Rate-limit headers still have underscore aliases with int values (backward compat)
+    assert additional_logging_headers["x_ratelimit_limit_requests"] == 2000
+    assert additional_logging_headers["x_ratelimit_remaining_requests"] == 1999
+    assert additional_logging_headers["x_ratelimit_limit_tokens"] == 160000
+    assert additional_logging_headers["x_ratelimit_remaining_tokens"] == 160000
+
+    # Provider-specific headers are now preserved (not dropped)
+    assert (
+        additional_logging_headers["llm_provider-request-id"]
+        == "req_01F6CycZZPSHKRCCctcS1Vto"
+    )
+    assert (
+        additional_logging_headers["llm_provider-cf-ray"] == "8da71bdbc9b57abb-SJC"
+    )
+
+    # Original dashed rate-limit keys are also still present
+    assert additional_logging_headers["x-ratelimit-limit-requests"] == "2000"
 
 
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
@@ -346,6 +358,7 @@ def test_get_hidden_params():
         "additional_headers": {
             "x-ratelimit-limit-requests": "2000",
             "x-ratelimit-remaining-requests": "1999",
+            "llm_provider-request-id": "req_abc123",
         },
     }
     result = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
@@ -355,6 +368,7 @@ def test_get_hidden_params():
     assert result["response_cost"] == 0.001
     assert result["additional_headers"] is not None
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
+    assert result["additional_headers"]["llm_provider-request-id"] == "req_abc123"
     # assert all fields in StandardLoggingHiddenParams are present
     assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
 

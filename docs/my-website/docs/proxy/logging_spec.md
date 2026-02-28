@@ -108,6 +108,10 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 
 ## StandardLoggingAdditionalHeaders
 
+`additional_headers` contains **all** provider response headers (e.g., `llm_provider-request-id`, `llm_provider-openai-organization`, `llm_provider-openai-processing-ms`), not just rate-limit fields.
+
+The following 4 rate-limit headers are also normalized to underscore keys with `int` values for backward compatibility:
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `x_ratelimit_limit_requests` | `int` | Rate limit for requests |
@@ -123,7 +127,7 @@ Inherits from `StandardLoggingUserAPIKeyMetadata` and adds:
 | `cache_key` | `Optional[str]` | Optional cache key |
 | `api_base` | `Optional[str]` | Optional API base URL |
 | `response_cost` | `Optional[str]` | Optional response cost |
-| `additional_headers` | `Optional[StandardLoggingAdditionalHeaders]` | Additional headers |
+| `additional_headers` | `Optional[Dict[str, Any]]` | All provider response headers |
 | `batch_models` | `Optional[List[str]]` | Only set for Batches API. Lists the models used for cost calculation |
 | `litellm_model_name` | `Optional[str]` | Model name sent in request |
 

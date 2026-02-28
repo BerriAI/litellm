@@ -2563,7 +2563,7 @@ class StandardLoggingHiddenParams(TypedDict):
     api_base: Optional[str]
     response_cost: Optional[str]
     litellm_overhead_time_ms: Optional[float]
-    additional_headers: Optional[StandardLoggingAdditionalHeaders]
+    additional_headers: Optional[Dict[str, Any]]
     batch_models: Optional[List[str]]
     litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
     usage_object: Optional[dict]

@@ -4847,22 +4847,28 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_additional_headers(
         additiona_headers: Optional[dict],
-    ) -> Optional[StandardLoggingAdditionalHeaders]:
+    ) -> Optional[Dict[str, Any]]:
         if additiona_headers is None:
             return None
 
-        additional_logging_headers: StandardLoggingAdditionalHeaders = {}
+        # Start with all headers passed through as-is
+        additional_logging_headers: Dict[str, Any] = dict(additiona_headers)
 
+        # Normalize the standard rate-limit headers to underscore format with int values
+        # for backward compatibility with consumers like Prometheus
         for key in StandardLoggingAdditionalHeaders.__annotations__.keys():
-            _key = key.lower()
-            _key = _key.replace("_", "-")
+            _key = key.lower().replace("_", "-")
             if _key in additiona_headers:
                 try:
-                    additional_logging_headers[key] = int(additiona_headers[_key])  # type: ignore
+                    additional_logging_headers[key] = int(additiona_headers[_key])
                 except (ValueError, TypeError):
+                    additional_logging_headers[key] = additiona_headers[_key]
                     verbose_logger.debug(
-                        f"Could not convert {additiona_headers[_key]} to int for key {key}."
+                        "Could not convert %s to int for key %s, storing as-is.",
+                        additiona_headers[_key],
+                        key,
                     )
+
         return additional_logging_headers
 
     @staticmethod
