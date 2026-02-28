@@ -260,14 +260,22 @@ def test_gpt5_drops_reasoning_effort_xhigh_when_requested(config: OpenAIConfig):
 
 # GPT-5.1 temperature handling tests
 def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
-    """Test that GPT-5.1 models are correctly detected."""
+    """Test that GPT-5.1 models are correctly detected.
+
+    Chat variants (gpt-5.1-chat, gpt-5.2-chat-*) are excluded because they
+    are regular chat models that don't support flexible temperature tied to
+    reasoning_effort.
+    Related: https://github.com/BerriAI/litellm/issues/21911
+    """
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
-    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
+    # Chat variants should NOT be detected as gpt-5.1-style reasoning models
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
@@ -414,3 +422,65 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
+
+
+# GPT-5.2-chat temperature drop tests
+# Related issue: https://github.com/BerriAI/litellm/issues/21911
+def test_gpt5_2_chat_temperature_drop(config: OpenAIConfig):
+    """Test that gpt-5.2-chat drops unsupported temperature with drop_params=True.
+
+    gpt-5.2-chat is a chat model, not a reasoning model. It should not get
+    the flexible temperature handling that reasoning models (gpt-5.1, gpt-5.2)
+    receive when reasoning_effort='none'.
+    """
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.5},
+        optional_params={},
+        model="gpt-5.2-chat",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_gpt5_2_chat_latest_temperature_drop(config: OpenAIConfig):
+    """Test that gpt-5.2-chat-latest also drops unsupported temperature."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.7},
+        optional_params={},
+        model="gpt-5.2-chat-latest",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_gpt5_2_chat_temperature_error(config: OpenAIConfig):
+    """Test that gpt-5.2-chat raises error for unsupported temperature when drop_params=False."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="gpt-5.2-chat-latest",
+            drop_params=False,
+        )
+
+
+def test_gpt5_2_chat_temperature_one_allowed(config: OpenAIConfig):
+    """Test that gpt-5.2-chat still allows temperature=1."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 1.0},
+        optional_params={},
+        model="gpt-5.2-chat-latest",
+        drop_params=False,
+    )
+    assert params["temperature"] == 1.0
+
+
+def test_gpt5_2_base_still_allows_temperature(config: OpenAIConfig):
+    """Test that gpt-5.2 (reasoning model) still allows temperature when reasoning_effort is None."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.5},
+        optional_params={},
+        model="gpt-5.2",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.5
