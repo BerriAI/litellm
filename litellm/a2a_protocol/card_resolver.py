@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from a2a.types import AgentCard
 
 # Runtime imports with availability check
-_A2ACardResolver: Any = None
 AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent-card.json"
 PREV_AGENT_CARD_WELL_KNOWN_PATH: str = "/.well-known/agent.json"
 
@@ -24,7 +23,13 @@ try:
         PREV_AGENT_CARD_WELL_KNOWN_PATH,
     )
 except ImportError:
-    pass
+
+    class _A2ACardResolver:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def get_agent_card(self, *args, **kwargs):
+            raise RuntimeError("a2a-sdk is not installed")
 
 
 def is_localhost_or_internal_url(url: Optional[str]) -> bool:

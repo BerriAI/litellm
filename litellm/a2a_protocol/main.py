@@ -240,7 +240,9 @@ async def asend_message(
         extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
-        a2a_client = await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
+        a2a_client = await create_a2a_client(
+            base_url=api_base, extra_headers=extra_headers
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -606,7 +608,9 @@ async def create_a2a_client(
 
     if extra_headers:
         httpx_client.headers.update(extra_headers)
-        verbose_proxy_logger.debug(f"A2A client created with extra_headers={extra_headers}")
+        verbose_proxy_logger.debug(
+            f"A2A client created with extra_headers={extra_headers}"
+        )
 
     # Resolve agent card
     resolver = A2ACardResolver(
@@ -623,6 +627,7 @@ async def create_a2a_client(
     a2a_client = _A2AClient(
         httpx_client=httpx_client,
         agent_card=agent_card,
+        url=base_url,
     )
 
     # Store agent_card on client for later retrieval (SDK doesn't expose it)

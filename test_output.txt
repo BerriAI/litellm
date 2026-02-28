@@ -1,0 +1,332 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.6.0 -- /home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/bin/python
+cachedir: .pytest_cache
+rootdir: /home/lucky_2004/repos/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.21.2, respx-0.22.0, retry-1.7.0, anyio-4.11.0, xdist-3.8.0, requests-mock-1.12.1, mock-3.15.1
+asyncio: mode=Mode.AUTO
+collecting ... collected 1 item
+
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_pass_through_output_config_preservation RETRY [100%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_pass_through_output_config_preservation FAILED [100%]
+
+=================================== FAILURES ===================================
+_________________ test_pass_through_output_config_preservation _________________
+
+mock_completion = <MagicMock name='completion' id='140508424224112'>
+
+    @patch("litellm.completion")
+    def test_pass_through_output_config_preservation(mock_completion):
+        """Test that output_config is preserved when using the pass-through handler."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+    
+        mock_completion.return_value = MagicMock()
+    
+        messages = [{"role": "user", "content": "Hello"}]
+        output_config = {"effort": "high"}
+    
+>       LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+            max_tokens=1000,
+            messages=messages,
+            model="gpt-4o",
+            output_config=output_config,
+        )
+
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py:1489: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+max_tokens = 1000, messages = [{'content': 'Hello', 'role': 'user'}]
+model = 'gpt-4o', metadata = None, stop_sequences = None, stream = False
+system = None, temperature = None, thinking = None, tool_choice = None
+tools = None, top_k = None, top_p = None, output_format = None
+output_config = {'effort': 'high'}, _is_async = False, kwargs = {}
+
+    @staticmethod
+    def anthropic_messages_handler(
+        max_tokens: int,
+        messages: List[Dict],
+        model: str,
+        metadata: Optional[Dict] = None,
+        stop_sequences: Optional[List[str]] = None,
+        stream: Optional[bool] = False,
+        system: Optional[str] = None,
+        temperature: Optional[float] = None,
+        thinking: Optional[Dict] = None,
+        tool_choice: Optional[Dict] = None,
+        tools: Optional[List[Dict]] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        output_format: Optional[Dict] = None,
+        output_config: Optional[Dict] = None,
+        _is_async: bool = False,
+        **kwargs,
+    ) -> Union[
+        AnthropicMessagesResponse,
+        AsyncIterator[Any],
+        Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+    ]:
+        """Handle non-Anthropic models using the adapter."""
+        if _is_async is True:
+            return LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                output_config=output_config,
+                **kwargs,
+            )
+    
+        completion_kwargs, tool_name_mapping = (
+>           LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                output_config=output_config,
+                extra_kwargs=kwargs,
+            )
+        )
+E       TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+litellm/llms/anthropic/experimental_pass_through/adapters/handler.py:241: TypeError
+---------------------------- Captured stdout setup -----------------------------
+<module 'litellm' from '/home/lucky_2004/repos/litellm/litellm/__init__.py'>
+
+======================= the following tests were retried =======================
+	test_pass_through_output_config_preservation failed on attempt 1! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 262, in <lambda>
+	    lambda: ihook(item=item, **kwds), when=when, reraise=reraise
+	            ^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 2! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 3! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 4! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 5! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 6! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 7! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 8! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 9! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 10! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 11! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 12! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 13! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 14! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 15! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 16! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 17! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 18! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 19! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed on attempt 20! Retrying!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+	test_pass_through_output_config_preservation failed after 21 attempts!
+	Traceback (most recent call last):
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/_pytest/runner.py", line 341, in from_call
+	    result: Optional[TResult] = func()
+	                                ^^^^^^
+	  File "/home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/lib/python3.12/site-packages/pytest_retry/retry_plugin.py", line 238, in <lambda>
+	    call = pytest.CallInfo.from_call(lambda: hook.pytest_runtest_call(item=item), when="call")
+	                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	TypeError: LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs() got an unexpected keyword argument 'top_k'
+
+=========================== end of test retry report ===========================
+
+=========================== short test summary info ============================
+FAILED tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_pass_through_output_config_preservation
+=================== 1 failed, 1 retried in 110.42s (0:01:50) ===================

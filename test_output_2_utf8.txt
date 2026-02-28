@@ -1,0 +1,138 @@
+﻿============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.6.0 -- /home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/bin/python
+cachedir: .pytest_cache
+rootdir: /home/lucky_2004/repos/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.21.2, respx-0.22.0, retry-1.7.0, anyio-4.12.1, xdist-3.8.0, requests-mock-1.12.1, mock-3.15.1
+asyncio: mode=Mode.AUTO
+collecting ... collected 1 item
+
+wsl : [92m10:22:32 - 
+LiteLLM Proxy:ERROR[0m: k
+ey_management_endpoints.py
+:2701 - litellm.proxy.prox
+y_server.generate_key_help
+er_fn(): Exception 
+occured - 400: {'error': 
+'Key already exists. Use 
+/key/update to modify an 
+existing key.'}
+At line:1 char:1
++ wsl -d Ubuntu-24.04 -u 
+lucky_2004 --cd /home/luck
+y_2004/repos/litellm ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo        
+      : NotSpecified: (  
+  [92m10:22:32 -...exis   
+ ting key.'}:String) [    
+], RemoteException
+    + FullyQualifiedError 
+   Id : NativeCommandErr  
+  or
+ 
+[92m10:22:32 - LiteLLM 
+Proxy:ERROR[0m: key_manag
+ement_endpoints.py:1142 - 
+litellm.proxy.proxy_server
+.generate_key_fn(): 
+Exception occured - 400: 
+{'error': 'Key already 
+exists. Use /key/update 
+to modify an existing 
+key.'}
+Traceback (most recent 
+call last):
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 1134, in 
+generate_key_fn
+    return await _common_k
+ey_generation_helper(
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 659, in _common_key_g
+eneration_helper
+    response = await 
+generate_key_helper_fn(
+               ^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 2708, in 
+generate_key_helper_fn
+    raise e
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 2675, in 
+generate_key_helper_fn
+    raise HTTPException(
+fastapi.exceptions.HTTPExc
+eption: 400: {'error': 
+'Key already exists. Use 
+/key/update to modify an 
+existing key.'}
+[92m10:22:32 - LiteLLM 
+Proxy:ERROR[0m: 
+utils.py:4188 - 
+Exception: 400: {'error': 
+'Key already exists. Use 
+/key/update to modify an 
+existing key.'}
+Traceback (most recent 
+call last):
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 1134, in 
+generate_key_fn
+    return await _common_k
+ey_generation_helper(
+           ^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 659, in _common_key_g
+eneration_helper
+    response = await 
+generate_key_helper_fn(
+               ^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 2708, in 
+generate_key_helper_fn
+    raise e
+  File "/home/lucky_2004/r
+epos/litellm/litellm/proxy
+/management_endpoints/key_
+management_endpoints.py", 
+line 2675, in 
+generate_key_helper_fn
+    raise HTTPException(
+fastapi.exceptions.HTTPExc
+eption: 400: {'error': 
+'Key already exists. Use 
+/key/update to modify an 
+existing key.'}
+tests/proxy_unit_tests/test_issue_20494.py::test_repro_issue_20494 <module 'litellm' from '/home/lucky_2004/repos/litellm/litellm/__init__.py'>
+PASSED
+
+============================== 1 passed in 3.49s ===============================
