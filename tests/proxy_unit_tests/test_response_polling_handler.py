@@ -626,6 +626,7 @@ class TestStreamingEventProcessing:
         assert UPDATE_INTERVAL * 1000 == 150  # 150 milliseconds
 
 
+@pytest.mark.xdist_group("heavy_imports")
 class TestBackgroundStreamingModule:
     """Test cases for background_streaming module imports and structure"""
 
