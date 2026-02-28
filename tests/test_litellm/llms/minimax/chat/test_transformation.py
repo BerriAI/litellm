@@ -203,6 +203,64 @@ def test_minimax_chat_completion_streaming():
     assert len(chunks) > 0
 
 
+def test_minimax_map_reasoning_details_to_reasoning_content():
+    """Test that reasoning_details is mapped to reasoning_content in streaming chunks."""
+    config = MinimaxChatConfig()
+
+    # Simulate MiniMax streaming chunk with reasoning_details
+    choices = [
+        {"delta": {"reasoning_details": "Let me think step by step..."}}
+    ]
+    result = config._map_reasoning_to_reasoning_content(choices)
+
+    assert "reasoning_content" in result[0]["delta"]
+    assert result[0]["delta"]["reasoning_content"] == "Let me think step by step..."
+    assert "reasoning_details" not in result[0]["delta"]
+
+
+def test_minimax_map_reasoning_details_preserves_standard_reasoning():
+    """Test that standard reasoning field still works for MiniMax."""
+    config = MinimaxChatConfig()
+
+    # Simulate chunk with standard 'reasoning' field
+    choices = [
+        {"delta": {"reasoning": "Standard reasoning content"}}
+    ]
+    result = config._map_reasoning_to_reasoning_content(choices)
+
+    assert "reasoning_content" in result[0]["delta"]
+    assert result[0]["delta"]["reasoning_content"] == "Standard reasoning content"
+
+
+def test_minimax_map_reasoning_details_no_reasoning():
+    """Test that chunks without reasoning fields are unchanged."""
+    config = MinimaxChatConfig()
+
+    choices = [
+        {"delta": {"content": "Normal content"}}
+    ]
+    result = config._map_reasoning_to_reasoning_content(choices)
+
+    assert result[0]["delta"] == {"content": "Normal content"}
+
+
+def test_extract_reasoning_content_with_reasoning_details():
+    """Test that _extract_reasoning_content handles reasoning_details field."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    # MiniMax non-streaming response with reasoning_details
+    message = {
+        "content": "The answer is 4.",
+        "reasoning_details": "2+2=4 because addition..."
+    }
+    reasoning, content = _extract_reasoning_content(message)
+
+    assert reasoning == "2+2=4 because addition..."
+    assert content == "The answer is 4."
+
+
 if __name__ == "__main__":
     # Run basic tests that don't require API key
     print("Testing MiniMax Chat Config...")
@@ -220,6 +278,19 @@ if __name__ == "__main__":
     print("\nTesting MiniMax Provider Config Manager...")
     test_minimax_provider_config_manager()
     print("✓ Provider config manager test passed")
+
+    print("\nTesting MiniMax reasoning_details mapping...")
+    test_minimax_map_reasoning_details_to_reasoning_content()
+    print("✓ reasoning_details mapping test passed")
+
+    test_minimax_map_reasoning_details_preserves_standard_reasoning()
+    print("✓ standard reasoning mapping test passed")
+
+    test_minimax_map_reasoning_details_no_reasoning()
+    print("✓ no reasoning test passed")
+
+    test_extract_reasoning_content_with_reasoning_details()
+    print("✓ extract reasoning content test passed")
     
     print("\n✅ All basic tests passed!")
 

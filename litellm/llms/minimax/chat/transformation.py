@@ -20,6 +20,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
     - MiniMax-M2.1
     - MiniMax-M2.1-lightning
     - MiniMax-M2
+    - MiniMax-M2.5
     """
 
     @staticmethod
@@ -103,4 +104,19 @@ class MinimaxChatConfig(OpenAIGPTConfig):
             pass
         
         return base_params + additional_params
+
+    def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
+        """
+        Map MiniMax's 'reasoning_details' and 'reasoning' fields to 'reasoning_content'.
+
+        MiniMax returns reasoning content in delta.reasoning_details when
+        reasoning_split=True is passed. LiteLLM expects delta.reasoning_content.
+        """
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning_details" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning_details")
+            elif "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
+        return choices
 
