@@ -102,7 +102,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
   [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
   [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
-  [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
+  [Providers.Azure_AI_Studio]: `${asset_logos_folder}azure_ai_foundry.png`,
   [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
   [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
   [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
@@ -211,6 +211,13 @@ export const getPlaceholder = (selectedProvider: string): string => {
   }
 };
 
+const isValidModelName = (modelName: string): boolean => {
+  // Filter out image model variants with resolution/quality prefixes
+  // Examples: "1024-x-1024/gpt-image-1.5", "high/1024-x-1024/gpt-image-1", "standard/1024-x-1024/gpt-image-1"
+  const invalidImageModelPattern = /^(high|low|medium|standard|hd)?\/?\d{3,4}-x-\d{3,4}\/(dall-e-|gpt-image-)/;
+  return !invalidImageModelPattern.test(modelName);
+};
+
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
   console.log(`Provider key: ${providerKey}`);
@@ -227,7 +234,9 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
           litellmProvider === custom_llm_provider ||
           (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
         ) {
-          providerModels.push(key);
+          if (isValidModelName(key)) {
+            providerModels.push(key);
+          }
         }
       }
     });
@@ -242,7 +251,9 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
           "litellm_provider" in (value as object) &&
           (value as any)["litellm_provider"] === "cohere_chat"
         ) {
-          providerModels.push(key);
+          if (isValidModelName(key)) {
+            providerModels.push(key);
+          }
         }
       });
     }
@@ -258,11 +269,13 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
           "litellm_provider" in (value as object) &&
           (value as any)["litellm_provider"] === "sagemaker_chat"
         ) {
-          providerModels.push(key);
+          if (isValidModelName(key)) {
+            providerModels.push(key);
+          }
         }
       });
     }
   }
 
-  return providerModels;
+  return providerModels.sort();
 };

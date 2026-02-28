@@ -411,7 +411,7 @@
     "default_model_placeholder": "azure/my-deployment"
   },
   {
-    "provider": "Azure_AI_Studio",
+    "provider": "AZURE_AI",
     "provider_display_name": "Azure AI Foundry (Studio)",
     "litellm_provider": "azure_ai",
     "credential_fields": [
@@ -1663,7 +1663,7 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
-    "provider": "MistralAI",
+    "provider": "MISTRAL",
     "provider_display_name": "Mistral AI",
     "litellm_provider": "mistral",
     "credential_fields": [
