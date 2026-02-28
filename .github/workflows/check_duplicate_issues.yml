@@ -34,6 +34,12 @@ jobs:
         with:
           sparse-checkout: .github/scripts
 
+      - name: Set up Python
+        if: github.event.action == 'opened'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Auto-close if high-confidence duplicate
         if: github.event.action == 'opened'
         env:
