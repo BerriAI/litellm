@@ -1559,6 +1559,7 @@ async def test_resolve_jwks_url_caches_resolved_jwks_uri():
     jwks_url = "https://login.microsoftonline.com/tenant/discovery/keys"
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {"jwks_uri": jwks_url}
 
     with patch.object(handler.http_handler, "get", new_callable=AsyncMock, return_value=mock_response) as mock_get:
@@ -1587,6 +1588,7 @@ async def test_resolve_jwks_url_raises_if_no_jwks_uri_in_discovery_doc():
 
     discovery_url = "https://example.com/.well-known/openid-configuration"
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {"issuer": "https://example.com"}  # no jwks_uri
 
     with patch.object(handler.http_handler, "get", new_callable=AsyncMock, return_value=mock_response):
