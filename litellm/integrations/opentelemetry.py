@@ -810,8 +810,13 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        # only log raw LLM request/response if message_logging is on and not globally turned off
-        if litellm.turn_off_message_logging or not self.message_logging:
+        # only log raw LLM request/response if message_logging is on, not globally turned off,
+        # and if raw request logging is enabled
+        if (
+            litellm.turn_off_message_logging
+            or not self.message_logging
+            or not litellm.log_raw_request_response
+        ):
             return
 
         litellm_params = kwargs.get("litellm_params", {})
