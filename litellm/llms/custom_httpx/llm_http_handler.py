@@ -9632,9 +9632,17 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.post(
-                url=url, headers=headers, json=request_body, timeout=timeout
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body, headers=headers
             )
+            if files is not None:
+                response = sync_httpx_client.post(
+                    url=url, headers=headers, data=data, files=files, timeout=timeout
+                )
+            else:
+                response = sync_httpx_client.post(
+                    url=url, headers=headers, json=request_body, timeout=timeout
+                )
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -9681,9 +9689,17 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.post(
-                url=url, headers=headers, json=request_body, timeout=timeout
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body, headers=headers
             )
+            if files is not None:
+                response = await async_httpx_client.post(
+                    url=url, headers=headers, data=data, files=files, timeout=timeout
+                )
+            else:
+                response = await async_httpx_client.post(
+                    url=url, headers=headers, json=request_body, timeout=timeout
+                )
         except Exception as e:
             raise self._handle_error(
                 e=e,
