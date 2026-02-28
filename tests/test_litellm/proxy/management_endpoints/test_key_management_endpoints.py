@@ -3967,6 +3967,7 @@ async def test_list_keys_with_expand_user():
     mock_key1 = MagicMock()
     mock_key1.token = "token1"
     mock_key1.user_id = "user123"
+    mock_key1.created_by = None
     # Set up model_dump() to raise AttributeError so it falls back to dict()
     mock_key1.model_dump = MagicMock(side_effect=AttributeError("model_dump not available"))
     mock_key1.dict = MagicMock(return_value=key1_dict)
@@ -3980,6 +3981,7 @@ async def test_list_keys_with_expand_user():
     mock_key2 = MagicMock()
     mock_key2.token = "token2"
     mock_key2.user_id = "user456"
+    mock_key2.created_by = None
     # Set up model_dump() to raise AttributeError so it falls back to dict()
     mock_key2.model_dump = MagicMock(side_effect=AttributeError("model_dump not available"))
     mock_key2.dict = MagicMock(return_value=key2_dict)
