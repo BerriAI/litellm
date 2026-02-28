@@ -3185,6 +3185,7 @@ class LlmProviders(str, Enum):
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
     LITELLM_AGENT = "litellm_agent"
+    CURSOR = "cursor"
 
 
 # Create a set of all provider values for quick lookup

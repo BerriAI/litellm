@@ -635,6 +635,7 @@ const sidebars = {
             "pass_through/bedrock",
             "pass_through/azure_passthrough",
             "pass_through/cohere",
+            "pass_through/cursor",
             "pass_through/google_ai_studio",
             "pass_through/langfuse",
             "pass_through/mistral",
