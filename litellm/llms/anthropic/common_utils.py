@@ -231,15 +231,36 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Check if effort parameter is being used.
 
         Returns True if effort-related parameters are present.
+        Note: callers use this to add the effort beta header. While effort
+        is GA for Claude 4.6 and Opus 4.5, sending the beta header is
+        harmless and keeps backward compatibility with older API versions.
         """
         if not optional_params:
             return False
 
-        # Check if reasoning_effort is provided for Claude Opus 4.5
-        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
-            reasoning_effort = optional_params.get("reasoning_effort")
-            if reasoning_effort and isinstance(reasoning_effort, str):
-                return True
+        if model:
+            model_lower = model.lower()
+            is_effort_model = any(
+                v in model_lower
+                for v in (
+                    "opus-4-5",
+                    "opus_4_5",
+                    "opus-4.5",
+                    "opus_4.5",
+                    "opus-4-6",
+                    "opus_4_6",
+                    "opus-4.6",
+                    "opus_4.6",
+                    "sonnet-4-6",
+                    "sonnet_4_6",
+                    "sonnet-4.6",
+                    "sonnet_4.6",
+                )
+            )
+            if is_effort_model:
+                reasoning_effort = optional_params.get("reasoning_effort")
+                if reasoning_effort and isinstance(reasoning_effort, str):
+                    return True
 
         # Check if output_config is directly provided
         output_config = optional_params.get("output_config")
