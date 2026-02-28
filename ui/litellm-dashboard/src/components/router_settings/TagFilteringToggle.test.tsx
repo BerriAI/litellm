@@ -3,24 +3,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TagFilteringToggle from "./TagFilteringToggle";
 
-// setupTests.ts mocks @tremor/react but leaves Switch as the real implementation.
-// Re-mock Switch as a plain checkbox so toggle interactions are trivially testable.
-vi.mock("@tremor/react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@tremor/react")>();
-  return {
-    ...actual,
-    Switch: ({ checked, onChange, className }: any) => (
-      <input
-        type="checkbox"
-        role="switch"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className={className}
-      />
-    ),
-  };
-});
-
 const baseMetadata = {
   enable_tag_filtering: {
     ui_field_name: "Tag Filtering",
