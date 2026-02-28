@@ -26,6 +26,7 @@ from litellm.types.utils import (
     CallTypes,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
+    GuardrailTracingDetail,
     LLMResponseTypes,
     StandardLoggingGuardrailInformation,
 )
@@ -91,6 +92,9 @@ class CustomGuardrail(CustomLogger):
         mask_request_content: bool = False,
         mask_response_content: bool = False,
         violation_message_template: Optional[str] = None,
+        end_session_after_n_fails: Optional[int] = None,
+        on_violation: Optional[str] = None,
+        realtime_violation_message: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -103,6 +107,9 @@ class CustomGuardrail(CustomLogger):
             default_on: If True, the guardrail will be run by default on all requests
             mask_request_content: If True, the guardrail will mask the request content
             mask_response_content: If True, the guardrail will mask the response content
+            end_session_after_n_fails: For /v1/realtime sessions, end the session after this many violations
+            on_violation: For /v1/realtime sessions, 'warn' or 'end_session'
+            realtime_violation_message: Message the bot speaks aloud when a /v1/realtime guardrail fires
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -113,6 +120,9 @@ class CustomGuardrail(CustomLogger):
         self.mask_request_content: bool = mask_request_content
         self.mask_response_content: bool = mask_response_content
         self.violation_message_template: Optional[str] = violation_message_template
+        self.end_session_after_n_fails: Optional[int] = end_session_after_n_fails
+        self.on_violation: Optional[str] = on_violation
+        self.realtime_violation_message: Optional[str] = realtime_violation_message
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -520,9 +530,15 @@ class CustomGuardrail(CustomLogger):
         masked_entity_count: Optional[Dict[str, int]] = None,
         guardrail_provider: Optional[str] = None,
         event_type: Optional[GuardrailEventHooks] = None,
+        tracing_detail: Optional[GuardrailTracingDetail] = None,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
+
+        Args:
+            tracing_detail: Optional typed dict with provider-specific tracing fields
+                (guardrail_id, policy_template, detection_method, confidence_score,
+                classification, match_details, patterns_checked, alert_recipients).
         """
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
@@ -559,6 +575,7 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
+            **(tracing_detail or {}),
         )
 
         def _append_guardrail_info(container: dict) -> None:
@@ -579,9 +596,10 @@ class CustomGuardrail(CustomLogger):
         elif "litellm_metadata" in request_data:
             _append_guardrail_info(request_data["litellm_metadata"])
         else:
-            verbose_logger.warning(
-                "unable to log guardrail information. No metadata found in request_data"
-            )
+            # Ensure guardrail info is always logged (e.g. proxy may not have set
+            # metadata yet). Attach to "metadata" so spend log / standard logging see it.
+            request_data["metadata"] = {}
+            _append_guardrail_info(request_data["metadata"])
 
     async def apply_guardrail(
         self,
@@ -814,8 +832,8 @@ def log_guardrail_information(func):
         - during_call
         - post_call
     """
-    import asyncio
     import functools
+    import inspect
 
     def _infer_event_type_from_function_name(
         func_name: str,
@@ -896,7 +914,7 @@ def log_guardrail_information(func):
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 

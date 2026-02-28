@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -76,6 +76,7 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -101,6 +102,7 @@ from litellm.proxy.db.create_views import (
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
@@ -383,6 +385,7 @@ class ProxyLogging:
         alert_types: Optional[List[AlertType]] = None,
         alerting_args: Optional[dict] = None,
         alert_to_webhook_url: Optional[dict] = None,
+        alert_type_config: Optional[dict] = None,
     ):
         updated_slack_alerting: bool = False
         if alerting is not None:
@@ -397,6 +400,8 @@ class ProxyLogging:
         if alert_to_webhook_url is not None:
             self.alert_to_webhook_url = alert_to_webhook_url
             updated_slack_alerting = True
+        if alert_type_config is not None:
+            updated_slack_alerting = True
 
         if updated_slack_alerting is True:
             self.slack_alerting_instance.update_values(
@@ -405,6 +410,7 @@ class ProxyLogging:
                 alert_types=self.alert_types,
                 alerting_args=alerting_args,
                 alert_to_webhook_url=self.alert_to_webhook_url,
+                alert_type_config=alert_type_config,
             )
 
             if self.alerting is not None and "slack" in self.alerting:
@@ -455,18 +461,26 @@ class ProxyLogging:
     def _init_litellm_callbacks(self, llm_router: Optional[Router] = None):
         self._add_proxy_hooks(llm_router)
         litellm.logging_callback_manager.add_litellm_callback(self.service_logging_obj)  # type: ignore
-        for callback in litellm.callbacks:
+
+        # Track string callbacks and their initialized instances so we can
+        # replace them in-place, preventing duplicates (string + instance) in
+        # litellm.callbacks which caused double-counting of metrics.
+        string_callbacks_to_replace: Dict[int, CustomLogger] = {}
+
+        for idx, callback in enumerate(litellm.callbacks):
             if isinstance(callback, str):
-                callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
+                initialized_callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
                     cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
 
-                if callback is None:
-                    continue
+                if initialized_callback is not None:
+                    string_callbacks_to_replace[idx] = initialized_callback
 
-            litellm.logging_callback_manager.add_litellm_callback(callback)
+        # Replace string entries in litellm.callbacks with initialized instances
+        for idx, initialized_callback in string_callbacks_to_replace.items():
+            litellm.callbacks[idx] = initialized_callback
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -950,6 +964,7 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: CallTypesLiteral,
+        event_type: GuardrailEventHooks,
     ) -> Optional[dict]:
         """
         Process a guardrail callback during pre-call hook.
@@ -969,8 +984,10 @@ class ProxyLogging:
         from litellm.types.guardrails import GuardrailEventHooks
 
         # Determine the event type based on call type
-        event_type = GuardrailEventHooks.pre_call
-        if call_type == CallTypes.call_mcp_tool.value:
+        if (
+            event_type is GuardrailEventHooks.pre_call
+            and call_type == CallTypes.call_mcp_tool.value
+        ):
             event_type = GuardrailEventHooks.pre_mcp_call
 
         # Check if the guardrail should run for this request
@@ -1226,7 +1243,8 @@ class ProxyLogging:
 
         if result.terminal_action == "modify_response":
             raise ModifyResponseException(
-                message=result.modify_response_message or "Response modified by pipeline",
+                message=result.modify_response_message
+                or "Response modified by pipeline",
                 model=data.get("model", "unknown"),
                 request_data=data,
                 guardrail_name=f"pipeline:{policy_name}",
@@ -1324,7 +1342,10 @@ class ProxyLogging:
                     and data is not None
                 ):
                     # Skip guardrails managed by a pipeline
-                    if _callback.guardrail_name and _callback.guardrail_name in pipeline_managed:
+                    if (
+                        _callback.guardrail_name
+                        and _callback.guardrail_name in pipeline_managed
+                    ):
                         continue
 
                     result = await self._process_guardrail_callback(
@@ -1332,6 +1353,7 @@ class ProxyLogging:
                         data=data,  # type: ignore
                         user_api_key_dict=user_api_key_dict,
                         call_type=call_type,
+                        event_type=GuardrailEventHooks.pre_call,
                     )
                     if result is None:
                         continue
@@ -1477,6 +1499,7 @@ class ProxyLogging:
             "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
+            "project_budget",
         ],
         user_info: CallInfo,
     ):
@@ -1485,11 +1508,11 @@ class ProxyLogging:
         # Note: user_info is a CallInfo that can represent user/team/org level info. For team budgets,
         # alert_emails is populated from team_object.metadata.soft_budget_alerting_emails (see auth_checks.py)
         is_soft_budget_with_alert_emails = (
-            type == "soft_budget" 
-            and user_info.alert_emails is not None 
+            type == "soft_budget"
+            and user_info.alert_emails is not None
             and len(user_info.alert_emails) > 0
         )
-        
+
         if self.alerting is None and not is_soft_budget_with_alert_emails:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
@@ -1505,10 +1528,9 @@ class ProxyLogging:
         # 1. "email" is in alerting config, OR
         # 2. It's a soft_budget alert with team-specific alert_emails (bypasses global alerting config)
         should_send_email = (
-            (self.alerting is not None and "email" in self.alerting) 
-            or is_soft_budget_with_alert_emails
-        )
-        
+            self.alerting is not None and "email" in self.alerting
+        ) or is_soft_budget_with_alert_emails
+
         if should_send_email and self.email_logging_instance is not None:
             await self.email_logging_instance.budget_alerts(
                 type=type,
@@ -1977,6 +1999,10 @@ class ProxyLogging:
             )
         return merged_headers
 
+    def is_a2a_streaming_response(self, response: dict) -> bool:
+        expected_keys = ["jsonrpc", "id", "result"]
+        return all(key in response for key in expected_keys)
+
     async def async_post_call_streaming_hook(
         self,
         data: dict,
@@ -1997,7 +2023,16 @@ class ProxyLogging:
         response_str: Optional[str] = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
+        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+            from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
+
+            response_str = extract_text_from_a2a_response(response)
         if response_str is not None:
+            # Cache model-level guardrails check per-request to avoid repeated
+            # dict lookups + llm_router.get_deployment() per callback per chunk.
+            _cached_guardrail_data: Optional[dict] = None
+            _guardrail_data_computed = False
+
             for callback in litellm.callbacks:
                 try:
                     _callback: Optional[CustomLogger] = None
@@ -2005,14 +2040,16 @@ class ProxyLogging:
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
 
-                        ## CHECK FOR MODEL-LEVEL GUARDRAILS
-                        modified_data = _check_and_merge_model_level_guardrails(
-                            data=data, llm_router=llm_router
-                        )
+                        ## CHECK FOR MODEL-LEVEL GUARDRAILS (cached per-request)
+                        if not _guardrail_data_computed:
+                            _cached_guardrail_data = _check_and_merge_model_level_guardrails(
+                                data=data, llm_router=llm_router
+                            )
+                            _guardrail_data_computed = True
 
                         if (
                             callback.should_run_guardrail(
-                                data=modified_data,
+                                data=_cached_guardrail_data,
                                 event_type=GuardrailEventHooks.post_call,
                             )
                             is not True
@@ -2142,6 +2179,58 @@ def jsonify_object(data: dict) -> dict:
     return db_data
 
 
+# In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
+# Avoids a DB query on every auth request for non-deprecated keys.
+# Bounded to prevent memory leaks from accumulated rotations.
+_deprecated_key_cache: LimitedSizeOrderedDict = LimitedSizeOrderedDict(max_size=1000)
+_DEPRECATED_KEY_CACHE_TTL_SECONDS = 60
+
+
+async def _lookup_deprecated_key(
+    db: Any,
+    hashed_token: str,
+) -> Optional[str]:
+    """
+    Check if a token exists in the deprecated keys table and is still within its grace period.
+
+    Returns the active_token_id if found and valid, otherwise None.
+    Uses an in-memory cache to avoid DB queries on every auth request.
+    """
+    now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
+
+    # Check cache first
+    cached = _deprecated_key_cache.get(hashed_token)
+    cached = _deprecated_key_cache.get(hashed_token)
+    if cached is not None:
+        active_token_id, cache_expires_at_ts, revoke_at_ts = cached
+        if now_ts < cache_expires_at_ts and now_ts < revoke_at_ts:
+            return active_token_id
+        else:
+            _deprecated_key_cache.pop(hashed_token, None)
+
+    try:
+        deprecated_row = await db.litellm_deprecatedverificationtoken.find_first(
+            where={
+                "token": hashed_token,
+                "revoke_at": {"gt": now},
+            },
+            select={"active_token_id": True},
+        )
+        if deprecated_row and deprecated_row.active_token_id:
+            _deprecated_key_cache[hashed_token] = (
+                deprecated_row.active_token_id,
+                now_ts + _DEPRECATED_KEY_CACHE_TTL_SECONDS,
+            )
+            return deprecated_row.active_token_id
+        # Only cache positive results; negative lookups are fast on indexed columns
+        # and caching them risks evicting real deprecated key entries.
+    except Exception as e:
+        verbose_proxy_logger.debug("Deprecated key lookup skipped: %s", e)
+
+    return None
+
+
 class PrismaClient:
     spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -2189,6 +2278,37 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
+        self._db_reconnect_lock = asyncio.Lock()
+        self._db_health_watchdog_task: Optional[asyncio.Task] = None
+        self._db_last_reconnect_attempt_ts: float = 0.0
+        self._db_reconnect_cooldown_seconds: int = max(
+            1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15"))
+        )
+        self._db_health_watchdog_interval_seconds: int = max(
+            5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "30"))
+        )
+        self._db_health_watchdog_enabled: bool = (
+            str_to_bool(os.getenv("PRISMA_HEALTH_WATCHDOG_ENABLED", "true")) is True
+        )
+        self._db_health_watchdog_probe_timeout_seconds: float = max(
+            0.5,
+            float(os.getenv("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", "5.0")),
+        )
+        self._db_watchdog_reconnect_timeout_seconds: float = max(
+            1.0, float(os.getenv("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", "30.0"))
+        )
+        self._db_auth_reconnect_timeout_seconds: float = max(
+            0.5, float(os.getenv("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", "2.0"))
+        )
+        self._db_auth_reconnect_lock_timeout_seconds: float = max(
+            0.0,
+            float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
+        )
+        self._engine_pidfd: int = -1
+        self._engine_pid: int = 0
+        self._watching_engine: bool = False
+        self._engine_confirmed_dead: bool = False
+        self._engine_wait_thread: Optional[threading.Thread] = None
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -2477,6 +2597,7 @@ class PrismaClient:
         parent_otel_span: Optional[Span] = None,
         proxy_logging_obj: Optional[ProxyLogging] = None,
         budget_id_list: Optional[List[str]] = None,
+        check_deprecated: bool = True,
     ):
         args_passed_in = locals()
         start_time = time.time()
@@ -2773,6 +2894,30 @@ class PrismaClient:
                     response = await self._query_first_with_cached_plan_fallback(
                         sql_query
                     )
+
+                    # If not found in main table, check deprecated keys (grace period)
+                    # check_deprecated=False on the recursive call prevents unbounded chaining
+                    if (
+                        response is None
+                        and hashed_token is not None
+                        and check_deprecated
+                    ):
+                        active_token_id = await _lookup_deprecated_key(
+                            db=self.db, hashed_token=hashed_token
+                        )
+                        if active_token_id:
+                            response = await self.get_data(
+                                token=active_token_id,
+                                table_name="combined_view",
+                                query_type="find_unique",
+                                parent_otel_span=parent_otel_span,
+                                proxy_logging_obj=proxy_logging_obj,
+                                check_deprecated=False,
+                            )
+                            if response is not None:
+                                verbose_proxy_logger.debug(
+                                    "Deprecated key used during grace period"
+                                )
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -3431,6 +3576,508 @@ class PrismaClient:
             )
             raise e
 
+    def _get_engine_pid(self) -> int:
+        try:
+            engine = self.db._original_prisma._engine  # type: ignore[attr-defined]
+            if engine is not None and engine.process is not None:
+                return engine.process.pid
+        except (AttributeError, TypeError):
+            pass
+        return 0
+
+    def _is_engine_alive(self) -> bool:
+        if self._engine_pid <= 0:
+            return True
+        try:
+            os.kill(self._engine_pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+
+    @staticmethod
+    def _reap_all_zombies() -> set:
+        """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
+
+        Returns a set of reaped PIDs.  As PID 1 in Docker (or any
+        process that spawns children), we must reap ALL terminated
+        children to prevent zombie accumulation.
+        """
+        reaped: set = set()
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break
+                reaped.add(pid)
+            except ChildProcessError:
+                break
+        return reaped
+
+    def _try_waitpid_watch(self, pid: int) -> bool:
+        """Watch engine PID via os.waitpid() in a dedicated thread.
+
+        The thread blocks on os.waitpid(pid, 0) which is a kernel-level
+        wait and with zero CPU overhead, instant detection when the process exits.
+        When the process dies, the thread notifies the asyncio event loop
+        via call_soon_threadsafe.
+
+        Returns True if the thread was started, False on failure.
+        """
+        try:
+            probe_pid, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            verbose_proxy_logger.debug(
+                "PID %s is not a child process; skipping waitpid watch.", pid,
+            )
+            return False
+
+        if probe_pid == pid:
+            verbose_proxy_logger.warning(
+                "prisma-query-engine PID %s already dead at watch start.", pid,
+            )
+            self._engine_confirmed_dead = True
+            self._reap_all_zombies()
+            self._cleanup_engine_watcher()
+            asyncio.create_task(
+                self.attempt_db_reconnect(
+                    reason="engine_process_death",
+                    force=True,
+                )
+            )
+            return True
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+
+        thread = threading.Thread(
+            target=self._waitpid_thread_func,
+            args=(pid, loop),
+            daemon=True,
+            name=f"prisma-engine-waitpid-{pid}",
+        )
+        thread.start()
+        self._engine_wait_thread = thread
+        return True
+
+    def _waitpid_thread_func(self, pid: int, loop: asyncio.AbstractEventLoop) -> None:
+        """Thread function: block until engine PID exits, then notify event loop.
+
+        Note: uvloop/libuv may reap the child first via waitpid(-1, WNOHANG)
+        in its SIGCHLD handler. In that case our waitpid raises ChildProcessError.
+        we still notify the event loop because the engine is dead either way.
+        """
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+        except OSError:
+            pass
+        try:
+            loop.call_soon_threadsafe(self._on_engine_death_from_thread, pid)
+        except RuntimeError:
+            pass
+
+    def _on_engine_death_from_thread(self, dead_pid: int) -> None:
+        """Called on the event loop thread when the waitpid thread detects engine death."""
+        if self._engine_confirmed_dead:
+            return
+        if dead_pid != self._engine_pid:
+            return
+        verbose_proxy_logger.error(
+            "prisma-query-engine PID %s exited (waitpid thread); triggering reconnect.",
+            dead_pid,
+        )
+        self._engine_confirmed_dead = True
+        self._reap_all_zombies()
+        self._cleanup_engine_watcher()
+        asyncio.create_task(
+            self.attempt_db_reconnect(
+                reason="engine_process_death",
+                force=True,
+            )
+        )
+
+    def _try_pidfd_watch(self, pid: int) -> bool:
+        """
+        Watch engine PID via pidfd_open + asyncio event loop reader.
+
+        Returns True if pidfd watch was set up, False if unavailable or failed.
+        Broad OSError catch handles both ENOSYS and SECCOMP-blocked syscalls.
+        """
+        if not hasattr(os, "pidfd_open"):
+            return False
+        fd = -1
+        try:
+            fd = os.pidfd_open(pid, 0)  # type: ignore[attr-defined]
+            asyncio.get_running_loop().add_reader(fd, self._on_pidfd_readable)
+            self._engine_pidfd = fd
+            return True
+        except OSError:
+            if fd >= 0:
+                os.close(fd)
+            return False
+
+    def _on_pidfd_readable(self) -> None:
+        """pidfd became readable: engine process exited or became zombie.
+
+        Sets _engine_confirmed_dead BEFORE cleanup so _run_reconnect_cycle
+        takes the heavy path (recreate Prisma client + re-arm watcher).
+        """
+        if self._engine_confirmed_dead:
+            # Already handled -- just clean up pidfd resources.
+            if self._engine_pidfd >= 0:
+                try:
+                    asyncio.get_running_loop().remove_reader(self._engine_pidfd)
+                except Exception:
+                    pass
+                try:
+                    os.close(self._engine_pidfd)
+                except OSError:
+                    pass
+                self._engine_pidfd = -1
+            return
+        dead_pid = self._engine_pid
+        verbose_proxy_logger.error(
+            "prisma-query-engine PID %s exited (pidfd event); triggering reconnect.",
+            dead_pid,
+        )
+        self._engine_confirmed_dead = True
+        self._reap_all_zombies()
+        self._cleanup_engine_watcher()
+        asyncio.create_task(
+            self.attempt_db_reconnect(
+                reason="engine_process_death",
+                force=True,
+            )
+        )
+
+    async def _poll_engine_proc(self) -> None:
+        """poll via os.kill(pid, 0) every 1s.
+        Only used when BOTH waitpid thread and pidfd are unavailable
+        (e.g., PID is not our child process and pidfd_open fails)
+        """
+        while self._watching_engine and self._engine_pid > 0:
+            try:
+                os.kill(self._engine_pid, 0)
+            except ProcessLookupError:
+                verbose_proxy_logger.error(
+                    "prisma-query-engine PID %s gone; triggering reconnect.",
+                    self._engine_pid,
+                )
+                self._engine_confirmed_dead = True
+                self._reap_all_zombies()
+                self._cleanup_engine_watcher()
+                await self.attempt_db_reconnect(
+                    reason="engine_process_death",
+                    force=True,
+                )
+                return
+            except (PermissionError, OSError):
+                verbose_proxy_logger.debug(
+                    "Cannot signal PID %s; stopping engine poll.",
+                    self._engine_pid,
+                )
+                self._cleanup_engine_watcher()
+                return
+            await asyncio.sleep(1)
+
+    def _cleanup_engine_watcher(self) -> None:
+        """Clean up pidfd reader, waitpid thread ref, or stop polling and reset state."""
+        self._watching_engine = False
+        if self._engine_pidfd >= 0:
+            try:
+                asyncio.get_running_loop().remove_reader(self._engine_pidfd)
+            except Exception:
+                pass
+            try:
+                os.close(self._engine_pidfd)
+            except OSError:
+                pass
+            self._engine_pidfd = -1
+        self._engine_wait_thread = None
+        self._engine_pid = 0
+
+    async def _start_engine_watcher(self) -> None:
+        """
+        Start watching the Prisma query engine process for death.
+
+        Detection priority:
+        1. os.waitpid() in a dedicated thread, works with all event loops.
+        2. pidfd_open kernel fd registered with asyncio.
+        3. os.kill(pid, 0) polling (1s), last-resort fallback when neither
+           waitpid thread nor pidfd are available.
+
+        """
+        if self._watching_engine or self._engine_pidfd >= 0 or self._engine_wait_thread is not None:
+            return
+        pid = self._get_engine_pid()
+        if pid == 0:
+            verbose_proxy_logger.debug("Could not find prisma-query-engine PID; engine death detection unavailable.")
+            return
+        self._engine_pid = pid
+        self._engine_confirmed_dead = False
+        verbose_proxy_logger.info("Found prisma-query-engine at PID %s.", pid)
+        waitpid_ok = self._try_waitpid_watch(pid)
+        pidfd_ok = False if waitpid_ok else self._try_pidfd_watch(pid)
+        if waitpid_ok:
+            verbose_proxy_logger.info(
+                "Watching engine PID %s via waitpid thread.", pid,
+            )
+        elif pidfd_ok:
+            verbose_proxy_logger.info(
+                "Watching engine PID %s via pidfd.", pid,
+            )
+        else:
+            verbose_proxy_logger.info(
+                "Watching engine PID %s via os.kill polling.", pid,
+            )
+            self._watching_engine = True
+            asyncio.create_task(self._poll_engine_proc())
+
+    def _stop_engine_watcher(self) -> None:
+        """Stop watching the engine process and clean up all resources."""
+        self._cleanup_engine_watcher()
+        self._engine_confirmed_dead = False
+        verbose_proxy_logger.debug("Stopped engine process watcher.")
+
+    async def _run_reconnect_cycle(
+        self, timeout_seconds: Optional[float] = None
+    ) -> None:
+        """
+        Run a reconnect cycle with a single overall timeout budget.
+
+        Uses the _engine_confirmed_dead flag (set by waitpid thread / pidfd / poll
+        handlers) to choose between heavy reconnect (engine dead -- recreate
+        Prisma client, re-arm watcher) and lightweight reconnect (network
+        blip -- disconnect, connect, SELECT 1).
+        """
+        effective_timeout = (
+            timeout_seconds if timeout_seconds is not None else self._db_watchdog_reconnect_timeout_seconds
+        )
+
+        engine_is_dead = self._engine_confirmed_dead or (
+            self._engine_pid > 0 and not self._is_engine_alive()
+        )
+
+        if engine_is_dead:
+            dead_pid = self._engine_pid
+            verbose_proxy_logger.warning(
+                "prisma-query-engine PID %s is dead; reconnecting.",
+                dead_pid,
+            )
+            self._reap_all_zombies()
+            self._cleanup_engine_watcher()
+            self._engine_confirmed_dead = False
+
+            async def _do_heavy_reconnect() -> None:
+                db_url = os.getenv("DATABASE_URL", "")
+                if not db_url:
+                    verbose_proxy_logger.error("DATABASE_URL not set; cannot recreate Prisma client.")
+                    raise RuntimeError("DATABASE_URL not set")
+                await self.db.recreate_prisma_client(db_url)
+                await self._start_engine_watcher()
+
+            await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
+        else:
+            verbose_proxy_logger.debug("Performing Prisma DB reconnect (engine alive or unknown).")
+
+            async def _do_direct_reconnect() -> None:
+                try:
+                    await self.db.disconnect()
+                except Exception as disconnect_err:
+                    verbose_proxy_logger.debug(
+                        "Prisma DB disconnect before reconnect failed (ignored): %s",
+                        disconnect_err,
+                    )
+
+                await self.db.connect()
+                await self.db.query_raw("SELECT 1")
+
+            await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
+
+    async def _attempt_reconnect_inside_lock(
+        self,
+        force: bool,
+        reason: str,
+        timeout_seconds: Optional[float],
+    ) -> bool:
+        now = time.time()
+        if (
+            force is False
+            and now - self._db_last_reconnect_attempt_ts
+            < self._db_reconnect_cooldown_seconds
+        ):
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
+                reason,
+            )
+            return False
+
+        verbose_proxy_logger.warning(
+            "Attempting Prisma DB reconnect. reason=%s", reason
+        )
+
+        reconnect_succeeded = False
+        try:
+            await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
+            reconnect_succeeded = True
+            verbose_proxy_logger.info(
+                "Prisma DB reconnect succeeded. reason=%s", reason
+            )
+        except Exception as reconnect_err:
+            verbose_proxy_logger.error(
+                "Prisma DB reconnect failed. reason=%s error=%s",
+                reason,
+                reconnect_err,
+            )
+        finally:
+            self._db_last_reconnect_attempt_ts = time.time()
+
+        return reconnect_succeeded
+
+    async def attempt_db_reconnect(
+        self,
+        reason: str,
+        force: bool = False,
+        timeout_seconds: Optional[float] = None,
+        lock_timeout_seconds: Optional[float] = None,
+    ) -> bool:
+        """
+        Attempt to reconnect the Prisma client in a singleflight manner.
+
+        Returns:
+            bool: True if reconnection succeeded, else False.
+        """
+        now = time.time()
+        if (
+            force is False
+            and now - self._db_last_reconnect_attempt_ts
+            < self._db_reconnect_cooldown_seconds
+        ):
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt due to cooldown. reason=%s",
+                reason,
+            )
+            return False
+
+        if lock_timeout_seconds is None:
+            async with self._db_reconnect_lock:
+                return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+
+        lock_acquired_by_timeout_task = False
+
+        async def _acquire_reconnect_lock() -> bool:
+            nonlocal lock_acquired_by_timeout_task
+            await self._db_reconnect_lock.acquire()
+            lock_acquired_by_timeout_task = True
+            return True
+
+        acquire_task = asyncio.create_task(_acquire_reconnect_lock())
+        done, _pending = await asyncio.wait(
+            {acquire_task},
+            timeout=lock_timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if acquire_task not in done:
+            acquire_task.cancel()
+            try:
+                await acquire_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
+            # Defensive cleanup for timeout/cancel race on Python 3.9-3.11.
+            if lock_acquired_by_timeout_task:
+                try:
+                    self._db_reconnect_lock.release()
+                except RuntimeError:
+                    pass
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
+                reason,
+                lock_timeout_seconds,
+            )
+            return False
+
+        try:
+            acquire_task.result()
+        except Exception as lock_acquire_err:
+            verbose_proxy_logger.debug(
+                "Skipping DB reconnect attempt due to lock acquisition error. reason=%s error=%s",
+                reason,
+                lock_acquire_err,
+            )
+            return False
+
+        try:
+            return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+        finally:
+            self._db_reconnect_lock.release()
+
+    async def start_db_health_watchdog_task(self) -> None:
+        """Start background tasks that monitor DB health:
+        - A periodic SELECT 1 probe that triggers reconnect on network/connection failure.
+        - A process-level watcher that detects engine death via waitpid thread, pidfd, or os.kill polling."""
+        if self._db_health_watchdog_enabled is not True:
+            verbose_proxy_logger.debug(
+                "Prisma DB health watchdog disabled via PRISMA_HEALTH_WATCHDOG_ENABLED"
+            )
+            return
+        if self._db_health_watchdog_task is not None:
+            return
+        self._db_health_watchdog_task = asyncio.create_task(
+            self._db_health_watchdog_loop()
+        )
+        verbose_proxy_logger.info(
+            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss)",
+            self._db_health_watchdog_interval_seconds,
+            self._db_reconnect_cooldown_seconds,
+            self._db_health_watchdog_probe_timeout_seconds,
+            self._db_watchdog_reconnect_timeout_seconds,
+        )
+        await self._start_engine_watcher()
+
+    async def stop_db_health_watchdog_task(self) -> None:
+        """Stop DB health watchdog task and engine watcher gracefully."""
+        self._stop_engine_watcher()
+        if self._db_health_watchdog_task is None:
+            return
+        self._db_health_watchdog_task.cancel()
+        try:
+            await self._db_health_watchdog_task
+        except asyncio.CancelledError:
+            pass
+        self._db_health_watchdog_task = None
+        verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
+
+    async def _db_health_watchdog_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self._db_health_watchdog_interval_seconds)
+                await asyncio.wait_for(
+                    self.db.query_raw("SELECT 1"),
+                    timeout=self._db_health_watchdog_probe_timeout_seconds,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if isinstance(
+                    e, asyncio.TimeoutError
+                ) or PrismaDBExceptionHandler.is_database_connection_error(e):
+                    await self.attempt_db_reconnect(
+                        reason="db_health_watchdog_connection_error",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "Prisma DB health watchdog observed non-DB error: %s", e
+                    )
+
     @backoff.on_exception(
         backoff.expo,
         Exception,
@@ -3821,20 +4468,29 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         db_writer_client: Optional[AsyncHTTPHandler],
         proxy_logging_obj: ProxyLogging,
+        logs_to_process: Optional[List[Dict[str, Any]]] = None,
     ):
         BATCH_SIZE = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL = (
             10000  # Maximum number of logs to flush in a single interval
         )
-        # Atomically read and remove logs to process (protected by lock)
-        async with prisma_client._spend_log_transactions_lock:
-            logs_to_process = prisma_client.spend_log_transactions[
-                :MAX_LOGS_PER_INTERVAL
-            ]
-            # Remove the logs we're about to process
-            prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                len(logs_to_process) :
-            ]
+        popped_batch = False
+        if logs_to_process is None:
+            # Atomically read and remove logs to process (protected by lock)
+            async with prisma_client._spend_log_transactions_lock:
+                logs_to_process = prisma_client.spend_log_transactions[
+                    :MAX_LOGS_PER_INTERVAL
+                ]
+                # Remove the logs we're about to process
+                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
+                    len(logs_to_process) :
+                ]
+            popped_batch = True
+        if len(logs_to_process) > 0:
+            verbose_proxy_logger.info(
+                "Spend tracking - processing %d spend logs for DB write",
+                len(logs_to_process),
+            )
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -3881,9 +4537,17 @@ class ProxyUpdateSpend:
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES:
+                except DB_CONNECTION_ERROR_TYPES as e:
                     if i is None:
                         i = 0
+                    verbose_proxy_logger.warning(
+                        "Spend tracking - DB connection error writing spend logs, "
+                        "retry %d/%d. logs_count=%d, error=%s",
+                        i + 1,
+                        n_retry_times,
+                        len(logs_to_process),
+                        str(e),
+                    )
                     if i >= n_retry_times:
                         raise
                     await asyncio.sleep(2**i)
@@ -3894,8 +4558,9 @@ class ProxyUpdateSpend:
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
         finally:
-            # Clean up logs_to_process after all processing is complete
-            del logs_to_process
+            # Clean up logs_to_process only if we popped it (caller-owned otherwise)
+            if popped_batch:
+                del logs_to_process
 
     @staticmethod
     def disable_spend_updates() -> bool:
@@ -3961,23 +4626,47 @@ async def update_spend_logs_job(
     Job to process spend_log_transactions queue.
 
     This job is triggered based on queue size rather than time.
-    Processes spend log transactions when the queue reaches a threshold.
+    Pops the batch once, writes spend logs, then runs guardrail usage tracking.
     """
     n_retry_times = 3
+    MAX_LOGS_PER_INTERVAL = 10000
 
-    # Check queue size with lock protection
+    # Atomically pop batch from queue
     async with prisma_client._spend_log_transactions_lock:
         queue_size = len(prisma_client.spend_log_transactions)
-
     if queue_size == 0:
         return
+
+    async with prisma_client._spend_log_transactions_lock:
+        logs_to_process = prisma_client.spend_log_transactions[
+            :MAX_LOGS_PER_INTERVAL
+        ]
+        prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
+            len(logs_to_process) :
+        ]
 
     await ProxyUpdateSpend.update_spend_logs(
         n_retry_times=n_retry_times,
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
         db_writer_client=db_writer_client,
+        logs_to_process=logs_to_process,
     )
+
+    # Guardrail/policy usage tracking (same batch, outside spend-logs update)
+    try:
+        from litellm.proxy.guardrails.usage_tracking import (
+            process_spend_logs_guardrail_usage,
+        )
+        await process_spend_logs_guardrail_usage(
+            prisma_client=prisma_client,
+            logs_to_process=logs_to_process,
+        )
+    except Exception as guardrail_tracking_err:
+        verbose_proxy_logger.warning(
+            "Spend tracking - guardrail usage tracking failed (non-fatal): %s",
+            guardrail_tracking_err,
+        )
 
 
 async def _monitor_spend_logs_queue(
@@ -4675,136 +5364,11 @@ def validate_model_access(
             )
 
 
-def _path_matches_pattern(path: str, pattern: str) -> bool:
-    """Check if a path matches a pattern (supporting * wildcard for list indices)."""
-    path_parts = path.split(".")
-    pattern_parts = pattern.split(".")
-
-    if len(path_parts) != len(pattern_parts):
-        return False
-
-    for path_part, pattern_part in zip(path_parts, pattern_parts):
-        if pattern_part == "*":
-            # Wildcard matches any numeric index
-            if not path_part.isdigit():
-                return False
-        elif path_part != pattern_part:
-            return False
-
-    return True
-
-
-def _build_preserved_paths(
-    data: Any, current_path: str, preserve_fields: List[str], preserved_paths: set
-) -> None:
-    """Iteratively build set of paths that should be preserved."""
-    # Use a stack to avoid recursion: (data, path)
-    stack = [(data, current_path)]
-
-    while stack:
-        current_data, current_path_str = stack.pop()
-
-        if isinstance(current_data, dict):
-            for key, value in current_data.items():
-                new_path = f"{current_path_str}.{key}" if current_path_str else key
-
-                # Check if this path matches any preserve pattern
-                for pattern in preserve_fields:
-                    if _path_matches_pattern(new_path, pattern):
-                        preserved_paths.add(new_path)
-
-                if isinstance(value, (dict, list)):
-                    stack.append((value, new_path))
-
-        elif isinstance(current_data, list):
-            for idx, item in enumerate(current_data):
-                new_path = f"{current_path_str}.{idx}" if current_path_str else str(idx)
-                if isinstance(item, (dict, list)):
-                    stack.append((item, new_path))
-
-
-def _remove_none_except_preserved(
-    data: Any, current_path: str, preserved_paths: set
-) -> Any:
-    """Iteratively remove None values except for preserved paths."""
-    if not isinstance(data, (dict, list)):
-        return data
-
-    # Use a stack for iterative processing: (data, path, is_first_visit)
-    # We'll process in a way that allows us to build the result bottom-up
-    stack = [(data, current_path, True)]  # (data, path, is_first_visit)
-    results_map: dict[int, Any] = {}  # Maps id(data) -> processed result
-
-    while stack:
-        current_data, current_path_str, is_first_visit = stack.pop()
-
-        if is_first_visit:
-            # First visit - mark for revisit and add children to stack
-            stack.append((current_data, current_path_str, False))
-
-            if isinstance(current_data, dict):
-                # Add children in reverse order so they're processed in correct order
-                for key in reversed(list(current_data.keys())):
-                    value = current_data[key]
-                    new_path = f"{current_path_str}.{key}" if current_path_str else key
-
-                    if isinstance(value, (dict, list)):
-                        stack.append((value, new_path, True))
-
-            elif isinstance(current_data, list):
-                # Add children in reverse order
-                for idx in reversed(range(len(current_data))):
-                    item = current_data[idx]
-                    new_path = (
-                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
-                    )
-
-                    if isinstance(item, (dict, list)):
-                        stack.append((item, new_path, True))
-        else:
-            # Second visit - children are processed, build result
-            result: Union[dict[str, Any], list[Any]]
-            if isinstance(current_data, dict):
-                result = {}
-                for key, value in current_data.items():
-                    new_path = f"{current_path_str}.{key}" if current_path_str else key
-
-                    if value is None:
-                        if new_path in preserved_paths:
-                            result[key] = None
-                    elif isinstance(value, (dict, list)):
-                        processed = results_map.get(id(value))
-                        if (
-                            processed is not None
-                            and processed != {}
-                            and processed != []
-                        ):
-                            result[key] = processed
-                    else:
-                        result[key] = value
-
-                results_map[id(current_data)] = result
-
-            elif isinstance(current_data, list):
-                result = []
-                for idx, item in enumerate(current_data):
-                    new_path = (
-                        f"{current_path_str}.{idx}" if current_path_str else str(idx)
-                    )
-
-                    if item is None:
-                        if new_path in preserved_paths:
-                            result.append(None)
-                    elif isinstance(item, (dict, list)):
-                        processed = results_map.get(id(item))
-                        if processed is not None:
-                            result.append(processed)
-                    else:
-                        result.append(item)
-
-                results_map[id(current_data)] = result
-
-    return results_map.get(id(data), data)
+_PRESERVED_NONE_FIELDS: List[tuple[str, str]] = [
+    ("message", "content"),  # null when tool_calls present (issue #6677)
+    ("message", "role"),  # always required by OpenAI spec
+    ("delta", "content"),  # null in streaming chunks
+]
 
 
 def model_dump_with_preserved_fields(
@@ -4813,38 +5377,35 @@ def model_dump_with_preserved_fields(
     exclude_unset: bool = True,
 ) -> Dict[str, Any]:
     """
-    Serialize a Pydantic model to a dictionary while preserving specific fields even if they are None.
+    Serialize a Pydantic model to a dictionary while preserving specific fields
+    even if they are None.
 
-    This function is useful when you need to maintain API compatibility where certain fields
-    must always be present in the response (e.g., message.content in OpenAI API responses).
+    Fields listed in _PRESERVED_NONE_FIELDS are restored after
+    model_dump(exclude_none=True) strips them.
 
     Args:
         obj: The Pydantic BaseModel instance to serialize
-        preserve_fields: List of field paths to preserve even if None (e.g., ["choices.*.message.content"])
+        preserve_fields: Deprecated, kept for backward compatibility.
         exclude_unset: Whether to exclude fields that were not explicitly set
 
     Returns:
         Dictionary representation with None values excluded except for preserved fields
-
-    Example:
-        >>> result = model_dump_with_preserved_fields(
-        ...     response,
-        ...     preserve_fields=["choices.*.message.content", "choices.*.message.role"]
-        ... )
     """
-    if preserve_fields is None:
-        preserve_fields = [
-            "choices.*.message.content",
-            "choices.*.message.role",
-            "choices.*.delta.content",
-        ]
+    result = obj.model_dump(exclude_none=True, exclude_unset=exclude_unset)
 
-    # First, get the full dump without excluding None values
-    full_dump = obj.model_dump(exclude_none=False, exclude_unset=exclude_unset)
+    choices = result.get("choices")
+    if not choices:
+        return result
 
-    # Build the set of preserved paths
-    preserved_paths: set = set()
-    _build_preserved_paths(full_dump, "", preserve_fields, preserved_paths)
+    obj_choices = obj.choices
+    for choice_obj, choice_dict in zip(obj_choices, choices):
+        for sub_object, field_name in _PRESERVED_NONE_FIELDS:
+            sub_dict = choice_dict.get(sub_object)
+            if sub_dict is None:
+                continue
+            if field_name not in sub_dict:
+                sub_obj = getattr(choice_obj, sub_object, None)
+                if sub_obj is not None and hasattr(sub_obj, field_name):
+                    sub_dict[field_name] = getattr(sub_obj, field_name)
 
-    # Remove None values except for preserved paths
-    return _remove_none_except_preserved(full_dump, "", preserved_paths)
+    return result

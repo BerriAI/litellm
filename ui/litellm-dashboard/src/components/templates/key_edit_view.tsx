@@ -1,10 +1,12 @@
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import AgentSelector from "../agent_management/AgentSelector";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
@@ -94,6 +96,15 @@ export function KeyEditView({
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [isKeySaving, setIsKeySaving] = useState(false);
+  const { data: projects } = useProjects();
+  const hasProject = Boolean(keyData.project_id);
+  const projectDisplay = (() => {
+    if (!keyData.project_id) return null;
+    const project = projects?.find((p) => p.project_id === keyData.project_id);
+    return project?.project_alias
+      ? `${project.project_alias} (${keyData.project_id})`
+      : keyData.project_id;
+  })();
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -169,6 +180,7 @@ export function KeyEditView({
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
+    access_group_ids: keyData.access_group_ids || [],
     auto_rotate: keyData.auto_rotate || false,
     ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
     allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
@@ -196,6 +208,7 @@ export function KeyEditView({
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
         : [],
+      access_group_ids: keyData.access_group_ids || [],
       auto_rotate: keyData.auto_rotate || false,
       ...(keyData.rotation_interval && { rotation_interval: keyData.rotation_interval }),
       allowed_routes: Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
@@ -342,15 +355,15 @@ export function KeyEditView({
                   <div style={{ padding: "4px 0" }}>
                     <div style={{ fontWeight: 500 }}>Default</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call LLM API + Management routes
+                      Can call AI APIs + Management routes
                     </div>
                   </div>
                 </Select.Option>
-                <Select.Option value="llm_api" label="LLM API">
+                <Select.Option value="llm_api" label="AI APIs">
                   <div style={{ padding: "4px 0" }}>
-                    <div style={{ fontWeight: 500 }}>LLM API</div>
+                    <div style={{ fontWeight: 500 }}>AI APIs</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call only LLM API routes (chat/completions, embeddings, etc.)
+                      Can call only AI API routes (chat/completions, embeddings, etc.)
                     </div>
                   </div>
                 </Select.Option>
@@ -500,6 +513,20 @@ export function KeyEditView({
         </Tooltip>
       </Form.Item>
 
+      <Form.Item
+        label={
+          <span>
+            Access Groups{" "}
+            <Tooltip title="Assign access groups to this key. Access groups control which models, MCP servers, and agents this key can use">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+        name="access_group_ids"
+      >
+        <AccessGroupSelector placeholder="Select access groups (optional)" />
+      </Form.Item>
+
       <Form.Item label="Allowed Pass Through Routes" name="allowed_passthrough_routes">
         <Tooltip
           title={!premiumUser ? "Setting allowed pass through routes by key is a premium feature" : ""}
@@ -573,10 +600,15 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Team ID" name="team_id">
+      <Form.Item
+        label="Team ID"
+        name="team_id"
+        help={hasProject ? "Team is locked because this key belongs to a project" : undefined}
+      >
         <Select
           placeholder="Select team"
           showSearch
+          disabled={hasProject}
           style={{ width: "100%" }}
           filterOption={(input, option) => {
             const team = teams?.find((t) => t.team_id === option?.value);
@@ -584,7 +616,6 @@ export function KeyEditView({
             return team.team_alias?.toLowerCase().includes(input.toLowerCase()) ?? false;
           }}
         >
-          {/* Only show All Team Models if team has models */}
           {teams?.map((team) => (
             <Select.Option key={team.team_id} value={team.team_id}>
               {`${team.team_alias} (${team.team_id})`}
@@ -592,6 +623,11 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
+      {hasProject && (
+        <Form.Item label="Project">
+          <Input value={projectDisplay ?? ""} disabled />
+        </Form.Item>
+      )}
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}

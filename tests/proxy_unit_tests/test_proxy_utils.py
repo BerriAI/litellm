@@ -2,7 +2,8 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -22,6 +23,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+
+pytestmark = pytest.mark.xdist_group("proxy_heavy")
 
 
 @pytest.fixture
@@ -1170,16 +1173,24 @@ def test_team_callback_metadata_none_values(none_key):
     assert none_key not in resp
 
 
-def test_proxy_config_state_post_init_callback_call():
+def test_proxy_config_state_post_init_callback_call(monkeypatch):
     """
     Ensures team_id is still in config, after callback is called
 
     Addresses issue: https://github.com/BerriAI/litellm/issues/6787
 
     Where team_id was being popped from config, after callback was called
+
+    Note: Environment variables are mocked to avoid validation errors
+    in parallel execution where env vars may not be set.
     """
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy.proxy_server import ProxyConfig
+
+    # Mock environment variables to avoid Pydantic validation errors
+    # when env vars are resolved to None in parallel execution
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "test_public_key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "test_secret_key")
 
     pc = ProxyConfig()
 
@@ -1478,12 +1489,46 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
+    
+    async def get_data(
+        self,
+        token: Optional[Union[str, list]] = None,
+        user_id: Optional[str] = None,
+        user_id_list: Optional[list] = None,
+        team_id: Optional[str] = None,
+        team_id_list: Optional[list] = None,
+        key_val: Optional[dict] = None,
+        table_name: Optional[str] = None,
+        query_type: str = "find_unique",
+        expires: Optional[datetime] = None,
+        reset_at: Optional[datetime] = None,
+        offset: Optional[int] = None,
+        limit: Optional[int] = None,
+    ):
+        """Mock get_data method to return user info for admin"""
+        from litellm.proxy._types import LiteLLM_UserTable
+        
+        # Return a proper LiteLLM_UserTable object when querying by user_id
+        if user_id:
+            return LiteLLM_UserTable(
+                user_id=user_id,
+                user_role="proxy_admin",
+                spend=0.0,
+                max_budget=None,
+            )
+        return None
 
 
 @pytest.mark.asyncio
 async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
     # Patch the prisma_client import
-    from litellm.proxy._types import UserInfoResponse
+    from litellm.proxy._types import UserAPIKeyAuth, UserInfoResponse
+
+    # Create a mock user_api_key_dict for admin user
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user_123",
+        user_role="proxy_admin",
+    )
 
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
@@ -1494,11 +1539,18 @@ async def test_get_user_info_for_proxy_admin(mock_team_data, mock_key_data):
         )
 
         # Execute the function
-        result = await _get_user_info_for_proxy_admin()
+        result = await _get_user_info_for_proxy_admin(
+            user_api_key_dict=mock_user_api_key_dict
+        )
 
         # Verify the result structure
         assert isinstance(result, UserInfoResponse)
         assert len(result.keys) == 2
+        # Verify admin's user_id is populated
+        assert result.user_id == "admin_user_123"
+        # Verify admin's user_info is populated
+        assert result.user_info is not None
+        assert result.user_info["user_id"] == "admin_user_123"
 
 
 def test_custom_openid_response():
@@ -1615,6 +1667,7 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
     mock_prisma.health_check = AsyncMock()
     mock_prisma.check_view_exists = AsyncMock()
     mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    mock_prisma.start_db_health_watchdog_task = AsyncMock()
     # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
     mock_db = MagicMock()
     mock_db.start_token_refresh_task = AsyncMock()
@@ -1918,6 +1971,24 @@ def test_get_known_models_from_wildcard(
             print(f"Missing expected model: {model}")
 
     assert all(model in wildcard_models for model in expected_models)
+
+
+def test_get_known_models_from_wildcard_without_litellm_params():
+    """
+    Test wildcard expansion without litellm_params (BYOK case - team has openai/*
+    but no deployment in router config).
+    """
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    wildcard_models = get_known_models_from_wildcard(
+        wildcard_model="openai/*", litellm_params=None
+    )
+    # Should return expanded OpenAI models (gpt-4o, gpt-4o-mini, etc.)
+    assert len(wildcard_models) > 0
+    assert all(m.startswith("openai/") for m in wildcard_models)
+    # Check for common OpenAI models
+    model_ids = [m.split("/", 1)[1] for m in wildcard_models]
+    assert "gpt-4o" in model_ids or "gpt-3.5-turbo" in model_ids
 
 
 @pytest.mark.parametrize(

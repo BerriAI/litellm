@@ -17,6 +17,7 @@ def schema_setup(postgresql_my):
     return postgresql_my
 
 
+@pytest.mark.xdist_group("proxy_heavy")
 def test_aaaasschema_migration_check(schema_setup, monkeypatch):
     """Test to check if schema requires migration"""
     # Set test database URL
@@ -26,15 +27,16 @@ def test_aaaasschema_migration_check(schema_setup, monkeypatch):
 
     deploy_dir = Path("./litellm-proxy-extras/litellm_proxy_extras")
     source_migrations_dir = deploy_dir / "migrations"
-    schema_path = Path("./schema.prisma")
+    source_schema_path = Path("./schema.prisma")
 
-    # Create temporary migrations directory next to schema.prisma
-    temp_migrations_dir = schema_path.parent / "migrations"
+    # Use worker-specific temp directory to avoid races when running with -n 8.
+    # Prisma expects migrations in <schema_dir>/migrations, so we create that layout.
+    temp_base = Path(tempfile.mkdtemp(prefix="litellm_schema_migration_"))
+    temp_migrations_dir = temp_base / "migrations"
+    schema_path = temp_base / "schema.prisma"
 
     try:
-        # Copy migrations to correct location
-        if temp_migrations_dir.exists():
-            shutil.rmtree(temp_migrations_dir)
+        shutil.copy(source_schema_path, schema_path)
         shutil.copytree(source_migrations_dir, temp_migrations_dir)
 
         if not temp_migrations_dir.exists() or not any(temp_migrations_dir.iterdir()):
@@ -80,6 +82,6 @@ def test_aaaasschema_migration_check(schema_setup, monkeypatch):
             print("No schema changes detected. Migration not needed.")
 
     finally:
-        # Clean up: remove temporary migrations directory
-        if temp_migrations_dir.exists():
-            shutil.rmtree(temp_migrations_dir)
+        # Clean up: remove temporary directory
+        if temp_base.exists():
+            shutil.rmtree(temp_base)

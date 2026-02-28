@@ -30,7 +30,7 @@ export function AccessGroupCreateModal({
         const params: AccessGroupCreateParams = {
           access_group_name: values.name,
           description: values.description,
-          access_model_ids: values.modelIds,
+          access_model_names: values.modelIds,
           access_mcp_server_ids: values.mcpServerIds,
           access_agent_ids: values.agentIds,
         };

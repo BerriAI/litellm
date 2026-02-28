@@ -79,6 +79,7 @@ vi.mock("@ant-design/icons", async () => {
     ShoppingCartOutlined: Icon,
     TagsOutlined: Icon,
     RobotOutlined: Icon,
+    UserOutlined: Icon,
     LineChartOutlined: Icon,
     BarChartOutlined: Icon,
   };

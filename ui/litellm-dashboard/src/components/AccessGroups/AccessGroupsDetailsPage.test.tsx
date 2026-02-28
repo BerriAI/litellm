@@ -56,7 +56,7 @@ const createMockAccessGroup = (
   access_group_id: "ag-1",
   access_group_name: "Test Group",
   description: "A test access group",
-  access_model_ids: ["model-1", "model-2"],
+  access_model_names: ["model-1", "model-2"],
   access_mcp_server_ids: ["mcp-1"],
   access_agent_ids: ["agent-1"],
   assigned_team_ids: ["team-1"],
@@ -319,7 +319,7 @@ describe("AccessGroupDetail", () => {
   it("should show empty state in Models tab when no models assigned", () => {
     mockUseAccessGroupDetails.mockReturnValue({
       ...baseMockReturnValue,
-      data: createMockAccessGroup({ access_model_ids: [] }),
+      data: createMockAccessGroup({ access_model_names: [] }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
     renderWithProviders(

@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -7,6 +7,7 @@ from litellm.proxy._types import (
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -15,6 +16,7 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import _premium_user_check
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -34,6 +36,25 @@ def _is_user_team_admin(
         ) and member.role == "admin":
             return True
 
+    return False
+
+
+def _team_member_has_permission(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_obj: LiteLLM_TeamTable,
+    permission: str,
+) -> bool:
+    """Check if a non-admin team member has a specific permission on a team."""
+    if not team_obj.team_member_permissions:
+        return False
+    if permission not in team_obj.team_member_permissions:
+        return False
+    for member in team_obj.members_with_roles:
+        if (
+            member.user_id is not None
+            and member.user_id == user_api_key_dict.user_id
+        ):
+            return True
     return False
 
 
@@ -262,6 +283,9 @@ def _set_object_metadata_field(
         LiteLLM_TeamTable,
         KeyRequestBase,
         LiteLLM_OrganizationTable,
+        LiteLLM_ProjectTable,
+        "NewProjectRequest",
+        "UpdateProjectRequest",
     ],
     field_name: str,
     value: Any,
@@ -270,7 +294,7 @@ def _set_object_metadata_field(
     Helper function to set metadata fields that require premium user checks
 
     Args:
-        object_data: The team data object to modify
+        object_data: The team/key/organization/project data object to modify
         field_name: Name of the metadata field to set
         value: Value to set for the field
     """
@@ -402,7 +426,7 @@ def _update_metadata_fields(updated_kv: dict) -> None:
         updated_kv: The key-value dict being used for the update
     """
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if field in updated_kv and _has_non_empty_value(updated_kv[field]):
+        if field in updated_kv and updated_kv[field] is not None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:

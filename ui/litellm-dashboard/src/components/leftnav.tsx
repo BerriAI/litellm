@@ -13,6 +13,7 @@ import {
   DatabaseOutlined,
   ExperimentOutlined,
   FileTextOutlined,
+  FolderOutlined,
   KeyOutlined,
   LineChartOutlined,
   PlayCircleOutlined,
@@ -134,6 +135,12 @@ const menuGroups: MenuGroup[] = [
             label: "Vector Stores",
             icon: <DatabaseOutlined />,
           },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <SafetyOutlined />,
+          },
         ],
       },
     ],
@@ -154,23 +161,41 @@ const menuGroups: MenuGroup[] = [
         label: "Logs",
         icon: <LineChartOutlined />,
       },
+      {
+        key: "guardrails-monitor",
+        page: "guardrails-monitor",
+        label: "Guardrails Monitor",
+        icon: <SafetyOutlined />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+      },
     ],
   },
   {
     groupLabel: "ACCESS CONTROL",
     items: [
       {
+        key: "teams",
+        page: "teams",
+        label: "Teams",
+        icon: <TeamOutlined />,
+      },
+      {
+        key: "projects",
+        page: "projects",
+        label: (
+          <span className="flex items-center gap-2">
+            Projects <NewBadge />
+          </span>
+        ),
+        icon: <FolderOutlined />,
+        roles: all_admin_roles,
+      },
+      {
         key: "users",
         page: "users",
         label: "Internal Users",
         icon: <UserOutlined />,
         roles: all_admin_roles,
-      },
-      {
-        key: "teams",
-        page: "teams",
-        label: "Teams",
-        icon: <TeamOutlined />,
       },
       {
         key: "organizations",
@@ -182,11 +207,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "access-groups",
         page: "access-groups",
-        label: (
-          <span className="flex items-center gap-2">
-            Access Groups <NewBadge />
-          </span>
-        ),
+        label: "Access Groups",
         icon: <BlockOutlined />,
         roles: all_admin_roles,
       },

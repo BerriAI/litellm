@@ -14,7 +14,7 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 
 from typing import List, Optional
 
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 
 
 class AmazonNovaEmbeddingConfig:
@@ -244,11 +244,14 @@ class AmazonNovaEmbeddingConfig:
         }
 
     def _transform_response(
-        self, response_list: List[dict], model: str
+        self,
+        response_list: List[dict],
+        model: str,
+        batch_data: Optional[List[dict]] = None,
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
-        
+
         Nova response format:
         {
             "embeddings": [
@@ -262,7 +265,7 @@ class AmazonNovaEmbeddingConfig:
         """
         embeddings: List[Embedding] = []
         total_tokens = 0
-        
+
         for response in response_list:
             # Nova response has an "embeddings" array
             if "embeddings" in response and isinstance(response["embeddings"], list):
@@ -274,7 +277,7 @@ class AmazonNovaEmbeddingConfig:
                             object="embedding",
                         )
                         embeddings.append(embedding)
-                        
+
                         # Estimate token count
                         # For text, use truncatedCharLength if available
                         if "truncatedCharLength" in item:
@@ -291,9 +294,31 @@ class AmazonNovaEmbeddingConfig:
                 )
                 embeddings.append(embedding)
                 total_tokens += len(response["embedding"]) // 4
-        
-        usage = Usage(prompt_tokens=total_tokens, total_tokens=total_tokens)
-        
+
+        # Count images from original requests for cost calculation
+        image_count = 0
+        if batch_data:
+            for request_data in batch_data:
+                # Nova wraps params in singleEmbeddingParams or segmentedEmbeddingParams
+                params = request_data.get(
+                    "singleEmbeddingParams",
+                    request_data.get("segmentedEmbeddingParams", {}),
+                )
+                if "image" in params:
+                    image_count += 1
+
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        if image_count > 0:
+            prompt_tokens_details = PromptTokensDetailsWrapper(
+                image_count=image_count,
+            )
+
+        usage = Usage(
+            prompt_tokens=total_tokens,
+            total_tokens=total_tokens,
+            prompt_tokens_details=prompt_tokens_details,
+        )
+
         return EmbeddingResponse(data=embeddings, model=model, usage=usage)
 
     def _transform_async_invoke_response(

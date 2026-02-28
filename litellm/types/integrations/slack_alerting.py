@@ -1,12 +1,14 @@
 import os
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
+
+DEFAULT_DIGEST_INTERVAL = 86400  # 24 hours in seconds
 
 SLACK_ALERTING_THRESHOLD_5_PERCENT = 0.05
 SLACK_ALERTING_THRESHOLD_15_PERCENT = 0.15
@@ -199,3 +201,30 @@ class HangingRequestData(BaseModel):
     key_alias: Optional[str] = None
     team_alias: Optional[str] = None
     alerting_metadata: Optional[dict] = None
+
+
+class AlertTypeConfig(LiteLLMPydanticObjectBase):
+    """Per-alert-type configuration, including digest mode settings."""
+
+    digest: bool = Field(
+        default=False,
+        description="Enable digest mode for this alert type. When enabled, duplicate alerts are aggregated into a single summary message.",
+    )
+    digest_interval: int = Field(
+        default=DEFAULT_DIGEST_INTERVAL,
+        description="Digest window in seconds. Alerts are aggregated within this interval. Default 24 hours.",
+    )
+
+
+class DigestEntry(TypedDict):
+    """Tracks an in-flight digest bucket for a unique (alert_type, model, api_base) combination."""
+
+    alert_type: str
+    request_model: str
+    api_base: str
+    first_message: str
+    level: str
+    count: int
+    start_time: dt
+    last_time: dt
+    webhook_url: Union[str, List[str]]

@@ -483,6 +483,7 @@ def image_generation(  # noqa: PLR0915
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
+                headers=headers,
             )
         elif custom_llm_provider == "bedrock":
             if model is None:

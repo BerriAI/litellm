@@ -68,7 +68,7 @@ def make_sync_call(
             model_response=model_response, json_mode=json_mode
         )
     else:
-        decoder = AWSEventStreamDecoder(model=model)
+        decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
         completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
 
     # LOGGING
@@ -272,7 +272,18 @@ class BedrockConverseLLM(BaseAWSLLM):
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
         else:
-            modelId = self.encode_model_id(model_id=model)
+            # Strip nova spec prefixes before encoding model ID for API URL
+            _model_for_id = model
+            _stripped = _model_for_id
+            for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
+                if _stripped.startswith(rp):
+                    _stripped = _stripped[len(rp):]
+                    break
+            for _nova_prefix in ["nova-2/", "nova/"]:
+                if _stripped.startswith(_nova_prefix):
+                    _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
+                    break
+            modelId = self.encode_model_id(model_id=_model_for_id)
 
         fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
             fake_stream=fake_stream,

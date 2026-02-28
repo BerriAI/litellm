@@ -5,6 +5,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+
 import traceback
 import uuid
 from datetime import datetime
@@ -43,9 +44,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.litellm_pre_call_utils import (
-    LiteLLMProxyRequestSetup,
-)
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
@@ -85,6 +84,7 @@ except ImportError as e:
 # Global variables to track initialization
 _SESSION_MANAGERS_INITIALIZED = False
 _INITIALIZATION_LOCK = asyncio.Lock()
+
 
 if MCP_AVAILABLE:
     from mcp.server import Server
@@ -149,7 +149,7 @@ if MCP_AVAILABLE:
         app=server,
         event_store=None,
         json_response=False, # enables SSE streaming
-        stateless=False, # enables session state
+        stateless=True,
     )
 
     # Create SSE session manager
@@ -773,8 +773,8 @@ if MCP_AVAILABLE:
                 user_api_key_auth
             )
         )
-        allowed_mcp_server_ids = (
-            global_mcp_server_manager.filter_server_ids_by_ip(
+        allowed_mcp_server_ids, _ip_blocked = (
+            global_mcp_server_manager.filter_server_ids_by_ip_with_info(
                 allowed_mcp_server_ids, client_ip
             )
         )
@@ -782,6 +782,16 @@ if MCP_AVAILABLE:
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
             client_ip, allowed_mcp_server_ids,
         )
+        if _ip_blocked > 0:
+            verbose_logger.debug(
+                "MCP IP filtering: %d server(s) are not accessible from client IP %s "
+                "because they are restricted to internal networks. "
+                "No tools from those servers will be returned. "
+                "To expose a server externally, set 'available_on_public_internet: true' "
+                "in its configuration.",
+                _ip_blocked,
+                client_ip,
+            )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             mcp_server = global_mcp_server_manager.get_mcp_server_by_id(
@@ -795,6 +805,7 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
+        
 
         return allowed_mcp_servers
 
@@ -938,9 +949,6 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
             )
 
-            # Decide whether to add prefix based on number of allowed servers
-            add_prefix = not (len(allowed_mcp_servers) == 1)
-
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
             ) -> List[MCPTool]:
@@ -961,7 +969,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -1079,8 +1087,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        # Decide whether to add prefix based on number of allowed servers
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         # Get prompts from each allowed server
         all_prompts = []
@@ -1101,7 +1107,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
 
@@ -1140,7 +1146,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         all_resources: List[Resource] = []
         for server in allowed_mcp_servers:
@@ -1160,7 +1165,7 @@ if MCP_AVAILABLE:
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    add_prefix=True,  # Always add server prefix
                     raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
@@ -1197,7 +1202,6 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
         )
 
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
         all_resource_templates: List[ResourceTemplate] = []
         for server in allowed_mcp_servers:
@@ -1218,7 +1222,7 @@ if MCP_AVAILABLE:
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=add_prefix,
+                        add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                     )
                 )
@@ -1676,14 +1680,9 @@ if MCP_AVAILABLE:
                 detail="User not allowed to get this prompt.",
             )
 
-        # Decide whether to add prefix based on number of allowed servers
-        add_prefix = not (len(allowed_mcp_servers) == 1)
 
-        if add_prefix:
-            original_prompt_name, server_name = split_server_prefix_from_name(name)
-        else:
-            original_prompt_name = name
-            server_name = allowed_mcp_servers[0].name
+        # Extract server name from prefixed prompt name
+        original_prompt_name, server_name = split_server_prefix_from_name(name)
 
         server = next((s for s in allowed_mcp_servers if s.name == server_name), None)
         if server is None:
@@ -1922,65 +1921,86 @@ if MCP_AVAILABLE:
         mgr: "StreamableHTTPSessionManager",
     ) -> bool:
         """
-        Handle stale MCP session IDs to prevent "Session not found" errors.
-
-        When clients reconnect after a server restart or session cleanup, they may
-        send a session ID that no longer exists. This function handles two scenarios:
-
-        1. Non-DELETE requests: Strip the stale session ID header so the session
-           manager creates a fresh session transparently.
-
-        2. DELETE requests: Return success (200) immediately for idempotent behavior,
-           since the desired state (session doesn't exist) is already achieved.
+        Inspect the incoming ``mcp-session-id`` header **before** the
+        request reaches the MCP SDK.  If the session is stale (not known
+        to this worker), strip the header so the SDK creates a fresh
+        stateless session instead of returning a 400.
 
         Returns:
-            True if the request was handled (DELETE on non-existent session)
-            False if the request should continue to the session manager
+            True if the request was fully handled (e.g. DELETE on
+            non-existent session).  False if the request should continue
+            to the session manager.
 
-        Fixes https://github.com/BerriAI/litellm/issues/20292
+        Fixes https://github.com/BerriAI/litellm/issues/20992
         """
         _mcp_session_header = b"mcp-session-id"
+        _headers = scope.get("headers", [])
+
+        def _normalize_header_name(header_name: Any) -> Optional[bytes]:
+            if isinstance(header_name, bytes):
+                return header_name.lower()
+            if isinstance(header_name, str):
+                return header_name.lower().encode("utf-8", errors="replace")
+            return None
+
         _session_id: Optional[str] = None
-        for header_name, header_value in scope.get("headers", []):
-            if header_name == _mcp_session_header:
-                _session_id = header_value.decode("utf-8", errors="replace")
+        for header_name, header_value in _headers:
+            if _normalize_header_name(header_name) == _mcp_session_header:
+                if isinstance(header_value, bytes):
+                    _session_id = header_value.decode("utf-8", errors="replace")
+                else:
+                    _session_id = str(header_value)
                 break
 
         if _session_id is None:
             return False
 
+        # Check in-memory session tracking
         known_sessions = getattr(mgr, "_server_instances", None)
-        if known_sessions is None or _session_id in known_sessions:
-            # Session exists or we can't check - let the session manager handle it
+        # If we cannot inspect known_sessions, let the manager handle it
+        if known_sessions is None:
             return False
 
-        # Session doesn't exist - handle based on request method
+        # If session exists in this worker's memory, let the manager handle it
+        try:
+            if _session_id in known_sessions:
+                return False
+        except Exception:
+            verbose_logger.debug(
+                "Unable to inspect active MCP sessions for '%s'. "
+                "Deferring to session manager.",
+                _session_id,
+            )
+            return False
+
+        # --- Session not in this worker's memory ---
         method = scope.get("method", "").upper()
-        
+
         if method == "DELETE":
-            # Idempotent DELETE: session doesn't exist, return success
             verbose_logger.info(
-                f"DELETE request for non-existent MCP session '{_session_id}'. "
-                "Returning success (idempotent DELETE)."
+                "DELETE request for non-existent MCP session '%s'. "
+                "Returning success (idempotent DELETE).",
+                _session_id,
             )
             success_response = JSONResponse(
                 status_code=200,
-                content={"message": "Session terminated successfully"}
+                content={"message": "Session terminated successfully"},
             )
             await success_response(scope, receive, send)
             return True
-        else:
-            # Non-DELETE: strip stale session ID to allow new session creation
-            verbose_logger.warning(
-                "MCP session ID '%s' not found in active sessions. "
-                "Stripping stale header to force new session creation.",
-                _session_id,
-            )
-            scope["headers"] = [
-                (k, v) for k, v in scope["headers"]
-                if k != _mcp_session_header
-            ]
-            return False
+
+        # Non-DELETE: strip stale session ID to allow new session creation
+        verbose_logger.warning(
+            "MCP session ID '%s' not found in this worker's memory. "
+            "Stripping stale header to force new session creation.",
+            _session_id,
+        )
+        scope["headers"] = [
+            (k, v)
+            for k, v in _headers
+            if _normalize_header_name(k) != _mcp_session_header
+        ]
+        return False
 
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
@@ -2058,7 +2078,9 @@ if MCP_AVAILABLE:
 
             # Handle stale session IDs - either strip them for reconnection
             # or return success for idempotent DELETE operations
-            handled = await _handle_stale_mcp_session(scope, receive, send, session_manager)
+            handled = await _handle_stale_mcp_session(
+                scope, receive, send, session_manager
+            )
             if handled:
                 # Request was fully handled (e.g., DELETE on non-existent session)
                 return

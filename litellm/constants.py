@@ -49,6 +49,27 @@ DEFAULT_REPLICATE_POLLING_DELAY_SECONDS = int(
 )
 DEFAULT_IMAGE_TOKEN_COUNT = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
 
+# Maximum wall-clock seconds a streaming response is allowed to run.
+# Streams exceeding this duration are terminated with a Timeout error.
+# None (default) = no limit.  Set env var to a number of seconds to enable globally.
+_max_stream_duration_env = os.getenv("LITELLM_MAX_STREAMING_DURATION_SECONDS", None)
+LITELLM_MAX_STREAMING_DURATION_SECONDS = (
+    float(_max_stream_duration_env) if _max_stream_duration_env is not None else None
+)
+
+# Maximum number of base64 characters to keep in logging payloads.
+# Data URIs exceeding this are replaced with a size placeholder.
+# Set to 0 to disable truncation.
+MAX_BASE64_LENGTH_FOR_LOGGING = int(
+    os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
+)
+
+# When true, adds detailed per-phase timing breakdown headers to responses.
+# Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
+LITELLM_DETAILED_TIMING = (
+    os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
+)
+
 # Model cost map validation constants
 MODEL_COST_MAP_MIN_MODEL_COUNT = int(
     os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
@@ -91,6 +112,14 @@ MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH = int(
     os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
 )
 
+# Semantic Guard Defaults
+DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL = str(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL", "text-embedding-3-small")
+)
+DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(
+    os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75)
+)
+
 # MCP OAuth2 Client Credentials Defaults
 MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS = int(
     os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
@@ -106,9 +135,7 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 # npm/npx needs a writable cache dir; in containers the default (~/.npm)
 # may not exist or be read-only. /tmp is always writable.
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
-MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(
-    os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10")
-)
+MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
@@ -131,7 +158,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE = int(
 # Maximum number of callbacks that can be registered
 # This prevents callbacks from exponentially growing and consuming CPU resources
 # Override with LITELLM_MAX_CALLBACKS env var for large deployments (e.g., many teams with guardrails)
-MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 30)
+MAX_CALLBACKS = get_env_int("LITELLM_MAX_CALLBACKS", 100)
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
@@ -166,16 +193,20 @@ _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client fo
 
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
-AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))
-AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 50))
+AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
+AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
+    os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500)
+)
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
-AIOHTTP_NEEDS_CLEANUP_CLOSED = (
-    (3, 13, 0) <= sys.version_info < (3, 13, 1) or sys.version_info < (3, 12, 7)
-)
+AIOHTTP_NEEDS_CLEANUP_CLOSED = (3, 13, 0) <= sys.version_info < (
+    3,
+    13,
+    1,
+) or sys.version_info < (3, 12, 7)
 
 # WebSocket constants
 # Default to None (unlimited) to match OpenAI's official agents SDK behavior
@@ -213,14 +244,19 @@ REDIS_UPDATE_BUFFER_KEY = "litellm_spend_update_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_org_spend_update_buffer"
-REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_end_user_spend_update_buffer"
+REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = (
+    "litellm_daily_end_user_spend_update_buffer"
+)
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
-MAX_SIZE_IN_MEMORY_QUEUE = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", 2000))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
-LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(
-    os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000)
+LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
+TOOL_POLICY_CACHE_TTL_SECONDS = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 60))
+# Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
+# Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
+MAX_SIZE_IN_MEMORY_QUEUE = int(
+    os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8))
 )
 MAX_IN_MEMORY_QUEUE_FLUSH_COUNT = int(
     os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
@@ -285,7 +321,9 @@ MIN_NON_ZERO_TEMPERATURE = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
 REPEATED_STREAMING_CHUNK_LIMIT = int(
     os.getenv("REPEATED_STREAMING_CHUNK_LIMIT", 100)
 )  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
-DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 16))
+# Shared maxsize for functools.lru_cache usage across hot paths.
+# Defaulted to 64 to avoid cache thrash in multi-model production workloads.
+DEFAULT_MAX_LRU_CACHE_SIZE = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 64))
 _REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
 INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY = float(os.getenv("MAX_RETRY_DELAY", 8.0))
@@ -317,6 +355,9 @@ NON_LLM_CONNECTION_TIMEOUT = int(
 MAX_EXCEPTION_MESSAGE_LENGTH = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
 MAX_STRING_LENGTH_PROMPT_IN_DB = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
 BEDROCK_MAX_POLICY_SIZE = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
+BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(
+    os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
+)
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 )
@@ -343,7 +384,9 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
-DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+DEFAULT_A2A_AGENT_TIMEOUT: float = float(
+    os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
+)  # 10 minutes
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
 # replaced with the original base_url. This is a common misconfiguration where
 # developers deploy agents with development URLs in their agent cards.
@@ -395,8 +438,12 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
 
-EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60))  # 24 hours in seconds
-EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8))  # 80% of max budget
+EMAIL_BUDGET_ALERT_TTL = int(
+    os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)
+)  # 24 hours in seconds
+EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(
+    os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8)
+)  # 80% of max budget
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv(
@@ -565,6 +612,11 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
     "service_tier",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "verbosity",
+    "store",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -626,6 +678,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "prompt_cache_retention": None,
     "store": None,
     "metadata": None,
+    "context_management": None,
 }
 
 openai_compatible_endpoints: List = [
@@ -1028,6 +1081,7 @@ BEDROCK_CONVERSE_MODELS = [
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "anthropic.claude-opus-4-6-v1:0",
     "anthropic.claude-opus-4-6-v1",
+    "anthropic.claude-sonnet-4-6",
     "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
@@ -1150,7 +1204,17 @@ known_tokenizer_config = {
 }
 
 
-OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null", "finish_reason_unspecified", "malformed_function_call", "guardrail_intervened", "eos"]
+OPENAI_FINISH_REASONS = [
+    "stop",
+    "length",
+    "function_call",
+    "content_filter",
+    "null",
+    "finish_reason_unspecified",
+    "malformed_function_call",
+    "guardrail_intervened",
+    "eos",
+]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
 )  # 1 minute
@@ -1240,6 +1304,9 @@ LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false"
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
     os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
 )  # 24 hours default
+LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
+    "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
+)  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -1250,8 +1317,8 @@ CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
 CLI_JWT_EXPIRATION_HOURS = int(
-    os.getenv("CLI_JWT_EXPIRATION_HOURS") 
-    or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS") 
+    os.getenv("CLI_JWT_EXPIRATION_HOURS")
+    or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS")
     or 24
 )
 
@@ -1341,6 +1408,9 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(
     os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
+)
+DEFAULT_ACCESS_GROUP_CACHE_TTL = int(
+    os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
 )
 
 # Sentry Scrubbing Configuration
@@ -1432,12 +1502,21 @@ MICROSOFT_USER_EMAIL_ATTRIBUTE = str(
 MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "displayName")
 )
-MICROSOFT_USER_ID_ATTRIBUTE = str(
-    os.getenv("MICROSOFT_USER_ID_ATTRIBUTE", "id")
-)
+MICROSOFT_USER_ID_ATTRIBUTE = str(os.getenv("MICROSOFT_USER_ID_ATTRIBUTE", "id"))
 MICROSOFT_USER_FIRST_NAME_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "givenName")
 )
 MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "surname")
 )
+
+# Maximum payload size (in bytes) to fully serialize for DEBUG logging.
+# Payloads larger than this are truncated to avoid multi-second json.dumps blocking the response.
+MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
+    os.getenv("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400)
+)  # 100 KB
+
+# Policy template enrichment
+MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
+COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
+DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"

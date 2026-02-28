@@ -10,7 +10,7 @@ async function globalSetup() {
   await page.getByPlaceholder("Enter your password").fill(users[Role.ProxyAdmin].password);
   const loginButton = page.getByRole("button", { name: "Login", exact: true });
   await loginButton.click();
-  await page.waitForSelector("text=AI Gateway");
+  await page.waitForSelector("text=Virtual Keys");
   await page.context().storageState({ path: "admin.storageState.json" });
   await browser.close();
 }
