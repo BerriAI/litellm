@@ -431,6 +431,7 @@ class LiteLLMRoutes(enum.Enum):
 
     agent_routes = [
         "/v1/agents",
+        "/v1/agents/{agent_id}",
         "/agents",
         "/a2a/{agent_id}",
         "/a2a/{agent_id}/message/send",
