@@ -49,7 +49,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
       title: "Description",
       dataIndex: "description",
       key: "description",
-      render: (desc: string) => <Text type="secondary">{desc}</Text>,
+      render: (desc: string) => <Text type="secondary" style={{ whiteSpace: "pre-line" }}>{desc}</Text>,
     },
   ];
 
@@ -58,7 +58,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
       {/* Description */}
       {tool.description && (
         <div style={{ marginBottom: 16 }}>
-          <Text style={{ lineHeight: 1.6 }}>{tool.description}</Text>
+          <Text style={{ lineHeight: 1.6, whiteSpace: "pre-line" }}>{tool.description}</Text>
         </div>
       )}
 
