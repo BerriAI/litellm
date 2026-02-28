@@ -1486,10 +1486,9 @@ def test_completion_streaming_iterator_fallback_on_429():
         assert mock_fallback.called
         call_kwargs = mock_fallback.call_args
         # Pre-first-chunk: should use original messages, no continuation prompt
-        assert call_kwargs.kwargs.get("messages", call_kwargs[1].get("messages")) is None or True
+        assert call_kwargs.kwargs.get("messages") == messages
         # Verify original_function is _completion (sync)
-        passed_kwargs = {**call_kwargs.kwargs}
-        assert passed_kwargs.get("original_function") == router._completion
+        assert call_kwargs.kwargs.get("original_function") == router._completion
 
 
 def test_completion_streaming_iterator_preserves_hidden_params():
