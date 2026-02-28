@@ -33,8 +33,6 @@ jobs:
       - name: Scan for duplicate issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_THRESHOLD: ${{ inputs.threshold }}
           INPUT_CLOSE: ${{ inputs.close }}
         run: |
