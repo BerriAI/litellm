@@ -1477,6 +1477,19 @@ if MCP_AVAILABLE:
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)
 
+        # Validate that extracted server_name exists in allowed servers
+        # If not, the tool name likely contains the separator itself
+        if server_name and not any(
+            server_name in [s for s in [server.name, server.alias] if s]
+            for server in allowed_mcp_servers
+        ):
+            verbose_logger.debug(
+                f"Server '{server_name}' from tool '{name}' not found in allowed servers. "
+                f"Treating as unprefixed tool."
+            )
+            original_tool_name = name
+            server_name = ""
+
         # If tool name is unprefixed, resolve its server so we can enforce permissions
         if not server_name:
             mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)

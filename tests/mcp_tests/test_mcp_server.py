@@ -2730,3 +2730,145 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
     assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
     # Permissions check should be invoked with the resolved server name
     mock_is_allowed.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_validates_extracted_server_name():
+    """
+    Test that call_mcp_tool validates extracted server names against allowed servers.
+    If a tool name contains the separator but the extracted server doesn't exist,
+    it should be treated as an unprefixed tool name.
+    """
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            call_mcp_tool,
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+
+    # Create a real allowed server
+    allowed_server = MCPServer(
+        server_id="server-123",
+        name="backstage",
+        alias="backstage",
+        server_name="backstage",
+        url="https://backstage.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "backstage"},
+    )
+
+    with patch.object(
+        global_mcp_server_manager,
+        "get_allowed_mcp_servers",
+        new_callable=AsyncMock,
+    ) as mock_get_allowed, patch.object(
+        global_mcp_server_manager,
+        "get_mcp_server_by_id",
+        return_value=allowed_server,
+    ), patch.object(
+        global_mcp_server_manager,
+        "_get_mcp_server_from_tool_name",
+        return_value=allowed_server,
+    ) as mock_get_server, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+    ) as mock_tool_registry, patch(
+        "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+        new_callable=AsyncMock,
+    ) as mock_handle_managed, patch(
+        "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+        return_value=True,
+    ):
+        mock_get_allowed.return_value = [allowed_server.server_id]
+        mock_tool_registry.get_tool.return_value = None
+
+        expected_response = [TextContent(type="text", text="ok")]
+
+        # Call with a tool name that contains separator but "get" is not a valid server
+        # This should be treated as unprefixed tool "get--catalog--entity"
+        result = await call_mcp_tool(
+            name="get-catalog-entity",
+            arguments={"id": "123"},
+            mcp_servers=["backstage"],
+        )
+
+    mock_get_allowed.assert_awaited_once()
+    # Should resolve server from tool name since extracted "get" is not valid
+    assert mock_get_server.call_count >= 1
+    # First call should use the full tool name (not split) since "get" is not a valid server
+    assert mock_get_server.call_args_list[0][0][0] == "get-catalog-entity"
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_validates_extracted_server_name():
+    """
+    Test that call_mcp_tool validates extracted server names against allowed servers.
+    If a tool name contains the separator but the extracted server doesn't exist,
+    it should be treated as an unprefixed tool name.
+    """
+
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            call_mcp_tool,
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+
+    # Create a real allowed server
+    allowed_server = MCPServer(
+        server_id="server-123",
+        name="backstage",
+        alias="backstage",
+        server_name="backstage",
+        url="https://backstage.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "backstage"},
+    )
+
+    with patch.object(
+        global_mcp_server_manager,
+        "get_allowed_mcp_servers",
+        new_callable=AsyncMock,
+    ) as mock_get_allowed, patch.object(
+        global_mcp_server_manager,
+        "get_mcp_server_by_id",
+        return_value=allowed_server,
+    ), patch.object(
+        global_mcp_server_manager,
+        "_get_mcp_server_from_tool_name",
+        return_value=allowed_server,
+    ) as mock_get_server, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+    ) as mock_tool_registry, patch(
+        "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+        new_callable=AsyncMock,
+    ) as mock_handle_managed, patch(
+        "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+        return_value=True,
+    ):
+        mock_get_allowed.return_value = [allowed_server.server_id]
+        mock_tool_registry.get_tool.return_value = None
+
+        expected_response = [TextContent(type="text", text="ok")]
+
+        # Call with a tool name that contains separator but "get" is not a valid server
+        # This should be treated as unprefixed tool "get--catalog--entity"
+        result = await call_mcp_tool(
+            name="backstage-tool-1",
+            arguments={"id": "123"},
+            mcp_servers=["backstage"],
+        )
+
+    mock_get_allowed.assert_awaited_once()
+    # Should resolve server from tool name since extracted "get" is not valid
+    assert mock_get_server.call_count >= 1
+    # We should resolve the server at least once using the unprefixed name
+    assert mock_get_server.call_args_list[0][0][0] == "tool-1"
