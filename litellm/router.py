@@ -114,6 +114,9 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+    EncryptedContentAffinityCheck,
+)
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -1248,6 +1251,22 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
         # ---------------------------------------------------------------------
+        # Encrypted content affinity
+        # ---------------------------------------------------------------------
+        if "encrypted_content_affinity" in optional_pre_call_checks:
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+
+            already_registered = any(
+                isinstance(cb, EncryptedContentAffinityCheck)
+                for cb in self.optional_callbacks
+            )
+            if not already_registered:
+                ec_callback = EncryptedContentAffinityCheck()
+                self.optional_callbacks.append(ec_callback)
+                litellm.logging_callback_manager.add_litellm_callback(ec_callback)
+
+        # ---------------------------------------------------------------------
         # Remaining optional pre-call checks
         # ---------------------------------------------------------------------
         for pre_call_check in optional_pre_call_checks:
@@ -1256,6 +1275,7 @@ class Router:
                 "deployment_affinity",
                 "responses_api_deployment_check",
                 "session_affinity",
+                "encrypted_content_affinity",
             ):
                 continue
             if pre_call_check == "prompt_caching":
@@ -8660,6 +8680,13 @@ class Router:
             )
             if isinstance(healthy_deployments, dict):
                 return healthy_deployments
+
+            # When encrypted content affinity pins to a specific deployment,
+            if (
+                request_kwargs.get("_encrypted_content_affinity_pinned")
+                and len(healthy_deployments) == 1
+            ):
+                return healthy_deployments[0]
 
             start_time = time.time()
             if (
