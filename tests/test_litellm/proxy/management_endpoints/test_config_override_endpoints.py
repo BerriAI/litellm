@@ -256,7 +256,7 @@ async def test_update_hashicorp_config_success(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_update_hashicorp_config_excludes_none_fields(client, monkeypatch):
-    """POST with partial fields should only set provided fields."""
+    """POST with partial fields should only store provided fields (None fields excluded)."""
     mock_configoverrides = MagicMock()
     mock_configoverrides.upsert = AsyncMock(return_value=None)
 
@@ -270,6 +270,47 @@ async def test_update_hashicorp_config_excludes_none_fields(client, monkeypatch)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
 
+    with patch(
+        "litellm.proxy.management_endpoints.config_override_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.side_effect = lambda v: f"enc_{v}"
+
+        app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+        )
+
+        try:
+            response = client.post(
+                "/config_overrides/hashicorp_vault",
+                json={
+                    "vault_addr": "https://vault.partial.com",
+                    "vault_token": "tok",
+                },
+            )
+            assert response.status_code == 200
+
+            # Only vault_addr and vault_token should be in the upserted data
+            upsert_call = mock_configoverrides.upsert.call_args
+            create_data = json.loads(
+                upsert_call.kwargs["data"]["create"]["config_value"]
+            )
+            assert create_data == {
+                "vault_addr": "https://vault.partial.com",
+                "vault_token": "enc_tok",
+            }
+        finally:
+            app.dependency_overrides.pop(ps.user_api_key_auth, None)
+            os.environ.pop("HCP_VAULT_ADDR", None)
+            os.environ.pop("HCP_VAULT_TOKEN", None)
+
+
+@pytest.mark.asyncio
+async def test_update_hashicorp_config_missing_vault_addr(client, monkeypatch):
+    """POST without vault_addr should return 400."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
@@ -277,19 +318,34 @@ async def test_update_hashicorp_config_excludes_none_fields(client, monkeypatch)
     try:
         response = client.post(
             "/config_overrides/hashicorp_vault",
-            json={"vault_addr": "https://vault.partial.com"},
+            json={"vault_token": "some-token"},
         )
-        assert response.status_code == 200
-
-        # Only vault_addr should be in the upserted data
-        upsert_call = mock_configoverrides.upsert.call_args
-        create_data = json.loads(
-            upsert_call.kwargs["data"]["create"]["config_value"]
-        )
-        assert create_data == {"vault_addr": "https://vault.partial.com"}
+        assert response.status_code == 400
+        assert "vault_addr" in response.json()["detail"]["error"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
-        os.environ.pop("HCP_VAULT_ADDR", None)
+
+
+@pytest.mark.asyncio
+async def test_update_hashicorp_config_missing_auth(client, monkeypatch):
+    """POST with vault_addr but no auth method should return 400."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.post(
+            "/config_overrides/hashicorp_vault",
+            json={"vault_addr": "https://vault.example.com"},
+        )
+        assert response.status_code == 400
+        assert "authentication" in response.json()["detail"]["error"].lower()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
