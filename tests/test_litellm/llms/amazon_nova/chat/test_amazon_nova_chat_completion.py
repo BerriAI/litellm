@@ -27,7 +27,7 @@ def _create_mock_nova_response():
             )
         ],
         created=1234567890,
-        model="amazon-nova/nova-micro-v1",
+        model="amazon_nova/nova-micro-v1",
         object="chat.completion",
         usage=Usage(
             prompt_tokens=25,
@@ -38,7 +38,7 @@ def _create_mock_nova_response():
 
 def test_amazon_nova_chat_completion_nova_micro():
     if _has_api_key():
-        response: ModelResponse = completion(model="amazon-nova/nova-micro-v1", messages=[{
+        response: ModelResponse = completion(model="amazon_nova/nova-micro-v1", messages=[{
                 "role": "system",
                 "content": "You are a helpful assistant"
             },
@@ -51,7 +51,7 @@ def test_amazon_nova_chat_completion_nova_micro():
         response = _create_mock_nova_response()
         # Additional mock-specific assertions for code review reference
         assert response.choices[0].message.content == "I am Amazon Nova Micro. 777 times 9 equals 6993."
-        assert response.model == "amazon-nova/nova-micro-v1"
+        assert response.model == "amazon_nova/nova-micro-v1"
         assert response.usage.prompt_tokens == 25
         assert response.usage.completion_tokens == 15
         assert response.object == "chat.completion"
@@ -67,7 +67,7 @@ def test_amazon_nova_chat_completion_nova_micro():
 
 @pytest.mark.skipif(not _has_api_key(), reason="Amazon Nova API key not available")
 def test_amazon_nova_chat_completion_nova_lite():
-    response: ModelResponse = completion(model="amazon-nova/nova-lite-v1", messages=[{
+    response: ModelResponse = completion(model="amazon_nova/nova-lite-v1", messages=[{
             "role": "system",
             "content": "You are a helpful assistant"
         },
@@ -84,7 +84,7 @@ def test_amazon_nova_chat_completion_nova_lite():
 
 @pytest.mark.skipif(not _has_api_key(), reason="Amazon Nova API key not available")
 def test_amazon_nova_chat_completion_nova_pro():
-    response: ModelResponse = completion(model="amazon-nova/nova-pro-v1", messages=[{
+    response: ModelResponse = completion(model="amazon_nova/nova-pro-v1", messages=[{
             "role": "system",
             "content": "You are a helpful assistant"
         },
@@ -101,7 +101,7 @@ def test_amazon_nova_chat_completion_nova_pro():
 
 @pytest.mark.skipif(not _has_api_key(), reason="Amazon Nova API key not available")
 def test_amazon_nova_chat_completion_nova_premier():
-    response: ModelResponse = completion(model="amazon-nova/nova-premier-v1", messages=[{
+    response: ModelResponse = completion(model="amazon_nova/nova-premier-v1", messages=[{
             "role": "system",
             "content": "You are a helpful assistant"
         },
@@ -119,7 +119,7 @@ def test_amazon_nova_chat_completion_nova_premier():
 
 @pytest.mark.skipif(not _has_api_key(), reason="Amazon Nova API key not available")
 def test_amazon_nova_chat_completion_with_tool_usage():
-    response: ModelResponse = completion(model="amazon-nova/nova-micro-v1", messages=[{
+    response: ModelResponse = completion(model="amazon_nova/nova-micro-v1", messages=[{
             "role": "system",
             "content": "You are a helpful assistant"
         },
@@ -152,7 +152,7 @@ def test_amazon_nova_chat_completion_with_tool_usage():
 
 @pytest.mark.skipif(not _has_api_key(), reason="Amazon Nova API key not available")
 def test_amazon_nova_chat_completion_with_stream_response():
-    response = completion(model="amazon-nova/nova-micro-v1", stream=True, messages=[{
+    response = completion(model="amazon_nova/nova-micro-v1", stream=True, messages=[{
             "role": "system",
             "content": "You are a helpful assistant"
         },

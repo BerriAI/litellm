@@ -21226,7 +21226,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
-    "amazon-nova/nova-micro-v1": {
+    "amazon_nova/nova-micro-v1": {
         "input_cost_per_token": 3.5e-08,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 128000,
@@ -21238,7 +21238,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true
     },
-    "amazon-nova/nova-lite-v1": {
+    "amazon_nova/nova-lite-v1": {
         "input_cost_per_token": 6e-08,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 300000,
@@ -21252,7 +21252,7 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
-    "amazon-nova/nova-premier-v1": {
+    "amazon_nova/nova-premier-v1": {
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 1000000,
@@ -21266,7 +21266,7 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
-    "amazon-nova/nova-pro-v1": {
+    "amazon_nova/nova-pro-v1": {
         "input_cost_per_token": 8e-07,
         "litellm_provider": "amazon_nova",
         "max_input_tokens": 300000,
