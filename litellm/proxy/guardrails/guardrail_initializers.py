@@ -46,6 +46,7 @@ def initialize_lakera(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         category_thresholds=litellm_params.category_thresholds,
         default_on=litellm_params.default_on,
+        experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_callback)
     return _lakera_callback
@@ -66,6 +67,7 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
         metadata=litellm_params.metadata,
         dev_info=litellm_params.dev_info,
         on_flagged=litellm_params.on_flagged,
+        experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lakera_v2_callback)
     return _lakera_v2_callback
@@ -95,6 +97,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
             presidio_language=litellm_params.presidio_language,
             presidio_entities_deny_list=litellm_params.presidio_entities_deny_list,
             apply_to_output=False,
+            experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
         )
         params.update(overrides)
         callback = _OPTIONAL_PresidioPIIMasking(**params)
@@ -140,6 +143,7 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
         event_hook=litellm_params.mode,
         guardrail_name=guardrail.get("guardrail_name", ""),
         default_on=litellm_params.default_on,
+        experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
     )
     litellm.logging_callback_manager.add_litellm_callback(_secret_detection_object)
     return _secret_detection_object
@@ -167,6 +171,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         on_disallowed_action=getattr(litellm_params, "on_disallowed_action", "block"),
         default_on=litellm_params.default_on,
         violation_message_template=litellm_params.violation_message_template,
+        experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
     )
     litellm.logging_callback_manager.add_litellm_callback(_tool_permission_callback)
     return _tool_permission_callback
@@ -187,6 +192,7 @@ def initialize_lasso(
         mask=litellm_params.mask,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
     )
     litellm.logging_callback_manager.add_litellm_callback(_lasso_callback)
 
@@ -219,6 +225,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         fallback_on_error=getattr(litellm_params, "fallback_on_error", "block"),
         timeout=float(getattr(litellm_params, "timeout", 10.0)),
         violation_message_template=litellm_params.violation_message_template,
+        experimental_use_latest_role_message_only=litellm_params.experimental_use_latest_role_message_only,
     )
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)
 

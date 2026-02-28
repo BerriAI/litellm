@@ -6,6 +6,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Type,
     Union,
     get_args,
@@ -92,6 +93,7 @@ class CustomGuardrail(CustomLogger):
         mask_request_content: bool = False,
         mask_response_content: bool = False,
         violation_message_template: Optional[str] = None,
+        experimental_use_latest_role_message_only: bool = False,
         end_session_after_n_fails: Optional[int] = None,
         on_violation: Optional[str] = None,
         realtime_violation_message: Optional[str] = None,
@@ -120,6 +122,9 @@ class CustomGuardrail(CustomLogger):
         self.mask_request_content: bool = mask_request_content
         self.mask_response_content: bool = mask_response_content
         self.violation_message_template: Optional[str] = violation_message_template
+        self.experimental_use_latest_role_message_only: bool = (
+            experimental_use_latest_role_message_only
+        )
         self.end_session_after_n_fails: Optional[int] = end_session_after_n_fails
         self.on_violation: Optional[str] = on_violation
         self.realtime_violation_message: Optional[str] = realtime_violation_message
@@ -128,6 +133,34 @@ class CustomGuardrail(CustomLogger):
             ## validate event_hook is in supported_event_hooks
             self._validate_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
+
+    def filter_messages_for_latest_role(
+        self, messages: List[AllMessageValues], target_role: str = "user"
+    ) -> Tuple[
+        Optional[List[AllMessageValues]],
+        Optional[List[AllMessageValues]],
+        Optional[List[int]],
+    ]:
+        """Filter to only the latest message for target_role."""
+        
+
+        for index in range(len(messages) - 1, -1, -1):
+            if messages[index].get("role") == target_role:
+                return [copy.deepcopy(messages[index])], list(messages), [index]
+        return None, None, None
+
+    def merge_filtered_messages(
+        self,
+        original_messages: List[AllMessageValues],
+        updated_target_messages: List[AllMessageValues],
+        target_indices: List[int],
+    ) -> List[AllMessageValues]:
+        """Merge filtered guardrail results back into the original message list."""
+        merged = list(original_messages)
+        for idx, updated_msg in zip(target_indices, updated_target_messages):
+            if idx < len(merged):
+                merged[idx] = updated_msg
+        return merged
 
     def render_violation_message(
         self, default: str, context: Optional[Dict[str, Any]] = None
