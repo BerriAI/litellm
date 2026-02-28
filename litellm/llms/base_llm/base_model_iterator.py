@@ -125,26 +125,32 @@ class BaseModelResponseIterator:
             )
 
     def __next__(self):
-        try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        while True:
+            try:
+                chunk = self.response_iterator.__next__()
+            except StopIteration:
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
-            # chunk is a str at this point
-            return self._handle_string_chunk(str_line=str_line)
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            try:
+                str_line = chunk
+                if isinstance(chunk, bytes):  # Handle binary data
+                    str_line = chunk.decode("utf-8")  # Convert bytes to string
+                    index = str_line.find("data:")
+                    if index != -1:
+                        str_line = str_line[index:]
+
+                # Skip empty lines (common in SSE streams between events)
+                if not str_line or not str_line.strip():
+                    continue
+
+                # chunk is a str at this point
+                return self._handle_string_chunk(str_line=str_line)
+            except StopIteration:
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -152,30 +158,35 @@ class BaseModelResponseIterator:
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
+        while True:
+            try:
+                chunk = await self.async_response_iterator.__anext__()
 
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+            except StopAsyncIteration:
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            str_line = chunk
-            if isinstance(chunk, bytes):  # Handle binary data
-                str_line = chunk.decode("utf-8")  # Convert bytes to string
-                index = str_line.find("data:")
-                if index != -1:
-                    str_line = str_line[index:]
+            try:
+                str_line = chunk
+                if isinstance(chunk, bytes):  # Handle binary data
+                    str_line = chunk.decode("utf-8")  # Convert bytes to string
+                    index = str_line.find("data:")
+                    if index != -1:
+                        str_line = str_line[index:]
 
-            # chunk is a str at this point
-            chunk = self._handle_string_chunk(str_line=str_line)
+                # Skip empty lines (common in SSE streams between events)
+                if not str_line or not str_line.strip():
+                    continue
 
-            return chunk
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+                # chunk is a str at this point
+                chunk = self._handle_string_chunk(str_line=str_line)
+
+                return chunk
+            except StopAsyncIteration:
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses
