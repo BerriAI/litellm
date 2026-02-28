@@ -71,7 +71,9 @@ try:
     from mcp.shared.tool_name_validation import (
         validate_tool_name,  # pyright: ignore[reportAssignmentType]
     )
-    from mcp.shared.tool_name_validation import SEP_986_URL
+    from mcp.shared.tool_name_validation import (
+        SEP_986_URL,
+    )
 except ImportError:
     from pydantic import BaseModel
 
@@ -329,7 +331,7 @@ class MCPServerManager:
                 static_headers=server_config.get("static_headers", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
-                    server_config.get("available_on_public_internet", False)
+                    server_config.get("available_on_public_internet", True)
                 ),
             )
             self.config_mcp_servers[server_id] = new_server
@@ -632,7 +634,7 @@ class MCPServerManager:
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
             allow_all_keys=mcp_server.allow_all_keys,
             available_on_public_internet=bool(
-                getattr(mcp_server, "available_on_public_internet", False)
+                getattr(mcp_server, "available_on_public_internet", True)
             ),
             updated_at=getattr(mcp_server, "updated_at", None),
         )
