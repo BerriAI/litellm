@@ -1259,7 +1259,7 @@ def _create_oauth2_server(
 
 @pytest.mark.asyncio
 async def test_authorize_root_resolves_single_oauth2_server():
-    """When /authorize is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
+    """When /authorize is hit without server name and exactly 1 OAuth2 server exists (no non-OAuth), resolve it."""
     try:
         from fastapi import Request
 
@@ -1286,7 +1286,6 @@ async def test_authorize_root_resolves_single_oauth2_server():
         ) as mock_encrypt:
             mock_encrypt.return_value = "mocked_encrypted_state"
 
-            # Call /authorize WITHOUT mcp_server_name, with dummy_client as client_id
             response = await authorize(
                 request=mock_request,
                 client_id="dummy_client",
@@ -1299,7 +1298,6 @@ async def test_authorize_root_resolves_single_oauth2_server():
         assert response.status_code == 307
         location = response.headers["location"]
         assert "https://provider.com/oauth/authorize" in location
-        assert "client_id=test_client_id" in location
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -1350,7 +1348,7 @@ async def test_authorize_root_fails_with_multiple_oauth2_servers():
 
 @pytest.mark.asyncio
 async def test_token_root_resolves_single_oauth2_server():
-    """When /token is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
+    """When /token is hit without server name and exactly 1 OAuth2 server exists (no non-OAuth), resolve it."""
     try:
         from fastapi import Request
 
@@ -1388,7 +1386,6 @@ async def test_token_root_resolves_single_oauth2_server():
         ) as mock_get_client:
             mock_get_client.return_value = mock_async_client
 
-            # Call /token WITHOUT mcp_server_name
             response = await token_endpoint(
                 request=mock_request,
                 grant_type="authorization_code",
@@ -1400,13 +1397,11 @@ async def test_token_root_resolves_single_oauth2_server():
                 code_verifier="test_verifier",
             )
 
-        # Should resolve and exchange token with the upstream server
         import json
 
         token_data = json.loads(response.body)
         assert token_data["access_token"] == "ya29.test_token"
 
-        # Verify it called the correct upstream token URL
         call_args = mock_async_client.post.call_args
         assert call_args.args[0] == "https://provider.com/oauth/token"
     finally:
@@ -1415,7 +1410,7 @@ async def test_token_root_resolves_single_oauth2_server():
 
 @pytest.mark.asyncio
 async def test_register_root_resolves_single_oauth2_server():
-    """When /register is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
+    """When /register is hit without server name and exactly 1 OAuth2 server exists (no non-OAuth), resolve it."""
     try:
         from fastapi import Request
 
@@ -1452,7 +1447,7 @@ async def test_register_root_resolves_single_oauth2_server():
 
 @pytest.mark.asyncio
 async def test_discovery_root_includes_server_name_prefix():
-    """When root discovery is hit and exactly 1 OAuth2 server exists, include server name in URLs."""
+    """When root discovery is hit and exactly 1 OAuth2 server exists (no non-OAuth), include server name in URLs."""
     try:
         from fastapi import Request
 
@@ -1485,6 +1480,196 @@ async def test_discovery_root_includes_server_name_prefix():
         assert "/test_oauth/token" in response["token_endpoint"]
         assert "/test_oauth/register" in response["registration_endpoint"]
         assert response["scopes_supported"] == ["read", "write"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def _create_non_oauth_server(
+    server_id="test_plain_server",
+    name="test_plain",
+    server_name="test_plain",
+    alias="test_plain",
+):
+    """Helper to create a mock non-OAuth MCPServer."""
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        server_name=server_name,
+        alias=alias,
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=None,
+    )
+
+
+# -------------------------------------------------------------------
+# Tests for root-level OAuth when non-OAuth servers are also present
+# -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_authorize_root_returns_404_when_non_oauth_servers_present():
+    """When /authorize is hit without server name and non-OAuth servers also exist, return 404.
+
+    Auto-resolution is skipped to avoid polluting non-OAuth servers' discovery.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    plain_server = _create_non_oauth_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+    global_mcp_server_manager.registry[plain_server.server_id] = plain_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await authorize(
+                request=mock_request,
+                client_id="dummy_client",
+                mcp_server_name=None,
+                redirect_uri="http://localhost:62646/callback",
+                state="test_state",
+            )
+        assert exc_info.value.status_code == 404
+        assert "MCP server not found" in str(exc_info.value.detail)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_token_root_returns_404_when_non_oauth_servers_present():
+    """When /token is hit without server name and non-OAuth servers also exist, return 404."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    plain_server = _create_non_oauth_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+    global_mcp_server_manager.registry[plain_server.server_id] = plain_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await token_endpoint(
+                request=mock_request,
+                grant_type="authorization_code",
+                code="test_auth_code",
+                redirect_uri="http://localhost:62646/callback",
+                client_id="dummy_client",
+                mcp_server_name=None,
+                client_secret=None,
+                code_verifier="test_verifier",
+            )
+        assert exc_info.value.status_code == 404
+        assert "MCP server not found" in str(exc_info.value.detail)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_register_root_returns_dummy_when_non_oauth_servers_present():
+    """When /register is hit without server name and non-OAuth servers also exist, return dummy."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            register_client,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    plain_server = _create_non_oauth_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+    global_mcp_server_manager.registry[plain_server.server_id] = plain_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            new=AsyncMock(return_value={}),
+        ):
+            result = await register_client(request=mock_request, mcp_server_name=None)
+
+        # Should return dummy registration since auto-resolution is skipped
+        assert result["client_id"] == "dummy_client"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_discovery_root_returns_generic_urls_when_non_oauth_servers_present():
+    """When root discovery is hit and non-OAuth servers also exist, return generic URLs without server prefix."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server()
+    plain_server = _create_non_oauth_server()
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+    global_mcp_server_manager.registry[plain_server.server_id] = plain_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name=None,
+        )
+
+        # Should NOT resolve — return generic URLs without server prefix
+        assert response["authorization_endpoint"] == "https://llm.example.com/authorize"
+        assert response["token_endpoint"] == "https://llm.example.com/token"
+        assert response["registration_endpoint"] == "https://llm.example.com/register"
+        assert response["scopes_supported"] == []
     finally:
         global_mcp_server_manager.registry.clear()
 

@@ -2184,10 +2184,9 @@ if MCP_AVAILABLE:
         return {"enabled": MCP_AVAILABLE}
 
     # Mount the MCP handlers
-    app.mount("/", handle_streamable_http_mcp)
-    app.mount("/mcp", handle_streamable_http_mcp)
-    app.mount("/{mcp_server_name}/mcp", handle_streamable_http_mcp)
+    # /sse must be mounted before the "/" catch-all so it's matched first
     app.mount("/sse", handle_sse_mcp)
+    app.mount("/", handle_streamable_http_mcp)
     app.add_middleware(AuthContextMiddleware)
 
     ########################################################
