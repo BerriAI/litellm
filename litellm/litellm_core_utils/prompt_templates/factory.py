@@ -2975,7 +2975,9 @@ def cohere_message_pt(messages: list):
             )
             tool_results.append(tool_result)
         elif message.get("content"):
-            prompt += message["content"] + "\n\n"
+            text_content = convert_content_list_to_str(message)
+            if text_content:
+                prompt += text_content + "\n\n"
     prompt = prompt.rstrip()
     return prompt, tool_results
 
