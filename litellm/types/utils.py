@@ -32,7 +32,14 @@ from openai.types.moderation_create_response import Moderation as Moderation
 from openai.types.moderation_create_response import (
     ModerationCreateResponse as ModerationCreateResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
@@ -855,6 +862,21 @@ class ChatCompletionTokenLogprob(OpenAIObject):
     In rare cases, there may be fewer than the number of requested `top_logprobs`
     returned.
     """
+
+    # Some OpenAI-compatible providers return null for top_logprobs when
+    # omitted; normalize to [] to preserve the typed List[TopLogprob] contract.
+    @field_validator("top_logprobs", mode="before")
+    @classmethod
+    def ensure_top_logprobs_is_list(cls, v):
+        """Normalize null top_logprobs to empty list.
+
+        Some providers return null instead of [] when logprobs=true but
+        top_logprobs is unset. The OpenAI spec requires an array.
+        Fixes https://github.com/BerriAI/litellm/issues/21932
+        """
+        if v is None:
+            return []
+        return v
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
