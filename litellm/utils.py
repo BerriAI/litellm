@@ -3313,7 +3313,16 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             request_type="embeddings",
         )
         _check_valid_arg(supported_params=supported_params)
-        if litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(model):
+        if litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(model):
+            optional_params = (
+                litellm.VoyageMultimodalEmbeddingConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params={},
+                    model=model,
+                    drop_params=drop_params if drop_params is not None else False,
+                )
+            )
+        elif litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(model):
             optional_params = (
                 litellm.VoyageContextualEmbeddingConfig().map_openai_params(
                     non_default_params=non_default_params,
@@ -8079,6 +8088,11 @@ class ProviderConfigManager:
         provider: LlmProviders,
     ) -> Optional[BaseEmbeddingConfig]:
         if (
+            litellm.LlmProviders.VOYAGE == provider
+            and litellm.VoyageMultimodalEmbeddingConfig.is_multimodal_embedding(model)
+        ):
+            return litellm.VoyageMultimodalEmbeddingConfig()
+        elif (
             litellm.LlmProviders.VOYAGE == provider
             and litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(
                 model

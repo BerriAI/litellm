@@ -1139,6 +1139,52 @@ from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
 from .llms.topaz.common_utils import TopazModelInfo
+from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
+from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
+from .llms.groq.chat.transformation import GroqChatConfig
+from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
+from .llms.voyage.embedding.transformation_contextual import (
+    VoyageContextualEmbeddingConfig,
+)
+from .llms.voyage.embedding.transformation_multimodal import (
+    VoyageMultimodalEmbeddingConfig,
+)
+from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
+from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
+from .llms.mistral.chat.transformation import MistralConfig
+from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import (
+    AzureOpenAIOSeriesResponsesAPIConfig,
+)
+from .llms.xai.responses.transformation import XAIResponsesAPIConfig
+from .llms.litellm_proxy.responses.transformation import (
+    LiteLLMProxyResponsesAPIConfig,
+)
+from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
+from .llms.openai.chat.o_series_transformation import (
+    OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
+    OpenAIOSeriesConfig,
+)
+from .llms.anthropic.skills.transformation import AnthropicSkillsConfig
+from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig
+
+from .llms.gradient_ai.chat.transformation import GradientAIConfig
+
+openaiOSeriesConfig = OpenAIOSeriesConfig()
+from .llms.openai.chat.gpt_transformation import (
+    OpenAIGPTConfig,
+)
+from .llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
+)
+from .llms.openai.transcriptions.whisper_transformation import (
+    OpenAIWhisperAudioTranscriptionConfig,
+)
+from .llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
+)
 
 # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
 # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
