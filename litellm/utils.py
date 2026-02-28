@@ -3453,44 +3453,58 @@ def _remove_additional_properties(schema):
     """
     clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
 
+    Returns a deep copy with 'additionalProperties' removed — the original schema
+    is not mutated. This is critical for cache-key stability: the cache key is
+    computed from the caller's original tools dict, so in-place mutation would
+    cause the key at GET time to differ from the key at SET time.
+
     Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088
+    See also: https://github.com/BerriAI/litellm/issues/18784
     """
+    schema = copy.deepcopy(schema)
+    _remove_additional_properties_in_place(schema)
+    return schema
+
+
+def _remove_additional_properties_in_place(schema):
+    """In-place recursive helper — only called on an already-copied schema."""
     if isinstance(schema, dict):
-        # Remove the 'additionalProperties' key if it exists and is set to False
         if "additionalProperties" in schema and schema["additionalProperties"] is False:
             del schema["additionalProperties"]
-
-        # Recursively process all dictionary values
         for key, value in schema.items():
-            _remove_additional_properties(value)
-
+            _remove_additional_properties_in_place(value)
     elif isinstance(schema, list):
-        # Recursively process all items in the list
         for item in schema:
-            _remove_additional_properties(item)
-
-    return schema
+            _remove_additional_properties_in_place(item)
 
 
 def _remove_strict_from_schema(schema):
     """
+    Remove 'strict' keys from a JSON schema structure.
+
+    Returns a deep copy with 'strict' removed — the original schema is not
+    mutated. This is critical for cache-key stability: the cache key is
+    computed from the caller's original tools dict, so in-place mutation would
+    cause the key at GET time to differ from the key at SET time.
+
     Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088
+    See also: https://github.com/BerriAI/litellm/issues/18784
     """
+    schema = copy.deepcopy(schema)
+    _remove_strict_from_schema_in_place(schema)
+    return schema
+
+
+def _remove_strict_from_schema_in_place(schema):
+    """In-place recursive helper — only called on an already-copied schema."""
     if isinstance(schema, dict):
-        # Remove the 'additionalProperties' key if it exists and is set to False
         if "strict" in schema:
             del schema["strict"]
-
-        # Recursively process all dictionary values
         for key, value in schema.items():
-            _remove_strict_from_schema(value)
-
+            _remove_strict_from_schema_in_place(value)
     elif isinstance(schema, list):
-        # Recursively process all items in the list
         for item in schema:
-            _remove_strict_from_schema(item)
-
-    return schema
+            _remove_strict_from_schema_in_place(item)
 
 
 def _remove_json_schema_refs(schema, max_depth=10):
