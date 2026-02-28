@@ -68,7 +68,10 @@ def validate_standard_logging_payload(
     assert slp is not None, "Standard logging payload should not be None"
 
     # Validate token counts
-    print("VALIDATING STANDARD LOGGING PAYLOAD. response=", json.dumps(response, indent=4, default=str))
+    print(
+        "VALIDATING STANDARD LOGGING PAYLOAD. response=",
+        json.dumps(response, indent=4, default=str),
+    )
     print("FIELDS IN SLP=", json.dumps(slp, indent=4, default=str))
     print("SLP PROMPT TOKENS=", slp["prompt_tokens"])
     print("RESPONSE PROMPT TOKENS=", response["usage"]["input_tokens"])
@@ -857,6 +860,206 @@ async def test_openai_responses_litellm_router_with_prompt():
         request_body = mock_post.call_args.kwargs["json"]
         assert request_body["prompt"] == prompt_obj
         mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_with_prompt_instructions_as_list():
+    """
+    Test that ResponsesAPIResponse correctly handles instructions returned as a list
+    when using prompt objects. This is the format OpenAI returns when a prompt template
+    is expanded - the instructions become a list of message objects rather than a string.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/XXXX
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    # Mock response with instructions as a list (as returned by OpenAI when using prompt objects)
+    mock_response = {
+        "id": "resp_abc123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_001",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "The answer is 3."}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        # This is the key: instructions as a list of message objects (expanded from prompt template)
+        "instructions": [
+            {
+                "type": "message",
+                "content": [
+                    {"type": "input_text", "text": "You are a helpful math assistant."}
+                ],
+                "role": "developer",
+            },
+            {
+                "type": "message",
+                "content": [
+                    {"type": "input_text", "text": "Solve the following problem."}
+                ],
+                "role": "assistant",
+            },
+        ],
+        "metadata": {},
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    # This should not raise a ValidationError
+    response = ResponsesAPIResponse(**mock_response)
+
+    # Verify the response was parsed correctly
+    assert response.id == "resp_abc123"
+    assert response.status == "completed"
+    assert isinstance(response.instructions, list)
+    assert len(response.instructions) == 2
+    assert response.instructions[0]["role"] == "developer"
+    assert response.instructions[1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_with_prompt_instructions_as_string():
+    """
+    Test that ResponsesAPIResponse still correctly handles instructions as a string
+    (the traditional format when not using prompt objects).
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    mock_response = {
+        "id": "resp_xyz789",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": "You are a helpful assistant.",  # String format
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    response = ResponsesAPIResponse(**mock_response)
+
+    assert response.id == "resp_xyz789"
+    assert response.instructions == "You are a helpful assistant."
+    assert isinstance(response.instructions, str)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_openai_responses_streaming_with_prompt_instructions_as_list(sync_mode):
+    """
+    Test that streaming response event types correctly handle instructions as a list
+    when using prompt objects. This tests that ResponseCreatedEvent, ResponseInProgressEvent,
+    and ResponseCompletedEvent all properly parse instructions as a list.
+
+    Regression test for ValidationError when using prompt objects with streaming.
+    """
+    from litellm.types.llms.openai import (
+        ResponseCreatedEvent,
+        ResponseInProgressEvent,
+        ResponseCompletedEvent,
+    )
+
+    # Test data with instructions as a list (as returned by OpenAI when using prompt objects)
+    response_with_list_instructions = {
+        "id": "resp_stream123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "in_progress",
+        "model": "gpt-4o",
+        "output": [],
+        "parallel_tool_calls": True,
+        "usage": None,
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": [
+            {
+                "type": "message",
+                "content": [
+                    {"type": "input_text", "text": "You are a helpful assistant."}
+                ],
+                "role": "developer",
+            }
+        ],
+        "metadata": {},
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    # Test ResponseCreatedEvent with list instructions
+    created_event_data = {
+        "type": "response.created",
+        "response": response_with_list_instructions,
+    }
+    created_event = ResponseCreatedEvent(**created_event_data)
+    assert created_event.type == "response.created"
+    assert isinstance(created_event.response.instructions, list)
+    assert len(created_event.response.instructions) == 1
+    assert created_event.response.instructions[0]["role"] == "developer"
+
+    # Test ResponseInProgressEvent with list instructions
+    in_progress_event_data = {
+        "type": "response.in_progress",
+        "response": response_with_list_instructions,
+    }
+    in_progress_event = ResponseInProgressEvent(**in_progress_event_data)
+    assert in_progress_event.type == "response.in_progress"
+    assert isinstance(in_progress_event.response.instructions, list)
+
+    # Test ResponseCompletedEvent with list instructions
+    completed_response = response_with_list_instructions.copy()
+    completed_response["status"] = "completed"
+    completed_response["usage"] = {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "total_tokens": 15,
+    }
+    completed_event_data = {
+        "type": "response.completed",
+        "response": completed_response,
+    }
+    completed_event = ResponseCompletedEvent(**completed_event_data)
+    assert completed_event.type == "response.completed"
+    assert isinstance(completed_event.response.instructions, list)
 
 
 def test_bad_request_bad_param_error():
@@ -1665,8 +1868,12 @@ async def test_openai_streaming_logging():
             ), f"Expected response_obj.usage to be of type Usage or dict, but got {type(response_obj.usage)}"
             # Verify it has the chat completion format fields
             if isinstance(response_obj.usage, dict):
-                assert "prompt_tokens" in response_obj.usage, "Usage dict should have prompt_tokens"
-                assert "completion_tokens" in response_obj.usage, "Usage dict should have completion_tokens"
+                assert (
+                    "prompt_tokens" in response_obj.usage
+                ), "Usage dict should have prompt_tokens"
+                assert (
+                    "completion_tokens" in response_obj.usage
+                ), "Usage dict should have completion_tokens"
             print("\n\nVALIDATED USAGE\n\n")
             self.validate_usage = True
 
