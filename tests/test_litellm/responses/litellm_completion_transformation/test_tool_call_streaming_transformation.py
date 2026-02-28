@@ -257,7 +257,7 @@ def test_tool_call_delta_without_id_uses_index_mapping():
 
     all_events = []
     while iterator._pending_tool_events:
-        all_events.append(iterator._pending_tool_events.pop(0))
+        all_events.append(iterator._pending_tool_events.popleft())
 
     delta_events = [
         evt
@@ -310,7 +310,7 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
 
     all_events = []
     while iterator._pending_tool_events:
-        all_events.append(iterator._pending_tool_events.pop(0))
+        all_events.append(iterator._pending_tool_events.popleft())
 
     output_item_added_events = [
         evt
@@ -374,7 +374,7 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
 
     all_events = []
     while iterator._pending_tool_events:
-        all_events.append(iterator._pending_tool_events.pop(0))
+        all_events.append(iterator._pending_tool_events.popleft())
 
     delta_events = [
         evt
