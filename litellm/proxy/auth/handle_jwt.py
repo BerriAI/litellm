@@ -857,6 +857,7 @@ class JWTAuthManager:
             end_user_id=None,
             org_id=org_id,
             team_membership=None,
+            jwt_claims={},
         )
 
     @staticmethod
@@ -1479,4 +1480,5 @@ class JWTAuthManager:
             end_user_object=end_user_object,
             token=api_key,
             team_membership=team_membership_object,
+            jwt_claims=jwt_valid_token,
         )

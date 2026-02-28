@@ -539,6 +539,11 @@ class LiteLLMRoutes(enum.Enum):
         "/model/update",
         "/model/delete",
         "/model/info",
+        "/jwt/key/mapping/new",
+        "/jwt/key/mapping/update",
+        "/jwt/key/mapping/delete",
+        "/jwt/key/mapping/list",
+        "/jwt/key/mapping/info",
     ] + key_management_routes
 
     spend_tracking_routes = [
@@ -3664,6 +3669,36 @@ class KeyHealthResponse(TypedDict, total=False):
     logging_callbacks: Optional[LoggingCallbackStatus]
 
 
+class CreateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    jwt_claim_name: str
+    jwt_claim_value: str
+    key: str
+    description: Optional[str] = None
+
+
+class UpdateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    id: str
+    key: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class DeleteJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
+    id: str
+
+
+class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
+    id: str
+    jwt_claim_name: str
+    jwt_claim_value: str
+    token: str
+    key_alias: Optional[str] = None
+    description: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class SpecialHeaders(enum.Enum):
     """Used by user_api_key_auth.py to get litellm key"""
 
@@ -3834,6 +3869,7 @@ class JWTAuthBuilderResult(TypedDict):
     end_user_id: Optional[str]
     org_id: Optional[str]
     team_membership: Optional[LiteLLM_TeamMembership]
+    jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
@@ -3976,6 +4012,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     oidc_userinfo_cache_ttl: float = Field(
         default=300,
         description="TTL (in seconds) for caching UserInfo responses. Default: 300s (5 minutes).",
+    )
+    # JWT-to-Virtual-Key Mapping
+    virtual_key_claim_field: Optional[str] = Field(
+        default=None,
+        description="JWT claim field for virtual key mapping lookup (e.g. 'sub', 'email'). Supports dot notation.",
+    )
+    virtual_key_mapping_cache_ttl: float = Field(
+        default=300,
+        description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
     )
     #########################################################
 
