@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import inspect
 import re
 import secrets
 from datetime import datetime, timezone
@@ -527,7 +528,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
-            response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
+            # Pass request_data if the custom_auth function accepts it (backwards compatible)
+            _custom_auth_kwargs: dict = {"request": request, "api_key": api_key}
+            try:
+                _sig = inspect.signature(user_custom_auth)
+                _accepts_request_data = "request_data" in _sig.parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in _sig.parameters.values()
+                )
+                if _accepts_request_data:
+                    _custom_auth_kwargs["request_data"] = request_data
+            except (ValueError, TypeError):
+                pass
+            response = await user_custom_auth(**_custom_auth_kwargs)  # type: ignore
             validated = UserAPIKeyAuth.model_validate(response)
             validated = await _run_post_custom_auth_checks(
                 valid_token=validated,
