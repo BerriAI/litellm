@@ -422,3 +422,149 @@ def test_output_format_removed_from_bedrock_invoke_request():
     # Verify output_format is not in the request
     assert "output_format" not in result, \
         f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+# ---------------------------------------------------------------------------
+# Context Management on Bedrock Invoke
+# ---------------------------------------------------------------------------
+
+
+def _sample_context_management_payload():
+    """Anthropic-format context management with non-compact edits."""
+    return {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+                "clear_tool_inputs": False,
+            }
+        ]
+    }
+
+
+def _sample_compact_context_management_payload():
+    """Anthropic-format context management with compact edits."""
+    return {
+        "edits": [
+            {
+                "type": "compact_20260112",
+                "trigger": {"type": "input_tokens", "value": 150000},
+            }
+        ]
+    }
+
+
+def _sample_openai_context_management_payload():
+    """OpenAI-format context management (list of entries)."""
+    return [{"type": "compaction", "compact_threshold": 200000}]
+
+
+def test_context_management_in_supported_params():
+    """context_management must be listed as a supported OpenAI param for Bedrock Invoke."""
+    config = AmazonAnthropicClaudeConfig()
+    params = config.get_supported_openai_params(
+        model="anthropic.claude-sonnet-4-20250514-v1:0"
+    )
+    assert "context_management" in params
+
+
+def test_transform_request_includes_context_management():
+    """context_management payload must appear in the Bedrock Invoke request body."""
+    config = AmazonAnthropicClaudeConfig()
+    payload = _sample_context_management_payload()
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 256,
+            "context_management": payload,
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert "context_management" in result
+    assert result["context_management"] == payload
+
+
+def test_transform_request_adds_compact_beta_header():
+    """Compact edits must inject compact-2026-01-12 into anthropic_beta."""
+    config = AmazonAnthropicClaudeConfig()
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 256,
+            "context_management": _sample_compact_context_management_payload(),
+        },
+        litellm_params={},
+        headers={},
+    )
+    beta_list = result.get("anthropic_beta", [])
+    assert "compact-2026-01-12" in beta_list, (
+        f"compact-2026-01-12 should be in anthropic_beta, got: {beta_list}"
+    )
+
+
+def test_transform_request_adds_context_management_beta_header():
+    """Non-compact edits must inject context-management-2025-06-27 into anthropic_beta."""
+    config = AmazonAnthropicClaudeConfig()
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "max_tokens": 256,
+            "context_management": _sample_context_management_payload(),
+        },
+        litellm_params={},
+        headers={},
+    )
+    beta_list = result.get("anthropic_beta", [])
+    assert "context-management-2025-06-27" in beta_list, (
+        f"context-management-2025-06-27 should be in anthropic_beta, got: {beta_list}"
+    )
+
+
+def test_map_openai_params_transforms_context_management():
+    """OpenAI-format context_management must be transformed to Anthropic format."""
+    config = AmazonAnthropicClaudeConfig()
+    openai_payload = _sample_openai_context_management_payload()
+    optional_params = config.map_openai_params(
+        non_default_params={"context_management": openai_payload},
+        optional_params={},
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        drop_params=False,
+    )
+    cm = optional_params.get("context_management")
+    assert cm is not None, "context_management should be in optional_params"
+    assert "edits" in cm, "should be converted to Anthropic format with 'edits' key"
+    assert cm["edits"][0]["type"] == "compact_20260112"
+    assert cm["edits"][0]["trigger"] == {"type": "input_tokens", "value": 200000}
+
+
+def test_transform_request_openai_format_end_to_end():
+    """Full pipeline: OpenAI-format context_management → map → transform → request body + beta."""
+    config = AmazonAnthropicClaudeConfig()
+    openai_payload = _sample_openai_context_management_payload()
+    optional_params = config.map_openai_params(
+        non_default_params={"context_management": openai_payload},
+        optional_params={},
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        drop_params=False,
+    )
+    optional_params["max_tokens"] = 256
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    # Body must have the transformed context_management
+    assert "context_management" in result
+    assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
+    # Beta header must be present
+    beta_list = result.get("anthropic_beta", [])
+    assert "compact-2026-01-12" in beta_list
