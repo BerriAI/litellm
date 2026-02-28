@@ -144,13 +144,6 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             timeout=30.0,
         )
 
-        # Check for errors
-        if response.status_code != 200:
-            error_text = response.text
-            raise ValueError(
-                f"Token counting request failed with status {response.status_code}: {error_text}"
-            )
-
         # Parse response
         result = response.json()
 
