@@ -503,6 +503,16 @@ class LLMCachingHandler:
         if _caching_handler_response.final_embedding_cached_response is None:
             return embedding_response
 
+        # Sort the API response by the ``index`` field before filling
+        # None slots.  Some providers (e.g. vLLM) may return embedding
+        # results in a different order than the input, and the sequential
+        # counter used below assumes sorted order.  See #20456.
+        if embedding_response.data is not None:
+            embedding_response.data = sorted(
+                embedding_response.data,
+                key=lambda e: getattr(e, "index", 0),
+            )
+
         idx = 0
         final_data_list = []
         for item in _caching_handler_response.final_embedding_cached_response.data:
@@ -511,6 +521,15 @@ class LLMCachingHandler:
                 idx += 1
             else:
                 final_data_list.append(item)
+
+        # Correct the ``index`` field on every item so that it matches
+        # the item's position in the final merged list.  Without this,
+        # API result items retain their provider-relative indices (0, 1,
+        # 2, …) which do not match the original input positions when
+        # there were cache hits.  See #20456.
+        for pos, item in enumerate(final_data_list):
+            if item is not None and hasattr(item, "index"):
+                item.index = pos
 
         _caching_handler_response.final_embedding_cached_response.data = final_data_list
         _caching_handler_response.final_embedding_cached_response._hidden_params[

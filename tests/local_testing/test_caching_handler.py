@@ -338,6 +338,112 @@ def test_combine_cached_embedding_response_multiple_missing_values():
     assert result.data[3].embedding == [0.7, 0.8, 0.9]
 
 
+def test_combine_cached_embedding_response_out_of_order_api_results():
+    """
+    Regression test for #20456 — when the provider returns embedding results
+    out of order (e.g. vLLM), the combine function must still place the
+    correct embeddings into the correct positions and fix the index fields.
+
+    Cached: [cache_hit, None, None, cache_hit, None]
+    API returns (out of order): [idx=2, idx=0, idx=1]
+    Expected final: [cache_hit, api[idx=0], api[idx=1], cache_hit, api[idx=2]]
+    with all index fields matching their position (0,1,2,3,4).
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
+            None,
+            None,
+            Embedding(embedding=[0.7, 0.8, 0.9], index=3, object="embedding"),
+            None,
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+
+    # API returns results OUT OF ORDER — index field does not match position
+    api_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[1.0, 1.1, 1.2], index=2, object="embedding"),
+            Embedding(embedding=[0.4, 0.5, 0.6], index=0, object="embedding"),
+            Embedding(embedding=[2.0, 2.1, 2.2], index=1, object="embedding"),
+        ]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert isinstance(result, EmbeddingResponse)
+    assert len(result.data) == 5
+    # Cached items stay in place
+    assert result.data[0].embedding == [0.1, 0.2, 0.3]
+    assert result.data[3].embedding == [0.7, 0.8, 0.9]
+    # API items placed in correct positions (sorted by their original index)
+    assert result.data[1].embedding == [0.4, 0.5, 0.6]  # was api index=0
+    assert result.data[2].embedding == [2.0, 2.1, 2.2]  # was api index=1
+    assert result.data[4].embedding == [1.0, 1.1, 1.2]  # was api index=2
+    # All index fields must match their final position
+    for i, item in enumerate(result.data):
+        assert item.index == i, f"data[{i}].index = {item.index}, expected {i}"
+
+
+def test_combine_cached_embedding_response_corrects_index_fields():
+    """
+    Regression test for #20456 — even when API results are in order, the
+    index fields should be corrected to match the final merged positions.
+
+    Cached: [cache_hit, None, cache_hit]
+    API returns: [idx=0]  (single uncached item)
+    Expected: data[1].index should be 1, not 0.
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+
+    start_time = datetime.now()
+    end_time = start_time + timedelta(seconds=1)
+
+    cached_response = EmbeddingResponse(
+        data=[
+            Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
+            None,
+            Embedding(embedding=[0.7, 0.8, 0.9], index=2, object="embedding"),
+        ]
+    )
+    caching_handler_response = CachingHandlerResponse(
+        final_embedding_cached_response=cached_response
+    )
+
+    api_response = EmbeddingResponse(
+        data=[Embedding(embedding=[0.4, 0.5, 0.6], index=0, object="embedding")]
+    )
+
+    result = caching_handler._combine_cached_embedding_response_with_api_result(
+        _caching_handler_response=caching_handler_response,
+        embedding_response=api_response,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert len(result.data) == 3
+    # Index must match final position
+    assert result.data[0].index == 0
+    assert result.data[1].index == 1  # was api index=0, corrected to 1
+    assert result.data[2].index == 2
+
+
 @pytest.mark.asyncio
 async def test_embedding_cache_model_field_consistency():
     """
