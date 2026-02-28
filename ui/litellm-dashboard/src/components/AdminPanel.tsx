@@ -22,6 +22,7 @@ import NotificationsManager from "./molecules/notifications_manager";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "./networking";
 import SCIMConfig from "./SCIM";
 import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
+import HashicorpVault from "./Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
 import SSOModals from "./SSOModals";
 import UIAccessControlForm from "./UIAccessControlForm";
@@ -360,6 +361,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
         </Space>
       ),
       children: <UISettings />,
+    },
+    {
+      key: "hashicorp-vault",
+      label: "Hashicorp Vault",
+      children: <HashicorpVault />,
     },
   ];
 
