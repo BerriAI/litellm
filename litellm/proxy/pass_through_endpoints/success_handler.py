@@ -22,6 +22,9 @@ from .llm_provider_handlers.assembly_passthrough_logging_handler import (
 from .llm_provider_handlers.cohere_passthrough_logging_handler import (
     CoherePassthroughLoggingHandler,
 )
+from .llm_provider_handlers.cursor_passthrough_logging_handler import (
+    CursorPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
@@ -59,6 +62,9 @@ class PassThroughEndpointLogging:
 
         # Gemini
         self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent", "predictLongRunning"]
+
+        # Cursor Cloud Agents
+        self.TRACKED_CURSOR_ROUTES = ["/v0/agents", "/v0/me", "/v0/models", "/v0/repositories"]
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
@@ -223,6 +229,25 @@ class PassThroughEndpointLogging:
             )
             kwargs = openai_passthrough_logging_handler_result["kwargs"]
 
+        elif self.is_cursor_route(url_route, custom_llm_provider):
+            cursor_passthrough_logging_handler_result = (
+                CursorPassthroughLoggingHandler.cursor_passthrough_handler(
+                    httpx_response=httpx_response,
+                    response_body=response_body or {},
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    request_body=request_body,
+                    **kwargs,
+                )
+            )
+            standard_logging_response_object = (
+                cursor_passthrough_logging_handler_result["result"]
+            )
+            kwargs = cursor_passthrough_logging_handler_result["kwargs"]
         elif self.is_vertex_ai_live_route(url_route):
             from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
                 VertexAILivePassthroughLoggingHandler,
@@ -383,6 +408,22 @@ class PassThroughEndpointLogging:
         for route in self.TRACKED_VERTEX_AI_LIVE_ROUTES:
             if route in url_route:
                 return True
+        return False
+
+    def is_cursor_route(
+        self, url_route: str, custom_llm_provider: Optional[str] = None
+    ):
+        """Check if the URL route is a Cursor Cloud Agents API route."""
+        if custom_llm_provider == "cursor":
+            return True
+        parsed_url = urlparse(url_route)
+        if parsed_url.hostname and "api.cursor.com" in parsed_url.hostname:
+            return True
+        for route in self.TRACKED_CURSOR_ROUTES:
+            if route in url_route:
+                path = parsed_url.path if parsed_url.scheme else url_route
+                if path.startswith("/v0/"):
+                    return custom_llm_provider == "cursor"
         return False
 
     def is_openai_route(self, url_route: str):
