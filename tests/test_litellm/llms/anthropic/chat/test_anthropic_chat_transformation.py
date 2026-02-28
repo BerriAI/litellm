@@ -1560,19 +1560,19 @@ def test_effort_output_config_preservation():
 
 
 def test_effort_beta_header_injection():
-    """Test that effort beta header is automatically added when output_config is detected."""
+    """Test that effort beta header is automatically added for non-4.6 models."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     model_info = AnthropicModelInfo()
 
-    # Test with effort parameter
+    # Test with effort parameter on non-4.6 model (should inject header)
     optional_params = {
         "output_config": {
             "effort": "low"
         }
     }
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(optional_params=optional_params, model="claude-opus-4-5-20251101")
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1582,6 +1582,24 @@ def test_effort_beta_header_injection():
 
     assert "anthropic-beta" in headers
     assert "effort-2025-11-24" in headers["anthropic-beta"]
+
+
+def test_no_effort_beta_header_for_46_models():
+    """Test that effort beta header is NOT injected for Claude 4.6 models."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+
+    # output_config.effort on a 4.6 model should NOT trigger the beta header
+    optional_params = {
+        "output_config": {
+            "effort": "high"
+        }
+    }
+
+    for model in ["claude-sonnet-4-6-20260514", "claude-opus-4-6-20260205"]:
+        effort_used = model_info.is_effort_used(optional_params=optional_params, model=model)
+        assert effort_used is False, f"Beta header should not be injected for {model}"
 
 
 def test_effort_validation():

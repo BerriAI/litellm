@@ -228,25 +228,33 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
         """
-        Check if effort parameter is being used.
+        Check if effort parameter is being used and requires the beta header.
 
-        Returns True if effort-related parameters are present.
+        The effort-2025-11-24 beta header is only needed for reasoning_effort
+        on Opus 4.5. Claude 4.6 models use output_config.effort natively
+        without any beta header.
         """
         if not optional_params:
             return False
 
+        model_lower = model.lower() if model else ""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        is_46 = AnthropicConfig._is_claude_4_6_model(model) if model else False
+
         # Check if reasoning_effort is provided for Claude Opus 4.5
-        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
+        if model and ("opus-4-5" in model_lower or "opus_4_5" in model_lower):
             reasoning_effort = optional_params.get("reasoning_effort")
             if reasoning_effort and isinstance(reasoning_effort, str):
                 return True
 
-        # Check if output_config is directly provided
-        output_config = optional_params.get("output_config")
-        if output_config and isinstance(output_config, dict):
-            effort = output_config.get("effort")
-            if effort and isinstance(effort, str):
-                return True
+        # Check if output_config is directly provided (only needs header for non-4.6 models)
+        if not is_46:
+            output_config = optional_params.get("output_config")
+            if output_config and isinstance(output_config, dict):
+                effort = output_config.get("effort")
+                if effort and isinstance(effort, str):
+                    return True
 
         return False
 
