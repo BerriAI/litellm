@@ -14409,13 +14409,12 @@
         "max_tokens": 65535,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
-        "mode": "chat",
+        "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
+            "/vertex_ai/live"
         ],
         "supported_modalities": [
             "text",
@@ -14454,14 +14453,13 @@
         "max_tokens": 65535,
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
-        "mode": "chat",
+        "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
         "rpm": 100000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
+            "/v1/realtime"
         ],
         "supported_modalities": [
             "text",
