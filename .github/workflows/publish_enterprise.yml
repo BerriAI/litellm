@@ -13,9 +13,10 @@ on:
           - minor
           - major
 
-jobs:
-  publish:
     runs-on: ubuntu-latest
+    if: github.repository == 'BerriAI/litellm'
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: enterprise
