@@ -17,6 +17,7 @@ from typing import (
 from urllib.parse import urlparse
 
 import httpx
+import orjson
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -1200,7 +1201,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 **data, timeout=timeout
             )  # type: ignore
             headers = dict(raw_response.headers)
-            response = raw_response.parse()
+            response = orjson.loads(raw_response.content)
             return headers, response
         except Exception as e:
             raise e
@@ -1224,7 +1225,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )  # type: ignore
 
             headers = dict(raw_response.headers)
-            response = raw_response.parse()
+            response = orjson.loads(raw_response.content)
             return headers, response
         except Exception as e:
             raise e
@@ -1259,7 +1260,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
             )
             logging_obj.model_call_details["response_headers"] = headers
-            stringified_response = response.model_dump()
+            stringified_response = response if isinstance(response, dict) else response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -1370,7 +1371,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 original_response=sync_embedding_response,
             )
             response: EmbeddingResponse = convert_to_model_response_object(
-                response_object=sync_embedding_response.model_dump(),
+                response_object=sync_embedding_response if isinstance(sync_embedding_response, dict) else sync_embedding_response.model_dump(),
                 model_response_object=model_response,
                 _response_headers=headers,
                 response_type="embedding",
