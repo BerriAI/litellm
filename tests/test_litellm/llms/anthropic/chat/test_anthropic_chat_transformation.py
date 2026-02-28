@@ -2033,6 +2033,9 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["thinking"]["type"] == "adaptive"
             # Should not have budget_tokens for adaptive type
             assert "budget_tokens" not in result["thinking"]
+            # Should set output_config with the effort level
+            assert "output_config" in result, f"output_config missing for {model} with effort={effort}"
+            assert result["output_config"]["effort"] == effort
             # reasoning_effort should not be in the result (it's transformed to thinking)
             assert "reasoning_effort" not in result
 
@@ -2081,6 +2084,9 @@ def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
     assert "thinking" in result
     assert result["thinking"]["type"] == "adaptive"
     assert "budget_tokens" not in result["thinking"]
+    # output_config should be set in the final payload
+    assert "output_config" in result
+    assert result["output_config"]["effort"] == "high"
 
 
 def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
@@ -2115,6 +2121,8 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         assert "thinking" in result
         assert result["thinking"]["type"] == "enabled"
         assert result["thinking"]["budget_tokens"] == expected_budget
+        # Non-4.6 models should NOT get output_config from reasoning_effort
+        assert "output_config" not in result
         # reasoning_effort should not be in the result (it's transformed to thinking)
         assert "reasoning_effort" not in result
 
