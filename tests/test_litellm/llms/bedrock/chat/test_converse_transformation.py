@@ -3377,6 +3377,80 @@ def test_output_config_applies_additional_properties():
 
 
 
+_TOOL_PARAM = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The location to get weather for",
+                    }
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+
+def test_parallel_tool_calls_newer_model_adds_disable_flag():
+    """Newer Claude models (4.5+) should get disable_parallel_tool_use in additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "additionalModelRequestFields" in request_data
+    assert "tool_choice" in request_data["additionalModelRequestFields"]
+    assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
+    assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
+
+
+def test_parallel_tool_calls_older_model_drops_disable_flag():
+    """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    additional = request_data.get("additionalModelRequestFields", {})
+    assert "tool_choice" not in additional
+    assert "parallel_tool_calls" not in additional
+
+
 class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
