@@ -1071,7 +1071,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _input_schema["additionalProperties"] = True
             _input_schema["properties"] = {}
         else:
-            _input_schema.update(cast(AnthropicInputSchema, json_schema))
+            # Filter out unsupported constraints (minimum, maximum, etc.) before
+            # sending to Anthropic API. Mirrors SDK transformation behavior.
+            # See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs#how-sdk-transformation-works
+            filtered_schema = self.filter_anthropic_output_schema(json_schema)
+            _input_schema.update(cast(AnthropicInputSchema, filtered_schema))
 
         _tool = AnthropicMessagesTool(
             name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema
