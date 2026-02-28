@@ -379,7 +379,8 @@ async def test_realtime_guardrail_blocks_prompt_injection():
     """
     Test that when a transcription event containing prompt injection arrives from the
     backend, a registered guardrail blocks it — sending a warning to the client
-    and NOT sending response.create to the backend.
+    and voicing the guardrail violation message via response.cancel +
+    conversation.item.create + response.create.
     """
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
