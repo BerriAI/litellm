@@ -437,6 +437,7 @@ async def test_streamable_http_mcp_handler_mock():
 @pytest.mark.asyncio
 async def test_sse_mcp_handler_mock():
     """Test the SSE MCP handler functionality"""
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Mock the SSE session manager and its methods
     mock_sse_session_manager = AsyncMock()
@@ -455,12 +456,26 @@ async def test_sse_mcp_handler_mock():
     mock_receive = AsyncMock()
     mock_send = AsyncMock()
 
+    mock_auth_result = (
+        UserAPIKeyAuth(),
+        None,
+        None,
+        {},
+        {},
+        [],
+    )
+
     with patch(
         "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
         True,
     ), patch(
         "litellm.proxy._experimental.mcp_server.server.sse_session_manager",
         mock_sse_session_manager,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new=AsyncMock(return_value=mock_auth_result),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
     ):
         from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
 

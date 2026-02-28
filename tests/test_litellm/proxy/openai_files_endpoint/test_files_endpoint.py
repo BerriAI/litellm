@@ -107,7 +107,12 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
     """
     import litellm
     from litellm import Router
+    from litellm.proxy._types import LitellmUserRoles
+    import litellm.proxy.proxy_server as ps
     from litellm.proxy.utils import ProxyLogging
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     # Mock create_file as an async function
     mock_create_file = mocker.patch("litellm.files.main.create_file", new=mocker.AsyncMock())
@@ -178,52 +183,59 @@ def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: 
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
     )
 
-    # Create a simple test file content
-    test_file_content = b"test audio content"
-    test_file = ("test.wav", test_file_content, "audio/wav")
-
-    response = client.post(
-        "/v1/files",
-        files={"file": test_file},
-        data={
-            "purpose": "user_data",
-            "target_model_names": "azure-gpt-3-5-turbo, gpt-3.5-turbo",
-        },
-        headers={"Authorization": "Bearer test-key"},
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
 
-    assert response.status_code == 200
+    try:
+        # Create a simple test file content
+        test_file_content = b"test audio content"
+        test_file = ("test.wav", test_file_content, "audio/wav")
 
-    # Get all calls made to create_file
-    calls = mock_create_file.call_args_list
+        response = client.post(
+            "/v1/files",
+            files={"file": test_file},
+            data={
+                "purpose": "user_data",
+                "target_model_names": "azure-gpt-3-5-turbo, gpt-3.5-turbo",
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
 
-    # Check for Azure call
-    azure_call_found = False
-    for call in calls:
-        kwargs = call.kwargs
-        if (
-            kwargs.get("custom_llm_provider") == "azure"
-            and kwargs.get("model") == "azure/chatgpt-v-2"
-            and kwargs.get("api_key") == "azure_api_key"
-        ):
-            azure_call_found = True
-            break
-    assert (
-        azure_call_found
-    ), f"Azure call not found with expected parameters. Calls: {calls}"
+        assert response.status_code == 200
 
-    # Check for OpenAI call
-    openai_call_found = False
-    for call in calls:
-        kwargs = call.kwargs
-        if (
-            kwargs.get("custom_llm_provider") == "openai"
-            and kwargs.get("model") == "openai/gpt-3.5-turbo"
-            and kwargs.get("api_key") == "openai_api_key"
-        ):
-            openai_call_found = True
-            break
-    assert openai_call_found, "OpenAI call not found with expected parameters"
+        # Get all calls made to create_file
+        calls = mock_create_file.call_args_list
+
+        # Check for Azure call
+        azure_call_found = False
+        for call in calls:
+            kwargs = call.kwargs
+            if (
+                kwargs.get("custom_llm_provider") == "azure"
+                and kwargs.get("model") == "azure/chatgpt-v-2"
+                and kwargs.get("api_key") == "azure_api_key"
+            ):
+                azure_call_found = True
+                break
+        assert (
+            azure_call_found
+        ), f"Azure call not found with expected parameters. Calls: {calls}"
+
+        # Check for OpenAI call
+        openai_call_found = False
+        for call in calls:
+            kwargs = call.kwargs
+            if (
+                kwargs.get("custom_llm_provider") == "openai"
+                and kwargs.get("model") == "openai/gpt-3.5-turbo"
+                and kwargs.get("api_key") == "openai_api_key"
+            ):
+                openai_call_found = True
+                break
+        assert openai_call_found, "OpenAI call not found with expected parameters"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.flaky(retries=3, delay=2)

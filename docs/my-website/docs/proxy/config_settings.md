@@ -488,6 +488,7 @@ router_settings:
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
 | COHERE_API_BASE | Base URL for Cohere API. Default is https://api.cohere.com
 | COMPETITOR_LLM_TEMPERATURE | Temperature setting for the LLM used in competitor discovery. Default is 0.3
+| CURSOR_API_BASE | API base URL for Cursor AI provider integration. Default is https://api.cursor.com
 | DATABASE_HOST | Hostname for the database server
 | DATABASE_NAME | Name of the database
 | DATABASE_PASSWORD | Password for the database user
