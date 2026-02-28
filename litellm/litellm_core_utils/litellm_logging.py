@@ -1418,6 +1418,19 @@ class Logging(LiteLLMLoggingBaseClass):
             ):  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
+        # Fallback: extract router_model_id from deployment metadata set by
+        # the Router (covers image_edit, generic API calls, etc. where
+        # hidden_params may not contain model_id).
+        if router_model_id is None:
+            _lp = getattr(self, "litellm_params", None) or {}
+            _mi = (
+                (_lp.get("litellm_metadata") or {}).get("model_info")
+                or (_lp.get("metadata") or {}).get("model_info")
+                or {}
+            )
+            if isinstance(_mi, dict):
+                router_model_id = _mi.get("id")
+
         ## RESPONSE COST ##
         custom_pricing = use_custom_pricing_for_model(
             litellm_params=(
