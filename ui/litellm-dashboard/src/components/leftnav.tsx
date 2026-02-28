@@ -301,7 +301,11 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: <span className="flex items-center gap-4">Settings</span>,
+        label: (
+          <span className="flex items-center gap-2">
+            Settings <NewBadge />
+          </span>
+        ),
         icon: <SettingOutlined />,
         roles: all_admin_roles,
         children: [
@@ -322,7 +326,11 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: "Admin Settings",
+            label: (
+              <span className="flex items-center gap-2">
+                Admin Settings <NewBadge dot><span /></NewBadge>
+              </span>
+            ),
             icon: <SettingOutlined />,
             roles: all_admin_roles,
           },
