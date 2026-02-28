@@ -188,8 +188,8 @@ class AnthropicResponsesStreamWrapper:
                 if usage is not None:
                     input_tokens = getattr(usage, "input_tokens", 0) or 0
                     output_tokens = getattr(usage, "output_tokens", 0) or 0
-                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)
-                    cache_read_tokens = getattr(usage, "output_tokens_details", None)
+                    cache_creation_tokens = getattr(usage, "input_tokens_details", None)  # type: ignore[assignment]
+                    cache_read_tokens = getattr(usage, "output_tokens_details", None)  # type: ignore[assignment]
                     # Prefer direct cache fields if present
                     cache_creation_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
                     cache_read_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0

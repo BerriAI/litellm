@@ -304,7 +304,7 @@ async def aresponses_api_with_mcp(
             )
 
             # Extract MCP auth headers from the request to pass to MCP server
-            secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
+            secret_fields = kwargs.get("secret_fields")
             (
                 mcp_auth_header,
                 mcp_server_auth_headers,
