@@ -928,6 +928,35 @@ def test_get_supported_openai_params():
     assert "stream" in params
 
 
+def test_context_management_in_supported_params():
+    """context_management must be advertised as a supported param."""
+    config = OpenAIResponsesAPIConfig()
+    params = config.get_supported_openai_params("gpt-4o")
+    assert "context_management" in params
+
+
+def test_context_management_passthrough_in_request():
+    """context_management should pass through unchanged in the request body."""
+    config = OpenAIResponsesAPIConfig()
+    cm_payload = [{"type": "compaction", "compact_threshold": 200000}]
+
+    result = config.transform_responses_api_request(
+        model="gpt-4o",
+        input="Hello",
+        response_api_optional_request_params={
+            "temperature": 0.5,
+            "context_management": cm_payload,
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "context_management" in result
+    assert result["context_management"] == cm_payload
+    assert result["context_management"][0]["type"] == "compaction"
+    assert result["context_management"][0]["compact_threshold"] == 200000
+
+
 class TestPhaseParameter:
     """Tests for the `phase` parameter on assistant output items (gpt-5.3-codex)."""
 
