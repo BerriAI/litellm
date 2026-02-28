@@ -112,5 +112,6 @@ tests:
       - equal:
           path: spec.selector
           value:
+            app.kubernetes.io/component: proxy
             app.kubernetes.io/name: litellm
             app.kubernetes.io/instance: RELEASE-NAME

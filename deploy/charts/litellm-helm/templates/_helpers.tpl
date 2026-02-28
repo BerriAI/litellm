@@ -35,7 +35,7 @@ Common labels
 */}}
 {{- define "litellm.labels" -}}
 helm.sh/chart: {{ include "litellm.chart" . }}
-{{ include "litellm.selectorLabels" . }}
+{{ include "litellm.appLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -43,11 +43,19 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+App labels
+*/}}
+{{- define "litellm.appLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
 Selector labels
 */}}
 {{- define "litellm.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "litellm.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+{{ include "litellm.appLabels" . }}
+app.kubernetes.io/component: proxy
 {{- end }}
 
 {{/*
