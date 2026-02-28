@@ -1,3 +1,4 @@
+<!-- This agent was launched through LiteLLM proxy - Cursor Cloud Agents API integration test -->
 <h1 align="center">
         🚅 LiteLLM
     </h1>
