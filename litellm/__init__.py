@@ -304,6 +304,7 @@ enable_json_schema_validation: bool = False
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
+skip_batch_token_counting_providers: Optional[List[str]] = None
 enable_caching_on_provider_specific_optional_params: bool = (
     False  # feature-flag for caching on optional params - e.g. 'top_k'
 )
