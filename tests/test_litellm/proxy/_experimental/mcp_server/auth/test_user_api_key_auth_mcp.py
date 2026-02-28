@@ -1738,3 +1738,110 @@ class TestAgentMCPPermissions:
                         user_api_key_auth=user_api_key_auth,
                     )
                     assert sorted(result) == ["tool_a", "tool_b"]
+
+
+@pytest.mark.asyncio
+class TestUISessionTokenTeamHandling:
+    """Test that UI session tokens with team_id='litellm-dashboard' are handled
+    gracefully without attempting DB lookups for the non-existent team."""
+
+    async def test_get_team_object_permission_returns_none_for_ui_session_team(self):
+        """_get_team_object_permission should return None immediately for
+        UI_SESSION_TOKEN_TEAM_ID without calling get_team_object."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        )
+
+        mock_prisma = MagicMock()
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_team_object"
+            ) as mock_get_team:
+                result = await MCPRequestHandler._get_team_object_permission(
+                    mock_user_auth
+                )
+
+                assert result is None
+                mock_get_team.assert_not_called()
+
+    async def test_get_allowed_mcp_servers_for_team_returns_empty_for_ui_session_team(
+        self,
+    ):
+        """_get_allowed_mcp_servers_for_team should return [] immediately for
+        UI_SESSION_TOKEN_TEAM_ID without calling get_team_object."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        )
+
+        with patch.object(
+            MCPRequestHandler, "_get_team_object_permission"
+        ) as mock_get_team_perm:
+            mock_get_team_perm.return_value = None
+
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+                mock_user_auth
+            )
+
+            assert result == []
+
+    async def test_get_mcp_access_groups_for_team_returns_empty_for_ui_session_team(
+        self,
+    ):
+        """_get_mcp_access_groups_for_team should return [] immediately for
+        UI_SESSION_TOKEN_TEAM_ID without calling get_team_object."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id=UI_SESSION_TOKEN_TEAM_ID,
+        )
+
+        mock_prisma = MagicMock()
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_team_object"
+            ) as mock_get_team:
+                result = await MCPRequestHandler._get_mcp_access_groups_for_team(
+                    mock_user_auth
+                )
+
+                assert result == []
+                mock_get_team.assert_not_called()
+
+    async def test_regular_team_id_still_calls_get_team_object(self):
+        """Verify that a regular team_id still triggers get_team_object."""
+        from litellm.proxy._types import LiteLLM_TeamTable
+
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="real-team-123",
+        )
+
+        mock_team_obj = LiteLLM_TeamTable(
+            team_id="real-team-123",
+            object_permission=None,
+        )
+
+        mock_prisma = MagicMock()
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            with patch(
+                "litellm.proxy.auth.auth_checks.get_team_object"
+            ) as mock_get_team:
+                mock_get_team.return_value = mock_team_obj
+
+                result = await MCPRequestHandler._get_team_object_permission(
+                    mock_user_auth
+                )
+
+                assert result is None
+                mock_get_team.assert_called_once()

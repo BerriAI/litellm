@@ -462,6 +462,7 @@ class MCPRequestHandler:
         Note: object_permission is automatically populated when the team is fetched via
         get_team_object() in litellm/proxy/auth/auth_checks.py
         """
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
@@ -473,6 +474,9 @@ class MCPRequestHandler:
             f"MCP team permission lookup: team_id={user_api_key_auth.team_id if user_api_key_auth else None}"
         )
         if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
+            return None
+
+        if user_api_key_auth.team_id == UI_SESSION_TOKEN_TEAM_ID:
             return None
 
         # Get the team object (which has object_permission already loaded)
@@ -1021,6 +1025,7 @@ class MCPRequestHandler:
         """
         Get MCP access groups for the team
         """
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
@@ -1032,6 +1037,9 @@ class MCPRequestHandler:
             return []
 
         if user_api_key_auth.team_id is None:
+            return []
+
+        if user_api_key_auth.team_id == UI_SESSION_TOKEN_TEAM_ID:
             return []
 
         if prisma_client is None:
