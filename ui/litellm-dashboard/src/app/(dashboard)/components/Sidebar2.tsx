@@ -101,6 +101,8 @@ const routeFor = (slug: string): string => {
       return "model-hub";
     case "logs":
       return "logs";
+    case "performance-dashboard":
+      return "performance-dashboard";
     case "guardrails":
       return "guardrails";
     case "policies":
@@ -198,6 +200,13 @@ const menuItems: MenuItemCfg[] = [
     icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
   },
   { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined style={{ fontSize: 18 }} /> },
+  {
+    key: "30",
+    page: "performance-dashboard",
+    label: "Performance",
+    icon: <BarChartOutlined style={{ fontSize: 18 }} />,
+    roles: all_admin_roles,
+  },
   {
     key: "11",
     page: "guardrails",

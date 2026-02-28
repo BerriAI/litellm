@@ -168,6 +168,13 @@ const menuGroups: MenuGroup[] = [
         icon: <SafetyOutlined />,
         roles: [...all_admin_roles, ...internalUserRoles],
       },
+      {
+        key: "performance-dashboard",
+        page: "performance-dashboard",
+        label: "Performance",
+        icon: <BarChartOutlined />,
+        roles: all_admin_roles,
+      },
     ],
   },
   {
