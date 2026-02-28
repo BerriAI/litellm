@@ -576,6 +576,11 @@ class AmazonConverseConfig(BaseConfig):
         ):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
+
+        # Anthropic models on Bedrock support context_management
+        if base_model.startswith("anthropic"):
+            supported_params.append("context_management")
+
         return supported_params
 
     def map_tool_choice_values(
@@ -868,7 +873,7 @@ class AmazonConverseConfig(BaseConfig):
         ):
             optional_params["fake_stream"] = True
 
-    def map_openai_params(
+    def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: dict,
         optional_params: dict,
@@ -933,6 +938,15 @@ class AmazonConverseConfig(BaseConfig):
                 if grounding_tool is not None:
                     optional_params = self._add_tools_to_optional_params(
                         optional_params=optional_params, tools=[grounding_tool]
+                    )
+            if param == "context_management" and isinstance(value, (list, dict)):
+                # Supports both OpenAI list format and Anthropic dict format
+                anthropic_context_management = (
+                    AnthropicConfig.map_openai_context_management_to_anthropic(value)
+                )
+                if anthropic_context_management is not None:
+                    optional_params["context_management"] = (
+                        anthropic_context_management
                     )
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
