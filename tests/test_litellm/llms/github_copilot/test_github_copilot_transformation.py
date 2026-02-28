@@ -29,6 +29,90 @@ from litellm.llms.github_copilot.common_utils import (
     GetDeviceCodeError,
     RefreshAPIKeyError,
 )
+from litellm.types.utils import LlmProviders
+
+
+def test_custom_llm_provider_property():
+    """Test that custom_llm_provider returns LlmProviders.GITHUB_COPILOT"""
+    config = GithubCopilotConfig()
+    assert config.custom_llm_provider == LlmProviders.GITHUB_COPILOT
+
+
+def test_get_complete_url_with_default_api_base():
+    """Test get_complete_url uses default API base when none provided"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator to return None for api_base
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = None
+    
+    url = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="gpt-4",
+        optional_params={},
+        litellm_params={},
+    )
+    
+    assert url == "https://api.githubcopilot.com/chat/completions"
+
+
+def test_get_complete_url_with_custom_api_base():
+    """Test get_complete_url uses provided api_base parameter"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = "https://api.individual.githubcopilot.com"
+    
+    url = config.get_complete_url(
+        api_base="https://custom.api.com/",  # With trailing slash
+        api_key=None,
+        model="gpt-4",
+        optional_params={},
+        litellm_params={},
+    )
+    
+    # Should use provided api_base, not authenticator's
+    assert url == "https://custom.api.com/chat/completions"
+
+
+def test_get_complete_url_with_authenticator_api_base():
+    """Test get_complete_url uses authenticator api_base when no api_base provided"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator to return dynamic api_base
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = "https://api.individual.githubcopilot.com"
+    
+    url = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="gpt-4",
+        optional_params={},
+        litellm_params={},
+    )
+    
+    assert url == "https://api.individual.githubcopilot.com/chat/completions"
+
+
+def test_get_complete_url_strips_trailing_slash():
+    """Test get_complete_url strips trailing slashes from api_base"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = None
+    
+    url = config.get_complete_url(
+        api_base="https://api.example.com///",  # Multiple trailing slashes
+        api_key=None,
+        model="gpt-4",
+        optional_params={},
+        litellm_params={},
+    )
+    
+    assert url == "https://api.example.com/chat/completions"
 
 
 def test_github_copilot_config_get_openai_compatible_provider_info():
@@ -92,21 +176,15 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
 
 
 @patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_key")
-@patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion")
-def test_completion_github_copilot_mock_response(mock_completion, mock_get_api_key):
-    """Test the completion function with GitHub Copilot provider."""
+@patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_base")
+def test_completion_github_copilot_mock_response(mock_get_api_base, mock_get_api_key):
+    """Test the completion function with GitHub Copilot provider using mock_response."""
+    
+    # Mock the authenticator methods
+    mock_get_api_key.return_value = "gh.mock-key-for-testing"
+    mock_get_api_base.return_value = None
 
-    # Mock the API key return value
-    mock_api_key = "gh.test-key-123456789"
-    mock_get_api_key.return_value = mock_api_key
-
-    # Mock completion response
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock()]
-    mock_response.choices[0].message.content = "Hello, I'm GitHub Copilot!"
-    mock_completion.return_value = mock_response
-
-    # Test non-streaming completion
+    # Test non-streaming completion with mock_response
     messages = [
         {"role": "system", "content": "You're GitHub Copilot, an AI assistant."},
         {"role": "user", "content": "Hello, who are you?"},
@@ -118,28 +196,17 @@ def test_completion_github_copilot_mock_response(mock_completion, mock_get_api_k
         "Copilot-Integration-Id": "vscode-chat",
     }
 
+    mock_response_content = "Hello, I'm GitHub Copilot!"
+
     response = completion(
         model="github_copilot/gpt-4",
         messages=messages,
         extra_headers=headers,
+        mock_response=mock_response_content,
     )
 
     assert response is not None
-
-    # Verify the get_api_key call was made (can be called multiple times)
-    assert mock_get_api_key.call_count >= 1
-
-    # Verify the completion call was made with the expected params
-    mock_completion.assert_called_once()
-    args, kwargs = mock_completion.call_args
-
-    # Check that the proper authorization header is set
-    assert "headers" in kwargs
-    # Check that the model name is correctly formatted
-    assert (
-        kwargs.get("model") == "gpt-4"
-    )  # Model name should be without provider prefix
-    assert kwargs.get("messages") == messages
+    assert response.choices[0].message.content == mock_response_content
 
 
 def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):

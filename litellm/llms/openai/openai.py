@@ -653,8 +653,23 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     model=model, custom_llm_provider=custom_llm_provider, stream=stream
                 )
 
-            if headers:
+            # Always call validate_environment to allow providers to add custom headers
+            # (e.g., GitHub Copilot needs Copilot-Vision-Request for vision requests)
+            if provider_config:
+                validated_headers = provider_config.validate_environment(
+                    headers=headers or {},
+                    model=model or "",
+                    messages=messages or [],
+                    optional_params=inference_params,
+                    litellm_params=litellm_params,
+                    api_key=api_key,
+                    api_base=api_base,
+                )
+                if validated_headers:
+                    inference_params["extra_headers"] = validated_headers
+            elif headers:
                 inference_params["extra_headers"] = headers
+
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message="Missing model or messages")
 
