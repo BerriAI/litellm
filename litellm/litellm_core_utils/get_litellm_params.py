@@ -93,6 +93,9 @@ def get_litellm_params(
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
     litellm_request_debug: Optional[bool] = None,
+    retry_delay: Optional[float] = None,
+    exponential_backoff: Optional[bool] = None,
+    jitter: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     # Build base dict with explicit parameters (always included)
@@ -143,6 +146,20 @@ def get_litellm_params(
         "merge_reasoning_content_in_choices": merge_reasoning_content_in_choices,
         "api_version": api_version,
         "max_retries": max_retries,
+<<<<<<< litellm_configurable_retry_logic
+        "retry_delay": retry_delay,
+        "exponential_backoff": exponential_backoff,
+        "jitter": jitter,
+        "timeout": kwargs.get("timeout"),
+        "bucket_name": kwargs.get("bucket_name"),
+        "vertex_credentials": kwargs.get("vertex_credentials"),
+        "vertex_project": kwargs.get("vertex_project"),
+        "vertex_location": kwargs.get("vertex_location"),
+        "vertex_ai_project": kwargs.get("vertex_ai_project"),
+        "vertex_ai_location": kwargs.get("vertex_ai_location"),
+        "vertex_ai_credentials": kwargs.get("vertex_ai_credentials"),
+=======
+>>>>>>> main
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
     }

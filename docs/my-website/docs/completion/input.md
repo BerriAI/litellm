@@ -266,6 +266,12 @@ messages=[{"role": "user", "content": [
 
 - `num_retries`: *int (optional)* - The number of times to retry the API call if an APIError, TimeoutError or ServiceUnavailableError occurs 
 
+- `retry_delay`: *float (optional)* - Time in seconds to wait between retries.
+
+- `exponential_backoff`: *float (optional)* - If true, wait time doubles after each failure (1s, 2s, 4s...)
+
+- `jitter`: *float (optional)* - If true, adds randomness to the wait time to prevent thundering herd. 
+
 - `context_window_fallback_dict`: *dict (optional)* - A mapping of model to use if call fails due to context window error
 
 - `fallbacks`: *list (optional)* - A list of model names + params to be used, in case the initial call fails

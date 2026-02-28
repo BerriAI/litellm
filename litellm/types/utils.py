@@ -3011,6 +3011,9 @@ all_litellm_params = (
         "shared_session",
         "search_tool_name",
         "order",
+        "retry_delay",
+        "exponential_backoff",
+        "jitter",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

@@ -31,6 +31,36 @@ response = completion(
         )
 ```
 
+### Configurable Retries (Exponential Backoff, Jitter)
+
+You can also specify the `retry_delay` and `exponential_backoff` or `jitter` to the completion call.
+
+* `retry_delay`: (float) Time in seconds to wait between retries.
+* `exponential_backoff`: (bool) If true, wait time doubles after each failure (1s, 2s, 4s...).
+* `jitter`: (bool) If true, adds randomness to the wait time to prevent thundering herd.
+
+```python
+import litellm
+
+# Exponential Backoff
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hi"}],
+    num_retries=3,
+    retry_delay=1.0,        # Start with 1s wait
+    exponential_backoff=True # Wait 1s, 2s, 4s...
+)
+
+# Jitter
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hi"}],
+    num_retries=3,
+    retry_delay=1.0,
+    jitter=True             # Randomize wait times
+)
+```
+
 ## Fallbacks (SDK)
 
 :::info
