@@ -120,7 +120,18 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         (kwargs.get("metadata", {}) or {}).get("user_api_key_auth")
     )
 
-    # Process MCP tools
+    # Extract MCP auth headers early so they can be used for both tool fetching and execution
+    (
+        mcp_auth_header,
+        mcp_server_auth_headers,
+        oauth2_headers,
+        raw_headers,
+    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+        secret_fields=kwargs.get("secret_fields"),
+        tools=tools,
+    )
+
+    # Process MCP tools (with auth headers for servers that require authentication)
     (
         deduplicated_mcp_tools,
         tool_server_map,
@@ -128,6 +139,10 @@ async def acompletion_with_mcp(  # noqa: PLR0915
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
     )
 
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
@@ -141,17 +156,6 @@ async def acompletion_with_mcp(  # noqa: PLR0915
     # Determine if we should auto-execute tools
     should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
-    )
-
-    # Extract MCP auth headers
-    (
-        mcp_auth_header,
-        mcp_server_auth_headers,
-        oauth2_headers,
-        raw_headers,
-    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-        secret_fields=kwargs.get("secret_fields"),
-        tools=tools,
     )
 
     # Prepare call parameters

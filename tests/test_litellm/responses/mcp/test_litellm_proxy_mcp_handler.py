@@ -402,3 +402,87 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     assert mock_get_tools.await_args is not None
     assert mock_get_tools.await_args.kwargs["log_list_tools_to_spendlogs"] is True
     assert mock_get_tools.await_args.kwargs["list_tools_log_source"] == "responses"
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_tools_from_manager_forwards_auth_headers(monkeypatch):
+    """
+    Verify that _get_mcp_tools_from_manager forwards x-mcp-auth and
+    x-mcp-<server>-* auth headers to _get_tools_from_mcp_servers.
+
+    Previously these were hardcoded to None, meaning MCP servers that
+    require authentication would fail during tool list retrieval even
+    though the caller supplied the correct headers.
+    """
+    mock_get_tools = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
+        mock_get_tools,
+    )
+
+    fake_manager = types.SimpleNamespace(
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+
+    user_auth = types.SimpleNamespace(api_key="test_key", user_id="test_user")
+
+    test_mcp_auth_header = "Bearer my-mcp-token"
+    test_server_auth_headers = {"deepwiki": {"Authorization": "Bearer deepwiki-token"}}
+    test_oauth2_headers = {"Authorization": "Bearer oauth2-token"}
+    test_raw_headers = {"x-mcp-auth": "Bearer my-mcp-token"}
+
+    await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        user_api_key_auth=user_auth,
+        mcp_tools_with_litellm_proxy=[
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}
+        ],
+        mcp_auth_header=test_mcp_auth_header,
+        mcp_server_auth_headers=test_server_auth_headers,
+        oauth2_headers=test_oauth2_headers,
+        raw_headers=test_raw_headers,
+    )
+
+    assert mock_get_tools.await_count == 1
+    call_kwargs = mock_get_tools.await_args.kwargs
+    assert call_kwargs["mcp_auth_header"] == test_mcp_auth_header
+    assert call_kwargs["mcp_server_auth_headers"] == test_server_auth_headers
+    assert call_kwargs["oauth2_headers"] == test_oauth2_headers
+    assert call_kwargs["raw_headers"] == test_raw_headers
+
+
+@pytest.mark.asyncio
+async def test_process_mcp_tools_without_openai_transform_forwards_auth_headers(
+    monkeypatch,
+):
+    """
+    Verify that _process_mcp_tools_without_openai_transform passes auth
+    headers through to _get_mcp_tools_from_manager.
+    """
+    mock_get_manager = AsyncMock(return_value=([], []))
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_get_mcp_tools_from_manager",
+        mock_get_manager,
+    )
+
+    test_mcp_auth = "Bearer token-abc"
+    test_server_headers = {"myserver": {"x-api-key": "key123"}}
+
+    await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        user_api_key_auth=None,
+        mcp_tools_with_litellm_proxy=[
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/myserver"}
+        ],
+        mcp_auth_header=test_mcp_auth,
+        mcp_server_auth_headers=test_server_headers,
+    )
+
+    assert mock_get_manager.await_count == 1
+    call_kwargs = mock_get_manager.await_args.kwargs
+    assert call_kwargs["mcp_auth_header"] == test_mcp_auth
+    assert call_kwargs["mcp_server_auth_headers"] == test_server_headers

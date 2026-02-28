@@ -177,6 +177,18 @@ async def aresponses_api_with_mcp(
         "litellm_metadata", {}
     ).get("user_api_key_auth")
 
+    # Extract MCP auth headers from the request for tool list retrieval
+    secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
+    (
+        mcp_auth_header,
+        mcp_server_auth_headers,
+        oauth2_headers,
+        raw_headers_from_request,
+    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+        secret_fields=secret_fields,
+        tools=tools,
+    )
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
         original_mcp_tools,
@@ -185,6 +197,10 @@ async def aresponses_api_with_mcp(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers_from_request,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         original_mcp_tools
@@ -286,18 +302,6 @@ async def aresponses_api_with_mcp(
         if tool_calls:
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get(
                 "user_api_key_auth"
-            )
-
-            # Extract MCP auth headers from the request to pass to MCP server
-            secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
-            (
-                mcp_auth_header,
-                mcp_server_auth_headers,
-                oauth2_headers,
-                raw_headers_from_request,
-            ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-                secret_fields=secret_fields,
-                tools=tools,
             )
 
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
