@@ -16,6 +16,9 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    if: github.repository == 'BerriAI/litellm'
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: litellm-proxy-extras
@@ -46,8 +49,21 @@ jobs:
           sed -i "s/litellm-proxy-extras = {version = \"${OLD}\"/litellm-proxy-extras = {version = \"${NEW}\"/" ../pyproject.toml
           sed -i "s/litellm-proxy-extras==${OLD}/litellm-proxy-extras==${NEW}/" ../requirements.txt
 
+      - name: Update poetry.lock
+        working-directory: .
+        run: poetry lock
+
       - name: Build
         run: poetry build
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cd ..
+          git add litellm-proxy-extras/pyproject.toml pyproject.toml requirements.txt poetry.lock
+          git commit -m "bump: litellm-proxy-extras ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
+          git push
 
       - name: Publish to PyPI
         env:
@@ -56,12 +72,3 @@ jobs:
         run: |
           pip install twine
           twine upload dist/litellm_proxy_extras-${{ steps.bump.outputs.new }}*
-
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          cd ..
-          git add litellm-proxy-extras/pyproject.toml pyproject.toml requirements.txt
-          git commit -m "bump: litellm-proxy-extras ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
-          git push

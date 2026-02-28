@@ -13,6 +13,8 @@ on:
           - minor
           - major
 
+jobs:
+  publish:
     runs-on: ubuntu-latest
     if: github.repository == 'BerriAI/litellm'
     permissions:
@@ -47,8 +49,21 @@ on:
           sed -i "s/litellm-enterprise = {version = \"${OLD}\"/litellm-enterprise = {version = \"${NEW}\"/" ../pyproject.toml
           sed -i "s/litellm-enterprise==${OLD}/litellm-enterprise==${NEW}/" ../requirements.txt
 
+      - name: Update poetry.lock
+        working-directory: .
+        run: poetry lock
+
       - name: Build
         run: poetry build
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cd ..
+          git add enterprise/pyproject.toml pyproject.toml requirements.txt poetry.lock
+          git commit -m "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
+          git push
 
       - name: Publish to PyPI
         env:
@@ -57,13 +72,3 @@ on:
         run: |
           pip install twine
           twine upload dist/litellm_enterprise-${{ steps.bump.outputs.new }}*
-
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          cd ..
-          poetry lock --no-update
-          git add enterprise/pyproject.toml pyproject.toml requirements.txt poetry.lock
-          git commit -m "bump: litellm-enterprise ${{ steps.bump.outputs.old }} → ${{ steps.bump.outputs.new }}"
-          git push
