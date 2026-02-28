@@ -436,3 +436,522 @@ async def delete_skill(
             version=version,
         )
 
+
+@router.post(
+    "/v1/skills/{skill_id}",
+    tags=["[beta] Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_skill_endpoint(
+    skill_id: str,
+    fastapi_response: Response,
+    request: Request,
+    custom_llm_provider: Optional[str] = "openai",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Update a skill (e.g. set default_version). OpenAI-specific."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    body = await request.body()
+    data = orjson.loads(body) if body else {}
+
+    data["skill_id"] = skill_id
+
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
+    if "custom_llm_provider" not in data:
+        data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aupdate_skill",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.get(
+    "/v1/skills/{skill_id}/content",
+    tags=["[beta] Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_skill_content_endpoint(
+    skill_id: str,
+    fastapi_response: Response,
+    request: Request,
+    custom_llm_provider: Optional[str] = "openai",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Get skill content. OpenAI-specific."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    body = await request.body()
+    data = orjson.loads(body) if body else {}
+
+    data["skill_id"] = skill_id
+
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
+    if "custom_llm_provider" not in data:
+        data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aget_skill_content",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.post(
+    "/v1/skills/{skill_id}/versions",
+    tags=["[beta] Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def create_skill_version_endpoint(
+    skill_id: str,
+    fastapi_response: Response,
+    request: Request,
+    custom_llm_provider: Optional[str] = "openai",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Create a new skill version. OpenAI-specific."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    form_data = await get_form_data(request)
+    data = await convert_upload_files_to_file_data(form_data)
+
+    data["skill_id"] = skill_id
+
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
+    if "custom_llm_provider" not in data:
+        data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="acreate_skill_version",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.get(
+    "/v1/skills/{skill_id}/versions",
+    tags=["[beta] Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def list_skill_versions_endpoint(
+    skill_id: str,
+    fastapi_response: Response,
+    request: Request,
+    limit: Optional[int] = 20,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    custom_llm_provider: Optional[str] = "openai",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """List skill versions. OpenAI-specific."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    body = await request.body()
+    data = orjson.loads(body) if body else {}
+
+    data["skill_id"] = skill_id
+    if "limit" not in data and limit is not None:
+        data["limit"] = limit
+    if "after" not in data and after is not None:
+        data["after"] = after
+    if "before" not in data and before is not None:
+        data["before"] = before
+
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
+    if "custom_llm_provider" not in data:
+        data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="alist_skill_versions",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.get(
+    "/v1/skills/{skill_id}/versions/{version}",
+    tags=["[beta] Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_skill_version_endpoint(
+    skill_id: str,
+    version: str,
+    fastapi_response: Response,
+    request: Request,
+    custom_llm_provider: Optional[str] = "openai",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Get a specific skill version. OpenAI-specific."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    body = await request.body()
+    data = orjson.loads(body) if body else {}
+
+    data["skill_id"] = skill_id
+    data["version"] = version
+
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
+    if "custom_llm_provider" not in data:
+        data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aget_skill_version",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.delete(
+    "/v1/skills/{skill_id}/versions/{version}",
+    tags=["[beta] Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_skill_version_endpoint(
+    skill_id: str,
+    version: str,
+    fastapi_response: Response,
+    request: Request,
+    custom_llm_provider: Optional[str] = "openai",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Delete a skill version. OpenAI-specific."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    body = await request.body()
+    data = orjson.loads(body) if body else {}
+
+    data["skill_id"] = skill_id
+    data["version"] = version
+
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
+    if "custom_llm_provider" not in data:
+        data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="adelete_skill_version",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.get(
+    "/v1/skills/{skill_id}/versions/{version}/content",
+    tags=["[beta] Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_skill_version_content_endpoint(
+    skill_id: str,
+    version: str,
+    fastapi_response: Response,
+    request: Request,
+    custom_llm_provider: Optional[str] = "openai",
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Get skill version content. OpenAI-specific."""
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    body = await request.body()
+    data = orjson.loads(body) if body else {}
+
+    data["skill_id"] = skill_id
+    data["version"] = version
+
+    model = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+    if model:
+        data["model"] = model
+    
+    if "custom_llm_provider" not in data:
+        data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aget_skill_version_content",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
