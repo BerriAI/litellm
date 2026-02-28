@@ -2275,6 +2275,10 @@ class PrismaClient:
             0.0,
             float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
         )
+        self._consecutive_reconnect_failures: int = 0
+        self._reconnect_escalation_threshold: int = max(
+            1, int(os.getenv("PRISMA_RECONNECT_ESCALATION_THRESHOLD", "3"))
+        )
         self._engine_pidfd: int = -1
         self._engine_pid: int = 0
         self._watching_engine: bool = False
@@ -3888,6 +3892,19 @@ class PrismaClient:
             )
             return False
 
+        # Escalate to heavy reconnect after consecutive lightweight failures.
+        # When the Prisma engine process is alive but not accepting connections
+        # (e.g., startup race condition), lightweight reconnects (disconnect +
+        # connect) will never succeed. Force a full Prisma client recreation
+        # to recover from this state.
+        if self._consecutive_reconnect_failures >= self._reconnect_escalation_threshold:
+            verbose_proxy_logger.warning(
+                "Escalating to heavy reconnect after %d consecutive failures. reason=%s",
+                self._consecutive_reconnect_failures,
+                reason,
+            )
+            self._engine_confirmed_dead = True
+
         verbose_proxy_logger.warning(
             "Attempting Prisma DB reconnect. reason=%s", reason
         )
@@ -3896,12 +3913,15 @@ class PrismaClient:
         try:
             await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
             reconnect_succeeded = True
+            self._consecutive_reconnect_failures = 0
             verbose_proxy_logger.info(
                 "Prisma DB reconnect succeeded. reason=%s", reason
             )
         except Exception as reconnect_err:
+            self._consecutive_reconnect_failures += 1
             verbose_proxy_logger.error(
-                "Prisma DB reconnect failed. reason=%s error=%s",
+                "Prisma DB reconnect failed (%d consecutive). reason=%s error=%s",
+                self._consecutive_reconnect_failures,
                 reason,
                 reconnect_err,
             )
