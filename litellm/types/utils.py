@@ -1,5 +1,6 @@
 import json
 import time
+import warnings
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -1441,7 +1442,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
-        server_tool_use: Optional[ServerToolUse] = None,
+        server_tool_use: Optional[Union[ServerToolUse, dict]] = None,
         cost: Optional[float] = None,
         **params,
     ):
@@ -1534,6 +1535,42 @@ class Usage(SafeAttributeModel, CompletionUsage):
                     "cache_creation_input_tokens"
                 ]
 
+        # Handle server_tool_use - convert dict to ServerToolUse object if needed
+        _server_tool_use: Optional[ServerToolUse] = None
+        if server_tool_use is not None:
+            if isinstance(server_tool_use, dict):
+                _server_tool_use = ServerToolUse(**server_tool_use)
+            elif isinstance(server_tool_use, ServerToolUse):
+                _server_tool_use = server_tool_use
+            else:
+                # Warn about unsupported type and try to handle it gracefully
+                warnings.warn(
+                    f"server_tool_use received unsupported type {type(server_tool_use).__name__}. "
+                    f"Expected dict or ServerToolUse. Attempting to convert to dict.",
+                    UserWarning,
+                    stacklevel=2
+                )
+                # Try to convert to dict if it has model_dump (Pydantic models)
+                if hasattr(server_tool_use, "model_dump"):
+                    try:
+                        _server_tool_use = ServerToolUse(**server_tool_use.model_dump())
+                    except Exception as e:
+                        warnings.warn(
+                            f"Failed to convert server_tool_use to ServerToolUse: {e}",
+                            UserWarning,
+                            stacklevel=2
+                        )
+                # Try dict() conversion for mapping types
+                elif isinstance(server_tool_use, Mapping):
+                    try:
+                        _server_tool_use = ServerToolUse(**dict(server_tool_use))
+                    except Exception as e:
+                        warnings.warn(
+                            f"Failed to convert server_tool_use to ServerToolUse: {e}",
+                            UserWarning,
+                            stacklevel=2
+                        )
+
         super().__init__(
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
@@ -1542,8 +1579,8 @@ class Usage(SafeAttributeModel, CompletionUsage):
             prompt_tokens_details=_prompt_tokens_details or None,
         )
 
-        if server_tool_use is not None:
-            self.server_tool_use = server_tool_use
+        if _server_tool_use is not None:
+            self.server_tool_use = _server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
