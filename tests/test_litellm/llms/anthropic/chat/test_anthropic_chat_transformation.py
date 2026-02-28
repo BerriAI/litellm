@@ -2728,6 +2728,83 @@ def test_map_openai_params_with_context_management():
     assert result["context_management"] == non_default_params_anthropic["context_management"]
 
 
+def test_cache_control_in_supported_params():
+    """
+    Test that cache_control is listed as a supported OpenAI param for Anthropic.
+    """
+    config = AnthropicConfig()
+    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
+    assert "cache_control" in params
+
+
+def test_map_openai_params_with_cache_control():
+    """
+    Test that map_openai_params correctly passes through top-level cache_control
+    for Anthropic's automatic prompt caching.
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {
+        "cache_control": {"type": "ephemeral"}
+    }
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+
+    assert "cache_control" in result
+    assert result["cache_control"] == {"type": "ephemeral"}
+
+
+def test_map_openai_params_cache_control_ignored_when_not_dict():
+    """
+    Test that cache_control is ignored when it is not a dict.
+    """
+    config = AnthropicConfig()
+
+    non_default_params = {
+        "cache_control": "ephemeral"
+    }
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="claude-sonnet-4-20250514",
+        drop_params=False,
+    )
+
+    assert "cache_control" not in result
+
+
+def test_transform_request_includes_cache_control():
+    """
+    Test that transform_request includes top-level cache_control in the request body.
+    """
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Hello"}]
+    optional_params = {
+        "max_tokens": 100,
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "cache_control" in result
+    assert result["cache_control"] == {"type": "ephemeral"}
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
