@@ -335,13 +335,37 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             status_code=status_code, message=error_message, headers=headers
         )
 
+    def _parse_gcs_uri(self, file_id: str) -> Tuple[str, str]:
+        """
+        Parse a GCS URI (gs://bucket/path/to/object) into (bucket, url-encoded-object-path).
+        Handles both raw and URL-encoded input.
+        """
+        import urllib.parse
+
+        decoded = urllib.parse.unquote(file_id)
+        if decoded.startswith("gs://"):
+            full_path = decoded[5:]
+        else:
+            full_path = decoded
+
+        if "/" in full_path:
+            bucket_name, object_path = full_path.split("/", 1)
+        else:
+            bucket_name = full_path
+            object_path = ""
+
+        encoded_object = urllib.parse.quote(object_path, safe="")
+        return bucket_name, encoded_object
+
     def transform_retrieve_file_request(
         self,
         file_id: str,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError("VertexAIFilesConfig does not support file retrieval")
+        bucket, encoded_object = self._parse_gcs_uri(file_id)
+        url = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
+        return url, {}
 
     def transform_retrieve_file_response(
         self,
@@ -349,7 +373,21 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
-        raise NotImplementedError("VertexAIFilesConfig does not support file retrieval")
+        response_json = raw_response.json()
+        gcs_id = response_json.get("id", "")
+        gcs_id = "/".join(gcs_id.split("/")[:-1]) if gcs_id else ""
+        return OpenAIFileObject(
+            id=f"gs://{gcs_id}",
+            bytes=int(response_json.get("size", 0)),
+            created_at=_convert_vertex_datetime_to_openai_datetime(
+                vertex_datetime=response_json.get("timeCreated", "")
+            ),
+            filename=response_json.get("name", ""),
+            object="file",
+            purpose=response_json.get("metadata", {}).get("purpose", "batch"),
+            status="processed",
+            status_details=None,
+        )
 
     def transform_delete_file_request(
         self,
@@ -357,7 +395,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError("VertexAIFilesConfig does not support file deletion")
+        bucket, encoded_object = self._parse_gcs_uri(file_id)
+        url = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
+        return url, {}
 
     def transform_delete_file_response(
         self,
@@ -365,7 +405,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> FileDeleted:
-        raise NotImplementedError("VertexAIFilesConfig does not support file deletion")
+        file_id = "deleted"
+        if hasattr(raw_response, "request") and raw_response.request:
+            url = str(raw_response.request.url)
+            if "/o/" in url:
+                import urllib.parse
+                encoded_name = url.split("/o/")[-1].split("?")[0]
+                file_id = f"gs://{urllib.parse.unquote(encoded_name)}"
+        return FileDeleted(id=file_id, deleted=True, object="file")
 
     def transform_list_files_request(
         self,
@@ -389,7 +436,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError("VertexAIFilesConfig does not support file content retrieval")
+        file_id = file_content_request.get("file_id", "")
+        bucket, encoded_object = self._parse_gcs_uri(file_id)
+        url = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}?alt=media"
+        return url, {}
 
     def transform_file_content_response(
         self,
@@ -397,7 +447,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError("VertexAIFilesConfig does not support file content retrieval")
+        return HttpxBinaryResponseContent(response=raw_response)
 
 
 class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
