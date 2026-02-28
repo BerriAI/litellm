@@ -1680,3 +1680,57 @@ async def test_async_success_handler_preserves_response_cost_for_pass_through_en
     slo = logging_obj.model_call_details.get("standard_logging_object")
     assert slo is not None
     assert slo["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_merges_response_cost_from_kwargs_for_passthrough():
+    """
+    Test that async_success_handler merges response_cost from **kwargs into
+    model_call_details for pass_through_endpoint calls.
+
+    This verifies the fix for streaming pass-through endpoints where the
+    provider handler computes response_cost and returns it in kwargs, but
+    it was never being merged into model_call_details.
+    """
+    logging_obj = LitellmLogging(
+        model="unknown",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=time.time(),
+        litellm_call_id="test-passthrough-123",
+        function_id="1245",
+    )
+
+    # Simulate update_environment_variables having set litellm_params with metadata
+    logging_obj.model_call_details["litellm_params"] = {
+        "metadata": {
+            "user_api_key_hash": "sk-hashed-test",
+            "user_api_key_alias": "my-test-key",
+            "user_api_key_team_id": "team-abc",
+            "user_api_key_user_id": "user-xyz",
+        }
+    }
+
+    result = "test result"
+
+    # Call async_success_handler with response_cost in kwargs
+    # (simulating what the Anthropic streaming handler returns)
+    await logging_obj.async_success_handler(
+        result=result,
+        start_time=time.time(),
+        end_time=time.time(),
+        cache_hit=False,
+        response_cost=0.0042,
+        model="claude-3-haiku-20240307",
+    )
+
+    # response_cost from kwargs should be merged into model_call_details
+    assert logging_obj.model_call_details.get("response_cost") == 0.0042
+
+    # standard_logging_object should exist and have the metadata
+    slo = logging_obj.model_call_details.get("standard_logging_object")
+    assert slo is not None
+    assert slo["metadata"].get("user_api_key_hash") == "sk-hashed-test"
+    assert slo["metadata"].get("user_api_key_alias") == "my-test-key"
+    assert slo["metadata"].get("user_api_key_team_id") == "team-abc"
