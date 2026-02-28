@@ -839,9 +839,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     """
 
     from litellm.proxy.proxy_server import llm_router, premium_user
-    from litellm.types.proxy.litellm_pre_call_utils import SecretFields
+    from litellm.types.proxy.litellm_pre_call_utils import (
+        RedactedDict,
+        SecretFields,
+    )
 
-    _raw_headers: Dict[str, str] = _safe_get_request_headers(request)
+    _raw_headers: Dict[str, str] = RedactedDict(
+        _safe_get_request_headers(request)
+    )
 
     forward_llm_auth = False
     if general_settings:
@@ -938,9 +943,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     add_provider_specific_headers_to_request(data=data, headers=_headers)
 
     ## Cache Controls
-    headers = request.headers
-    verbose_proxy_logger.debug("Request Headers: %s", headers)
-    cache_control_header = headers.get("Cache-Control", None)
+    cache_control_header = _headers.get("Cache-Control", None)
     if cache_control_header:
         cache_dict = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
