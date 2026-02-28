@@ -15,7 +15,7 @@ import TabItem from '@theme/TabItem';
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
 | Guardrails | ✅ | Applies to input prompts (non-streaming only) |
-| Supported Providers | OpenAI, Azure, Google AI Studio, Vertex AI, AWS Bedrock, Recraft, OpenRouter, Xinference, Nscale | |
+| Supported Providers | OpenAI, Azure, Google AI Studio, Vertex AI, AWS Bedrock, Black Forest Labs, OpenRouter, Recraft, Xinference, Nscale | |
 
 ## Quick Start
 

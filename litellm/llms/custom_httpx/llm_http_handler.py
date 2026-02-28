@@ -4830,7 +4830,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             else:
-                # Use JSON (Gemini style)
+                # Use JSON (BFL/Gemini style)
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -4926,7 +4926,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             else:
-                # Use JSON (Gemini style)
+                # Use JSON (BFL/Gemini style)
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,

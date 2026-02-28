@@ -50,6 +50,10 @@ from litellm.main import (
     openai_image_variations,
 )
 
+# BFL handlers
+from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
+from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
+
 ###########################################
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -426,6 +430,22 @@ def image_generation(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 client=client,
+            )
+        elif custom_llm_provider == "black_forest_labs":
+            # Route to BFL-specific handler (polling required)
+            if model is None:
+                raise Exception("Model needs to be set for black_forest_labs")
+            return bfl_image_generation.image_generation(
+                model=model,
+                prompt=prompt,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                client=client,
+                aimg_generation=aimg_generation,
             )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
@@ -913,6 +933,23 @@ def image_edit(  # noqa: PLR0915
             _is_async=_is_async,
             client=kwargs.get("client"),
         )
+        elif custom_llm_provider == "black_forest_labs":
+            # Route to BFL-specific handler (polling required)
+            if model is None:
+                raise Exception("Model needs to be set for black_forest_labs")
+            image_edit_request_params.update(non_default_params)
+            return bfl_image_edit.image_edit(
+                model=model,
+                image=images,
+                prompt=prompt,
+                image_edit_optional_request_params=image_edit_request_params,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                extra_headers=extra_headers,
+                client=kwargs.get("client"),
+                aimage_edit=_is_async,
+            )
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,

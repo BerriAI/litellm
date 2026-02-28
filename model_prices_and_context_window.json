@@ -7760,6 +7760,78 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "black_forest_labs/flux-kontext-pro": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/edits"
+        ]
+    },
+    "black_forest_labs/flux-kontext-max": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/edits"
+        ]
+    },
+    "black_forest_labs/flux-pro-1.0-fill": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/edits"
+        ]
+    },
+    "black_forest_labs/flux-pro-1.0-expand": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/edits"
+        ]
+    },
+    "black_forest_labs/flux-pro-1.1": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "black_forest_labs/flux-pro-1.1-ultra": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "black_forest_labs/flux-dev": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "black_forest_labs/flux-pro": {
+        "litellm_provider": "black_forest_labs",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://bfl.ai/pricing",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "cerebras/llama-3.3-70b": {
         "input_cost_per_token": 8.5e-07,
         "litellm_provider": "cerebras",
