@@ -2616,11 +2616,11 @@ def test_empty_assistant_message_handling():
     empty or whitespace-only content with a placeholder to prevent AWS Bedrock
     Converse API 400 Bad Request errors.
     """
-    # Import the litellm module that factory.py uses to ensure we patch the correct reference
-    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
     from litellm.litellm_core_utils.prompt_templates.factory import (
         _bedrock_converse_messages_pt,
     )
+    # Import the litellm module that factory.py uses to ensure we patch the correct reference
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
 
     # Test case 1: Empty string content - test with modify_params=True to prevent merging
     messages = [
@@ -3135,12 +3135,7 @@ def test_native_structured_output_no_fake_stream():
 
 def test_transform_request_with_output_config():
     """Test that outputConfig flows through _transform_request_helper into the final request."""
-    from litellm.types.llms.bedrock import (
-        JsonSchemaDefinition,
-        OutputConfigBlock,
-        OutputFormat,
-        OutputFormatStructure,
-    )
+    from litellm.types.llms.bedrock import OutputConfigBlock, OutputFormat, OutputFormatStructure, JsonSchemaDefinition
 
     config = AmazonConverseConfig()
 
@@ -3382,59 +3377,78 @@ def test_output_config_applies_additional_properties():
 
 
 
-def test_parallel_tool_calls_in_request_transformation():
-    """Test that parallel_tool_calls is correctly placed in additionalModelRequestFields after full transformation"""
-    config = AmazonConverseConfig()
-    
-    messages = [
-        {"role": "user", "content": "What's the weather in SF and NYC?"}
-    ]
-    
-    non_default_params = {
-        "parallel_tool_calls": False,
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The location to get weather for"
-                            }
-                        },
-                        "required": ["location"]
+_TOOL_PARAM = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The location to get weather for",
                     }
-                }
-            }
-        ],
-        "max_tokens": 100,
+                },
+                "required": ["location"],
+            },
+        },
     }
-    
+]
+
+
+def test_parallel_tool_calls_newer_model_adds_disable_flag():
+    """Newer Claude models (4.5+) should get disable_parallel_tool_use in additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
     optional_params = config.map_openai_params(
-        non_default_params=non_default_params,
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
         optional_params={},
-        model="anthropic.claude-sonnet-4-5-v2:0",
+        model=model,
         drop_params=False,
     )
-    
-    # Transform the request
+
     request_data = config.transform_request(
-        model="anthropic.claude-sonnet-4-5-v2:0",
+        model=model,
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
         headers={},
     )
-    
-    # Verify the structure
+
     assert "additionalModelRequestFields" in request_data
     assert "tool_choice" in request_data["additionalModelRequestFields"]
-    assert "disable_parallel_tool_use" in request_data["additionalModelRequestFields"]["tool_choice"]
     assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
+    assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
+
+
+def test_parallel_tool_calls_older_model_drops_disable_flag():
+    """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    additional = request_data.get("additionalModelRequestFields", {})
+    assert "tool_choice" not in additional
+    assert "parallel_tool_calls" not in additional
 
 
 class TestBedrockMinThinkingBudgetTokens:

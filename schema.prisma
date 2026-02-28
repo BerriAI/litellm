@@ -64,6 +64,8 @@ model LiteLLM_AgentsTable {
   litellm_params Json?
   agent_card_params Json
   agent_access_groups String[]       @default([])
+  object_permission_id String?
+  object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -264,6 +266,7 @@ model LiteLLM_ObjectPermissionTable {
   organizations         LiteLLM_OrganizationTable[]
   users                 LiteLLM_UserTable[]
   end_users             LiteLLM_EndUserTable[]
+  agents_table          LiteLLM_AgentsTable[]
 }
 
 // Holds the MCP server configuration 
@@ -273,7 +276,6 @@ model LiteLLM_MCPServerTable {
   alias        String?
   description  String?
   url          String?
-  spec_path    String?
   transport    String         @default("sse")
   auth_type    String?        
   credentials  Json?          @default("{}")
@@ -315,6 +317,7 @@ model LiteLLM_VerificationToken {
     router_settings Json? @default("{}")
     user_id    String?
     team_id    String?
+    agent_id   String?
     project_id String?
     permissions Json @default("{}")
     max_parallel_requests Int?
@@ -387,6 +390,7 @@ model LiteLLM_DeletedVerificationToken {
     config                  Json     @default("{}")
     user_id                 String?
     team_id                 String?
+    agent_id   String?
     project_id              String?
     permissions             Json     @default("{}")
     max_parallel_requests   Int?
@@ -477,6 +481,7 @@ model LiteLLM_SpendLogs {
   completion_tokens   Int     @default(0)
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
+  request_duration_ms Int?
   completionStartTime DateTime? // Assuming completionStartTime is a DateTime field
   model               String   @default("")
   model_id            String?   @default("") // the model id stored in proxy model db
@@ -1052,6 +1057,26 @@ model LiteLLM_PolicyAttachmentTable {
   updated_by       String?
 }
 
+// Global tool registry - auto-discovered from LLM responses; admins set call_policy here
+model LiteLLM_ToolTable {
+  tool_id     String   @id @default(uuid())
+  tool_name   String   @unique   // e.g. "huggingface_remote-mcp__dynamic_space"
+  origin      String?            // MCP server name or "user_defined"
+  call_policy String   @default("untrusted")  // "trusted" | "untrusted" | "dual_llm" | "blocked"
+  call_count  Int      @default(0)            // cumulative number of times this tool was seen
+  assignments Json?    @default("{}")
+  key_hash    String?            // hash of the virtual key that first called this tool
+  team_id     String?            // team that first called this tool
+  key_alias   String?            // human-readable alias of the virtual key
+  created_at  DateTime @default(now())
+  created_by  String?
+  updated_at  DateTime @default(now()) @updatedAt
+  updated_by  String?
+
+  @@index([call_policy])
+  @@index([team_id])
+}
+
 //Unified Access Groups table for storing unified access groups
 model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())
@@ -1070,4 +1095,19 @@ model LiteLLM_AccessGroupTable {
   created_by         String?
   updated_at         DateTime @default(now()) @updatedAt
   updated_by         String?
+}
+// Claude Code Plugin Marketplace table
+model LiteLLM_ClaudeCodePluginTable {
+  id            String    @id @default(uuid())
+  name          String    @unique
+  version       String?
+  description   String?
+  manifest_json String?
+  files_json    String?   @default("{}")
+  enabled       Boolean   @default(true)
+  created_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now()) @updatedAt
+  created_by    String?
+
+  @@map("LiteLLM_ClaudeCodePluginTable")
 }

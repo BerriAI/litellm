@@ -17,6 +17,7 @@ interface UsageExportHeaderProps {
   selectedFilters?: string[];
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
+  filterMode?: "multiple" | "single";
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
@@ -32,6 +33,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   selectedFilters = [],
   onFiltersChange,
   filterOptions = [],
+  filterMode = "multiple",
   customTitle,
   compactLayout = false,
   teams = [],
@@ -59,11 +61,17 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
             <div>
               {filterLabel && <Text className="mb-2">{filterLabel}</Text>}
               <Select
-                mode="multiple"
+                mode={filterMode === "single" ? undefined : "multiple"}
                 style={{ width: "100%" }}
                 placeholder={filterPlaceholder}
-                value={selectedFilters}
-                onChange={onFiltersChange}
+                value={filterMode === "single" ? (selectedFilters[0] ?? undefined) : selectedFilters}
+                onChange={(value: any) => {
+                  if (filterMode === "single") {
+                    onFiltersChange?.(value ? [value] : []);
+                  } else {
+                    onFiltersChange?.(value);
+                  }
+                }}
                 options={filterOptions}
                 allowClear
               />

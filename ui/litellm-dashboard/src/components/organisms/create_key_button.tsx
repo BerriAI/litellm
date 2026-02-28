@@ -5,13 +5,13 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
+import { Button as Button2, Form, Input, message, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
-import { CopyToClipboard } from "react-copy-to-clipboard";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
+import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
@@ -20,7 +20,6 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
-import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import TeamDropdown from "../common_components/team_dropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -40,10 +39,10 @@ import {
   proxyBaseUrl,
   userFilterUICall,
 } from "../networking";
+import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import { simplifyKeyGenerateError } from "./utils";
-import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 
 const { Option } = Select;
 
@@ -299,7 +298,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         formValues.user_id = userID;
       } else if (keyOwner === "agent") {
         if (!selectedAgentId) {
-          message.error("Please select an agent");
+          NotificationsManager.fromBackend("Please select an agent");
           return;
         }
         formValues.agent_id = selectedAgentId;
@@ -559,7 +558,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 <Radio value="you">You</Radio>
                 <Radio value="service_account">Service Account</Radio>
                 {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
-                <Radio value="agent">Agent <Tag color="purple">New</Tag></Radio>
+                <Radio value="agent">
+                  Agent <Tag color="purple">New</Tag>
+                </Radio>
               </Radio.Group>
             </Form.Item>
 
@@ -1005,9 +1006,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                       style={{ width: "100%" }}
                       disabled={!premiumUser}
                       placeholder={
-                        !premiumUser
-                          ? "Premium feature - Upgrade to set policies by key"
-                          : "Select or enter policies"
+                        !premiumUser ? "Premium feature - Upgrade to set policies by key" : "Select or enter policies"
                       }
                       options={policiesList.map((name) => ({ value: name, label: name }))}
                     />
@@ -1059,9 +1058,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     help="Select access groups to assign to this key"
                   >
-                    <AccessGroupSelector
-                      placeholder="Select access groups (optional)"
-                    />
+                    <AccessGroupSelector placeholder="Select access groups (optional)" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -1297,7 +1294,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           accessToken={accessToken || ""}
                           value={routerSettings || undefined}
                           onChange={setRouterSettings}
-                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
+                          modelData={
+                            userModels.length > 0
+                              ? { data: userModels.map((model) => ({ model_name: model })) }
+                              : undefined
+                          }
                         />
                       </div>
                     </AccordionBody>

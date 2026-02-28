@@ -699,7 +699,15 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     role: Required[Literal["assistant"]]
     content: Optional[
         Union[
-            str, Iterable[Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]]
+            str,
+            Iterable[
+                Union[
+                    ChatCompletionTextObject,
+                    ChatCompletionThinkingBlock,
+                    ChatCompletionRedactedThinkingBlock,
+                    ChatCompletionImageObject,
+                ]
+            ],
         ]
     ]
     name: Optional[str]
@@ -786,17 +794,19 @@ ValidUserMessageContentTypes = [
     "file",
 ]  # used for validating user messages. Prevent users from accidentally sending anthropic messages.
 
-# Assistant message content types (text, thinking, redacted_thinking)
+# Assistant message content types (text, thinking, redacted_thinking, image_url)
 ValidAssistantMessageContentTypesLiteral = Literal[
     "text",
     "thinking",
     "redacted_thinking",
+    "image_url",
 ]
 
 ValidAssistantMessageContentTypes = [
     "text",
     "thinking",
     "redacted_thinking",
+    "image_url",
 ]
 
 # Combined valid content types for chat completion messages

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import traceback
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -9,6 +10,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
+from litellm.constants import LITELLM_MAX_STREAMING_DURATION_SECONDS, STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -57,6 +59,7 @@ class BaseResponsesAPIStreamingIterator:
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
+        self._stream_created_time: float = time.time()
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -82,6 +85,18 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+
+    def _check_max_streaming_duration(self) -> None:
+        """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
+        if LITELLM_MAX_STREAMING_DURATION_SECONDS is None:
+            return
+        elapsed = time.time() - self._stream_created_time
+        if elapsed > LITELLM_MAX_STREAMING_DURATION_SECONDS:
+            raise litellm.Timeout(
+                message=f"Stream exceeded max streaming duration of {LITELLM_MAX_STREAMING_DURATION_SECONDS}s (elapsed {elapsed:.1f}s)",
+                model=self.model or "",
+                llm_provider=self.custom_llm_provider or "",
+            )
 
     def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
         """Process a single chunk of data from the stream"""
@@ -361,6 +376,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
         try:
+            self._check_max_streaming_duration()
             while True:
                 # Get the next chunk from the stream
                 try:
@@ -369,6 +385,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.finished = True
                     raise StopAsyncIteration
 
+                self._check_max_streaming_duration()
                 result = self._process_chunk(chunk)
 
                 if self.finished:
@@ -464,6 +481,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __next__(self):
         try:
+            self._check_max_streaming_duration()
             while True:
                 # Get the next chunk from the stream
                 try:
@@ -472,6 +490,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.finished = True
                     raise StopIteration
 
+                self._check_max_streaming_duration()
                 result = self._process_chunk(chunk)
 
                 if self.finished:
