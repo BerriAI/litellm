@@ -113,6 +113,31 @@ litellm_settings:
 ```
 
 
+## Pod Health Metrics
+
+Use these to measure per-pod queue depth and diagnose latency that occurs **before** LiteLLM starts processing a request.
+
+| Metric Name | Type | Description |
+|---|---|---|
+| `litellm_in_flight_requests` | Gauge | Number of HTTP requests currently in-flight on this uvicorn worker. Tracks the pod's queue depth in real time. With multiple workers, values are summed across all live workers (`livesum`). |
+
+### When to use this
+
+LiteLLM measures latency from when its handler starts. If a request waits in uvicorn's event loop before the handler runs, that wait is invisible to LiteLLM's own logs. `litellm_in_flight_requests` shows how loaded the pod was at any point in time.
+
+```
+high in_flight_requests + high ALB TargetResponseTime → pod overloaded, scale out
+low  in_flight_requests + high ALB TargetResponseTime → delay is pre-ASGI (event loop blocking)
+```
+
+You can also check the current value directly without Prometheus:
+
+```bash
+curl http://localhost:4000/health/backlog \
+  -H "Authorization: Bearer sk-..."
+# {"in_flight_requests": 47}
+```
+
 ## Proxy Level Tracking Metrics
 
 Use this to track overall LiteLLM Proxy usage.
