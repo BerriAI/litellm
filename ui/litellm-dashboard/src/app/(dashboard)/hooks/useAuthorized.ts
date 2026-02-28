@@ -3,38 +3,11 @@
 import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
+import { buildLoginUrlWithReturn, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { formatUserRole } from "@/utils/roles";
 import { useUIConfig } from "./uiConfig/useUIConfig";
-
-function formatUserRole(userRole: string) {
-  if (!userRole) {
-    return "Undefined Role";
-  }
-  switch (userRole.toLowerCase()) {
-    case "app_owner":
-      return "App Owner";
-    case "demo_app_owner":
-      return "App Owner";
-    case "app_admin":
-      return "Admin";
-    case "proxy_admin":
-      return "Admin";
-    case "proxy_admin_viewer":
-      return "Admin Viewer";
-    case "org_admin":
-      return "Org Admin";
-    case "internal_user":
-      return "Internal User";
-    case "internal_user_viewer":
-    case "internal_viewer": // TODO:remove if deprecated
-      return "Internal Viewer";
-    case "app_user":
-      return "App User";
-    default:
-      return "Unknown Role";
-  }
-}
 
 const useAuthorized = () => {
   const router = useRouter();
@@ -47,6 +20,14 @@ const useAuthorized = () => {
   const isLoading = isUIConfigLoading;
   const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
 
+  // Helper function to redirect to login while preserving the current URL
+  const redirectToLogin = useCallback(() => {
+    storeReturnUrl();
+    const baseLoginUrl = `${getProxyBaseUrl()}/ui/login`;
+    const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
+    router.replace(loginUrlWithReturn);
+  }, [router]);
+
   // Single useEffect for all redirect logic
   useEffect(() => {
     if (isLoading) return;
@@ -55,9 +36,9 @@ const useAuthorized = () => {
       if (token) {
         clearTokenCookies();
       }
-      router.replace(`${getProxyBaseUrl()}/ui/login`);
+      redirectToLogin();
     }
-  }, [isLoading, isAuthorized, token, router]);
+  }, [isLoading, isAuthorized, token, redirectToLogin]);
 
   return {
     isLoading,
