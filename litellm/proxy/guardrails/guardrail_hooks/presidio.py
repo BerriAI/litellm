@@ -427,6 +427,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         analyze_results: Any,
         output_parse_pii: bool,
         masked_entity_count: Dict[str, int],
+        request_data: Optional[Dict] = None,
     ) -> str:
         """
         Send analysis results to the Presidio anonymizer endpoint to get redacted text
@@ -482,10 +483,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if item["operator"] == "replace" and output_parse_pii is True:
                         # check if token in dict
                         # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
-                        if replacement in self.pii_tokens:
-                            replacement = replacement + str(uuid.uuid4())
+                        pii_tokens = self.pii_tokens
+                        if request_data is not None:
+                            if "pii_tokens" not in request_data:
+                                request_data["pii_tokens"] = {}
+                            pii_tokens = request_data["pii_tokens"]
 
-                        self.pii_tokens[replacement] = new_text[
+                        # Always append a UUID to ensure the replacement token is unique to this request and session.
+                        # This prevents collisions where the LLM might hallucinate a generic token like [PHONE_NUMBER].
+                        replacement = f"{replacement}_{str(uuid.uuid4())[:12]}"
+
+                        pii_tokens[replacement] = new_text[
                             start:end
                         ]  # get text it'll replace
 
@@ -525,10 +533,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return analyze_results
 
         filtered_results: List[PresidioAnalyzeResponseItem] = []
+        deny_list_strings = [
+            x.value if hasattr(x, "value") else str(x)
+            for x in self.presidio_entities_deny_list
+        ]
         for item in analyze_results:
             entity_type = item.get("entity_type")
 
-            if entity_type and entity_type in self.presidio_entities_deny_list:
+            str_entity_type = str(
+                entity_type.value if hasattr(entity_type, "value") else entity_type
+            )
+            if entity_type and str_entity_type in deny_list_strings:
                 continue
 
             if self.presidio_score_thresholds:
@@ -621,6 +636,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     analyze_results=analyze_results,
                     output_parse_pii=output_parse_pii,
                     masked_entity_count=masked_entity_count,
+                    request_data=request_data,
                 )
                 return anonymized_text
             return redacted_text["text"]
@@ -866,14 +882,118 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
         ):  # /chat/completions requests
-            if isinstance(response.choices[0].message.content, str):
-                verbose_proxy_logger.debug(
-                    f"self.pii_tokens: {self.pii_tokens}; initial response: {response.choices[0].message.content}"
-                )
-                for key, value in self.pii_tokens.items():
-                    response.choices[0].message.content = response.choices[
-                        0
-                    ].message.content.replace(key, value)
+            await self._process_response_for_pii(
+                response=response,
+                request_data=data,
+                mode="unmask",
+            )
+        return response
+
+    async def _process_response_for_pii(
+        self,
+        response: ModelResponse,
+        request_data: dict,
+        mode: Literal["mask", "unmask"],
+    ) -> ModelResponse:
+        """
+        Helper to recursively process a ModelResponse for PII.
+        Handles all choices and tool calls.
+        """
+        pii_tokens = (
+            request_data.get("pii_tokens", self.pii_tokens)
+            if request_data
+            else self.pii_tokens
+        )
+        presidio_config = self.get_presidio_settings_from_request_data(
+            request_data or {}
+        )
+
+        for choice in response.choices:
+            message = getattr(choice, "message", None)
+            if message is None:
+                continue
+
+            # 1. Process content
+            content = getattr(message, "content", None)
+            if isinstance(content, str):
+                if mode == "unmask":
+                    for token, original_text in pii_tokens.items():
+                        if token in content:
+                            content = content.replace(token, original_text)
+                        # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
+                        else:
+                            # If the end of content matches the start of a token, it's likely truncated
+                            for i in range(
+                                max(0, len(content) - len(token)), len(content)
+                            ):
+                                sub = content[i:]
+                                if token.startswith(sub) and len(sub) > 15:
+                                    content = content[:i] + original_text
+                                    break
+                    message.content = content
+                elif mode == "mask":
+                    message.content = await self.check_pii(
+                        text=content,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+            elif isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    text_value = item.get("text")
+                    if text_value is None:
+                        continue
+                    if mode == "unmask":
+                        for token, original_text in pii_tokens.items():
+                            text_value = text_value.replace(token, original_text)
+                        item["text"] = text_value
+                    elif mode == "mask":
+                        item["text"] = await self.check_pii(
+                            text=text_value,
+                            output_parse_pii=False,
+                            presidio_config=presidio_config,
+                            request_data=request_data,
+                        )
+
+            # 2. Process tool calls
+            tool_calls = getattr(message, "tool_calls", None)
+            if tool_calls:
+                for tool_call in tool_calls:
+                    function = getattr(tool_call, "function", None)
+                    if function and hasattr(function, "arguments"):
+                        args = function.arguments
+                        if isinstance(args, str):
+                            if mode == "unmask":
+                                for token, original_text in pii_tokens.items():
+                                    args = args.replace(token, original_text)
+                                function.arguments = args
+                            elif mode == "mask":
+                                function.arguments = await self.check_pii(
+                                    text=args,
+                                    output_parse_pii=False,
+                                    presidio_config=presidio_config,
+                                    request_data=request_data,
+                                )
+
+            # 3. Process legacy function calls
+            function_call = getattr(message, "function_call", None)
+            if function_call and hasattr(function_call, "arguments"):
+                args = function_call.arguments
+                if isinstance(args, str):
+                    if mode == "unmask":
+                        for token, original_text in pii_tokens.items():
+                            args = args.replace(token, original_text)
+                        function_call.arguments = args
+                    elif mode == "mask":
+                        function_call.arguments = await self.check_pii(
+                            text=args,
+                            output_parse_pii=False,
+                            presidio_config=presidio_config,
+                            request_data=request_data,
+                        )
+
         return response
 
     async def _mask_output_response(
@@ -891,38 +1011,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if response.choices and isinstance(response.choices[0], StreamingChoices):
             return response
 
-        presidio_config = self.get_presidio_settings_from_request_data(
-            request_data or {}
+        await self._process_response_for_pii(
+            response=response,
+            request_data=request_data,
+            mode="mask",
         )
-
-        for choice in response.choices:
-            # Type narrowing: StreamingChoices doesn't have .message attribute
-            if not hasattr(choice, "message"):
-                continue
-            content = getattr(choice.message, "content", None)  # type: ignore
-            if content is None:
-                continue
-            if isinstance(content, str):
-                choice.message.content = await self.check_pii(  # type: ignore
-                    text=content,
-                    output_parse_pii=False,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
-            elif isinstance(content, list):
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    text_value = item.get("text")
-                    if text_value is None:
-                        continue
-                    item["text"] = await self.check_pii(
-                        text=text_value,
-                        output_parse_pii=False,
-                        presidio_config=presidio_config,
-                        request_data=request_data,
-                    )
-
         return response
 
     async def async_post_call_streaming_iterator_hook(
@@ -934,7 +1027,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Process streaming response chunks to unmask PII tokens when needed.
         """
-        from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+        from litellm.llms.base_llm.base_model_iterator import (
+            convert_model_response_to_streaming,
+        )
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
@@ -959,45 +1054,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     return
 
                 # Apply Presidio masking on the assembled response
-                presidio_config = self.get_presidio_settings_from_request_data(
-                    request_data or {}
-                )
-
-                content_to_mask = ""
-                if (
-                    hasattr(assembled_model_response, "choices")
-                    and len(assembled_model_response.choices) > 0
-                ):
-                    if hasattr(
-                        assembled_model_response.choices[0], "message"
-                    ) and hasattr(
-                        assembled_model_response.choices[0].message, "content"
-                    ):
-                        content_to_mask = (
-                            assembled_model_response.choices[0].message.content or ""
-                        )
-
-                masked_content = await self.check_pii(
-                    text=content_to_mask,
-                    output_parse_pii=False,
-                    presidio_config=presidio_config,
+                await self._process_response_for_pii(
+                    response=assembled_model_response,
                     request_data=request_data,
+                    mode="mask",
                 )
 
-                if (
-                    hasattr(assembled_model_response, "choices")
-                    and len(assembled_model_response.choices) > 0
-                ):
-                    if hasattr(assembled_model_response.choices[0], "message"):
-                        assembled_model_response.choices[
-                            0
-                        ].message.content = masked_content
-
-                mock_response = MockResponseIterator(
-                    model_response=assembled_model_response
+                mock_response_stream = convert_model_response_to_streaming(
+                    assembled_model_response
                 )
-                async for chunk in mock_response:
-                    yield chunk
+                yield mock_response_stream
                 return
 
             except Exception as e:
@@ -1011,7 +1077,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
 
         # --- PII unmasking path (output_parse_pii=True) ---
-        if not (self.output_parse_pii and self.pii_tokens):
+        pii_tokens = (
+            request_data.get("pii_tokens", self.pii_tokens)
+            if request_data
+            else self.pii_tokens
+        )
+        if not (self.output_parse_pii and pii_tokens):
             async for chunk in response:
                 yield chunk
             return
@@ -1034,20 +1105,27 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
                 return
 
-            # Apply PII unmasking to assembled content
-            for choice in assembled_model_response.choices:
-                if hasattr(choice, "message") and hasattr(choice.message, "content"):
-                    content = choice.message.content
-                    if isinstance(content, str):
-                        for token, original_text in self.pii_tokens.items():
-                            content = content.replace(token, original_text)
-                        choice.message.content = content
+            # --- PRESERVE USAGE METADATA ---
+            # stream_chunk_builder might miss usage if it's only in the last chunk
+            if (
+                not hasattr(assembled_model_response, "usage")
+                or not assembled_model_response.usage
+            ) and remaining_chunks:
+                last_chunk = remaining_chunks[-1]
+                if hasattr(last_chunk, "usage") and last_chunk.usage:
+                    assembled_model_response.usage = last_chunk.usage
 
-            mock_response = MockResponseIterator(
-                model_response=assembled_model_response
+            # Apply PII unmasking to assembled content (unmasking tokens back to original text)
+            await self._process_response_for_pii(
+                response=assembled_model_response,
+                request_data=request_data,
+                mode="unmask",
             )
-            async for chunk in mock_response:
-                yield chunk
+
+            mock_response_stream = convert_model_response_to_streaming(
+                assembled_model_response
+            )
+            yield mock_response_stream
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
