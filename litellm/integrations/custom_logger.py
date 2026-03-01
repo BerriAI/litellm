@@ -792,6 +792,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         turn_off_message_logging: bool = getattr(
             self, "turn_off_message_logging", False
         )
+
+        # Also check global and dynamic (per-request) redaction settings
+        # to ensure StandardLoggingPayload is redacted for all callbacks
+        # when litellm.turn_off_message_logging=True or per-request override
+        if not turn_off_message_logging:
+            from litellm.litellm_core_utils.redact_messages import (
+                should_redact_message_logging,
+            )
+
+            turn_off_message_logging = should_redact_message_logging(
+                model_call_details
+            )
         excluded_fields: Optional[List[str]] = getattr(
             litellm, "standard_logging_payload_excluded_fields", None
         )
