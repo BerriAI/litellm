@@ -517,7 +517,7 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
     signature: str
-    encrypted_content: str
+    encrypted_content: Optional[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
