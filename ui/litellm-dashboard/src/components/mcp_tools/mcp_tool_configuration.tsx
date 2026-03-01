@@ -21,7 +21,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   existingAllowedTools,
   onAllowedToolsChange,
 }) => {
-  const previousToolsLengthRef = useRef(0);
+  const previousToolNamesRef = useRef<string>("");
   const [toolSearchTerm, setToolSearchTerm] = useState("");
 
   const { tools, isLoadingTools, toolsError, canFetchTools } = useTestMCPConnection({
@@ -40,27 +40,32 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     );
   });
 
-  // Auto-select tools when tools are first loaded
+  // Auto-select tools when tools are first loaded or when tool list changes (e.g. URL changed)
   useEffect(() => {
+    const currentToolNames = tools.map((t) => t.name).sort().join(",");
     // Only auto-select if:
     // 1. We have tools
-    // 2. Tools length changed (new tools loaded)
-    // 3. No tools are currently selected (initial state)
-    if (tools.length > 0 && tools.length !== previousToolsLengthRef.current && allowedTools.length === 0) {
+    // 2. Tool names changed from last fetch (detects both count and content changes)
+    // 3. No tools are currently selected (initial state or cleared after URL change)
+    if (tools.length > 0 && currentToolNames !== previousToolNamesRef.current && allowedTools.length === 0) {
       if (existingAllowedTools && existingAllowedTools.length > 0) {
         // If we have existing allowed tools, use those as the initial selection
         // Filter to only include tools that are actually available from the server
         const availableToolNames = tools.map((tool) => tool.name);
         const validExistingTools = existingAllowedTools.filter((toolName) => availableToolNames.includes(toolName));
-        onAllowedToolsChange(validExistingTools);
+        if (validExistingTools.length > 0) {
+          onAllowedToolsChange(validExistingTools);
+        } else {
+          // No existing tools match the new server — select all new tools
+          onAllowedToolsChange(availableToolNames);
+        }
       } else {
         // If no existing allowed tools, auto-select all tools (create mode)
         const allToolNames = tools.map((tool) => tool.name);
         onAllowedToolsChange(allToolNames);
       }
     }
-    // Update ref to track tools length (will be 0 when tools clear)
-    previousToolsLengthRef.current = tools.length;
+    previousToolNamesRef.current = currentToolNames;
   }, [tools, allowedTools.length, existingAllowedTools, onAllowedToolsChange]);
 
   const handleToolToggle = (toolName: string) => {
