@@ -162,6 +162,10 @@ class LoggingWorker:
                     my_sem.release()
                     raise
 
+            # Epoch changed — discard stale items from the old queue to
+            # prevent "coroutine was never awaited" warnings.
+            self._discard_queue(my_queue)
+
         except asyncio.CancelledError:
             verbose_logger.debug("LoggingWorker cancelled during shutdown")
             # Drain the LOCAL queue we were serving, not self._queue
