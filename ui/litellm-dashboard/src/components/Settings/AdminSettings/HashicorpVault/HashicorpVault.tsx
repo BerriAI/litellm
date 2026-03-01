@@ -60,7 +60,6 @@ export default function HashicorpVault() {
   const {
     mutate: updateConfig,
     isPending: isUpdating,
-    error: updateError,
   } = useUpdateHashicorpVaultConfig(accessToken);
 
   const schema = data?.field_schema;
@@ -127,14 +126,6 @@ export default function HashicorpVault() {
             <Typography.Paragraph style={{ marginBottom: 0 }}>
               {schema.description}
             </Typography.Paragraph>
-          )}
-
-          {updateError && (
-            <Alert
-              type="error"
-              message="Could not update Hashicorp Vault configuration"
-              description={updateError instanceof Error ? updateError.message : undefined}
-            />
           )}
 
           <Form layout="vertical" initialValues={values} onFinish={handleSave}>
