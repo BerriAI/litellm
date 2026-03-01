@@ -4440,7 +4440,6 @@ class ProxyConfig:
             await self._init_hashicorp_vault_config_override(
                 prisma_client=prisma_client
             )
-            self._hashicorp_config_override_initialized = True
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -4572,6 +4571,7 @@ class ProxyConfig:
             )
 
             if db_record is None or db_record.config_value is None:
+                self._hashicorp_config_override_initialized = True
                 return
 
             config_data = _parse_config_value(db_record.config_value)
@@ -4590,6 +4590,7 @@ class ProxyConfig:
             verbose_proxy_logger.info(
                 "Hashicorp Vault config override loaded from DB"
             )
+            self._hashicorp_config_override_initialized = True
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error loading Hashicorp Vault config override from DB: %s",
