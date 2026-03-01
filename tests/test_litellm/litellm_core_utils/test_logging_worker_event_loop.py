@@ -9,6 +9,8 @@ module-level singleton survives across tests.
 """
 
 import asyncio
+import atexit
+import contextvars
 
 import pytest
 
@@ -23,25 +25,10 @@ async def _noop_coro():
     """Coroutine that does nothing — used as a logging payload."""
 
 
-async def _slow_coro():
-    """Coroutine that takes long enough to still be running when we check."""
-    await asyncio.sleep(10)
-
-
 def _make_fresh_worker() -> LoggingWorker:
     """Create a standalone worker (no atexit side-effects in tests)."""
-    w = LoggingWorker.__new__(LoggingWorker)
-    w.timeout = 5.0
-    w.max_queue_size = 100
-    w.concurrency = 4
-    w._queue = None
-    w._worker_task = None
-    w._running_tasks = set()
-    w._sem = None
-    w._bound_loop = None
-    w._last_aggressive_clear_time = 0.0
-    w._aggressive_clear_in_progress = False
-    w._epoch = 0
+    w = LoggingWorker(timeout=5.0, max_queue_size=100, concurrency=4)
+    atexit.unregister(w._flush_on_exit)
     return w
 
 
@@ -69,7 +56,7 @@ class TestEpochPreventsStaleAccess:
         w._epoch += 1
 
         # Enqueue something so the worker wakes up from queue.get()
-        w._queue.put_nowait({"coroutine": _noop_coro(), "context": __import__("contextvars").copy_context()})
+        w._queue.put_nowait({"coroutine": _noop_coro(), "context": contextvars.copy_context()})
 
         # Give the worker a chance to process and detect the epoch change
         for _ in range(20):
@@ -175,7 +162,7 @@ class TestWorkerLoopLocalCapture:
         w._queue = new_queue
 
         # Enqueue another task to the OLD queue (simulates in-flight item)
-        original_queue.put_nowait({"coroutine": _noop_coro(), "context": __import__("contextvars").copy_context()})
+        original_queue.put_nowait({"coroutine": _noop_coro(), "context": contextvars.copy_context()})
 
         # Cancel the worker — it should discard from original_queue
         if w._worker_task is not None:

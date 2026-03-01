@@ -95,20 +95,30 @@ class LoggingWorker:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
 
-    async def _process_log_task(self, task: LoggingTask, sem: asyncio.Semaphore):
-        """Runs the logging task and handles cleanup. Releases semaphore when done."""
+    async def _process_log_task(
+        self,
+        task: LoggingTask,
+        sem: asyncio.Semaphore,
+        queue: "asyncio.Queue[LoggingTask]",
+    ):
+        """Runs the logging task and handles cleanup. Releases semaphore when done.
+
+        Accepts an explicit *queue* reference so that ``task_done()`` is
+        always called on the queue the task was dequeued from, even if
+        ``self._queue`` has been replaced by ``_ensure_queue()`` on a new
+        event loop.
+        """
         try:
-            if self._queue is not None:
-                try:
-                    # Run the coroutine in its original context
-                    await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
-                        timeout=self.timeout,
-                    )
-                except Exception as e:
-                    verbose_logger.exception(f"LoggingWorker error: {e}")
-                finally:
-                    self._queue.task_done()
+            try:
+                # Run the coroutine in its original context
+                await asyncio.wait_for(
+                    task["context"].run(asyncio.create_task, task["coroutine"]),
+                    timeout=self.timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"LoggingWorker error: {e}")
+            finally:
+                queue.task_done()
         finally:
             # Always release semaphore, even if queue is None
             sem.release()
@@ -136,7 +146,7 @@ class LoggingWorker:
                     task = await my_queue.get()
                     # Track each spawned coroutine so we can cancel on shutdown.
                     processing_task = asyncio.create_task(
-                        self._process_log_task(task, my_sem)
+                        self._process_log_task(task, my_sem, my_queue)
                     )
                     self._running_tasks.add(processing_task)
                     processing_task.add_done_callback(self._running_tasks.discard)
@@ -410,38 +420,6 @@ class LoggingWorker:
             return
         while not self._queue.empty():
             await self._queue.join()
-
-    async def _drain_queue(
-        self, queue: Optional["asyncio.Queue[LoggingTask]"]
-    ) -> None:
-        """Drain a specific queue instance (used during cancellation).
-
-        Unlike ``clear_queue`` this accepts an explicit *queue* reference so
-        that a cancelled worker drains the queue it was serving, not whatever
-        ``self._queue`` points to now (which may belong to a different loop).
-        """
-        if queue is None:
-            return
-
-        start_time = asyncio.get_event_loop().time()
-
-        for _ in range(MAX_ITERATIONS_TO_CLEAR_QUEUE):
-            if asyncio.get_event_loop().time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
-                break
-            try:
-                task = queue.get_nowait()
-                try:
-                    await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
-                        timeout=self.timeout,
-                    )
-                except Exception:
-                    pass
-                finally:
-                    task = None
-                queue.task_done()
-            except asyncio.QueueEmpty:
-                break
 
     @staticmethod
     def _discard_queue(queue: Optional["asyncio.Queue[LoggingTask]"]) -> None:
