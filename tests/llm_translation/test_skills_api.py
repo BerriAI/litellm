@@ -264,3 +264,7 @@ class TestAnthropicSkillsAPI(BaseSkillsAPITest):
     def get_api_base(self) -> Optional[str]:
         return os.environ.get("ANTHROPIC_API_BASE")
 
+
+# OpenAI E2E tests moved to test_skills_e2e.py per repository policy
+# (tests/llm_translation/ must contain only mock tests)
+

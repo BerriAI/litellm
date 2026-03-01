@@ -2,10 +2,10 @@
 Type definitions for Anthropic Skills API
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-from typing_extensions import Required, TypedDict
+from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 
 # Skills API Request Types
@@ -44,6 +44,9 @@ class Skill(BaseModel):
 
     display_title: Optional[str] = None
     """Display title for the skill"""
+
+    default_version: Optional[str] = None
+    """Default version of the skill (OpenAI-specific, None for Anthropic)"""
 
     latest_version: Optional[str] = None
     """The latest version identifier for the skill"""

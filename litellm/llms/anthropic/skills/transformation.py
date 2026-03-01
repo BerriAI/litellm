@@ -64,6 +64,15 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
 
         return headers
 
+    def get_api_base(
+        self, litellm_params: Optional[GenericLiteLLMParams]
+    ) -> str:
+        """Resolve Anthropic API base URL."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        api_base_override = litellm_params.api_base if litellm_params else None
+        return AnthropicModelInfo.get_api_base(api_base_override)
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -125,11 +134,11 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         
         # Build query parameters
         query_params: Dict[str, Any] = {}
-        if "limit" in list_params and list_params["limit"]:
+        if list_params.get("limit") is not None:
             query_params["limit"] = list_params["limit"]
-        if "page" in list_params and list_params["page"]:
+        if list_params.get("page") is not None:
             query_params["page"] = list_params["page"]
-        if "source" in list_params and list_params["source"]:
+        if list_params.get("source") is not None:
             query_params["source"] = list_params["source"]
         
         verbose_logger.debug(

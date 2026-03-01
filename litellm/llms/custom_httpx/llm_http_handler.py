@@ -151,6 +151,24 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _redact_auth_headers(headers: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Redact sensitive auth headers for logging.
+
+    Args:
+        headers: Dictionary of HTTP headers
+
+    Returns:
+        Headers dict with auth headers redacted, or None if input is None
+    """
+    if headers is None:
+        return None
+
+    return {
+        k: '[REDACTED]' if k.lower() in ('authorization', 'x-api-key') else v
+        for k, v in headers.items()
+    }
+
+
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -437,7 +455,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -866,7 +884,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -1005,7 +1023,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -1152,7 +1170,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data or {},
                 "api_base": complete_url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -1398,7 +1416,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -1466,7 +1484,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -1690,7 +1708,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -1772,7 +1790,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": complete_url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -1873,7 +1891,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             api_base=api_base,
         )
-        
+
         headers = update_headers_with_filtered_beta(
             headers=headers, provider=custom_llm_provider
         )
@@ -1946,7 +1964,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": str(request_url),
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2144,7 +2162,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2289,7 +2307,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2413,7 +2431,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2497,7 +2515,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2582,7 +2600,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2653,7 +2671,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2750,7 +2768,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2823,7 +2841,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -2966,7 +2984,7 @@ class BaseLLMHTTPHandler:
                     data=transformed_request["upload_request"]["data"],
                     timeout=timeout,
                 )
-                
+
                 # Store initial response for transformation
                 if initial_response_data:
                     litellm_params["initial_file_response"] = initial_response_data
@@ -3058,7 +3076,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": transformed_request,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -3095,7 +3113,7 @@ class BaseLLMHTTPHandler:
                     data=transformed_request["upload_request"]["data"],
                     timeout=timeout,
                 )
-                
+
                 # Store initial response for transformation
                 if initial_response_data:
                     litellm_params["initial_file_response"] = initial_response_data
@@ -3387,7 +3405,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": transformed_request,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -3473,7 +3491,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": transformed_request,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "batch_id": batch_id,
             },
         )
@@ -3590,7 +3608,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -3666,7 +3684,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -3755,7 +3773,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -3834,7 +3852,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -3906,7 +3924,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "file_id": file_id,
             },
         )
@@ -3966,7 +3984,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "file_id": file_id,
             },
         )
@@ -4036,7 +4054,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "file_id": file_id,
             },
         )
@@ -4096,7 +4114,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "file_id": file_id,
             },
         )
@@ -4166,7 +4184,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "purpose": purpose,
             },
         )
@@ -4226,7 +4244,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "purpose": purpose,
             },
         )
@@ -4296,7 +4314,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "file_id": file_content_request.get("file_id"),
             },
         )
@@ -4356,7 +4374,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "file_id": file_content_request.get("file_id"),
             },
         )
@@ -4467,7 +4485,7 @@ class BaseLLMHTTPHandler:
             if logging_obj is not None
             else False
         )
-        
+
         if websearch_converted_stream:
             from typing import cast
 
@@ -4478,11 +4496,11 @@ class BaseLLMHTTPHandler:
             from litellm.types.llms.anthropic_messages.anthropic_response import (
                 AnthropicMessagesResponse,
             )
-            
+
             verbose_logger.debug(
                 "WebSearchInterception: No tool call made, converting non-streaming response to fake stream"
             )
-            
+
             # Convert the non-streaming response to a fake stream
             # The response should be an AnthropicMessagesResponse (dict)
             if isinstance(response, dict):
@@ -4491,7 +4509,7 @@ class BaseLLMHTTPHandler:
                     response=cast(AnthropicMessagesResponse, response)
                 )
                 return fake_stream
-        
+
         return None
 
     async def _call_agentic_chat_completion_hooks(
@@ -4574,23 +4592,23 @@ class BaseLLMHTTPHandler:
             if logging_obj is not None
             else False
         )
-        
+
         if websearch_converted_stream:
             from litellm._logging import verbose_logger
             from litellm.llms.base_llm.base_model_iterator import (
                 convert_model_response_to_streaming,
             )
-            
+
             verbose_logger.debug(
                 "WebSearchInterception: No tool call made, converting non-streaming chat completion to fake stream"
             )
-            
+
             # Convert the non-streaming ModelResponse to a fake stream
             if hasattr(response, "choices"):
                 # Use the existing converter for ModelResponse
                 fake_stream = convert_model_response_to_streaming(response)
                 return fake_stream
-        
+
         return None
 
     def _handle_error(
@@ -4814,7 +4832,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": files,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -4910,7 +4928,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -5033,7 +5051,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -5143,7 +5161,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -5247,7 +5265,7 @@ class BaseLLMHTTPHandler:
             model=model,
             litellm_params=litellm_params,
         )
-        
+
         if extra_headers:
             headers.update(extra_headers)
 
@@ -5273,7 +5291,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -5374,7 +5392,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -5656,7 +5674,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "video_id": video_id,
             },
         )
@@ -5738,7 +5756,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "video_id": video_id,
             },
         )
@@ -5876,7 +5894,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
             },
         )
@@ -5952,7 +5970,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "video_id": video_id,
             },
         )
@@ -6046,7 +6064,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "video_id": video_id,
                 "data": data,
             },
@@ -6133,7 +6151,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "video_id": video_id,
                 "data": data,
             },
@@ -6164,7 +6182,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=video_status_provider_config,
             )
-    
+
     ###### CONTAINER HANDLER ######
     def container_create_handler(
         self,
@@ -6204,7 +6222,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
         )
-        
+
         # Add Content-Type header for JSON requests
         headers["Content-Type"] = "application/json"
 
@@ -6232,7 +6250,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -6254,7 +6272,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_create_handler(
         self,
         name: str,
@@ -6280,7 +6298,7 @@ class BaseLLMHTTPHandler:
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
         )
-        
+
         # Add Content-Type header for JSON requests
         headers["Content-Type"] = "application/json"
 
@@ -6308,7 +6326,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -6330,7 +6348,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     def container_list_handler(
         self,
         container_provider_config: "BaseContainerConfig",
@@ -6400,7 +6418,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
             },
         )
@@ -6422,7 +6440,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_list_handler(
         self,
         container_provider_config: "BaseContainerConfig",
@@ -6477,7 +6495,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
             },
         )
@@ -6499,7 +6517,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     def container_retrieve_handler(
         self,
         container_id: str,
@@ -6555,7 +6573,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -6566,7 +6584,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
                 "container_id": container_id,
             },
@@ -6589,7 +6607,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_retrieve_handler(
         self,
         container_id: str,
@@ -6632,7 +6650,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -6643,7 +6661,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
                 "container_id": container_id,
             },
@@ -6666,7 +6684,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     def container_delete_handler(
         self,
         container_id: str,
@@ -6722,7 +6740,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -6733,7 +6751,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
                 "container_id": container_id,
             },
@@ -6756,7 +6774,7 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=container_provider_config,
             )
-    
+
     async def async_container_delete_handler(
         self,
         container_id: str,
@@ -6799,7 +6817,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        
+
         # Add any extra query parameters
         if extra_query:
             params.update(extra_query)
@@ -6810,7 +6828,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
                 "container_id": container_id,
             },
@@ -6905,7 +6923,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
             },
         )
@@ -6984,7 +7002,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
             },
         )
@@ -7069,7 +7087,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
             },
         )
@@ -7142,7 +7160,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": params,
             },
         )
@@ -7241,7 +7259,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7344,7 +7362,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7413,7 +7431,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7489,7 +7507,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7561,7 +7579,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7646,7 +7664,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7716,7 +7734,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7802,7 +7820,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7866,7 +7884,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -7943,7 +7961,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8007,7 +8025,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8087,7 +8105,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8159,7 +8177,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8246,7 +8264,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8310,7 +8328,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8390,7 +8408,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_params,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8496,7 +8514,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8605,7 +8623,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8730,7 +8748,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8829,7 +8847,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8887,19 +8905,20 @@ class BaseLLMHTTPHandler:
         """
         if "files" not in request_body or not request_body["files"]:
             return None, None
-            
+
         # Remove content-type header if present - httpx will set it automatically for multipart
-        if "content-type" in headers:
-            del headers["content-type"]
-        
+        ct_key = next((k for k in headers if k.lower() == "content-type"), None)
+        if ct_key:
+            del headers[ct_key]
+
         # Prepare files for multipart upload
         files = []
         for file_obj in request_body["files"]:
             files.append(("files[]", file_obj))
-        
+
         # Prepare data (non-file fields)
         data = {k: v for k, v in request_body.items() if k != "files"}
-        
+
         return data, files
 
     def create_skill_handler(
@@ -8946,7 +8965,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -8955,7 +8974,7 @@ class BaseLLMHTTPHandler:
             data, files = self._prepare_skill_multipart_request(
                 request_body=request_body, headers=headers
             )
-            
+
             if files is not None:
                 response = sync_httpx_client.post(
                     url=url, headers=headers, data=data, files=files, timeout=timeout
@@ -9006,7 +9025,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9015,7 +9034,7 @@ class BaseLLMHTTPHandler:
             data, files = self._prepare_skill_multipart_request(
                 request_body=request_body, headers=headers
             )
-            
+
             if files is not None:
                 response = await async_httpx_client.post(
                     url=url, headers=headers, data=data, files=files, timeout=timeout
@@ -9080,7 +9099,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9129,7 +9148,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9189,7 +9208,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9234,7 +9253,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9294,7 +9313,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9341,7 +9360,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9356,6 +9375,785 @@ class BaseLLMHTTPHandler:
             )
 
         return skills_api_provider_config.transform_delete_skill_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+
+    # ===================================
+    # Skills API Extended Handlers (OpenAI-specific)
+    # ===================================
+
+    def update_skill_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        """Update Skill"""
+        if _is_async:
+            return self.async_update_skill_handler(
+                url=url,
+                request_body=request_body,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_update_skill_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_update_skill_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Dict:
+        """Async update skill"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=url, headers=headers, json=request_body, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_update_skill_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def get_skill_content_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        """Get Skill Content"""
+        if _is_async:
+            return self.async_get_skill_content_handler(
+                url=url,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers)
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_get_skill_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_get_skill_content_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Dict:
+        """Async get skill content"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_get_skill_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def create_skill_version_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        """Create Skill Version"""
+        if _is_async:
+            return self.async_create_skill_version_handler(
+                url=url,
+                request_body=request_body,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body, headers=headers
+            )
+            if files is not None:
+                response = sync_httpx_client.post(
+                    url=url, headers=headers, data=data, files=files, timeout=timeout
+                )
+            else:
+                response = sync_httpx_client.post(
+                    url=url, headers=headers, json=request_body, timeout=timeout
+                )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_create_skill_version_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_create_skill_version_handler(
+        self,
+        url: str,
+        request_body: Dict,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Dict:
+        """Async create skill version"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            data, files = self._prepare_skill_multipart_request(
+                request_body=request_body, headers=headers
+            )
+            if files is not None:
+                response = await async_httpx_client.post(
+                    url=url, headers=headers, data=data, files=files, timeout=timeout
+                )
+            else:
+                response = await async_httpx_client.post(
+                    url=url, headers=headers, json=request_body, timeout=timeout
+                )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_create_skill_version_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def list_skill_versions_handler(
+        self,
+        url: str,
+        query_params: Dict,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        """List Skill Versions"""
+        if _is_async:
+            return self.async_list_skill_versions_handler(
+                url=url,
+                query_params=query_params,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": query_params,
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url, headers=headers, params=query_params
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_list_skill_versions_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_list_skill_versions_handler(
+        self,
+        url: str,
+        query_params: Dict,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Dict:
+        """Async list skill versions"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "complete_input_dict": query_params,
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=query_params
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_list_skill_versions_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def get_skill_version_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        """Get Skill Version"""
+        if _is_async:
+            return self.async_get_skill_version_handler(
+                url=url,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers)
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_get_skill_version_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_get_skill_version_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Dict:
+        """Async get skill version"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_get_skill_version_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def delete_skill_version_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        """Delete Skill Version"""
+        if _is_async:
+            return self.async_delete_skill_version_handler(
+                url=url,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = sync_httpx_client.delete(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_delete_skill_version_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_delete_skill_version_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Dict:
+        """Async delete skill version"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = await async_httpx_client.delete(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_delete_skill_version_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    def get_skill_version_content_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Union[Dict, Coroutine[Any, Any, Dict]]:
+        """Get Skill Version Content"""
+        if _is_async:
+            return self.async_get_skill_version_content_handler(
+                url=url,
+                skills_api_provider_config=skills_api_provider_config,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                shared_session=shared_session,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(url=url, headers=headers)
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_get_skill_version_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_get_skill_version_content_handler(
+        self,
+        url: str,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
+        custom_llm_provider: str,
+        litellm_params: GenericLiteLLMParams,
+        logging_obj: LiteLLMLoggingObj,
+        extra_headers: Optional[Dict[str, Any]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Dict:
+        """Async get skill version content"""
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = extra_headers or {}
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": _redact_auth_headers(headers),
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=skills_api_provider_config,
+            )
+
+        return skills_api_provider_config.transform_get_skill_version_content_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
@@ -9408,7 +10206,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9457,7 +10255,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9520,7 +10318,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9569,7 +10367,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": query_params,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9629,7 +10427,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9674,7 +10472,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9737,7 +10535,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9786,7 +10584,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9846,7 +10644,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9893,7 +10691,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -9953,7 +10751,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10000,7 +10798,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10067,7 +10865,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10116,7 +10914,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": request_body,
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10178,7 +10976,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": query_params,
             },
         )
@@ -10227,7 +11025,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
                 "params": query_params,
             },
         )
@@ -10288,7 +11086,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10333,7 +11131,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10393,7 +11191,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10440,7 +11238,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10500,7 +11298,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
@@ -10547,7 +11345,7 @@ class BaseLLMHTTPHandler:
             api_key="",
             additional_args={
                 "api_base": url,
-                "headers": headers,
+                "headers": _redact_auth_headers(headers),
             },
         )
 
