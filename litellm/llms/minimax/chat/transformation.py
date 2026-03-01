@@ -24,7 +24,9 @@ class MinimaxChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler
             delta = choice.get("delta", {})
             if "reasoning_details" in delta:
                 text = _concat_reasoning_details(delta.pop("reasoning_details"))
-                if text:
+                # Only set if reasoning_content not already present
+                # (consistent with non-streaming priority)
+                if text and "reasoning_content" not in delta:
                     delta["reasoning_content"] = text
         return super()._map_reasoning_to_reasoning_content(choices)
 

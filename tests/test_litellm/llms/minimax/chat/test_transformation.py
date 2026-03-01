@@ -280,6 +280,61 @@ def test_minimax_map_preserves_existing_reasoning_content():
     assert result[0]["delta"]["reasoning_content"] == "parent reasoning"
 
 
+def test_minimax_map_reasoning_details_non_string_text():
+    """Test streaming handler with non-string text values (None, int, bool)."""
+    from litellm.llms.minimax.chat.transformation import (
+        MinimaxChatCompletionStreamingHandler,
+    )
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+    # Dict entries with non-string text values
+    choices = [
+        {
+            "delta": {
+                "reasoning_details": [
+                    {"text": None},
+                    {"text": "valid"},
+                    {"text": 42},
+                ],
+                "content": "answer",
+            }
+        }
+    ]
+    result = handler._map_reasoning_to_reasoning_content(choices)
+    delta = result[0]["delta"]
+    assert delta["reasoning_content"] == "valid42"
+    assert "reasoning_details" not in delta
+    assert delta["content"] == "answer"
+
+
+def test_minimax_streaming_reasoning_content_priority():
+    """Test that existing reasoning_content is NOT overwritten by reasoning_details in streaming."""
+    from litellm.llms.minimax.chat.transformation import (
+        MinimaxChatCompletionStreamingHandler,
+    )
+
+    handler = MinimaxChatCompletionStreamingHandler(
+        streaming_response=iter([]),
+        sync_stream=True,
+        json_mode=False,
+    )
+    choices = [
+        {
+            "delta": {
+                "reasoning_content": "primary",
+                "reasoning_details": [{"text": "secondary"}],
+            }
+        }
+    ]
+    result = handler._map_reasoning_to_reasoning_content(choices)
+    assert result[0]["delta"]["reasoning_content"] == "primary"
+    assert "reasoning_details" not in result[0]["delta"]
+
+
 def test_minimax_extract_reasoning_details_non_streaming():
     """Test that _extract_reasoning_content handles reasoning_details for non-streaming."""
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
