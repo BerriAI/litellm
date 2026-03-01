@@ -766,7 +766,13 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         premium_user = _license_check.is_premium()
 
     ## CHECK MASTER KEY IN ENVIRONMENT ##
-    master_key = get_secret_str("LITELLM_MASTER_KEY")
+    # Only overwrite master_key from env var if it is actually set.
+    # initialize() may have already configured master_key from a config file;
+    # unconditionally assigning None here would discard that value when the
+    # LITELLM_MASTER_KEY env var is absent (e.g. programmatic startup, tests).
+    _env_master_key = get_secret_str("LITELLM_MASTER_KEY")
+    if _env_master_key:
+        master_key = _env_master_key
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
     env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
