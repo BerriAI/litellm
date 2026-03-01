@@ -163,7 +163,56 @@ def test_get_additional_headers():
         "x_ratelimit_remaining_requests": 1999,
         "x_ratelimit_limit_tokens": 160000,
         "x_ratelimit_remaining_tokens": 160000,
+        "llm_provider_request_id": "req_01F6CycZZPSHKRCCctcS1Vto",
     }
+
+
+def test_get_additional_headers_openai_x_request_id():
+    """Test that OpenAI x-request-id is extracted via llm_provider- prefix."""
+    additional_headers = {
+        "llm_provider-x-request-id": "req_abc123",
+        "llm_provider-openai-organization": "org-test",
+        "llm_provider-openai-processing-ms": "42",
+        "x-ratelimit-limit-requests": "5000",
+        "x-ratelimit-remaining-requests": "4999",
+        "x-ratelimit-limit-tokens": "300000",
+        "x-ratelimit-remaining-tokens": "299990",
+    }
+    result = StandardLoggingPayloadSetup.get_additional_headers(additional_headers)
+    assert result is not None
+    assert result["llm_provider_x_request_id"] == "req_abc123"
+    assert result["llm_provider_openai_organization"] == "org-test"
+    assert result["llm_provider_openai_processing_ms"] == 42
+    assert result["x_ratelimit_limit_requests"] == 5000
+
+
+def test_get_additional_headers_only_prefixed_ratelimit():
+    """Test extraction when only llm_provider-prefixed rate-limit headers exist."""
+    additional_headers = {
+        "llm_provider-x-ratelimit-limit-requests": "1000",
+        "llm_provider-x-ratelimit-remaining-requests": "999",
+        "llm_provider-x-ratelimit-limit-tokens": "50000",
+        "llm_provider-x-ratelimit-remaining-tokens": "49999",
+    }
+    result = StandardLoggingPayloadSetup.get_additional_headers(additional_headers)
+    assert result is not None
+    assert result["x_ratelimit_limit_requests"] == 1000
+    assert result["x_ratelimit_remaining_requests"] == 999
+    assert result["x_ratelimit_limit_tokens"] == 50000
+    assert result["x_ratelimit_remaining_tokens"] == 49999
+
+
+def test_get_additional_headers_numeric_request_id_stays_string():
+    """String-typed fields must remain strings even when values are numeric."""
+    additional_headers = {
+        "llm_provider-x-request-id": "12345",
+        "llm_provider-request-id": "67890",
+    }
+    result = StandardLoggingPayloadSetup.get_additional_headers(additional_headers)
+    assert result["llm_provider_x_request_id"] == "12345"
+    assert isinstance(result["llm_provider_x_request_id"], str)
+    assert result["llm_provider_request_id"] == "67890"
+    assert isinstance(result["llm_provider_request_id"], str)
 
 
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
