@@ -2639,6 +2639,19 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def supports_max_effort(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports effort='max' in output_config (Opus 4.6+).
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_max_effort",
+    )
+
+
 def get_supported_regions(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> Optional[List[str]]:
