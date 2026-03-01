@@ -1808,6 +1808,42 @@ def test_translate_system_message_preserves_cache_control():
     assert result[0]["cache_control"] == {"type": "ephemeral"}
 
 
+def test_anthropic_messages_pt_skips_empty_user_text_blocks():
+    """
+    Test that anthropic_messages_pt filters out empty text blocks in user messages.
+
+    Fixes: Vertex AI Anthropic API error "messages: text content blocks must be non-empty"
+    when user messages contain list content with empty text blocks.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": ""},
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-3-5-sonnet-20241022",
+        llm_provider="anthropic",
+    )
+
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    content = result[0]["content"]
+    assert isinstance(content, list)
+    # Only the non-empty block should remain
+    assert len(content) == 1
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "Hello"
+
+
 # ============ Dynamic max_tokens Tests ============
 
 
