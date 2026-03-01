@@ -62,13 +62,14 @@ class InFlightRequestsMiddleware:
         try:
             from prometheus_client import Gauge
 
+            kwargs: dict[str, Any] = {}
             if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
                 # livesum aggregates across all worker processes in the scrape response
                 kwargs["multiprocess_mode"] = "livesum"
             InFlightRequestsMiddleware._gauge = Gauge(
                 "litellm_in_flight_requests",
                 "Number of HTTP requests currently in-flight on this uvicorn worker",
-                **kwargs,  # type: ignore[arg-type]
+                **kwargs,
             )
         except Exception:
             InFlightRequestsMiddleware._gauge = None
