@@ -201,6 +201,7 @@ class HangingRequestData(BaseModel):
     key_alias: Optional[str] = None
     team_alias: Optional[str] = None
     alerting_metadata: Optional[dict] = None
+    start_time: float = 0.0  # monotonic time when request was added
 
 
 class AlertTypeConfig(LiteLLMPydanticObjectBase):
