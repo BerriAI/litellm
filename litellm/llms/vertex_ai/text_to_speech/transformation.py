@@ -470,3 +470,13 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
         # Initialize the HttpxBinaryResponseContent instance
         return HttpxBinaryResponseContent(response)
+
+    @property
+    def supports_streaming(self) -> bool:
+        """
+        Vertex AI TTS does not support true streaming.
+
+        The API returns JSON with base64-encoded audio in the audioContent field,
+        which must be fully received and decoded before audio bytes are available.
+        """
+        return False
