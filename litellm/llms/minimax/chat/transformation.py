@@ -128,7 +128,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: bool = False,
+        json_mode: Optional[bool] = False,
     ) -> MinimaxChatCompletionStreamingHandler:
         return MinimaxChatCompletionStreamingHandler(
             streaming_response=streaming_response,
