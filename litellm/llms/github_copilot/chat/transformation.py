@@ -137,8 +137,8 @@ class GithubCopilotConfig(OpenAIConfig):
         Ref: https://github.com/sst/opencode-copilot-auth (index.mjs)
         """
         if messages:
-            last_role = messages[-1].get("role")
-            if last_role in ("tool", "assistant"):
+            last_role = messages[-1].get("role", "")
+            if isinstance(last_role, str) and last_role.lower() in ("tool", "assistant"):
                 return "agent"
         return "user"
 
