@@ -45,7 +45,7 @@
     "react-syntax-highlighter": "^15.6.6",
     "tailwind-merge": "^3.2.0",
     "uuid": "^11.1.0",
-    "js-yaml": ">=4.1.1"
+    "js-yaml": "^4.1.1"
   },
   "devDependencies": {
     "@neondatabase/api-client": "^2.6.0",
