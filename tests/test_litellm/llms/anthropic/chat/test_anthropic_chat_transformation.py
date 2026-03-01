@@ -1690,32 +1690,32 @@ def test_max_effort_rejected_for_sonnet_46():
         )
 
 
-def test_reasoning_effort_max_rejected_for_sonnet_46():
-    """Test reasoning_effort='max' flows through map_openai_params → transform_request and is rejected for Sonnet 4.6."""
+def test_reasoning_effort_max_accepted_for_opus_46_via_map():
+    """Test reasoning_effort='max' flows through map_openai_params → transform_request and is accepted for Opus 4.6."""
     config = AnthropicConfig()
 
     messages = [{"role": "user", "content": "Test"}]
 
-    # First map reasoning_effort='max' to output_config via map_openai_params
+    # Map reasoning_effort='max' to output_config via map_openai_params
     optional_params: dict = {}
     mapped = config.map_openai_params(
         non_default_params={"reasoning_effort": "max"},
         optional_params=optional_params,
-        model="claude-sonnet-4-6-20260205",
+        model="claude-opus-4-6-20260205",
         drop_params=False,
     )
     assert "output_config" in mapped
     assert mapped["output_config"]["effort"] == "max"
 
-    # Then verify transform_request rejects it
-    with pytest.raises(ValueError, match=r"effort='max' is only supported by Claude Opus 4\.6"):
-        config.transform_request(
-            model="claude-sonnet-4-6-20260205",
-            messages=messages,
-            optional_params=mapped,
-            litellm_params={},
-            headers={}
-        )
+    # Verify transform_request accepts it for Opus 4.6
+    result = config.transform_request(
+        model="claude-opus-4-6-20260205",
+        messages=messages,
+        optional_params=mapped,
+        litellm_params={},
+        headers={}
+    )
+    assert result["output_config"]["effort"] == "max"
 
 
 def test_effort_with_other_features():
