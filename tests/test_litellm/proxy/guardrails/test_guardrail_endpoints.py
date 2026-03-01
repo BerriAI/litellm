@@ -17,13 +17,19 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     PatchGuardrailRequest,
+    RegisterGuardrailRequest,
     UpdateGuardrailRequest,
     apply_guardrail,
+    approve_guardrail_submission,
     create_guardrail,
     delete_guardrail,
     get_guardrail_info,
+    get_guardrail_submission,
+    list_guardrail_submissions,
     list_guardrails_v2,
     patch_guardrail,
+    register_guardrail,
+    reject_guardrail_submission,
     update_guardrail,
 )
 
@@ -1104,3 +1110,254 @@ async def test_get_guardrail_info_endpoint_db_guardrail(mocker):
     assert result.guardrail_id == "test-db-guardrail"
     assert result.guardrail_name == "Test DB Guardrail"
     assert result.guardrail_definition_location == "db"
+
+
+# --- Team guardrail registration (register / submissions) ---
+
+MOCK_REGISTER_REQUEST = RegisterGuardrailRequest(
+    guardrail_name="team-prompt-guard",
+    litellm_params={
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "api_base": "https://guardrails.example.com/validate",
+    },
+    guardrail_info={"description": "Team prompt injection detector"},
+)
+
+
+@pytest.mark.asyncio
+async def test_register_guardrail_success(mocker):
+    """Register creates a row with status pending_review and returns guardrail_id."""
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    created_row = mocker.Mock(
+        guardrail_id="reg-123",
+        guardrail_name=MOCK_REGISTER_REQUEST.guardrail_name,
+        status="pending_review",
+        submitted_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.create = AsyncMock(return_value=created_row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    user = UserAPIKeyAuth(user_id="u1", user_email="alice@co.com", team_id="team-1")
+    result = await register_guardrail(MOCK_REGISTER_REQUEST, user)
+
+    assert result.guardrail_id == "reg-123"
+    assert result.guardrail_name == MOCK_REGISTER_REQUEST.guardrail_name
+    assert result.status == "pending_review"
+    mock_prisma.db.litellm_guardrailstable.create.assert_called_once()
+    call_data = mock_prisma.db.litellm_guardrailstable.create.call_args[1]["data"]
+    assert call_data["status"] == "pending_review"
+    assert call_data["guardrail_name"] == MOCK_REGISTER_REQUEST.guardrail_name
+
+
+@pytest.mark.asyncio
+async def test_register_guardrail_rejects_non_generic_api(mocker):
+    """Register returns 400 when litellm_params.guardrail is not generic_guardrail_api."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    req = RegisterGuardrailRequest(
+        guardrail_name="other-guard",
+        litellm_params={"guardrail": "bedrock", "mode": "pre_call", "api_base": "https://x.com"},
+    )
+    user = UserAPIKeyAuth(user_id="u1", user_email="a@b.com")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_guardrail(req, user)
+    assert exc_info.value.status_code == 400
+    assert "generic_guardrail_api" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_register_guardrail_requires_team_id(mocker):
+    """Register returns 400 when API key has no associated team_id."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    user = UserAPIKeyAuth(user_id="u1", user_email="a@b.com", team_id=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_guardrail(MOCK_REGISTER_REQUEST, user)
+    assert exc_info.value.status_code == 400
+    assert "team" in exc_info.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_register_guardrail_duplicate_name(mocker):
+    """Register returns 400 when guardrail_name already exists."""
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(
+        return_value={"guardrail_name": MOCK_REGISTER_REQUEST.guardrail_name}
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_id="u1", user_email="a@b.com", team_id="team-1")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await register_guardrail(MOCK_REGISTER_REQUEST, user)
+    assert exc_info.value.status_code == 400
+    assert "already exists" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_requires_admin(mocker):
+    """List submissions returns 403 when user is not admin."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await list_guardrail_submissions(user_api_key_dict=user)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_success(mocker):
+    """List submissions returns list and summary for admin."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="sub-1",
+        guardrail_name="pending-guard",
+        status="pending_review",
+        team_id="t1",
+        litellm_params={"guardrail": "generic_guardrail_api", "api_base": "https://x.com"},
+        guardrail_info={
+            "description": "A guard",
+            "submitted_by_user_id": "u1",
+            "submitted_by_email": "alice@co.com",
+        },
+        submitted_at=datetime.now(),
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[row])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result = await list_guardrail_submissions(user_api_key_dict=user)
+
+    assert len(result.submissions) == 1
+    assert result.submissions[0].guardrail_id == "sub-1"
+    assert result.submissions[0].status == "pending_review"
+    assert result.submissions[0].team_guardrail is True  # team_id is set
+    assert result.summary.total >= 1
+    assert result.summary.pending_review >= 1
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_returns_only_team_guardrails(mocker):
+    """List submissions only returns team guardrails (team_id not null)."""
+    mock_prisma = mocker.Mock()
+    find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await list_guardrail_submissions(user_api_key_dict=user)
+
+    calls = find_many.call_args_list
+    assert len(calls) >= 1
+    first_where = calls[0].kwargs.get("where", {})
+    assert first_where.get("team_id") == {"not": None}
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_team_id_filter(mocker):
+    """List submissions with team_id returns only that team's guardrails."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="team-1",
+        guardrail_name="team-guard",
+        status="active",
+        team_id="team-abc",
+        litellm_params={},
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    find_many = AsyncMock(side_effect=[[row], [row]])
+    mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result = await list_guardrail_submissions(
+        user_api_key_dict=user, team_id="team-abc"
+    )
+
+    assert len(result.submissions) == 1
+    assert result.submissions[0].team_guardrail is True
+    assert find_many.call_args_list[0].kwargs.get("where", {}).get("team_id") == "team-abc"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_submission_not_found(mocker):
+    """Get submission returns 404 when guardrail_id does not exist."""
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_guardrail_submission("nonexistent-id", user)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approve_guardrail_submission_success(mocker):
+    """Approve sets status to active and initializes guardrail in memory."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="approve-me",
+        guardrail_name="my-guard",
+        status="pending_review",
+        litellm_params={"guardrail": "generic_guardrail_api", "mode": "pre_call", "api_base": "https://g.com"},
+        guardrail_info={},
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_handler = mocker.Mock()
+    mock_handler.initialize_guardrail = mocker.Mock()
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_handler,
+    )
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result = await approve_guardrail_submission("approve-me", user)
+
+    assert result["status"] == "active"
+    assert result["guardrail_id"] == "approve-me"
+    mock_prisma.db.litellm_guardrailstable.update.assert_called_once()
+    call_data = mock_prisma.db.litellm_guardrailstable.update.call_args[1]["data"]
+    assert call_data["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_approve_guardrail_submission_not_pending(mocker):
+    """Approve returns 400 when status is not pending_review."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(guardrail_id="x", guardrail_name="y", status="active")
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await approve_guardrail_submission("x", user)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_reject_guardrail_submission_success(mocker):
+    """Reject sets status to rejected."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(guardrail_id="rej-1", guardrail_name="r", status="pending_review")
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result = await reject_guardrail_submission("rej-1", user)
+
+    assert result["status"] == "rejected"
+    mock_prisma.db.litellm_guardrailstable.update.assert_called_once()
+    call_data = mock_prisma.db.litellm_guardrailstable.update.call_args[1]["data"]
+    assert call_data["status"] == "rejected"
