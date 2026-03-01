@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from litellm.proxy._types import *
 from litellm.proxy._types import hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -118,6 +118,8 @@ async def delete_jwt_key_mapping(
 @router.get("/jwt/key/mapping/list", tags=["JWT Key Mapping"])
 async def list_jwt_key_mappings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    page: int = Query(1, description="Page number", ge=1),
+    size: int = Query(50, description="Page size", ge=1, le=100),
 ):
     from litellm.proxy.proxy_server import prisma_client
 
@@ -130,8 +132,19 @@ async def list_jwt_key_mappings(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        mappings = await prisma_client.db.litellm_jwtkeymapping.find_many()
-        return mappings
+        skip = (page - 1) * size
+        mappings = await prisma_client.db.litellm_jwtkeymapping.find_many(
+            skip=skip,
+            take=size,
+            order={"created_at": "desc"},
+        )
+        total_count = await prisma_client.db.litellm_jwtkeymapping.count()
+        return {
+            "mappings": mappings,
+            "total_count": total_count,
+            "current_page": page,
+            "total_pages": -(-total_count // size),  # ceiling division
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
