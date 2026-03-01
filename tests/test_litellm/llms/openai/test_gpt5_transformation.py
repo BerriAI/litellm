@@ -414,3 +414,66 @@ def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["reasoning_effort"] == "xhigh"
+
+
+# GPT-5.3 tests
+
+
+def test_gpt5_3_model_detection(gpt5_config: OpenAIGPT5Config):
+    """Test that GPT-5.3 models are correctly detected."""
+    assert gpt5_config.is_model_gpt_5_3_model("gpt-5.3-codex")
+    assert gpt5_config.is_model_gpt_5_3_model("gpt-5.3")
+    assert gpt5_config.is_model_gpt_5_3_model("openai/gpt-5.3-codex")
+    assert not gpt5_config.is_model_gpt_5_3_model("gpt-5.2")
+    assert not gpt5_config.is_model_gpt_5_3_model("gpt-5")
+
+
+def test_gpt5_3_included_in_gpt_5_1_model(gpt5_config: OpenAIGPT5Config):
+    """Test that GPT-5.3 is included in the is_model_gpt_5_1_model check for temperature support."""
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.3-codex")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.3")
+
+
+def test_gpt5_3_codex_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """Test that gpt-5.3-codex supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.3-codex",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_3_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """Test that gpt-5.3 (base) supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.3",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_3_codex_with_provider_prefix(config: OpenAIConfig):
+    """Test that gpt-5.3-codex works with openai/ provider prefix."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="openai/gpt-5.3-codex",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_3_temperature_with_reasoning_effort_none(config: OpenAIConfig):
+    """Test that gpt-5.3 supports arbitrary temperature when reasoning_effort='none'."""
+    for temp in [0.0, 0.5, 1.0, 1.5]:
+        params = config.map_openai_params(
+            non_default_params={"temperature": temp, "reasoning_effort": "none"},
+            optional_params={},
+            model="gpt-5.3-codex",
+            drop_params=False,
+        )
+        assert params["temperature"] == temp

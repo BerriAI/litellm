@@ -36,16 +36,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     
     @classmethod
     def is_model_gpt_5_1_model(cls, model: str) -> bool:
-        """Check if the model is a gpt-5.1 or gpt-5.2 chat variant.
+        """Check if the model is a gpt-5.1, gpt-5.2, or gpt-5.3 chat variant.
         
-        gpt-5.1/5.2 support temperature when reasoning_effort="none",
+        gpt-5.1/5.2/5.3 support temperature when reasoning_effort="none",
         unlike base gpt-5 which only supports temperature=1. Excludes
         pro variants which keep stricter knobs.
         """
         model_name = model.split("/")[-1]
         is_gpt_5_1 = model_name.startswith("gpt-5.1")
         is_gpt_5_2 = model_name.startswith("gpt-5.2") and "pro" not in model_name
-        return is_gpt_5_1 or is_gpt_5_2
+        is_gpt_5_3 = model_name.startswith("gpt-5.3")
+        return is_gpt_5_1 or is_gpt_5_2 or is_gpt_5_3
 
     @classmethod
     def is_model_gpt_5_2_pro_model(cls, model: str) -> bool:
@@ -58,6 +59,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         """Check if the model is a gpt-5.2 variant (including pro)."""
         model_name = model.split("/")[-1]
         return model_name.startswith("gpt-5.2")
+
+    @classmethod
+    def is_model_gpt_5_3_model(cls, model: str) -> bool:
+        """Check if the model is a gpt-5.3 variant (e.g. gpt-5.3-codex)."""
+        model_name = model.split("/")[-1]
+        return model_name.startswith("gpt-5.3")
 
     def get_supported_openai_params(self, model: str) -> list:
         from litellm.utils import supports_tool_choice
@@ -98,13 +105,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             if not (
                 self.is_model_gpt_5_1_codex_max_model(model)
                 or self.is_model_gpt_5_2_model(model)
+                or self.is_model_gpt_5_3_model(model)
             ):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max and gpt-5.2 models."
+                            "reasoning_effort='xhigh' is only supported for gpt-5.1-codex-max, gpt-5.2, and gpt-5.3 models."
                         ),
                         status_code=400,
                     )
