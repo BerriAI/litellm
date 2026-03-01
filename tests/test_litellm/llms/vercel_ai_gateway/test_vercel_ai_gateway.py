@@ -2,6 +2,7 @@
 Mock tests for vercel_ai_gateway provider
 """
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -249,12 +250,18 @@ def test_vercel_ai_gateway_glm46_cost_math():
 
 @pytest.fixture(autouse=False)
 def reload_model_cost():
-    """Reload model cost from JSON to pick up any updates."""
-    with open("model_prices_and_context_window.json", "r") as f:
+    """Reload model cost from JSON to pick up any updates, then restore the original."""
+    _repo_root = Path(__file__).resolve().parents[4]
+    _json_path = _repo_root / "model_prices_and_context_window.json"
+
+    original_model_cost = litellm.model_cost.copy()
+    with open(_json_path, "r") as f:
         litellm.model_cost = json.load(f)
     from litellm.utils import _invalidate_model_cost_lowercase_map
     _invalidate_model_cost_lowercase_map()
     yield
+    litellm.model_cost = original_model_cost
+    _invalidate_model_cost_lowercase_map()
 
 
 class TestVercelCostTracking:
