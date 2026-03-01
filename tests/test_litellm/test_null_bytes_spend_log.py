@@ -10,8 +10,6 @@ Refs: https://github.com/BerriAI/litellm/issues/15519
 
 import json
 
-import pytest
-
 from litellm.proxy.utils import _strip_null_bytes, jsonify_object
 
 
@@ -75,7 +73,12 @@ class TestJsonifyObjectNullBytes:
         assert "\x00" not in parsed["user_msg"]
 
     def test_strips_null_from_response_content(self):
-        """Simulate a spend log entry with null bytes in the LLM response."""
+        """Simulate a spend log entry with null bytes in the LLM response.
+        
+        jsonify_object serializes dict values via json.dumps. The critical
+        check is that the escaped \\u0000 sequence does NOT appear in the
+        resulting JSON string (PostgreSQL rejects it in JSONB columns).
+        """
         data = {
             "request_id": "msg_01BT4f5Rkt7ub18gYkexXEv1",
             "call_type": "acompletion",
@@ -85,8 +88,14 @@ class TestJsonifyObjectNullBytes:
             "response": {"text": "output\x00here"},
         }
         result = jsonify_object(data)
-        assert "\x00" not in result["messages"]
-        assert "\x00" not in result["response"]
+        # result["messages"] and result["response"] are JSON strings
+        # Verify no literal null byte AND no escaped \\u0000 sequence
+        for key in ("messages", "response"):
+            assert "\x00" not in result[key]
+            assert "\\u0000" not in result[key]
+            parsed = json.loads(result[key])
+            for v in parsed.values():
+                assert "\x00" not in str(v)
 
     def test_original_data_not_mutated(self):
         """jsonify_object uses deepcopy — original must stay intact."""
