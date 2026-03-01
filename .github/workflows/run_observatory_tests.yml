@@ -30,6 +30,7 @@ env:
 jobs:
   observatory-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -99,15 +100,19 @@ jobs:
         id: trigger
         run: |
           OBSERVATORY_URL="${{ secrets.OBSERVATORY_URL }}"
+          PAYLOAD=$(jq -n \
+            --arg url "${{ env.TUNNEL_URL }}" \
+            --arg key "${{ env.LITELLM_MASTER_KEY }}" \
+            '{
+              deployment_url: $url,
+              api_key: $key,
+              test_suite: "TestOAIAzureRelease",
+              models: ["gpt-4o-mini", "gpt-4o"]
+            }')
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${OBSERVATORY_URL}/run-test" \
             -H "Content-Type: application/json" \
             -H "X-LiteLLM-Observatory-API-Key: ${{ secrets.OBSERVATORY_API_KEY }}" \
-            -d '{
-              "deployment_url": "${{ env.TUNNEL_URL }}",
-              "api_key": "${{ env.LITELLM_MASTER_KEY }}",
-              "test_suite": "TestOAIAzureRelease",
-              "models": ["gpt-4o-mini", "gpt-4o"]
-            }')
+            -d "$PAYLOAD")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | head -n -1)
           echo "Response ($HTTP_CODE): $BODY"
