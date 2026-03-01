@@ -2232,7 +2232,6 @@ async def _lookup_deprecated_key(
 
 
 class PrismaClient:
-    spend_log_transactions: List = []
     _spend_log_transactions_lock = asyncio.Lock()
 
     def __init__(
@@ -2241,6 +2240,12 @@ class PrismaClient:
         proxy_logging_obj: ProxyLogging,
         http_client: Optional[Any] = None,
     ):
+        from litellm.constants import SPEND_LOG_TRANSACTIONS_MAX_SIZE
+        from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+        self.spend_log_transactions: SpendLogQueue = SpendLogQueue(
+            maxlen=SPEND_LOG_TRANSACTIONS_MAX_SIZE
+        )
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
         self.iam_token_db_auth: Optional[bool] = str_to_bool(
@@ -4476,15 +4481,11 @@ class ProxyUpdateSpend:
         )
         popped_batch = False
         if logs_to_process is None:
-            # Atomically read and remove logs to process (protected by lock)
+            # Atomically drain logs to process (protected by lock)
             async with prisma_client._spend_log_transactions_lock:
-                logs_to_process = prisma_client.spend_log_transactions[
-                    :MAX_LOGS_PER_INTERVAL
-                ]
-                # Remove the logs we're about to process
-                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-                    len(logs_to_process) :
-                ]
+                logs_to_process = prisma_client.spend_log_transactions.drain(
+                    MAX_LOGS_PER_INTERVAL
+                )
             popped_batch = True
         if len(logs_to_process) > 0:
             verbose_proxy_logger.info(
@@ -4638,12 +4639,9 @@ async def update_spend_logs_job(
         return
 
     async with prisma_client._spend_log_transactions_lock:
-        logs_to_process = prisma_client.spend_log_transactions[
-            :MAX_LOGS_PER_INTERVAL
-        ]
-        prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-            len(logs_to_process) :
-        ]
+        logs_to_process = prisma_client.spend_log_transactions.drain(
+            MAX_LOGS_PER_INTERVAL
+        )
 
     await ProxyUpdateSpend.update_spend_logs(
         n_retry_times=n_retry_times,

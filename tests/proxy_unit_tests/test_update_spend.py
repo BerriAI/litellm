@@ -18,6 +18,9 @@ import httpx
 from litellm.proxy.utils import update_spend, DB_CONNECTION_ERROR_TYPES
 
 
+from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+
 class MockPrismaClient:
     def __init__(self):
         # Create AsyncMock for db operations
@@ -25,8 +28,8 @@ class MockPrismaClient:
         self.db.litellm_spendlogs = AsyncMock()
         self.db.litellm_spendlogs.create_many = AsyncMock()
         
-        # Initialize transaction lists
-        self.spend_log_transactions = []
+        # Initialize transaction queue (bounded, matching real PrismaClient)
+        self.spend_log_transactions = SpendLogQueue(maxlen=100_000)
         self.daily_user_spend_transactions = {}
         
         # Add lock for spend_log_transactions (matches real PrismaClient)
@@ -71,10 +74,10 @@ async def test_update_spend_logs_connection_errors(error_type):
     proxy_logging_obj.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
 
     # Add test spend logs
-    prisma_client.spend_log_transactions = [
+    prisma_client.spend_log_transactions.extend([
         {"id": "1", "spend": 10},
         {"id": "2", "spend": 20},
-    ]
+    ])
 
     # Mock the database to fail with connection error twice then succeed
     create_many_mock = AsyncMock()
@@ -113,10 +116,10 @@ async def test_update_spend_logs_max_retries_exceeded(error_type):
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Add test spend logs
-    prisma_client.spend_log_transactions = [
+    prisma_client.spend_log_transactions.extend([
         {"id": "1", "spend": 10},
         {"id": "2", "spend": 20},
-    ]
+    ])
 
     # Mock the database to always fail
     create_many_mock = AsyncMock(side_effect=error_type)
@@ -145,10 +148,10 @@ async def test_update_spend_logs_non_connection_error():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Add test spend logs
-    prisma_client.spend_log_transactions = [
+    prisma_client.spend_log_transactions.extend([
         {"id": "1", "spend": 10},
         {"id": "2", "spend": 20},
-    ]
+    ])
 
     # Mock a different type of error (not connection-related)
     unexpected_error = ValueError("Unexpected database error")
@@ -176,7 +179,7 @@ async def test_update_spend_logs_exponential_backoff():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Add test spend logs
-    prisma_client.spend_log_transactions = [{"id": "1", "spend": 10}]
+    prisma_client.spend_log_transactions.extend([{"id": "1", "spend": 10}])
 
     # Track sleep times
     sleep_times = []
@@ -218,9 +221,9 @@ async def test_update_spend_logs_multiple_batches_success():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Create 1500 test spend logs (1.5x BATCH_SIZE)
-    prisma_client.spend_log_transactions = [
+    prisma_client.spend_log_transactions.extend([
         {"id": str(i), "spend": 10} for i in range(1500)
-    ]
+    ])
 
     create_many_mock = AsyncMock(return_value=None)
     prisma_client.db.litellm_spendlogs.create_many = create_many_mock
@@ -264,9 +267,9 @@ async def test_update_spend_logs_multiple_batches_with_failure():
     proxy_logging_obj = create_mock_proxy_logging()
 
     # Create 4000 test spend logs (4x BATCH_SIZE)
-    prisma_client.spend_log_transactions = [
+    prisma_client.spend_log_transactions.extend([
         {"id": str(i), "spend": 10} for i in range(4000)
-    ]
+    ])
 
     # Mock to fail on second batch first attempt, then succeed
     call_count = 0
@@ -303,3 +306,54 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+class TestSpendLogQueue:
+    """Unit tests for the bounded SpendLogQueue."""
+
+    def test_append_within_limit(self):
+        from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+        q = SpendLogQueue(maxlen=5)
+        for i in range(5):
+            q.append({"id": str(i)})
+        assert len(q) == 5
+
+    def test_append_exceeds_limit_drops_oldest(self):
+        from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+        q = SpendLogQueue(maxlen=3)
+        for i in range(5):
+            q.append({"id": str(i)})
+        assert len(q) == 3
+        # Oldest (0, 1) should be dropped; remaining: 2, 3, 4
+        drained = q.drain(10)
+        assert [d["id"] for d in drained] == ["2", "3", "4"]
+
+    def test_drain_partial(self):
+        from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+        q = SpendLogQueue(maxlen=10)
+        q.extend([{"id": str(i)} for i in range(6)])
+        batch = q.drain(4)
+        assert len(batch) == 4
+        assert [b["id"] for b in batch] == ["0", "1", "2", "3"]
+        assert len(q) == 2
+
+    def test_drain_more_than_available(self):
+        from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+        q = SpendLogQueue(maxlen=10)
+        q.extend([{"id": "a"}, {"id": "b"}])
+        batch = q.drain(100)
+        assert len(batch) == 2
+        assert len(q) == 0
+
+    def test_slice_readonly(self):
+        from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
+
+        q = SpendLogQueue(maxlen=10)
+        q.extend([{"id": str(i)} for i in range(5)])
+        sliced = q[:3]
+        assert len(sliced) == 3
+        assert len(q) == 5  # Slice does not mutate
