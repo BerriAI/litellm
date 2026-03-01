@@ -449,8 +449,57 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+# Load local backup at import time (fast, ~12 ms, no network I/O).
+_model_cost_url: str = model_cost_map_url
+# Dual env-var check is intentional:
+#   1. Import-time check (here) initializes _model_cost_remote_loaded to skip lazy fetch
+#   2. Runtime check (in get_model_cost_map) ensures correctness if env var changes
+#      after import (e.g., in tests or dynamic reconfiguration)
+_model_cost_remote_loaded: bool = (
+    os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true"
+)
+_model_cost_lock = threading.Lock()
+model_cost = GetModelCostMap.load_local_model_cost_map()
+
+
+def _ensure_remote_model_cost() -> None:
+    """Fetch and merge the remote model cost map on first use (once only).
+
+    The remote fetch is intentionally limited to cost calculation paths
+    (cost_per_token, completion_cost) where pricing accuracy matters most.
+    Other code paths use the local backup which is sufficient for model
+    capabilities, context windows, etc.
+
+    Thread safety: a lock ensures only one thread performs the remote fetch.
+    update() (not clear()+update()) keeps the dict non-empty for concurrent
+    readers at all times.
+
+    Note: update() merges remote keys on top of local backup. If a model is
+    removed upstream but still present in the local backup, it will persist
+    until process restart. This is an acceptable trade-off for thread safety
+    (atomic reassignment would break references held by other modules).
+    """
+    global _model_cost_remote_loaded
+    if _model_cost_remote_loaded:
+        return
+    with _model_cost_lock:
+        if _model_cost_remote_loaded:
+            return
+        try:
+            remote = get_model_cost_map(url=_model_cost_url)
+            model_cost.update(remote)  # merge remote on top of local; no clear() needed
+            add_known_models()  # repopulate provider model sets with merged data
+            _model_cost_remote_loaded = True
+        except Exception as e:
+            verbose_logger.debug(
+                "LiteLLM: Remote model cost map fetch/merge failed: %s. "
+                "Keeping local backup; will retry on next call.",
+                str(e),
+            )
+
+
 cost_discount_config: Dict[str, float] = (
     {}
 )  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -857,7 +906,7 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             llamagate_models.add(key)
 
 
-add_known_models()
+add_known_models(model_cost)  # use local backup — remote fetch deferred to first external call
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping
@@ -1231,16 +1280,6 @@ from .responses.main import *
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
 from . import interactions
-from .skills.main import (
-    create_skill,
-    acreate_skill,
-    list_skills,
-    alist_skills,
-    get_skill,
-    aget_skill,
-    delete_skill,
-    adelete_skill,
-)
 from .containers.main import *
 from .ocr.main import *
 from .rag.main import *

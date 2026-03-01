@@ -1,0 +1,155 @@
+"""Tests for deferred (lazy) model cost map loading."""
+
+import threading
+import pytest
+from unittest.mock import patch
+
+
+@pytest.fixture
+def isolate_model_cost_state():
+    """Save and restore _model_cost_remote_loaded state across tests."""
+    import litellm
+    original_state = litellm._model_cost_remote_loaded
+    original_cost_dict = dict(litellm.model_cost)  # shallow copy
+    yield
+    # Restore state after test
+    litellm._model_cost_remote_loaded = original_state
+    litellm.model_cost.clear()
+    litellm.model_cost.update(original_cost_dict)
+
+
+class TestLazyModelCostMap:
+    """Verify that model_cost loads local data at import and defers remote."""
+
+    def test_local_backup_loaded_at_import(self):
+        """model_cost should contain local data immediately after import."""
+        import litellm
+
+        assert isinstance(litellm.model_cost, dict)
+        assert len(litellm.model_cost) > 0, "model_cost should not be empty"
+
+    def test_local_only_skips_remote(self, isolate_model_cost_state):
+        """When _model_cost_remote_loaded is True, _ensure_remote_model_cost is a no-op."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = True
+        with patch("litellm.get_model_cost_map") as mock_get:
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_not_called()
+
+    def test_ensure_remote_idempotent(self, isolate_model_cost_state):
+        """Calling _ensure_remote_model_cost multiple times only fetches once."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm.get_model_cost_map") as mock_get:
+            mock_get.return_value = {"test_idempotent": {"litellm_provider": "openai"}}
+            litellm._ensure_remote_model_cost()
+            litellm._ensure_remote_model_cost()
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_called_once()
+
+    def test_add_known_models_with_arg_skips_remote(self, isolate_model_cost_state):
+        """add_known_models(explicit_map) must NOT trigger remote fetch."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        litellm.add_known_models(litellm.model_cost)
+        assert litellm._model_cost_remote_loaded is False, (
+            "passing an explicit map should NOT trigger remote fetch"
+        )
+
+    def test_add_known_models_without_arg_uses_current_data(self, isolate_model_cost_state):
+        """add_known_models() without args uses current model_cost — no remote fetch."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm.get_model_cost_map") as mock_get:
+            litellm.add_known_models()
+            mock_get.assert_not_called()
+            assert litellm._model_cost_remote_loaded is False
+
+    def test_remote_not_fetched_at_import_time(self, isolate_model_cost_state):
+        """The module-level add_known_models(model_cost) passes args, so
+        _ensure_remote_model_cost should NOT fire during import."""
+        import litellm
+
+        # After import, if LITELLM_LOCAL_MODEL_COST_MAP was not set,
+        # _model_cost_remote_loaded should still be False (import doesn't fetch)
+        # We can't truly test import-time behavior without reimporting,
+        # but we can verify the guard logic works correctly:
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm.get_model_cost_map") as mock_get:
+            mock_get.return_value = {"test_model": {"litellm_provider": "openai"}}
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_called_once()
+            assert "test_model" in litellm.model_cost
+            # Second call should be a no-op
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_called_once()  # still only 1 call
+
+    def test_model_cost_is_plain_dict(self):
+        """model_cost should be a plain dict, not a custom subclass."""
+        import litellm
+
+        assert type(litellm.model_cost) is dict
+
+    def test_remote_failure_keeps_local_and_allows_retry(self, isolate_model_cost_state):
+        """If remote fetch fails, local backup data remains and next call retries."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        original_keys = set(litellm.model_cost.keys())
+        with patch("litellm.get_model_cost_map", side_effect=Exception("network")) as mock_get:
+            litellm._ensure_remote_model_cost()
+            assert set(litellm.model_cost.keys()) == original_keys
+            assert litellm._model_cost_remote_loaded is False  # flag NOT set on failure
+            # Next call should retry
+            litellm._ensure_remote_model_cost()
+            assert mock_get.call_count == 2  # retried
+
+    def test_cost_per_token_triggers_remote_fetch(self, isolate_model_cost_state):
+        """cost_per_token() should trigger _ensure_remote_model_cost on first use."""
+        import litellm
+        from litellm.cost_calculator import cost_per_token
+
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm._ensure_remote_model_cost") as mock_ensure:
+            try:
+                cost_per_token(model="gpt-4o", prompt_tokens=10, completion_tokens=5)
+            except Exception:
+                pass  # model lookup may fail in test env
+            mock_ensure.assert_called()
+
+    def test_completion_cost_triggers_remote_fetch(self, isolate_model_cost_state):
+        """completion_cost() should trigger _ensure_remote_model_cost on first use."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm._ensure_remote_model_cost") as mock_ensure:
+            try:
+                litellm.completion_cost(model="gpt-4o", prompt="test", completion="test")
+            except Exception:
+                pass
+            mock_ensure.assert_called()
+
+    def test_concurrent_ensure_fetches_only_once(self, isolate_model_cost_state):
+        """Only one thread should perform the remote fetch even under contention."""
+        import litellm
+
+        litellm._model_cost_remote_loaded = False
+        barrier = threading.Barrier(4)
+
+        with patch("litellm.get_model_cost_map") as mock_get:
+            mock_get.return_value = {"concurrent_test": {"litellm_provider": "openai"}}
+
+            def worker():
+                barrier.wait()
+                litellm._ensure_remote_model_cost()
+
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+            mock_get.assert_called_once()
