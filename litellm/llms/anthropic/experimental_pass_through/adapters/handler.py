@@ -121,6 +121,41 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             Logging as LiteLLMLoggingObject,
         )
 
+        # Cap max_tokens against the model's known output token limit.
+        # Without this, requests from clients like Claude Code (which may send
+        # large max_tokens values valid for other providers) will be rejected by
+        # models with stricter limits (e.g. Amazon Nova Pro: 10,000 tokens).
+        #
+        # By this point get_llm_provider() has already been called in the outer
+        # anthropic_messages_handler, so `model` is the stripped model name
+        # (e.g. "converse/us.amazon.nova-pro-v1:0") and `custom_llm_provider`
+        # is passed via extra_kwargs (e.g. "bedrock"). We try the lookup with
+        # the provider first, then fall back to inferring it from the model
+        # string for cases where extra_kwargs doesn't carry the provider.
+        _custom_llm_provider = (extra_kwargs or {}).get("custom_llm_provider")
+        _capped = False
+        try:
+            model_info = litellm.get_model_info(
+                model=model, custom_llm_provider=_custom_llm_provider
+            )
+            model_max_output = model_info.get("max_output_tokens")
+            if model_max_output and max_tokens > model_max_output:
+                max_tokens = model_max_output
+            _capped = True
+        except Exception:
+            pass
+        if not _capped:
+            try:
+                _, inferred_provider, _, _ = litellm.utils.get_llm_provider(model)
+                model_info = litellm.get_model_info(
+                    model=model, custom_llm_provider=inferred_provider
+                )
+                model_max_output = model_info.get("max_output_tokens")
+                if model_max_output and max_tokens > model_max_output:
+                    max_tokens = model_max_output
+            except Exception:
+                pass
+
         request_data = {
             "model": model,
             "messages": messages,
