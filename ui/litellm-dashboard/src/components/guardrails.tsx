@@ -247,7 +247,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
 
           {/* Team Guardrails Tab */}
           <TabPanel>
-            <TeamGuardrailsTab />
+            <TeamGuardrailsTab accessToken={accessToken} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

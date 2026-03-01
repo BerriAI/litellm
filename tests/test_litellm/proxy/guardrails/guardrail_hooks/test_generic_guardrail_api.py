@@ -13,8 +13,8 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
-from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm._version import version as litellm_version
+from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -187,6 +187,97 @@ class TestGenericGuardrailAPIConfiguration:
             api_base="https://api.test.guardrail.com",
         )
         assert "x-api-key" not in guardrail.headers
+
+    def test_init_with_extra_headers(self):
+        """Test that extra_headers is stored for forwarding client headers to the guardrail"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            extra_headers=["x-request-id", "x-custom-auth"],
+        )
+        assert guardrail.extra_headers == ["x-request-id", "x-custom-auth"]
+
+
+class TestExtraHeadersForwarding:
+    """Test extra_headers: client headers allowed to be forwarded to the guardrail"""
+
+    @pytest.mark.asyncio
+    async def test_extra_headers_values_forwarded_to_guardrail(self):
+        """When extra_headers is set, those client header values are sent to the guardrail."""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            extra_headers=["x-my-header", "x-request-id"],
+        )
+        request_data = {
+            "proxy_server_request": {
+                "headers": {
+                    "x-my-header": "my-value",
+                    "x-request-id": "req-123",
+                    "x-private": "secret",
+                },
+            },
+        }
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        call_args = mock_post.call_args
+        json_payload = call_args.kwargs["json"]
+        request_headers = json_payload.get("request_headers") or {}
+
+        # Headers in extra_headers have their values forwarded
+        assert request_headers.get("x-my-header") == "my-value"
+        assert request_headers.get("x-request-id") == "req-123"
+        # Headers not in allowlist are sent as placeholder
+        assert request_headers.get("x-private") == _HEADER_PRESENT_PLACEHOLDER
+
+    @pytest.mark.asyncio
+    async def test_without_extra_headers_custom_header_value_not_forwarded(self):
+        """Without extra_headers, a custom client header is sent as [present] only."""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            # no extra_headers
+        )
+        request_data = {
+            "proxy_server_request": {
+                "headers": {
+                    "x-custom-auth": "bearer secret-token",
+                },
+            },
+        }
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+        call_args = mock_post.call_args
+        json_payload = call_args.kwargs["json"]
+        request_headers = json_payload.get("request_headers") or {}
+
+        # x-custom-auth is not in default allowlist nor extra_headers, so value is not forwarded
+        assert request_headers.get("x-custom-auth") == _HEADER_PRESENT_PLACEHOLDER
 
 
 class TestMetadataExtraction:

@@ -1199,9 +1199,11 @@ async def test_list_guardrail_submissions_success(mocker):
         status="pending_review",
         team_id="t1",
         litellm_params={"guardrail": "generic_guardrail_api", "api_base": "https://x.com"},
-        guardrail_info={"description": "A guard"},
-        submitted_by_user_id="u1",
-        submitted_by_email="alice@co.com",
+        guardrail_info={
+            "description": "A guard",
+            "submitted_by_user_id": "u1",
+            "submitted_by_email": "alice@co.com",
+        },
         submitted_at=datetime.now(),
         reviewed_at=None,
         created_at=datetime.now(),
@@ -1216,8 +1218,56 @@ async def test_list_guardrail_submissions_success(mocker):
     assert len(result.submissions) == 1
     assert result.submissions[0].guardrail_id == "sub-1"
     assert result.submissions[0].status == "pending_review"
+    assert result.submissions[0].team_guardrail is True  # team_id is set
     assert result.summary.total >= 1
     assert result.summary.pending_review >= 1
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_returns_only_team_guardrails(mocker):
+    """List submissions only returns team guardrails (team_id not null)."""
+    mock_prisma = mocker.Mock()
+    find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await list_guardrail_submissions(user_api_key_dict=user)
+
+    calls = find_many.call_args_list
+    assert len(calls) >= 1
+    first_where = calls[0].kwargs.get("where", {})
+    assert first_where.get("team_id") == {"not": None}
+
+
+@pytest.mark.asyncio
+async def test_list_guardrail_submissions_team_id_filter(mocker):
+    """List submissions with team_id returns only that team's guardrails."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="team-1",
+        guardrail_name="team-guard",
+        status="active",
+        team_id="team-abc",
+        litellm_params={},
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    find_many = AsyncMock(side_effect=[[row], [row]])
+    mock_prisma.db.litellm_guardrailstable.find_many = find_many
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result = await list_guardrail_submissions(
+        user_api_key_dict=user, team_id="team-abc"
+    )
+
+    assert len(result.submissions) == 1
+    assert result.submissions[0].team_guardrail is True
+    assert find_many.call_args_list[0].kwargs.get("where", {}).get("team_id") == "team-abc"
 
 
 @pytest.mark.asyncio
