@@ -270,21 +270,22 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
                 const parsed = yaml.load(content) as Record<string, unknown>;
                 if (parsed && Array.isArray(parsed.blocked_words)) {
                   const newWords: BlockedWord[] = parsed.blocked_words
-                    .filter((entry: unknown): entry is { keyword?: string; action?: string } =>
+                    .filter((entry: unknown): entry is { keyword?: string; action?: string; description?: string } =>
                       entry != null && typeof entry === "object"
                     )
                     .map(
-                      (entry: { keyword?: string; action?: string }, index: number) => ({
+                      (entry: { keyword?: string; action?: string; description?: string }, index: number) => ({
                         id: crypto.randomUUID(),
                         keyword: String(entry.keyword ?? ""),
                         action: (entry.action === "MASK" ? "MASK" : "BLOCK") as "BLOCK" | "MASK",
+                        description: String(entry.description ?? ""),
                       })
                     )
                     .filter((w: BlockedWord) => w.keyword.trim() !== "");
                   setBlockedWords(prev => [...prev, ...newWords]);
                 }
-              } catch {
-                // Validation already handled in ContentFilterConfiguration
+              } catch (err) {
+                console.error("Failed to parse YAML blocked-words file:", err);
               }
             }}
             accessToken={accessToken}
