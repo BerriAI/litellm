@@ -2028,6 +2028,7 @@ async def _fetch_key_object_from_db_with_reconnect(
         raise
 
 
+@log_db_metrics
 async def get_jwt_key_mapping_object(
     jwt_claim_name: str,
     jwt_claim_value: str,
