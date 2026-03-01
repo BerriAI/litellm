@@ -106,7 +106,7 @@ class FeatherlessAIConfig(OpenAIGPTConfig):
             or get_secret_str("FEATHERLESS_API_BASE")
             or "https://api.featherless.ai/v1"
         )
-        dynamic_api_key = api_key or get_secret_str("FEATHERLESS_API_KEY")
+        dynamic_api_key = api_key or get_secret_str("FEATHERLESS_AI_API_KEY")
         return api_base, dynamic_api_key
 
     def validate_environment(
