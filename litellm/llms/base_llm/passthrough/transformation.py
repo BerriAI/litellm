@@ -79,7 +79,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         model: Optional[str] = None,
     ) -> Tuple[dict, Optional[bytes]]:
         """
-        Some providers like Bedrock require signing the request. The sign request funtion needs access to `request_data` and `complete_url`
+        Some providers like Bedrock require signing the request. The sign request function needs access to `request_data` and `complete_url`
         Args:
             headers: dict
             optional_params: dict
