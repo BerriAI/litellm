@@ -177,8 +177,10 @@ async def check_view_exists():  # noqa: PLR0915
             jsonb_array_elements_text(request_tags) AS individual_request_tag,
             DATE(s."startTime") AS spend_date,
             COUNT(*) AS log_count,
-            SUM(spend) AS total_spend
+            SUM(spend / jsonb_array_length(request_tags)) AS total_spend
         FROM "LiteLLM_SpendLogs" s
+        WHERE request_tags IS NOT NULL
+          AND jsonb_array_length(request_tags) > 0
         GROUP BY individual_request_tag, DATE(s."startTime");
         """
         await db.execute_raw(query=sql_query)
