@@ -1204,6 +1204,26 @@ class TestValidatePatternsFile:
         assert "too large" in result.get("error", "").lower()
 
     @pytest.mark.asyncio
+    async def test_validate_patterns_double_colon_in_regex(self):
+        """:: in regex (e.g. IPv6) should not be treated as name separator."""
+        file_content = "::ffff:\\d+"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is True
+        assert len(result["patterns"]) == 1
+        assert result["patterns"][0]["pattern"] == "::ffff:\\d+"
+        assert result["patterns"][0]["name"] == "pattern_line_1"
+
+    @pytest.mark.asyncio
+    async def test_validate_patterns_named_with_double_colon(self):
+        """Valid identifier before :: is treated as name, rest as regex."""
+        file_content = "ipv6_match::fe80::\\w+"
+        result = await validate_patterns_file({"file_content": file_content})
+        assert result["valid"] is True
+        assert len(result["patterns"]) == 1
+        assert result["patterns"][0]["name"] == "ipv6_match"
+        assert result["patterns"][0]["pattern"] == "fe80::\\w+"
+
+    @pytest.mark.asyncio
     async def test_validate_patterns_only_comments(self):
         """File with only comments returns no patterns error."""
         file_content = "# comment 1\n# comment 2\n"

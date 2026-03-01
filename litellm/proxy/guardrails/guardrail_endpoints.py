@@ -1016,6 +1016,12 @@ _NESTED_QUANTIFIER_RE = re.compile(
     r"\([^)]*[*+]\)[*+?]|\([^)]*[*+]\)\{",
 )
 
+# A valid pattern name must look like an identifier: letters, digits,
+# underscores, hyphens — no regex metacharacters.  Used to decide whether
+# a ``::`` in a line is a name separator or part of the regex itself
+# (e.g. IPv6 patterns like ``::ffff:\d+``).
+_VALID_PATTERN_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
 
 def _check_redos_heuristic(pattern: str) -> Optional[str]:
     """Return an error message if the pattern looks like it could cause ReDoS."""
@@ -1105,15 +1111,20 @@ async def validate_patterns_file(request: Dict[str, str]):
                     )
                     break
 
-                # Parse optional name::regex format (:: avoids conflict with
-                # regex alternation operator |)
+                # Parse optional name::regex format.  Only treat :: as a
+                # name separator when the left-hand side is a valid
+                # identifier; otherwise the whole line is the regex
+                # (e.g. ``::ffff:\d+`` for IPv6).
+                name: Optional[str] = None
+                regex_str = stripped
                 if "::" in stripped:
                     parts = stripped.split("::", 1)
-                    name = parts[0].strip()
-                    regex_str = parts[1].strip()
-                else:
-                    name = None
-                    regex_str = stripped
+                    candidate_name = parts[0].strip()
+                    if candidate_name and _VALID_PATTERN_NAME_RE.match(
+                        candidate_name
+                    ):
+                        name = candidate_name
+                        regex_str = parts[1].strip()
 
                 if not regex_str:
                     errors.append(f"Line {line_num}: empty regex pattern")
