@@ -374,3 +374,60 @@ def test_construct_dynamic_arize_headers():
         "arize-space-id": "test_space_key",
         "api_key": "test_api_key"
     }
+    assert headers == expected_headers
+
+
+def test_usage_object_getattr_fix():
+    """
+    Test that _set_response_attributes correctly uses getattr() instead of dict.get()
+    for accessing usage object properties. This validates the fix in commit 3b428d07
+    that changed from usage.get() to getattr(usage, ...) calls.
+    """
+    from unittest.mock import MagicMock
+    from litellm.integrations.arize._utils import _set_response_attributes
+    from litellm.integrations._types.open_inference import SpanAttributes
+
+    span = MagicMock()
+
+    # Create a usage object that has attributes (like a Pydantic model)
+    class UsageObject:
+        def __init__(self):
+            self.total_tokens = 150
+            self.completion_tokens = 100
+            self.prompt_tokens = 50
+            self.output_tokens = 75  # Alternative attribute name
+            self.input_tokens = 25   # Alternative attribute name
+
+    # Create response object with usage as an object (not dict)
+    response_obj = {
+        "usage": UsageObject(),
+        "choices": []
+    }
+
+    # Call the function - this should work with the getattr() fix
+    _set_response_attributes(span, response_obj)
+
+    # Verify that the function successfully accessed object attributes
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 150)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 100)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 50)
+
+    # Test that it also handles the fallback names (output_tokens, input_tokens)
+    span.reset_mock()
+
+    class UsageObjectWithFallback:
+        def __init__(self):
+            self.total_tokens = 200
+            self.output_tokens = 120  # Should fallback to this for completion_tokens
+            self.input_tokens = 80    # Should fallback to this for prompt_tokens
+
+    response_obj_fallback = {
+        "usage": UsageObjectWithFallback(),
+        "choices": []
+    }
+
+    _set_response_attributes(span, response_obj_fallback)
+
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_TOTAL, 200)
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, 120)  # from output_tokens
+    span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 80)      # from input_tokens
