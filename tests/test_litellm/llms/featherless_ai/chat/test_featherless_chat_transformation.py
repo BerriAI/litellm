@@ -149,6 +149,45 @@ class TestFeatherlessAIConfig:
             )
         assert "Featherless AI doesn't support tools=" in str(excinfo.value)
 
+    def test_get_openai_compatible_provider_info_with_new_key(self):
+        """
+        Tests that _get_openai_compatible_provider_info correctly 
+        looks up the NEW environment variable 'FEATHERLESS_AI_API_KEY'.
+        """
+        config = FeatherlessAIConfig()
+        fake_key = "sk-featherless-12345"
+        
+        # We mock 'get_secret_str' and check if it's called with the new key name
+        with patch("litellm.llms.featherless_ai.chat.transformation.get_secret_str") as mock_get_secret:
+            mock_get_secret.return_value = fake_key
+            
+            api_base, api_key = config._get_openai_compatible_provider_info(
+                api_base=None, 
+                api_key=None
+            )
+            
+            # Verify the function tried to fetch the NEW key name
+            mock_get_secret.assert_any_call("FEATHERLESS_AI_API_KEY")
+            assert api_key == fake_key
+
+    def test_validate_environment_error_message(self):
+        """
+        Optional: Verify the error message prompts for the correct key 
+        if you updated the ValueError in transformation.py
+        """
+        config = FeatherlessAIConfig()
+        with pytest.raises(ValueError) as excinfo:
+            config.validate_environment(
+                headers={},
+                model="featherless-ai/Qwerky-72B",
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                api_key=None
+            )
+        # This ensures the user is guided to the right environment variable
+        assert "FEATHERLESS_AI_API_KEY" in str(excinfo.value)
+
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
         config = FeatherlessAIConfig()
