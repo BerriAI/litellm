@@ -140,7 +140,23 @@ class FailureInjectionConfig(BaseModel):
     deployment_failure_rates: Dict[str, float]  # {deployment_id: failure_probability 0.0-1.0}
 ```
 
-### 3. Add Unit Tests
+### 3. Extend StandardLoggingMetadata (Fix 5 — production observability)
+
+Edit `litellm/types/utils.py` — find `class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata)` and add these fields alongside the existing optional fields:
+
+```python
+class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
+    # ... existing fields (DO NOT remove any) ...
+    routing_group_id: Optional[str]       # NEW — UUID of the routing group
+    routing_group_name: Optional[str]     # NEW — human-readable name
+    routing_strategy: Optional[str]       # NEW — strategy used for this request
+```
+
+These fields flow automatically to ALL integrations (Langfuse, DataDog, Prometheus, SpendLogs) because `StandardLoggingPayload.metadata` is typed as `StandardLoggingMetadata`.
+
+The existing `LiteLLM_SpendLogs.metadata` JSON column stores the full `StandardLoggingMetadata` dict — no schema migration needed. The existing `LiteLLM_SpendLogs.model_group` column already captures the routing group name automatically (since routing_group_name IS the model_group).
+
+### 4. Add Unit Tests
 
 Create `tests/litellm/proxy/test_routing_group_types.py`:
 - Test RoutingGroupConfig validation (required fields, optional defaults)
@@ -151,6 +167,7 @@ Create `tests/litellm/proxy/test_routing_group_types.py`:
 ### Reference Files (read these first for patterns):
 - `litellm/proxy/schema.prisma` — see LiteLLM_AccessGroupTable for table pattern
 - `litellm/types/router.py` — see existing BaseModel classes for style
+- `litellm/types/utils.py` — see StandardLoggingMetadata for the logging metadata type
 - `tests/litellm/proxy/` — see existing test files for test patterns
 
 ### What NOT to do:
@@ -227,42 +244,210 @@ Create a helper function (can be in the same file or a utils file) that translat
   - `{routing_group_name}__fallback_p2` contains priority-2 deployments
   - `{routing_group_name}__fallback_p3` contains priority-3 deployments
 - Register fallbacks: `[{routing_group_name: [routing_group_name__fallback_p2, routing_group_name__fallback_p3]}]`
-- Add deployments to the router via `router.set_model_list()` or `router.add_deployment()`
+- Add deployments to the router via `router.upsert_deployment()`
+- Tag all sub-group deployments with `model_info.routing_group_managed = True` and `model_info.routing_group_id = config.routing_group_id` (so they can be filtered from /model/info)
 
 **For "weighted" strategy:**
 - Create a single model group with all deployments, set `weight` in each deployment's `litellm_params`
-- Set routing_strategy to "simple-shuffle" (which uses weights when available)
+- Register strategy as "simple-shuffle" via `router.model_group_routing_strategy[name] = "simple-shuffle"` (simple-shuffle respects weights)
 
 **For "simple-shuffle", "least-busy", "latency-based-routing", "cost-based-routing", "usage-based-routing-v2":**
 - Create a single model group with all deployments
-- The routing strategy is already set globally on the Router — but document that per-group strategy override is a future enhancement
+- Register per-group strategy: `router.model_group_routing_strategy[routing_group_name] = config.routing_strategy`
 
-### 3. Register Endpoints in proxy_server.py
+**Store routing group config on router for metadata injection:**
+```python
+router.routing_group_configs[routing_group_name] = config
+```
+
+### 3. Per-Group Routing Strategy Override (CRITICAL FIX)
+
+The Router's `routing_strategy` is currently global (one strategy for ALL model groups). Add per-group override following the existing `model_group_retry_policy` pattern:
+
+**In `litellm/router.py`:**
+
+a) Add to `__init__` (near line 274, alongside `model_group_retry_policy`):
+```python
+model_group_routing_strategy: Dict[str, str] = {},
+```
+
+b) Store on instance (near line 640):
+```python
+self.model_group_routing_strategy: Dict[str, str] = model_group_routing_strategy
+self.routing_group_configs: Dict[str, Any] = {}  # stores RoutingGroupConfig per group
+```
+
+c) In `get_available_deployment()` (line 9189) — replace `self.routing_strategy` with a per-group lookup:
+```python
+# At the top of the strategy selection block, add:
+_strategy = self.model_group_routing_strategy.get(model, self.routing_strategy)
+
+# Then change ALL occurrences of self.routing_strategy in this method to _strategy:
+if _strategy == "least-busy" and self.leastbusy_logger is not None:
+    ...
+elif _strategy == "simple-shuffle":
+    ...
+# etc.
+```
+
+d) Do the same in `async_get_available_deployment()` (line 8845) — same pattern.
+
+e) In `update_settings()` (line 8240): add `"model_group_routing_strategy"` to `_allowed_settings` list.
+
+f) Ensure all strategy loggers are initialized. Currently `routing_strategy_init()` only initializes the handler for the global strategy. For per-group overrides to work, initialize ALL strategy loggers unconditionally:
+```python
+# In routing_strategy_init() or in __init__:
+# Always init these so they're available for per-group overrides
+self.leastbusy_logger = LeastBusyLoggingHandler(router_cache=self.cache)
+self.lowesttpm_logger = LowestTPMLoggingHandler(router_cache=self.cache, routing_args={})
+self.lowesttpm_logger_v2 = LowestTPMLoggingHandler_v2(router_cache=self.cache, model_list=self.model_list, routing_args={})
+self.lowestlatency_logger = LowestLatencyLoggingHandler(router_cache=self.cache, routing_args={})
+self.lowestcost_logger = LowestCostLoggingHandler(router_cache=self.cache, routing_args={})
+```
+Note: Only register the GLOBAL strategy's logger as a litellm callback (as before). The per-group loggers are just used for deployment selection, not for callback tracking.
+
+### 4. Config Drift Protection (CRITICAL FIX)
+
+The proxy's periodic refresh cycle (`_update_llm_router()`) calls `_delete_deployment()` which removes any model not in DB or YAML config. This would wipe out routing-group-managed sub-deployments.
+
+**In `litellm/proxy/proxy_server.py`:**
+
+a) In `_delete_deployment()` (line 3485): Before the deletion loop (after building `combined_id_list` from DB + config), protect routing group models:
+```python
+# After line 3538 (combined_id_list.append(model_id))...
+# NEW: Protect routing group managed deployments
+routing_group_model_ids = await self._get_routing_group_managed_model_ids()
+combined_id_list.extend(routing_group_model_ids)
+```
+
+b) Add helper method `_get_routing_group_managed_model_ids()` to ProxyConfig:
+```python
+async def _get_routing_group_managed_model_ids(self) -> List[str]:
+    """Return all model IDs managed by routing groups (including fallback sub-groups)."""
+    if prisma_client is None:
+        return []
+    routing_groups = await prisma_client.db.litellm_routinggrouptable.find_many(
+        where={"is_active": True}
+    )
+    managed_ids = []
+    for rg in routing_groups:
+        for dep in rg.deployments:
+            if isinstance(dep, dict):
+                managed_ids.append(dep.get("model_id", ""))
+    return managed_ids
+```
+
+c) In `_update_llm_router()` (line 3631): After the existing delete/add cycle (after line 3680), re-sync routing groups:
+```python
+await self._delete_deployment(db_models=models_list)
+self._add_deployment(db_models=models_list)
+# NEW: Re-sync routing groups
+await self._sync_all_routing_groups()
+```
+
+d) Add `_sync_all_routing_groups()` method that loads all active routing groups from DB and calls `_sync_routing_group_to_router()` for each.
+
+### 5. Name Collision Guard
+
+In the create/update endpoints, validate that routing_group_name doesn't clash with existing model groups:
+```python
+existing_models = await prisma_client.db.litellm_proxymodeltable.find_many(
+    where={"model_name": config.routing_group_name}
+)
+if existing_models:
+    raise HTTPException(
+        status_code=400,
+        detail=f"Name '{config.routing_group_name}' is already used by an existing model group. Choose a different name."
+    )
+```
+
+### 6. Phantom Sub-Group Filtering
+
+Tag all routing-group-managed sub-deployments with metadata:
+```python
+model_info = ModelInfo(
+    id=deployment.model_id,
+    routing_group_managed=True,
+    routing_group_id=config.routing_group_id,
+    routing_group_name=config.routing_group_name,
+)
+```
+
+In `/model/info` and `/v2/model/info` endpoints (find them in proxy_server.py), filter out models where `model_info.get("routing_group_managed") == True`. This prevents internal sub-groups from appearing in the UI models list or being directly callable.
+
+### 7. Production Routing Metadata Injection (Fix 5 — wiring)
+
+When a request targets a routing group, inject metadata so it flows to spend logs + all integrations.
+
+In router.py, in the `_acompletion()` method (around line 1924) or in `make_call()`:
+```python
+# Before the deployment selection call:
+model_group = kwargs.get("model") or model
+if model_group in self.routing_group_configs:
+    _metadata = kwargs.get("metadata") or kwargs.get("litellm_metadata") or {}
+    config = self.routing_group_configs[model_group]
+    _metadata["routing_group_id"] = config.routing_group_id
+    _metadata["routing_group_name"] = model_group
+    _metadata["routing_strategy"] = config.routing_strategy
+```
+
+This populates the new `StandardLoggingMetadata` fields (added by Agent 1) and flows through to `LiteLLM_SpendLogs.metadata` and all callback integrations automatically.
+
+### 8. Stale Deployment Reference Guard
+
+In the model delete endpoint in `litellm/proxy/management_endpoints/model_management_endpoints.py`, before deletion:
+```python
+# Check if model is referenced by any routing group
+routing_groups = await prisma_client.db.litellm_routinggrouptable.find_many()
+for rg in routing_groups:
+    deployment_ids = [d.get("model_id") for d in (rg.deployments if isinstance(rg.deployments, list) else [])]
+    if model_id in deployment_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete model: it is used by routing group '{rg.routing_group_name}'. Remove it from the routing group first."
+        )
+```
+
+### 9. Health Endpoint
+
+Add `GET /v1/routing_group/{routing_group_id}/health` endpoint that returns per-deployment health:
+```python
+class DeploymentHealthStatus(BaseModel):
+    deployment_id: str
+    is_healthy: bool
+    in_cooldown: bool
+    cooldown_remaining_seconds: Optional[float] = None
+    last_error: Optional[str] = None
+    last_error_at: Optional[datetime] = None
+```
+
+Query the Router's `cooldown_cache` to check each deployment's cooldown status. The cache can be accessed via `router.cooldown_cache`.
+
+### 10. Register Endpoints in proxy_server.py
 
 Edit `litellm/proxy/proxy_server.py`:
 - Import the router from the new endpoints file
 - Add `app.include_router(routing_group_router)` alongside the other management endpoint registrations
 - Search for where `access_group_endpoints` is included and add routing_group_endpoints nearby
 
-### 4. Add Startup Sync
-
-In `litellm/proxy/proxy_server.py` in the `ProxyConfig` class:
-- In `add_deployment()` or `_update_llm_router()`, after DB models are loaded, also load routing groups from `LiteLLM_RoutingGroupTable`
-- Call `_sync_routing_group_to_router()` for each active group
-
-### 5. Unit Tests
+### 11. Unit Tests
 
 Create `tests/litellm/proxy/test_routing_group_endpoints.py`:
 - Test CRUD operations (mock the prisma client)
 - Test `_sync_routing_group_to_router()` logic for each strategy type
+- Test per-group routing strategy override works
+- Test config drift protection (managed model IDs aren't deleted)
+- Test name collision validation
+- Test stale deployment reference guard
 - Test validation (invalid strategy, missing priority for priority-failover, etc.)
 
 ### Reference Files (read these first):
 - `litellm/proxy/management_endpoints/access_group_endpoints.py` — CRUD pattern to follow
-- `litellm/proxy/management_endpoints/model_management_endpoints.py` — model CRUD + router sync pattern
-- `litellm/proxy/proxy_server.py` — search for "include_router" and "add_deployment" to find injection points
-- `litellm/router.py` — understand `set_model_list()`, `add_deployment()`, fallbacks config
+- `litellm/proxy/management_endpoints/model_management_endpoints.py` — model CRUD + router sync + delete logic
+- `litellm/proxy/proxy_server.py` — search for "include_router", "_delete_deployment", "_add_deployment", "_update_llm_router" to find injection points
+- `litellm/router.py` — understand `get_available_deployment()` (line 9130), `async_get_available_deployment()` (line 8787), `model_group_retry_policy` pattern (line 640), `update_settings()` (line 8240), `routing_strategy_init()` (line 750), `upsert_deployment()` (line 6949)
 - `litellm/types/router.py` — the types you'll use (RoutingGroupConfig, etc.)
+- `litellm/router_utils/get_retry_from_policy.py` — reference for model_group_retry_policy pattern
 
 ### What NOT to do:
 - Don't build the test engine (Agent 3 does that) — just define the endpoint signatures and call into it
@@ -758,6 +943,28 @@ export const routingGroupSimulateCall = async (
   }
   return await response.json();
 };
+
+export const routingGroupHealthCall = async (
+  accessToken: string,
+  routingGroupId: string,
+) => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/routing_group/${routingGroupId}/health`
+    : `/v1/routing_group/${routingGroupId}/health`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error("Network response was not ok");
+  }
+  return await response.json();
+};
 ```
 
 ### 9. Create React Query Hooks
@@ -999,7 +1206,9 @@ interface LiveTesterProps {
 
 Logic:
 - Mode toggle state: "ordered" | "weighted"
+- On mount and periodically (every 10s), call `routingGroupHealthCall()` to get deployment health/cooldown status
 - Renders StatsBar, then either OrderedFallbackFlow or WeightedRoundRobinFlow
+- Pass health status to each DeploymentCard (isHealthy, inCooldown, cooldownRemainingSeconds)
 - Renders SimulationControls below
 - On "Send Test" or "Run Simulation", calls the API via networking functions, updates state
 
@@ -1037,12 +1246,19 @@ interface DeploymentCardProps {
   avgLatencyMs: number;
   percentage: number;
   requestCount: number;
+  // Health status (Fix 7)
+  isHealthy?: boolean;        // green dot if true, red if false
+  inCooldown?: boolean;       // show yellow "In cooldown (Xs)" badge
+  cooldownRemainingSeconds?: number;
 }
 ```
 
 Render:
 - Dark card with rounded corners and subtle border
-- Left: colored circle with first letter of provider
+- Left: colored circle with first letter of provider + health dot (green/yellow/red) in top-right corner of the circle
+  - Green: healthy (isHealthy=true, inCooldown=false)
+  - Yellow: in cooldown (inCooldown=true) — show "Cooldown {X}s" text below the card
+  - Red: unhealthy (isHealthy=false)
 - Center: provider name (bold), label + latency subtitle
 - Right: large percentage number (in provider color) + request count
 
@@ -1110,7 +1326,7 @@ const getProviderColor = (provider: string): string => {
 - The animation should be smooth (use CSS animations, not JS-driven)
 
 ## Reference Files (READ FIRST):
-- `ui/litellm-dashboard/src/components/networking.tsx` — for routingGroupTestCall, routingGroupSimulateCall
+- `ui/litellm-dashboard/src/components/networking.tsx` — for routingGroupTestCall, routingGroupSimulateCall, routingGroupHealthCall
 - `ui/litellm-dashboard/src/components/routing_groups/` — Agent 4's files (your components integrate here)
 - `ui/litellm-dashboard/src/app/(dashboard)/hooks/useRoutingGroups.ts` — React Query hooks
 - `ui/litellm-dashboard/src/components/common_components/` — reusable components
