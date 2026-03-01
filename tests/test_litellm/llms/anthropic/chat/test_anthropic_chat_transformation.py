@@ -1560,19 +1560,27 @@ def test_effort_output_config_preservation():
 
 
 def test_effort_beta_header_injection():
-    """Test that effort beta header is automatically added when output_config is detected."""
+    """Test that effort beta header is only injected for Opus 4.5 reasoning_effort."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     model_info = AnthropicModelInfo()
 
-    # Test with effort parameter
+    # output_config.effort on 4.6 models should NOT trigger the beta header
     optional_params = {
         "output_config": {
             "effort": "low"
         }
     }
 
-    effort_used = model_info.is_effort_used(optional_params=optional_params)
+    effort_used = model_info.is_effort_used(optional_params=optional_params, model="claude-sonnet-4-6-20260205")
+    assert effort_used is False
+
+    # reasoning_effort on Opus 4.5 SHOULD trigger the beta header
+    optional_params_opus = {
+        "reasoning_effort": "low"
+    }
+
+    effort_used = model_info.is_effort_used(optional_params=optional_params_opus, model="claude-opus-4-5-20251101")
     assert effort_used is True
 
     headers = model_info.get_anthropic_headers(
@@ -1582,6 +1590,35 @@ def test_effort_beta_header_injection():
 
     assert "anthropic-beta" in headers
     assert "effort-2025-11-24" in headers["anthropic-beta"]
+
+    # 4.6 headers should NOT include effort beta
+    effort_used_46 = model_info.is_effort_used(
+        optional_params={"output_config": {"effort": "low"}},
+        model="claude-sonnet-4-6-20260205",
+    )
+    assert effort_used_46 is False
+    headers_46 = model_info.get_anthropic_headers(
+        api_key="test-key",
+        effort_used=effort_used_46,
+    )
+    assert "effort-2025-11-24" not in headers_46.get("anthropic-beta", "")
+
+
+@pytest.mark.parametrize("model_name", [
+    "claude-opus-4.5-20251101",
+    "claude-opus_4.5",
+    "anthropic/claude-opus-4-5-20251101",
+])
+def test_effort_beta_header_dot_separated_variants(model_name):
+    """Test that is_effort_used recognizes dot-separated Opus 4.5 model names."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    model_info = AnthropicModelInfo()
+    result = model_info.is_effort_used(
+        optional_params={"reasoning_effort": "low"},
+        model=model_name,
+    )
+    assert result is True
 
 
 def test_effort_validation():
