@@ -925,14 +925,17 @@ async def _validate_key_models_against_effective_team_models(
         team_member_models=member_models,
     )
 
-    # 3. Step 6b: If effective models are empty, deny access (empty list != all access)
+    # 3. Fallback: if effective models empty but team has models, use team.models
     if not effective_models:
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"No models available for User={user_id} in Team={team_id}. Admins must set 'default_models' on the team or per-user 'models' overrides."
-            },
-        )
+        if team_table.models:
+            effective_models = team_table.models
+        else:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"No models available for User={user_id} in Team={team_id}. Admins must set 'default_models' on the team or per-user 'models' overrides."
+                },
+            )
 
     # 4. Step 6b: If data.models is empty, default to effective models
     if not data.models:

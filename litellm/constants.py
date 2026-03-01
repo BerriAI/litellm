@@ -183,6 +183,11 @@ RUNWAYML_POLLING_TIMEOUT = int(
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
+# Team-scoped model overrides feature flag
+LITELLM_TEAM_MODEL_OVERRIDES: bool = (
+    os.getenv("LITELLM_TEAM_MODEL_OVERRIDES", "false").lower() == "true"
+)
+
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 300))

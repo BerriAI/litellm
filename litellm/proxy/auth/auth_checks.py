@@ -65,7 +65,7 @@ from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
-from litellm.proxy.management_endpoints.common_utils import _is_team_model_overrides_enabled
+from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -2581,23 +2581,28 @@ async def can_team_access_model(
     2. If not allowed natively, falls back to access_group_ids on the team
     """
     models_to_check: List[str] = team_object.models if team_object else []
-    if _is_team_model_overrides_enabled() and valid_token:
+    if LITELLM_TEAM_MODEL_OVERRIDES and valid_token:
         # Compute effective models: team defaults + per-user overrides
         effective_models = compute_effective_team_models(
             team_default_models=valid_token.team_default_models,
             team_member_models=valid_token.team_member_models,
         )
 
-        # If effective_models is empty, and feature is enabled, deny access
-        if len(effective_models) == 0:
+        if effective_models:
+            models_to_check = effective_models
+        elif team_object and team_object.models:
+            # Fallback: effective models empty but team has models configured.
+            # Graceful degradation prevents misconfiguration cliff when feature
+            # is enabled without populating default_models.
+            models_to_check = team_object.models
+        else:
+            # Both effective models and team.models are empty — deny access
             raise ProxyException(
                 message=f"Team not allowed to access model. No models available for user in this team. Model={model}.",
                 type=ProxyErrorTypes.team_model_access_denied,
                 param="model",
                 code=status.HTTP_403_FORBIDDEN,
             )
-
-        models_to_check = effective_models
 
     try:
         return _can_object_call_model(

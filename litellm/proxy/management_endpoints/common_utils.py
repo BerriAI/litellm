@@ -1,4 +1,3 @@
-import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -448,4 +447,6 @@ def _update_metadata_fields(updated_kv: dict) -> None:
 
 
 def _is_team_model_overrides_enabled() -> bool:
-    return os.getenv("LITELLM_TEAM_MODEL_OVERRIDES", "false").lower() == "true"
+    from litellm.constants import LITELLM_TEAM_MODEL_OVERRIDES
+
+    return LITELLM_TEAM_MODEL_OVERRIDES
