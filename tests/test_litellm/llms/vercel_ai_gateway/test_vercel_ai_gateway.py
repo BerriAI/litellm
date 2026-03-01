@@ -2,6 +2,7 @@
 Mock tests for vercel_ai_gateway provider
 """
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -231,17 +232,118 @@ def test_vercel_ai_gateway_models_endpoint_failure():
 def test_vercel_ai_gateway_glm46_cost_math():
     """Test the cost math for glm-4.6"""
 
-    with open("model_prices_and_context_window.json", "r") as f:
+    _repo_root = Path(__file__).resolve().parents[4]
+    _json_path = _repo_root / "model_prices_and_context_window.json"
+    original_cost = litellm.model_cost.copy()
+    with open(_json_path, "r") as f:
         litellm.model_cost = json.load(f)
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+    _invalidate_model_cost_lowercase_map()
 
-    key = "vercel_ai_gateway/zai/glm-4.6"
-    info = litellm.model_cost[key]
+    try:
+        key = "vercel_ai_gateway/zai/glm-4.6"
+        info = litellm.model_cost[key]
 
-    prompt_cost, completion_cost = cost_per_token(
-        model="vercel_ai_gateway/zai/glm-4.6",
-        prompt_tokens=1000,
-        completion_tokens=500,
-    )
+        prompt_cost, completion_cost = cost_per_token(
+            model="vercel_ai_gateway/zai/glm-4.6",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
 
-    assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
-    assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)
+        assert math.isclose(prompt_cost, 1000 * info["input_cost_per_token"], rel_tol=1e-12)
+        assert math.isclose(completion_cost, 500 * info["output_cost_per_token"], rel_tol=1e-12)
+    finally:
+        litellm.model_cost = original_cost
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.fixture(autouse=False)
+def reload_model_cost():
+    """Reload model cost from JSON to pick up any updates, then restore the original."""
+    _repo_root = Path(__file__).resolve().parents[4]
+    _json_path = _repo_root / "model_prices_and_context_window.json"
+
+    original_model_cost = litellm.model_cost.copy()
+    with open(_json_path, "r") as f:
+        litellm.model_cost = json.load(f)
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+    _invalidate_model_cost_lowercase_map()
+    yield
+    litellm.model_cost = original_model_cost
+    _invalidate_model_cost_lowercase_map()
+
+
+class TestVercelCostTracking:
+    """Tests for Vercel AI Gateway cost tracking — addresses GitHub issue #20412."""
+
+    def test_cost_for_model_in_json(self, reload_model_cost):
+        """Cost calculation works for Vercel models that exist in the pricing JSON."""
+        prompt_cost, completion_cost = cost_per_token(
+            model="vercel_ai_gateway/anthropic/claude-opus-4.5",
+            prompt_tokens=1000,
+            completion_tokens=500,
+        )
+        assert prompt_cost > 0, "Prompt cost must be non-zero"
+        assert completion_cost > 0, "Completion cost must be non-zero"
+
+    def test_cost_fallback_for_unlisted_model(self, reload_model_cost):
+        """When a Vercel model is NOT in the JSON, fall back to the sub-provider pricing."""
+        # Remove a vercel entry temporarily to simulate a missing model
+        saved = litellm.model_cost.pop("vercel_ai_gateway/openai/gpt-4o", None)
+        from litellm.utils import _invalidate_model_cost_lowercase_map
+        _invalidate_model_cost_lowercase_map()
+        try:
+            prompt_cost, completion_cost = cost_per_token(
+                model="vercel_ai_gateway/openai/gpt-4o",
+                prompt_tokens=1000,
+                completion_tokens=500,
+            )
+            assert prompt_cost > 0, "Fallback pricing must produce non-zero prompt cost"
+            assert completion_cost > 0, "Fallback pricing must produce non-zero completion cost"
+        finally:
+            if saved is not None:
+                litellm.model_cost["vercel_ai_gateway/openai/gpt-4o"] = saved
+                _invalidate_model_cost_lowercase_map()
+
+    def test_gemini_supports_reasoning(self, reload_model_cost):
+        """Vercel Gemini 2.5 models must have supports_reasoning=True."""
+        for model_key in [
+            "vercel_ai_gateway/google/gemini-2.5-pro",
+            "vercel_ai_gateway/google/gemini-2.5-flash",
+        ]:
+            assert model_key in litellm.model_cost
+            assert litellm.model_cost[model_key].get("supports_reasoning") is True, (
+                f"{model_key} must have supports_reasoning=True"
+            )
+
+    def test_gemini_flash_reasoning_token_cost(self, reload_model_cost):
+        """Vercel Gemini 2.5 Flash must have output_cost_per_reasoning_token set."""
+        flash = litellm.model_cost["vercel_ai_gateway/google/gemini-2.5-flash"]
+        assert flash.get("output_cost_per_reasoning_token") is not None
+        assert flash["output_cost_per_reasoning_token"] > 0
+
+    def test_provider_match_allows_vercel_fallback(self):
+        """_check_provider_match must accept vercel_ai_gateway matching any sub-provider."""
+        from litellm.utils import _check_provider_match
+
+        # Simulate a model_info from OpenAI
+        model_info = {"litellm_provider": "openai"}
+        assert _check_provider_match(model_info=model_info, custom_llm_provider="vercel_ai_gateway")
+
+        # Simulate a model_info from Anthropic
+        model_info = {"litellm_provider": "anthropic"}
+        assert _check_provider_match(model_info=model_info, custom_llm_provider="vercel_ai_gateway")
+
+    def test_cost_per_token_multiple_providers(self, reload_model_cost):
+        """Cost calculation produces non-zero values for multiple Vercel sub-providers."""
+        models = [
+            "vercel_ai_gateway/anthropic/claude-opus-4.5",
+            "vercel_ai_gateway/openai/gpt-4o",
+            "vercel_ai_gateway/google/gemini-2.5-pro",
+        ]
+        for model in models:
+            prompt_cost, completion_cost = cost_per_token(
+                model=model, prompt_tokens=1000, completion_tokens=500,
+            )
+            assert prompt_cost > 0, f"{model}: prompt cost must be non-zero"
+            assert completion_cost > 0, f"{model}: completion cost must be non-zero"

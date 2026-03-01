@@ -30216,7 +30216,9 @@
         "supports_vision": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "output_cost_per_reasoning_token": 2.5e-06
     },
     "vercel_ai_gateway/google/gemini-2.5-pro": {
         "input_cost_per_token": 2.5e-06,
@@ -30229,7 +30231,8 @@
         "supports_vision": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_reasoning": true
     },
     "vercel_ai_gateway/google/gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
