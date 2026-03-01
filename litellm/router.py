@@ -125,6 +125,10 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
+from litellm.router_utils.google_model_variant_utils import (
+    build_variant_deployments,
+    resolve_google_model_variant,
+)
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -8650,6 +8654,32 @@ class Router:
             )
 
         if len(healthy_deployments) == 0:
+            # ── Google/Gemini model variant resolution ──────────────
+            # Gemini CLI appends variant suffixes (e.g. "-customtools")
+            # to the base model name.  Resolve BEFORE default fallbacks
+            # so the original variant name is preserved.
+            variant_result = resolve_google_model_variant(
+                model=model,
+                model_names=self.model_names,
+                get_model_from_alias=lambda m: self._get_model_from_alias(model=m),
+            )
+            if variant_result is not None:
+                base_model_name, variant_suffix = variant_result
+                base_deployments = self._get_all_deployments(
+                    model_name=base_model_name
+                )
+                if len(base_deployments) > 0:
+                    variant_deployments = build_variant_deployments(
+                        base_deployments, variant_suffix
+                    )
+                    verbose_router_logger.info(
+                        "Resolved Google model variant '%s' → base model '%s' (%d deployment(s))",
+                        model,
+                        base_model_name,
+                        len(variant_deployments),
+                    )
+                    return model, variant_deployments
+
             # Check for default fallbacks if no deployments are found for the requested model
             if self._has_default_fallbacks():
                 fallback_model = self._get_first_default_fallback()
@@ -8657,7 +8687,6 @@ class Router:
                     verbose_router_logger.info(
                         f"Model '{model}' not found. Attempting to use default fallback model '{fallback_model}'."
                     )
-                    # Re-assign model to the fallback and try to get deployments again
                     model = fallback_model
                     healthy_deployments = self._get_all_deployments(model_name=model)
 
