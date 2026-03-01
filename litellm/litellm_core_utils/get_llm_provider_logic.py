@@ -504,6 +504,15 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
 
+    # If the provider is openrouter and the remaining model name still starts
+    # with "openrouter/", that inner prefix is part of the actual model ID on
+    # the OpenRouter API (e.g. openrouter/openrouter/aurora-alpha →
+    # model="openrouter/aurora-alpha").  Return immediately so the prefix is
+    # not stripped a second time.
+    if custom_llm_provider == "openrouter" and model.startswith("openrouter/"):
+        dynamic_api_key = api_key or get_secret_str("OPENROUTER_API_KEY")
+        return model, custom_llm_provider, dynamic_api_key, api_base
+
     # Check JSON providers FIRST (before hardcoded ones)
     from litellm.llms.openai_like.dynamic_config import create_config_class
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
