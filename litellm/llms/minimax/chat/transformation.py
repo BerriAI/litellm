@@ -1,9 +1,12 @@
 """
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from typing import AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _concat_reasoning_details,
+)
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
@@ -11,17 +14,6 @@ from litellm.llms.openai.chat.gpt_transformation import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import ModelResponse
-
-
-def _concat_reasoning_details(details: Any) -> str:
-    """Concatenate reasoning_details (list of dicts or string) into a single string."""
-    if isinstance(details, list):
-        return "".join(
-            str(item.get("text") or "") for item in details if isinstance(item, dict)
-        )
-    if isinstance(details, str):
-        return details
-    return ""
 
 
 class MinimaxChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
@@ -136,8 +128,8 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         self,
         streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
-    ) -> Any:
+        json_mode: bool = False,
+    ) -> MinimaxChatCompletionStreamingHandler:
         return MinimaxChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

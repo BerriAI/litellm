@@ -3,7 +3,6 @@ Test MiniMax OpenAI-compatible API support
 """
 import os
 import sys
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -11,7 +10,6 @@ sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm import completion
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 
@@ -330,7 +328,9 @@ def test_minimax_extract_reasoning_content_takes_priority():
 
 def test_minimax_concat_reasoning_details_null_text():
     """Ensure None or non-string text values don't crash concatenation."""
-    from litellm.llms.minimax.chat.transformation import _concat_reasoning_details
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _concat_reasoning_details,
+    )
 
     details = [{"text": None}, {"text": "ok"}, {"text": 42}]
     result = _concat_reasoning_details(details)
@@ -339,6 +339,34 @@ def test_minimax_concat_reasoning_details_null_text():
     assert _concat_reasoning_details([{"text": None}]) == ""
     assert _concat_reasoning_details([]) == ""
     assert _concat_reasoning_details(None) == ""
+
+
+def test_minimax_extract_reasoning_details_none_text_non_streaming():
+    """Test _extract_reasoning_content with {"text": None} entries."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _extract_reasoning_content,
+    )
+
+    message = {
+        "content": "answer",
+        "reasoning_details": [
+            {"text": None},
+            {"text": "valid"},
+            {"text": None},
+        ],
+    }
+    reasoning, content = _extract_reasoning_content(message)
+    assert reasoning == "valid"
+    assert content == "answer"
+
+    # All None → reasoning should be None (empty string coerced to None)
+    message_all_none = {
+        "content": "x",
+        "reasoning_details": [{"text": None}],
+    }
+    reasoning2, content2 = _extract_reasoning_content(message_all_none)
+    assert reasoning2 is None
+    assert content2 == "x"
 
 
 if __name__ == "__main__":
