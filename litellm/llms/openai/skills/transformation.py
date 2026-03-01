@@ -270,8 +270,12 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         content_type = raw_response.headers.get("content-type", "")
         if "json" in content_type:
             return raw_response.json()
+        content = raw_response.content
+        if isinstance(content, bytes):
+            import base64
+            content = base64.b64encode(content).decode("ascii")
         return {
-            "content": raw_response.content,
+            "content": content,
             "content_type": content_type,
             "status_code": raw_response.status_code,
         }
@@ -392,8 +396,12 @@ class OpenAISkillsConfig(BaseSkillsAPIConfig):
         content_type = raw_response.headers.get("content-type", "")
         if "json" in content_type:
             return raw_response.json()
+        content = raw_response.content
+        if isinstance(content, bytes):
+            import base64
+            content = base64.b64encode(content).decode("ascii")
         return {
-            "content": raw_response.content,
+            "content": content,
             "content_type": content_type,
             "status_code": raw_response.status_code,
         }
