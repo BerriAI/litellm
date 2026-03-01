@@ -304,13 +304,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
 
         # Filter unsupported string format values → move to description
-        schema_format = schema.get("format")
+        # Use ``"format" in schema`` (not ``schema.get("format") is not None``)
+        # to correctly handle explicit ``"format": None`` (valid JSON Schema).
         if (
-            schema_format is not None
+            "format" in schema
             and schema.get("type") == "string"
-            and schema_format not in _ANTHROPIC_SUPPORTED_STRING_FORMATS
+            and schema["format"] not in _ANTHROPIC_SUPPORTED_STRING_FORMATS
         ):
-            constraint_descriptions.append(f"format: {schema_format}")
+            constraint_descriptions.append(f"format: {schema['format']}")
 
         result: Dict[str, Any] = {}
 
