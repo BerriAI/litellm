@@ -151,11 +151,14 @@ model_list:
     litellm_params:
       model: sarvam/bulbul:v3
       api_key: os.environ/SARVAM_API_KEY
+      model_info:
+        mode: audio_speech
   - model_name: sarvam/saaras:v3
     litellm_params:
       model: sarvam/saaras:v3
       api_key: os.environ/SARVAM_API_KEY
-
+      model_info:
+        mode: audio_transcription
       
 litellm_settings:
   # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
