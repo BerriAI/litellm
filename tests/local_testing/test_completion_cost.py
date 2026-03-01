@@ -2847,6 +2847,7 @@ def test_cost_calculator_base_model_cross_provider():
     assert selected == "gemini/gemini-2.0-flash"
 
     # Verify cost calculation uses base_model pricing (gemini provider, not anthropic)
+    # Uses a random model name since mock_response bypasses actual API calls
     resp = litellm.completion(
         model="anthropic/random-model",
         messages=[{"role": "user", "content": "Hello"}],
