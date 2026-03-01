@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 from mcp.types import Tool as MCPTool
 
+from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
+
 
 @pytest.mark.asyncio
 async def test_semantic_filter_basic_filtering():
@@ -392,3 +394,75 @@ async def test_semantic_filter_hook_skips_no_tools():
     assert result is None, "Hook should skip requests without tools"
     print("✅ Hook correctly skips requests without tools")
 
+
+
+def test_get_tools_by_names_with_prefixed_names():
+    """
+    Test that _get_tools_by_names matches prefixed tool names.
+
+    When MCP tools are expanded for OpenAI format they receive a server-name
+    prefix (e.g. "youtube-get_transcript").  The semantic router indexes raw
+    names ("get_transcript").  _get_tools_by_names must handle this mismatch.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22445
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Router matched these raw names
+    matched_names = ["get_transcript", "perplexity_ask"]
+
+    # Expanded tools carry a server-name prefix using the configurable separator
+    sep = MCP_TOOL_PREFIX_SEPARATOR
+    available_tools = [
+        {"name": f"youtube{sep}get_transcript", "description": "Get transcript"},
+        {"name": f"fetch{sep}fetch", "description": "Fetch URL"},
+        {"name": f"perplexity{sep}perplexity_ask", "description": "Ask Perplexity"},
+        {"name": f"github{sep}search_issues", "description": "Search issues"},
+    ]
+
+    result = filter_instance._get_tools_by_names(matched_names, available_tools)
+
+    assert len(result) == 2, f"Expected 2 matched tools, got {len(result)}"
+    result_names = [t["name"] for t in result]
+    assert result_names[0] == f"youtube{sep}get_transcript"
+    assert result_names[1] == f"perplexity{sep}perplexity_ask"
+
+
+def test_get_tools_by_names_exact_match_preferred():
+    """
+    Exact name match is preferred over suffix match.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # If a tool's name exactly matches, that takes priority
+    sep = MCP_TOOL_PREFIX_SEPARATOR
+    available_tools = [
+        {"name": "get_transcript", "description": "Get transcript (unprefixed)"},
+        {"name": f"youtube{sep}get_transcript", "description": "Get transcript (prefixed)"},
+    ]
+
+    result = filter_instance._get_tools_by_names(["get_transcript"], available_tools)
+
+    assert len(result) == 1
+    # Exact match should win
+    assert result[0]["name"] == "get_transcript"
