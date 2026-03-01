@@ -351,6 +351,7 @@ model LiteLLM_VerificationToken {
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    jwt_key_mappings LiteLLM_JWTKeyMapping[]
 
     // SELECT COUNT(*) FROM (SELECT "public"."LiteLLM_VerificationToken"."token" FROM "public"."LiteLLM_VerificationToken" WHERE ("public"."LiteLLM_VerificationToken"."user_id" = $1 AND ("public"."LiteLLM_VerificationToken"."team_id" IS NULL OR "public"."LiteLLM_VerificationToken"."team_id" <> $2)) OFFSET $3 ) AS "sub"
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE "public"."LiteLLM_VerificationToken"."user_id" = $1 OFFSET $2
@@ -361,6 +362,24 @@ model LiteLLM_VerificationToken {
 
     // SELECT ... FROM "public"."LiteLLM_VerificationToken" WHERE (("public"."LiteLLM_VerificationToken"."expires" IS NULL OR "public"."LiteLLM_VerificationToken"."expires" > $1) AND "public"."LiteLLM_VerificationToken"."budget_reset_at" < $2) OFFSET $3
     @@index([budget_reset_at, expires])
+}
+
+model LiteLLM_JWTKeyMapping {
+    id                String   @id @default(uuid())
+    jwt_claim_name    String   // e.g. "sub", "email"
+    jwt_claim_value   String   // The claim value to match
+    token             String   // Hashed virtual key (FK)
+    description       String?
+    is_active         Boolean  @default(true)
+    created_at        DateTime @default(now())
+    created_by        String?
+    updated_at        DateTime @default(now()) @updatedAt
+    updated_by        String?
+
+    litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token])
+
+    @@unique([jwt_claim_name, jwt_claim_value])
+    @@index([jwt_claim_name, jwt_claim_value, is_active])
 }
 
 // Deprecated keys during grace period - allows old key to work until revoke_at
