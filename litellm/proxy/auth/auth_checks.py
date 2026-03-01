@@ -2028,6 +2028,28 @@ async def _fetch_key_object_from_db_with_reconnect(
         raise
 
 
+async def get_jwt_key_mapping_object(
+    jwt_claim_name: str,
+    jwt_claim_value: str,
+    prisma_client: PrismaClient,
+) -> Optional[str]:
+    """
+    Lookup a JWT-to-virtual-key mapping from the database.
+
+    Returns the hashed token (str) if a matching active mapping is found, else None.
+    """
+    mapping = await prisma_client.db.litellm_jwtkeymapping.find_first(
+        where={
+            "jwt_claim_name": jwt_claim_name,
+            "jwt_claim_value": jwt_claim_value,
+            "is_active": True,
+        }
+    )
+    if mapping is not None:
+        return mapping.token
+    return None
+
+
 @log_db_metrics
 async def get_key_object(
     hashed_token: str,
