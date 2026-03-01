@@ -158,6 +158,18 @@ class TestGithubCopilotResponsesAPITransformation:
         initiator = config._get_initiator(input_user_only)
         assert initiator == "user", "Should return 'user' for user-only messages"
 
+    def test_get_initiator_with_tool_role(self):
+        """Test _get_initiator returns 'agent' for explicit tool role"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        input_with_tool = [
+            {"role": "user", "content": "Run the function"},
+            {"role": "tool", "content": "result data"},
+        ]
+
+        initiator = config._get_initiator(input_with_tool)
+        assert initiator == "agent", "Should return 'agent' for tool role"
+
     def test_get_initiator_with_string_input(self):
         """Test _get_initiator returns 'user' for string input"""
         config = GithubCopilotResponsesAPIConfig()
