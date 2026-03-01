@@ -5,7 +5,7 @@ Anthropic Skills API endpoints - /v1/skills
 from typing import Optional
 
 import orjson
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -465,7 +465,13 @@ async def update_skill_endpoint(
     )
 
     body = await request.body()
-    data = orjson.loads(body) if body else {}
+    try:
+        data = orjson.loads(body) if body else {}
+    except orjson.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON body. Ensure the request Content-Type is application/json.",
+        )
 
     data["skill_id"] = skill_id
 
