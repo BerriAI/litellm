@@ -661,6 +661,7 @@ const sidebars = {
         "rerank",
         "response_api",
         "response_api_compact",
+        "context_management",
         {
           type: "category",
           label: "/search",
