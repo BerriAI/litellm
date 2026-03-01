@@ -162,6 +162,8 @@ class CustomStreamWrapper:
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
+        self.tool_id_at_index_0: Optional[str] = None # some providers (e.g. ChatGPT subscription) return index 0 for all tool calls, but with different ids. We need to track the id to know when to increment the index
+        self.current_tool_index: int = 0
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -1474,6 +1476,23 @@ class CustomStreamWrapper:
                                                 is None
                                             ):
                                                 t.function.arguments = ""
+                                        
+                                        ## FIX FOR OPENAI COMPATIBLE PROVIDERS - e.g. ChatGPT Subscription
+                                        ## check if index is 0, if so, check if id is different from previous index 0 tool call
+                                        ## if so, increment index
+                                        if hasattr(t, "index") and t.index == 0:
+                                            if hasattr(t, "id") and t.id is not None:
+                                                if self.tool_id_at_index_0 is None:
+                                                    self.tool_id_at_index_0 = t.id
+                                                elif self.tool_id_at_index_0 != t.id:
+                                                    self.current_tool_index += 1
+                                                    self.tool_id_at_index_0 = t.id
+                                            t.index = self.current_tool_index
+                                        elif hasattr(t, "index"):
+                                            # if provider returns non-zero index, trust it but update our tracker
+                                            if t.index > self.current_tool_index:
+                                                self.current_tool_index = t.index
+
                             _json_delta = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
                                 _json_delta[
@@ -1491,6 +1510,11 @@ class CustomStreamWrapper:
                                     ):
                                         # if function returned but type set to None - mistral's api returns type: None
                                         tool["type"] = "function"
+
+                                    ## FIX FOR OPENAI COMPATIBLE PROVIDERS - e.g. ChatGPT Subscription
+                                    if isinstance(tool, dict) and "index" in tool: 
+                                        tool["index"] = self.current_tool_index
+
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
                             verbose_logger.exception(
