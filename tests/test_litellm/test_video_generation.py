@@ -1260,7 +1260,7 @@ class TestAvideoListProviderFallback:
     """Regression test for https://github.com/BerriAI/litellm/issues/22130.
 
     avideo_list must not raise BadRequestError when custom_llm_provider is
-    omitted.  It should fall back to DEFAULT_VIDEO_ENDPOINT_MODEL instead of
+    omitted. It should fall back to DEFAULT_VIDEO_ENDPOINT_MODEL instead of
     passing model="" to get_llm_provider.
     """
 
