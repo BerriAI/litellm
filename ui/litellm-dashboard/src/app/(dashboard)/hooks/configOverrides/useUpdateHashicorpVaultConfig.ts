@@ -4,7 +4,7 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 
 const hashicorpVaultKeys = createQueryKeys("hashicorpVaultConfig");
 
-export const useUpdateHashicorpVaultConfig = (accessToken: string) => {
+export const useUpdateHashicorpVaultConfig = (accessToken: string | null) => {
   const queryClient = useQueryClient();
 
   return useMutation({
