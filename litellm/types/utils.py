@@ -2786,6 +2786,7 @@ class StandardLoggingPayload(TypedDict):
     model_id: Optional[str]
     model_group: Optional[str]
     api_base: str
+    auth_url: Optional[str]
     metadata: StandardLoggingMetadata
     cache_hit: Optional[bool]
     cache_key: Optional[str]
@@ -2952,6 +2953,7 @@ all_litellm_params = (
         "litellm_proxy_rate_limit_response",
         "api_key",
         "api_version",
+        "auth_url",
         "prompt_id",
         "prompt_variables",
         "litellm_system_prompt",
@@ -2996,6 +2998,7 @@ all_litellm_params = (
         "secret_fields",
         "preset_cache_key",
         "caching_groups",
+        "ssl_verify",
         "ttl",
         "cache",
         "no-log",

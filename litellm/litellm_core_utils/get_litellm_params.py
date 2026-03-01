@@ -4,6 +4,7 @@ from typing import Optional
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
 _OPTIONAL_KWARGS_KEYS = frozenset({
+    "auth_url",
     "azure_ad_token",
     "tenant_id",
     "client_id",
