@@ -152,4 +152,6 @@ class TestLazyModelCostMap:
                 t.start()
             for t in threads:
                 t.join(timeout=10)
+            for t in threads:
+                assert not t.is_alive(), "Thread did not complete within timeout"
             mock_get.assert_called_once()
