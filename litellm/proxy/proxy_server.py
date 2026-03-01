@@ -4382,7 +4382,7 @@ class ProxyConfig:
         """
         Use this to read non-llm objects from the db and initialize them
 
-        ex. Vector Stores, Guardrails, MCP tools, etc.
+        ex. Vector Stores, Guardrails, Agents, etc.
         """
         if self._should_load_db_object(object_type="guardrails"):
             await self._init_guardrails_in_db(prisma_client=prisma_client)
@@ -4396,8 +4396,8 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="vector_store_indexes"):
             await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
 
-        if self._should_load_db_object(object_type="mcp"):
-            await self._init_mcp_servers_in_db()
+        # MCP sync runs via its own dedicated scheduler job (mcp_server_sync_job).
+        # Calling it here too would double the DB queries every 30 s cycle.
 
         if self._should_load_db_object(object_type="agents"):
             await self._init_agents_in_db(prisma_client=prisma_client)
@@ -4904,12 +4904,18 @@ class ProxyConfig:
                 )
             )
 
-    async def _init_mcp_servers_in_db(self):
+    async def sync_mcp_servers_from_db(self):
+        """
+        Periodically re-synchronize MCP servers from the database.
+        Called exclusively by the dedicated mcp_server_sync_job scheduler job
+        (registered in initialize_scheduled_background_jobs), which already
+        checks _should_load_db_object before scheduling and calling this method.
+        This keeps MCP configuration eventually consistent across pods.
+        """
         from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
-
         if not is_mcp_available():
             verbose_proxy_logger.debug(
-                "MCP module not available, skipping MCP server initialization"
+                "MCP module not available, skipping MCP server synchronization"
             )
             return
 
@@ -4919,9 +4925,12 @@ class ProxyConfig:
 
         try:
             await global_mcp_server_manager.reload_servers_from_database()
+            verbose_proxy_logger.debug(
+                "litellm.proxy.proxy_server.py::ProxyConfig:sync_mcp_servers_from_db - MCP servers synchronized"
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
+                "litellm.proxy.proxy_server.py::ProxyConfig:sync_mcp_servers_from_db - {}".format(
                     str(e)
                 )
             )
@@ -5758,6 +5767,17 @@ class ProxyStartupEvent:
             await proxy_config.add_deployment(
                 prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
             )
+
+            if proxy_config._should_load_db_object(object_type="mcp"):
+                scheduler.add_job(
+                    proxy_config.sync_mcp_servers_from_db,
+                    "interval",
+                    seconds=30,  # keep in sync with add_deployment polling
+                    id="mcp_server_sync_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                await proxy_config.sync_mcp_servers_from_db()
 
             ### GET STORED CREDENTIALS ###
             scheduler.add_job(

@@ -444,6 +444,115 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
         assert len(mock_scheduler_calls) > 0
 
 
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_mcp_sync_enabled(monkeypatch):
+    """
+    Verify periodic MCP sync is scheduled and run once at startup when MCP DB objects are enabled.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+
+    mock_proxy_config = AsyncMock()
+    mock_proxy_config._should_load_db_object = MagicMock(return_value=True)
+    mock_proxy_config.sync_mcp_servers_from_db = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
+        "litellm.proxy.proxy_server.store_model_in_db", True
+    ), patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert mock_proxy_config.sync_mcp_servers_from_db.await_count == 1
+        assert ps.scheduler.get_job("mcp_server_sync_job") is not None
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_mcp_sync_disabled(monkeypatch):
+    """
+    Verify periodic MCP sync is not scheduled when MCP DB objects are disabled.
+    """
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+
+    mock_proxy_config = AsyncMock()
+    mock_proxy_config._should_load_db_object = MagicMock(return_value=False)
+    mock_proxy_config.sync_mcp_servers_from_db = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
+        "litellm.proxy.proxy_server.store_model_in_db", True
+    ), patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        mock_proxy_config.sync_mcp_servers_from_db.assert_not_awaited()
+        assert ps.scheduler.get_job("mcp_server_sync_job") is None
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_servers_from_db_available(monkeypatch):
+    """
+    Verify that when MCP is available, reload_servers_from_database is called.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    proxy_config = ProxyConfig()
+
+    mock_mcp_manager = AsyncMock()
+    
+    with patch("litellm.proxy._experimental.mcp_server.utils.is_mcp_available", return_value=True), patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", mock_mcp_manager
+    ):
+        await proxy_config.sync_mcp_servers_from_db()
+
+        mock_mcp_manager.reload_servers_from_database.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_servers_from_db_unavailable(monkeypatch):
+    """
+    Verify that when MCP is unavailable, reload_servers_from_database is NOT called.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    proxy_config = ProxyConfig()
+
+    mock_mcp_manager = AsyncMock()
+
+    with patch("litellm.proxy._experimental.mcp_server.utils.is_mcp_available", return_value=False), patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", mock_mcp_manager
+    ):
+        await proxy_config.sync_mcp_servers_from_db()
+
+        mock_mcp_manager.reload_servers_from_database.assert_not_awaited()
+
+
+
 def test_update_config_fields_deep_merge_db_wins():
     from litellm.proxy.proxy_server import ProxyConfig
 
