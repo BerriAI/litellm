@@ -2232,7 +2232,6 @@ async def _lookup_deprecated_key(
 
 
 class PrismaClient:
-    _spend_log_transactions_lock = asyncio.Lock()
 
     def __init__(
         self,
@@ -2243,6 +2242,7 @@ class PrismaClient:
         from litellm.constants import SPEND_LOG_TRANSACTIONS_MAX_SIZE
         from litellm.proxy.db.db_transaction_queue.spend_log_queue import SpendLogQueue
 
+        self._spend_log_transactions_lock = asyncio.Lock()
         self.spend_log_transactions: SpendLogQueue = SpendLogQueue(
             maxlen=SPEND_LOG_TRANSACTIONS_MAX_SIZE
         )
