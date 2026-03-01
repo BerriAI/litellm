@@ -466,6 +466,11 @@ def _ensure_remote_model_cost() -> None:
     Thread safety: uses update() (not clear()+update()) so concurrent readers
     always see a non-empty dict. The worst case for a race is a redundant
     remote fetch, which is harmless since update() is idempotent for same data.
+
+    Note: update() merges remote keys on top of local backup. If a model is
+    removed upstream but still present in the local backup, it will persist
+    until process restart. This is an acceptable trade-off for thread safety
+    (atomic reassignment would break references held by other modules).
     """
     global _model_cost_remote_loaded
     if _model_cost_remote_loaded:
@@ -656,8 +661,6 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def add_known_models(model_cost_map: Optional[Dict] = None):
-    if model_cost_map is None:
-        _ensure_remote_model_cost()
     _map = model_cost_map if model_cost_map is not None else model_cost
     for key, value in _map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
