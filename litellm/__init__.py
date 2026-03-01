@@ -1648,6 +1648,33 @@ if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes",
     from .main import encoding
 
 
+async def aclose() -> None:
+    """
+    Close all cached async HTTP clients (aiohttp sessions, httpx transports).
+
+    Call this **before** your ``asyncio.run()`` returns to prevent
+    "Unclosed client session" / "Unclosed connector" warnings::
+
+        import asyncio, litellm
+
+        async def main():
+            resp = await litellm.acompletion(...)
+            # ... more work ...
+            await litellm.aclose()   # clean up before the loop closes
+
+        asyncio.run(main())
+
+    This is a no-op if no async clients have been created.
+
+    See: https://github.com/BerriAI/litellm/issues/13251
+    """
+    from litellm.llms.custom_httpx.async_client_cleanup import (
+        close_litellm_async_clients,
+    )
+
+    await close_litellm_async_clients()
+
+
 def __getattr__(name: str) -> Any:
     """Lazy import handler with cached registry for improved performance."""
     global _async_client_cleanup_registered
