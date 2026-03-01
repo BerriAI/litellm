@@ -238,10 +238,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             return False
 
         # Only Opus 4.5 reasoning_effort path needs the beta header
-        if model and ("opus-4-5" in model.lower() or "opus_4_5" in model.lower()):
-            reasoning_effort = optional_params.get("reasoning_effort")
-            if reasoning_effort and isinstance(reasoning_effort, str):
-                return True
+        if model:
+            model_lower = model.lower()
+            if any(
+                v in model_lower
+                for v in ("opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5")
+            ):
+                reasoning_effort = optional_params.get("reasoning_effort")
+                if reasoning_effort and isinstance(reasoning_effort, str):
+                    return True
 
         return False
 
