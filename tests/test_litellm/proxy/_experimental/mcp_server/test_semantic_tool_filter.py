@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 from mcp.types import Tool as MCPTool
 
+from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
+
 
 @pytest.mark.asyncio
 async def test_semantic_filter_basic_filtering():
@@ -419,20 +421,21 @@ def test_get_tools_by_names_with_prefixed_names():
     # Router matched these raw names
     matched_names = ["get_transcript", "perplexity_ask"]
 
-    # Expanded tools carry a server-name prefix
+    # Expanded tools carry a server-name prefix using the configurable separator
+    sep = MCP_TOOL_PREFIX_SEPARATOR
     available_tools = [
-        {"name": "youtube-get_transcript", "description": "Get transcript"},
-        {"name": "fetch-fetch", "description": "Fetch URL"},
-        {"name": "perplexity-perplexity_ask", "description": "Ask Perplexity"},
-        {"name": "github-search_issues", "description": "Search issues"},
+        {"name": f"youtube{sep}get_transcript", "description": "Get transcript"},
+        {"name": f"fetch{sep}fetch", "description": "Fetch URL"},
+        {"name": f"perplexity{sep}perplexity_ask", "description": "Ask Perplexity"},
+        {"name": f"github{sep}search_issues", "description": "Search issues"},
     ]
 
     result = filter_instance._get_tools_by_names(matched_names, available_tools)
 
     assert len(result) == 2, f"Expected 2 matched tools, got {len(result)}"
     result_names = [t["name"] for t in result]
-    assert result_names[0] == "youtube-get_transcript"
-    assert result_names[1] == "perplexity-perplexity_ask"
+    assert result_names[0] == f"youtube{sep}get_transcript"
+    assert result_names[1] == f"perplexity{sep}perplexity_ask"
 
 
 def test_get_tools_by_names_exact_match_preferred():
@@ -452,9 +455,10 @@ def test_get_tools_by_names_exact_match_preferred():
     )
 
     # If a tool's name exactly matches, that takes priority
+    sep = MCP_TOOL_PREFIX_SEPARATOR
     available_tools = [
         {"name": "get_transcript", "description": "Get transcript (unprefixed)"},
-        {"name": "youtube-get_transcript", "description": "Get transcript (prefixed)"},
+        {"name": f"youtube{sep}get_transcript", "description": "Get transcript (prefixed)"},
     ]
 
     result = filter_instance._get_tools_by_names(["get_transcript"], available_tools)
