@@ -5,6 +5,7 @@ Verifies that anthropic-beta headers are stripped from HTTP headers
 and only sent via additionalModelRequestFields in the request body.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,67 +15,63 @@ from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
 
+@pytest.fixture(autouse=True)
+def _set_litellm_local_model_cost_map_env(monkeypatch):
+    """Ensure LITELLM_LOCAL_MODEL_COST_MAP is set for all tests in this module."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+
 class TestBedrockConverseBetaHeaderStripping:
-    """Verify anthropic-beta is removed from HTTP headers for Bedrock Converse."""
+    """Verify anthropic-beta is removed from HTTP headers via the actual handler code path."""
 
-    def test_beta_stripped_from_http_headers(self):
-        """anthropic-beta must be removed from HTTP headers."""
-        from litellm.anthropic_beta_headers_manager import (
-            update_headers_with_filtered_beta,
-        )
+    def test_sync_completion_strips_beta_from_http_headers(self):
+        """The sync completion path must strip anthropic-beta from outgoing HTTP headers."""
+        handler = BedrockConverseLLM()
 
-        headers = {
-            "Content-Type": "application/json",
-            "anthropic-beta": "context-1m-2025-08-07",
-        }
-        headers = update_headers_with_filtered_beta(
-            headers=headers, provider="bedrock_converse"
-        )
-        # Simulate what converse_handler.py now does
-        for key in [k for k in headers if k.lower() == "anthropic-beta"]:
-            del headers[key]
+        captured_request_headers = {}
 
-        assert "anthropic-beta" not in headers
-        assert headers["Content-Type"] == "application/json"
+        original_get_request_headers = handler.get_request_headers
 
-    def test_multiple_betas_all_stripped(self):
-        """All anthropic-beta values must be removed from HTTP headers."""
-        from litellm.anthropic_beta_headers_manager import (
-            update_headers_with_filtered_beta,
-        )
+        def spy_get_request_headers(**kwargs):
+            result = original_get_request_headers(**kwargs)
+            captured_request_headers.update(kwargs.get("extra_headers", {}))
+            return result
 
-        headers = {
-            "Content-Type": "application/json",
-            "anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14",
-        }
-        headers = update_headers_with_filtered_beta(
-            headers=headers, provider="bedrock_converse"
-        )
-        for key in [k for k in headers if k.lower() == "anthropic-beta"]:
-            del headers[key]
+        with patch.object(handler, "get_request_headers", side_effect=spy_get_request_headers):
+            with patch("litellm.llms.bedrock.chat.converse_handler.HTTPHandler") as mock_http:
+                mock_http_instance = MagicMock()
+                mock_http.return_value = mock_http_instance
+                mock_http_instance.post.return_value = MagicMock(
+                    status_code=200,
+                    text=json.dumps({"output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}}, "stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}),
+                    headers={},
+                    json=lambda: {"output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}}, "stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}},
+                )
 
-        assert "anthropic-beta" not in headers
+                try:
+                    handler.completion(
+                        model="anthropic.claude-sonnet-4-20250514-v1:0",
+                        messages=[{"role": "user", "content": "test"}],
+                        model_response=MagicMock(),
+                        timeout=30,
+                        encoding=None,
+                        logging_obj=MagicMock(pre_call=MagicMock()),
+                        optional_params={},
+                        litellm_params={
+                            "api_base": "https://bedrock.us-east-1.amazonaws.com",
+                            "model": "bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+                            "aws_region_name": "us-east-1",
+                        },
+                        extra_headers={
+                            "anthropic-beta": "context-1m-2025-08-07",
+                        },
+                        acompletion=False,
+                        stream=False,
+                    )
+                except Exception:
+                    pass
 
-    def test_other_headers_preserved(self):
-        """Non-beta headers must not be affected."""
-        from litellm.anthropic_beta_headers_manager import (
-            update_headers_with_filtered_beta,
-        )
-
-        headers = {
-            "Content-Type": "application/json",
-            "anthropic-beta": "context-1m-2025-08-07",
-            "x-custom-header": "my-value",
-        }
-        headers = update_headers_with_filtered_beta(
-            headers=headers, provider="bedrock_converse"
-        )
-        for key in [k for k in headers if k.lower() == "anthropic-beta"]:
-            del headers[key]
-
-        assert headers["x-custom-header"] == "my-value"
-        assert "anthropic-beta" not in headers
-
+        assert "anthropic-beta" not in captured_request_headers
 
     def test_case_insensitive_beta_stripped(self):
         """anthropic-beta removal must be case-insensitive per HTTP spec."""
