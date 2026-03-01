@@ -34,8 +34,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.commit_hash || github.sha }}
 
       - name: Validate tag input
         env:
