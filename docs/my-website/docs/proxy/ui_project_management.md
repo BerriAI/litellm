@@ -139,4 +139,4 @@ After creating a project:
 - [Access Groups](./access_groups.md) – Define reusable access controls for models, MCP servers, and agents
 - [Virtual Keys](./virtual_keys.md) – Create and manage API keys scoped to projects
 - [Role-based Access Control](./access_control.md) – Organizations, teams, and user roles
-- [Spend Logs](./spend_logs.md) – Track detailed request-level costs and usage
+- [Spend Logs](./spend_logs_deletion.md) – Track detailed request-level costs and usage
