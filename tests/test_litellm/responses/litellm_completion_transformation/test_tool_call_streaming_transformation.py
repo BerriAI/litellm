@@ -390,3 +390,57 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     assert arguments_by_call_id["call_b"] == '{"b":'
     assert arguments_by_call_id["call_a"] != '{"a":1}'
     assert arguments_by_call_id["call_b"] != '{"b":1}'
+
+
+def test_pending_response_events_drain_fifo():
+    """Verify _pending_response_events is drained FIFO via the deque-backed path."""
+    from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    # Manually enqueue two response events
+    ev1 = BaseLiteLLMOpenAIResponseObject(**{"id": "ev1", "type": "output_item.added"})
+    ev2 = BaseLiteLLMOpenAIResponseObject(**{"id": "ev2", "type": "output_item.added"})
+    iterator._pending_response_events.append(ev1)
+    iterator._pending_response_events.append(ev2)
+
+    # Simulate __anext__ logic: response events should be emitted before tool events
+    first = iterator._pending_response_events.popleft()
+    assert first.id == "ev1", f"Expected ev1 first (FIFO), got {first.id}"
+
+    second = iterator._pending_response_events.popleft()
+    assert second.id == "ev2", f"Expected ev2 second (FIFO), got {second.id}"
+
+    assert len(iterator._pending_response_events) == 0
+
+
+def test_pending_annotation_events_drain_fifo():
+    """Verify _pending_annotation_events is drained FIFO via the deque-backed path."""
+    from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    # Manually enqueue annotation events
+    ann1 = BaseLiteLLMOpenAIResponseObject(**{"id": "ann1", "type": "annotation"})
+    ann2 = BaseLiteLLMOpenAIResponseObject(**{"id": "ann2", "type": "annotation"})
+    ann3 = BaseLiteLLMOpenAIResponseObject(**{"id": "ann3", "type": "annotation"})
+    iterator._pending_annotation_events.append(ann1)
+    iterator._pending_annotation_events.append(ann2)
+    iterator._pending_annotation_events.append(ann3)
+
+    # Drain should be FIFO
+    results = []
+    while iterator._pending_annotation_events:
+        results.append(iterator._pending_annotation_events.popleft())
+
+    assert [r.id for r in results] == ["ann1", "ann2", "ann3"], (
+        f"Expected FIFO order, got {[r.id for r in results]}"
+    )
