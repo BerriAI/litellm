@@ -3638,8 +3638,10 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
-        elif custom_llm_provider == "sagemaker_chat":
+        elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
             # boto3 reads keys from .env
+            # sagemaker_chat: HF Messages API endpoints
+            # sagemaker_nova: Nova models on SageMaker (OpenAI-compatible)
             model_response = base_llm_http_handler.completion(
                 model=model,
                 stream=stream,
@@ -3649,7 +3651,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 model_response=model_response,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                custom_llm_provider="sagemaker_chat",
+                custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
                 headers=headers,
                 encoding=_get_encoding(),

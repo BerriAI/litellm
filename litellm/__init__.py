@@ -1383,6 +1383,7 @@ if TYPE_CHECKING:
     from .llms.ollama.completion.transformation import OllamaConfig as OllamaConfig
     from .llms.sagemaker.completion.transformation import SagemakerConfig as SagemakerConfig
     from .llms.sagemaker.chat.transformation import SagemakerChatConfig as SagemakerChatConfig
+    from .llms.sagemaker.nova.transformation import SagemakerNovaConfig as SagemakerNovaConfig
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
     from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as AnthropicMessagesConfig
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig
