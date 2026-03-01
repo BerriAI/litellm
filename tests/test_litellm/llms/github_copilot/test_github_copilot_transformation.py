@@ -259,7 +259,12 @@ def test_x_initiator_header_agent_request_with_tool():
 
 
 def test_x_initiator_header_mixed_messages_with_agent_roles():
-    """Test that mixed messages with agent roles (assistant/tool) result in X-Initiator: agent header"""
+    """Test that mixed messages ending with user result in X-Initiator: user header.
+    
+    Even though assistant messages appear earlier in the conversation,
+    only the LAST message role determines the initiator. A final user
+    message means a new premium request (user-initiated).
+    """
     config = GithubCopilotConfig()
     
     # Mock the authenticator  
@@ -283,7 +288,7 @@ def test_x_initiator_header_mixed_messages_with_agent_roles():
         api_base=None,
     )
     
-    assert headers["X-Initiator"] == "agent"
+    assert headers["X-Initiator"] == "user"
 
 
 def test_x_initiator_header_user_only_messages():
