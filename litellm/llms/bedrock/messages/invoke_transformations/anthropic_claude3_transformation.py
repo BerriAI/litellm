@@ -27,7 +27,7 @@ from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
@@ -424,6 +424,23 @@ class AmazonAnthropicClaudeMessagesConfig(
             ),
         )
         beta_set.update(auto_betas)
+
+        # 7. AUTO-INJECT context_management beta headers
+        # The parent's validate_anthropic_messages_environment is overridden for Bedrock
+        # and does not inject context_management beta headers into HTTP headers.
+        # Detect context_management edits and add the appropriate beta flags.
+        context_management = anthropic_messages_request.get("context_management")
+        if isinstance(context_management, dict):
+            for edit in context_management.get("edits", []):
+                edit_type = edit.get("type", "")
+                if edit_type == "compact_20260112":
+                    beta_set.add(
+                        ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
+                    )
+                else:
+                    beta_set.add(
+                        ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                    )
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
