@@ -152,7 +152,10 @@ class TestApplyDefaultBudgetToEndUser:
             # Budget applied in-memory
             assert result.litellm_budget_table is not None
 
-            # Budget persisted to DB (awaited directly, no background task)
+            # Let the event loop run the fire-and-forget task
+            await asyncio.sleep(0)
+
+            # Budget persisted to DB via background task
             pc.db.litellm_endusertable.update.assert_awaited_once_with(
                 where={"user_id": "user-1"},
                 data={"budget_id": "default-budget"},
@@ -179,5 +182,8 @@ class TestApplyDefaultBudgetToEndUser:
             )
             # In-memory budget still applied
             assert result.litellm_budget_table is not None
+
+            # Let the event loop run the fire-and-forget task
+            await asyncio.sleep(0)
         finally:
             litellm.max_end_user_budget_id = original
