@@ -2582,27 +2582,30 @@ async def can_team_access_model(
     """
     models_to_check: List[str] = team_object.models if team_object else []
     if LITELLM_TEAM_MODEL_OVERRIDES and valid_token:
-        # Compute effective models: team defaults + per-user overrides
-        effective_models = compute_effective_team_models(
-            team_default_models=valid_token.team_default_models,
-            team_member_models=valid_token.team_member_models,
-        )
-
-        if effective_models:
-            models_to_check = effective_models
-        elif team_object and team_object.models:
-            # Fallback: effective models empty but team has models configured.
-            # Graceful degradation prevents misconfiguration cliff when feature
-            # is enabled without populating default_models.
-            models_to_check = team_object.models
-        else:
-            # Both effective models and team.models are empty — deny access
-            raise ProxyException(
-                message=f"Team not allowed to access model. No models available for user in this team. Model={model}.",
-                type=ProxyErrorTypes.team_model_access_denied,
-                param="model",
-                code=status.HTTP_403_FORBIDDEN,
+        # Only apply override logic when overrides are actually configured.
+        # Teams that haven't set default_models or member models continue
+        # to use the original team_object.models / access_group path unchanged.
+        if valid_token.team_default_models or valid_token.team_member_models:
+            effective_models = compute_effective_team_models(
+                team_default_models=valid_token.team_default_models,
+                team_member_models=valid_token.team_member_models,
             )
+
+            if effective_models:
+                models_to_check = effective_models
+            elif team_object and team_object.models:
+                # Fallback: effective models empty but team has models configured.
+                # Graceful degradation prevents misconfiguration cliff when feature
+                # is enabled without populating default_models.
+                models_to_check = team_object.models
+            else:
+                # Both effective models and team.models are empty — deny access
+                raise ProxyException(
+                    message=f"Team not allowed to access model. No models available for user in this team. Model={model}.",
+                    type=ProxyErrorTypes.team_model_access_denied,
+                    param="model",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
 
     try:
         return _can_object_call_model(

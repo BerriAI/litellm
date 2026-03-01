@@ -917,11 +917,18 @@ async def _validate_key_models_against_effective_team_models(
         if membership:
             member_models = membership.models or []
 
+    team_default_models = team_table.default_models or []
+
+    # Skip override validation when neither default_models nor member models
+    # are configured. Teams not using overrides continue with existing behavior.
+    if not team_default_models and not member_models:
+        return
+
     # 2. Compute effective models
     from litellm.proxy.auth.auth_checks import compute_effective_team_models
 
     effective_models = compute_effective_team_models(
-        team_default_models=team_table.default_models or [],
+        team_default_models=team_default_models,
         team_member_models=member_models,
     )
 

@@ -331,14 +331,18 @@ async def _upsert_budget_and_membership(
     If any of these values exist, a budget is updated or created and linked to the team membership.
     """
     if max_budget is None and tpm_limit is None and rpm_limit is None:
-        # disconnect the budget since all limits are None
-        update_data: Dict[str, Any] = {"litellm_budget_table": {"disconnect": True}}
         if models is not None:
-            update_data["models"] = models
+            # Only updating models — do not touch the existing budget
+            await tx.litellm_teammembership.update(
+                where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+                data={"models": models},
+            )
+            return
 
+        # No budget params and no models — disconnect the budget
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data=update_data,
+            data={"litellm_budget_table": {"disconnect": True}},
         )
         return
 
