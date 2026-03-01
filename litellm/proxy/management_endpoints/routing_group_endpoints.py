@@ -6,7 +6,6 @@ that combine model deployments with a routing strategy.
 """
 
 import uuid
-from collections import defaultdict
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -74,19 +73,11 @@ async def _sync_routing_group_to_router(config: RoutingGroupConfig) -> None:
     """
     Translate a RoutingGroupConfig into live Router configuration.
 
-    For priority-failover: creates tiered model groups + fallback chain.
-    The fallback chain implements the per-group ordering independently of
-    the shared router's routing_strategy — this strategy is fully isolated
-    per group.
-
-    For all other strategies: deployments are added to a single model group
-    under the routing_group_name.  The shared router's routing_strategy is
-    NOT changed here — that is the proxy-level concern set in the config YAML.
-    Each group's deployments are correctly scoped to their own model group name;
-    the router picks between them using whatever strategy the proxy was started
-    with.  For "weighted" groups, per-deployment weights are stored in
-    litellm_params so simple_shuffle (if active) will honour them
-    automatically.
+    All deployments are registered under `routing_group_name` as the model_name.
+    At request time the router matches `model=<routing_group_name>` to these
+    deployments and picks one using whatever routing_strategy the proxy was
+    started with.  For weighted groups, per-deployment weights are stored in
+    litellm_params so simple_shuffle honours them automatically.
     """
     llm_router = _get_llm_router()
     if llm_router is None:
@@ -95,80 +86,28 @@ async def _sync_routing_group_to_router(config: RoutingGroupConfig) -> None:
         )
         return
 
-    strategy = config.routing_strategy
     group_name = config.routing_group_name
 
-    if strategy == "priority-failover":
-        priority_groups: dict = defaultdict(list)
-        for dep in config.deployments:
-            p = dep.priority if dep.priority is not None else 999
-            priority_groups[p].append(dep)
+    for dep in config.deployments:
+        try:
+            litellm_params: dict = {"model": dep.model_name}
+            if dep.weight is not None:
+                litellm_params["weight"] = dep.weight
 
-        sorted_priorities = sorted(priority_groups.keys())
-        group_names_by_priority = []
-
-        for i, priority in enumerate(sorted_priorities):
-            if i == 0:
-                # Primary group uses the routing_group_name directly
-                tier_group_name = group_name
-            else:
-                tier_group_name = f"{group_name}__fallback_p{priority}"
-            group_names_by_priority.append(tier_group_name)
-
-            for dep in priority_groups[priority]:
-                try:
-                    deployment_dict = {
-                        "model_name": tier_group_name,
-                        "litellm_params": {
-                            "model": dep.model_name,
-                        },
-                        "model_info": {
-                            "id": dep.model_id,
-                        },
-                    }
-                    llm_router.add_deployment(
-                        deployment=litellm.types.router.Deployment(**deployment_dict)
-                    )
-                except Exception as e:
-                    verbose_proxy_logger.debug(
-                        f"Could not add deployment {dep.model_id} to router: {e}"
-                    )
-
-        # Wire fallback chain
-        if len(group_names_by_priority) > 1:
-            primary = group_names_by_priority[0]
-            fallbacks = group_names_by_priority[1:]
-            existing_fallbacks = llm_router.fallbacks or []
-            # Remove old entry for this group if it exists
-            existing_fallbacks = [f for f in existing_fallbacks if primary not in f]
-            existing_fallbacks.append({primary: fallbacks})
-            llm_router.fallbacks = existing_fallbacks
-
-    else:
-        # All strategies except priority-failover: single model group.
-        for dep in config.deployments:
-            try:
-                litellm_params: dict = {"model": dep.model_name}
-                if strategy == "weighted" and dep.weight is not None:
-                    # simple_shuffle reads `weight` from litellm_params and
-                    # does a proportional random pick — this is how "weighted"
-                    # is actually honoured at call time.
-                    litellm_params["weight"] = dep.weight
-
-                deployment_dict = {
-                    "model_name": group_name,
-                    "litellm_params": litellm_params,
-                    "model_info": {
-                        "id": dep.model_id,
-                    },
-                }
-                llm_router.add_deployment(
-                    deployment=litellm.types.router.Deployment(**deployment_dict)
-                )
-            except Exception as e:
-                verbose_proxy_logger.debug(
-                    f"Could not add deployment {dep.model_id} to router: {e}"
-                )
+            deployment_dict = {
+                "model_name": group_name,
+                "litellm_params": litellm_params,
+                "model_info": {
+                    "id": dep.model_id,
+                },
+            }
+            llm_router.add_deployment(
+                deployment=litellm.types.router.Deployment(**deployment_dict)
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Could not add deployment {dep.model_id} to router: {e}"
+            )
 
 
 
