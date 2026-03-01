@@ -10,8 +10,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
-
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from litellm.llms.openai.skills.transformation import OpenAISkillsConfig
 from litellm.types.llms.anthropic_skills import (
     CreateSkillRequest,
