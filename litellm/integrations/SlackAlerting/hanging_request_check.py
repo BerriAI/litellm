@@ -8,6 +8,7 @@ Notes:
 """
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
@@ -71,6 +72,7 @@ class AlertingHangingRequestCheck:
             api_base=api_base,
             key_alias=request_metadata.get("user_api_key_alias", ""),
             team_alias=request_metadata.get("user_api_key_team_alias", ""),
+            start_time=time.monotonic(),
         )
 
         await self.hanging_request_cache.async_set_cache(
@@ -101,6 +103,7 @@ class AlertingHangingRequestCheck:
             n=MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
         )
 
+        now = time.monotonic()
         for request_id in hanging_requests:
             hanging_request_data: Optional[HangingRequestData] = (
                 await self.hanging_request_cache.async_get_cache(
@@ -127,11 +130,21 @@ class AlertingHangingRequestCheck:
                 )
                 continue
 
+            # only alert after the request has been pending for >= alerting_threshold
+            elapsed = now - hanging_request_data.start_time
+            if elapsed < self.slack_alerting_object.alerting_threshold:
+                continue
+
             ################
             # Send the Alert on Slack
             ################
             await self.send_hanging_request_alert(
                 hanging_request_data=hanging_request_data
+            )
+
+            # remove from cache after alerting to prevent duplicate alerts
+            self.hanging_request_cache._remove_key(
+                key=request_id,
             )
 
         return
