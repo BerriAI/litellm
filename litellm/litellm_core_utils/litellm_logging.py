@@ -4874,15 +4874,7 @@ class StandardLoggingPayloadSetup:
             if _value is None:
                 continue
 
-            _annotation = StandardLoggingAdditionalHeaders.__annotations__.get(key)
-            _is_str_field = _annotation is Optional[str]
-            if _is_str_field:
-                additional_logging_headers[key] = str(_value)  # type: ignore
-            else:
-                try:
-                    additional_logging_headers[key] = int(_value)  # type: ignore
-                except (ValueError, TypeError):
-                    additional_logging_headers[key] = str(_value)  # type: ignore
+            additional_logging_headers[key] = str(_value)  # type: ignore
         return additional_logging_headers
 
     @staticmethod
