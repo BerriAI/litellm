@@ -218,6 +218,10 @@ def get_complete_model_list(
 def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
+    if wildcard_model == "*":
+        # Global wildcard — return all known models across all providers
+        return get_provider_models("*", litellm_params=litellm_params) or []
+
     try:
         wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
     except ValueError:  # safely fail

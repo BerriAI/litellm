@@ -147,6 +147,30 @@ class TestGetWildcardModelsRemovesPatterns:
         assert "unknownprovider/*" not in unique_models
         assert len(expanded) == 0
 
+    def test_global_star_wildcard_removed_with_router(self):
+        """The bare '*' wildcard must be removed from unique_models even
+        when no concrete models can be expanded (e.g. no API keys set)."""
+        router = Router(model_list=[])
+
+        unique_models = ["*", "my-custom-model"]
+        expanded = _get_wildcard_models(
+            unique_models=unique_models,
+            return_wildcard_routes=False,
+            llm_router=router,
+        )
+        assert "*" not in unique_models
+        assert "my-custom-model" in unique_models
+
+    def test_global_star_wildcard_removed_without_router(self):
+        """The bare '*' wildcard must be removed even without a router."""
+        unique_models = ["*"]
+        expanded = _get_wildcard_models(
+            unique_models=unique_models,
+            return_wildcard_routes=False,
+            llm_router=None,
+        )
+        assert "*" not in unique_models
+
 
 class TestGetCompleteModelListEndToEnd:
     """End-to-end test matching issue #13752 scenario."""

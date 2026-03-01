@@ -1353,7 +1353,6 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
         assert "reasoning" not in req1, (
             "reasoning should NOT be injected when auto_summary is off"
         )
-        print("✓ No reasoning injected when auto_summary is off and no reasoning_effort passed")
 
         # --- Case 2: auto_summary ON, no reasoning_effort → reasoning injected ---
         litellm.reasoning_auto_summary = True
@@ -1373,7 +1372,6 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
         assert reasoning.get("effort") is None, (
             f"effort should not be set when no reasoning_effort passed, got {reasoning.get('effort')}"
         )
-        print("✓ reasoning={summary: 'detailed'} injected when auto_summary is on")
 
         # --- Case 3: auto_summary ON + explicit reasoning_effort → no double injection ---
         litellm.reasoning_auto_summary = True
@@ -1389,9 +1387,6 @@ def test_reasoning_auto_summary_injected_without_reasoning_effort():
         assert reasoning3.get("summary") == "detailed", (
             f"Expected summary='detailed', got {reasoning3.get('summary')}"
         )
-        print("✓ Explicit reasoning_effort preserved with auto_summary, no double injection")
-
-        print("✓ All reasoning_auto_summary injection tests passed")
     finally:
         litellm.reasoning_auto_summary = original_flag
         if original_env is not None:
