@@ -504,6 +504,11 @@ model LiteLLM_SpendLogs {
   mcp_namespaced_tool_name String? 
   agent_id            String?
   proxy_server_request Json?     @default("{}")
+  @@index([user])
+  @@index([status])
+  @@index([api_key])
+  @@index([user, startTime])
+  @@index([model_group])
   @@index([startTime])
   @@index([startTime, request_id])
   @@index([end_user])
