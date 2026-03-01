@@ -1,11 +1,9 @@
 """Tests for deferred (lazy) model cost map loading."""
 
-import os
-import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
-class TestLazyModelCostMap(unittest.TestCase):
+class TestLazyModelCostMap:
     """Verify that model_cost loads local data at import and defers remote."""
 
     def test_local_backup_loaded_at_import(self):
@@ -108,6 +106,14 @@ class TestLazyModelCostMap(unittest.TestCase):
                 pass  # model lookup may fail in test env
             mock_ensure.assert_called()
 
+    def test_completion_cost_triggers_remote_fetch(self):
+        """completion_cost() should trigger _ensure_remote_model_cost on first use."""
+        import litellm
 
-if __name__ == "__main__":
-    unittest.main()
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm._ensure_remote_model_cost") as mock_ensure:
+            try:
+                litellm.completion_cost(model="gpt-4o", prompt="test", completion="test")
+            except Exception:
+                pass
+            mock_ensure.assert_called()
