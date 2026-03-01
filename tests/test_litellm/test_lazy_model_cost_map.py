@@ -16,22 +16,25 @@ class TestLazyModelCostMap(unittest.TestCase):
         assert len(litellm.model_cost) > 0, "model_cost should not be empty"
 
     def test_local_only_skips_remote(self):
-        """When LITELLM_LOCAL_MODEL_COST_MAP=True, remote fetch is skipped."""
-        with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP": "true"}):
-            import litellm
+        """When _model_cost_remote_loaded is True, _ensure_remote_model_cost is a no-op."""
+        import litellm
 
-            litellm._model_cost_remote_loaded = True
-            litellm._ensure_remote_model_cost()  # should be a no-op
-            assert litellm._model_cost_remote_loaded is True
+        litellm._model_cost_remote_loaded = True
+        with patch("litellm.get_model_cost_map") as mock_get:
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_not_called()
 
     def test_ensure_remote_idempotent(self):
         """Calling _ensure_remote_model_cost multiple times only fetches once."""
         import litellm
 
-        litellm._model_cost_remote_loaded = True
-        original_len = len(litellm.model_cost)
-        litellm._ensure_remote_model_cost()
-        assert len(litellm.model_cost) == original_len
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm.get_model_cost_map") as mock_get:
+            mock_get.return_value = {"test_idempotent": {"litellm_provider": "openai"}}
+            litellm._ensure_remote_model_cost()
+            litellm._ensure_remote_model_cost()
+            litellm._ensure_remote_model_cost()
+            mock_get.assert_called_once()
 
     def test_add_known_models_with_arg_skips_remote(self):
         """add_known_models(explicit_map) must NOT trigger remote fetch."""
@@ -47,9 +50,12 @@ class TestLazyModelCostMap(unittest.TestCase):
         """add_known_models() without args triggers _ensure_remote_model_cost."""
         import litellm
 
-        with patch.object(litellm, "_ensure_remote_model_cost") as mock_ensure:
+        litellm._model_cost_remote_loaded = False
+        with patch("litellm.get_model_cost_map") as mock_get:
+            mock_get.return_value = {}
             litellm.add_known_models()
-            mock_ensure.assert_called_once()
+            mock_get.assert_called_once()
+            assert litellm._model_cost_remote_loaded is True
 
     def test_remote_not_fetched_at_import_time(self):
         """The module-level add_known_models(model_cost) passes args, so
