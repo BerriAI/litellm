@@ -215,6 +215,24 @@ When opening issues or pull requests, follow these templates:
 - Provider-specific docs in `docs/my-website/docs/providers/`
 - Admin UI for testing proxy features
 
+## RELEASE BRANCH CI LESSONS
+
+When creating release branches and fixing CI failures, keep these hard-won lessons in mind:
+
+1. **Always use proper enum types, not raw strings** — e.g., use `LitellmUserRoles.PROXY_ADMIN` instead of `"proxy_admin"` for `user_role` fields. MyPy CI checks enforce this and will fail on raw strings where enums are expected.
+
+2. **CI `-x` flag hides downstream failures** — Many CI test suites run with `pytest -x` (stop on first failure). Fixing one test may unmask additional pre-existing failures in tests that were never reached before. Always check for this when a previously-failing suite starts passing its first test.
+
+3. **Custom auth fixtures need admin roles for management endpoints** — The `custom_auth_basic.py` fixture (used in pass-through tests) must return `user_role=LitellmUserRoles.PROXY_ADMIN` for tests that call management endpoints like `/key/generate`. Without it, the route check in `non_proxy_admin_allowed_routes_check` rejects the request with 401.
+
+4. **Mock patterns must match between sibling tests** — When a handler test (e.g., `test_streamable_http_mcp_handler_mock`) has a sibling (e.g., `test_sse_mcp_handler_mock`), they should use the same mock patterns. If one mocks `extract_mcp_auth_context` and `set_auth_context`, the other should too.
+
+5. **Timing-sensitive tests need flaky retries in CI** — Tests that use `asyncio.sleep()` to wait for async callbacks (e.g., router usage tracking) need `@pytest.mark.flaky(retries=3, delay=1)` and generous sleep times (2s+) because CI runs on slower shared hardware.
+
+6. **Transient provider errors are expected** — Gemini 503, websocket timeouts, and similar provider-side errors are transient and pass on rerun. Don't waste time fixing these — just rerun the workflow.
+
+7. **CircleCI infrastructure can have capacity issues** — If ALL jobs fail immediately with "Task information unavailable" / canceled status, this is a CircleCI platform issue, not a code problem. Wait and retrigger.
+
 ## WHEN IN DOUBT
 
 - Follow existing patterns in the codebase
