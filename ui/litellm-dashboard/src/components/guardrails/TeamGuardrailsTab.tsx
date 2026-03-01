@@ -392,6 +392,9 @@ type DetailPanelProps = {
   onApprove: () => void;
   onReject: () => void;
   onToggleForwardKey: () => void;
+  onUpdateCustomHeaders: (
+    customHeaders: { key: string; value: string }[]
+  ) => Promise<void>;
   onUpdateExtraHeaders: (extraHeaders: string[]) => Promise<void>;
 };
 
@@ -401,10 +404,13 @@ function DetailPanel({
   onApprove,
   onReject,
   onToggleForwardKey,
+  onUpdateCustomHeaders,
   onUpdateExtraHeaders,
 }: DetailPanelProps) {
   const [configExpanded, setConfigExpanded] = useState(false);
   const [newExtraHeader, setNewExtraHeader] = useState("");
+  const [newStaticHeaderKey, setNewStaticHeaderKey] = useState("");
+  const [newStaticHeaderValue, setNewStaticHeaderValue] = useState("");
   const status = STATUS_CONFIG[g.status];
   const teamColor = TEAM_COLORS[g.team] ?? "bg-gray-100 text-gray-700";
   return (
@@ -496,44 +502,90 @@ function DetailPanel({
               Sent with every request to the guardrail.
             </p>
             {g.customHeaders.length === 0 ? (
-              <p className="text-xs text-gray-400 italic">
+              <p className="text-xs text-gray-400 italic mb-2">
                 No static headers configured.
               </p>
             ) : (
-              <div className="border border-gray-200 rounded-md overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="text-left px-3 py-2 text-gray-500 font-medium">
-                        Key
-                      </th>
-                      <th className="text-left px-3 py-2 text-gray-500 font-medium">
-                        Value
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.customHeaders.map((h, i) => (
-                      <tr
-                        key={`${h.key}-${i}`}
-                        className={
-                          i < g.customHeaders.length - 1
-                            ? "border-b border-gray-100"
-                            : ""
-                        }
-                      >
-                        <td className="px-3 py-2 font-mono text-gray-700">
-                          {h.key}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-gray-600">
-                          {h.value}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ul className="list-none space-y-1 mb-2">
+                {g.customHeaders.map((h, i) => (
+                  <li
+                    key={`${h.key}-${i}`}
+                    className="flex items-center justify-between gap-2 text-xs font-mono bg-gray-50 border border-gray-200 rounded px-2 py-1.5"
+                  >
+                    <span className="text-gray-700 truncate">
+                      {h.key}: {h.value}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateCustomHeaders(
+                          g.customHeaders.filter((_, idx) => idx !== i)
+                        )
+                      }
+                      className="text-gray-400 hover:text-red-600 flex-shrink-0"
+                      aria-label={`Remove ${h.key}`}
+                    >
+                      <XIcon className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <input
+                type="text"
+                value={newStaticHeaderKey}
+                onChange={(e) => setNewStaticHeaderKey(e.target.value)}
+                placeholder="Header name (e.g. X-API-Key)"
+                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const key = newStaticHeaderKey.trim();
+                    const value = newStaticHeaderValue.trim();
+                    if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
+                      onUpdateCustomHeaders([...g.customHeaders, { key, value }]);
+                      setNewStaticHeaderKey("");
+                      setNewStaticHeaderValue("");
+                    }
+                  }
+                }}
+              />
+              <input
+                type="text"
+                value={newStaticHeaderValue}
+                onChange={(e) => setNewStaticHeaderValue(e.target.value)}
+                placeholder="Value"
+                className="flex-1 min-w-0 text-xs font-mono border border-gray-200 rounded px-2 py-1.5 text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const key = newStaticHeaderKey.trim();
+                    const value = newStaticHeaderValue.trim();
+                    if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
+                      onUpdateCustomHeaders([...g.customHeaders, { key, value }]);
+                      setNewStaticHeaderKey("");
+                      setNewStaticHeaderValue("");
+                    }
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const key = newStaticHeaderKey.trim();
+                  const value = newStaticHeaderValue.trim();
+                  if (key && !g.customHeaders.some((h) => h.key.toLowerCase() === key.toLowerCase())) {
+                    onUpdateCustomHeaders([...g.customHeaders, { key, value }]);
+                    setNewStaticHeaderKey("");
+                    setNewStaticHeaderValue("");
+                  }
+                }}
+                className="text-xs font-medium text-blue-600 hover:text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 px-2 py-1.5 rounded transition-colors flex-shrink-0"
+              >
+                Add
+              </button>
+            </div>
           </div>
           <div>
             <div className="flex items-center gap-1.5 mb-2">
@@ -833,6 +885,35 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
     }
   }
 
+  async function updateCustomHeaders(
+    id: string,
+    customHeaders: { key: string; value: string }[]
+  ) {
+    if (!accessToken) return;
+    const headersObj: Record<string, string> = {};
+    for (const { key, value } of customHeaders) {
+      if (key.trim()) headersObj[key.trim()] = value;
+    }
+    try {
+      await updateGuardrailCall(accessToken, id, {
+        litellm_params: { headers: headersObj },
+      });
+      setGuardrails((prev) =>
+        prev.map((x) =>
+          x.id === id
+            ? {
+                ...x,
+                customHeaders: customHeaders.filter((h) => h.key.trim()),
+              }
+            : x
+        )
+      );
+      NotificationsManager.success("Static headers updated");
+    } catch {
+      NotificationsManager.fromBackend("Failed to update static headers");
+    }
+  }
+
   async function updateExtraHeaders(id: string, extraHeaders: string[]) {
     if (!accessToken) return;
     try {
@@ -973,6 +1054,9 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
             setConfirmAction({ id: selected.id, action: "reject" })
           }
           onToggleForwardKey={() => toggleForwardKey(selected.id)}
+          onUpdateCustomHeaders={(customHeaders) =>
+            updateCustomHeaders(selected.id, customHeaders)
+          }
           onUpdateExtraHeaders={(extraHeaders) =>
             updateExtraHeaders(selected.id, extraHeaders)
           }
