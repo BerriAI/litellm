@@ -92,8 +92,18 @@ def _safe_model_deep_copy(model: "BaseModel") -> "BaseModel":
     """
     try:
         return model.model_copy(deep=True)
-    except RuntimeError:
-        return model.__class__.model_validate(model.model_dump())
+    except RuntimeError as e:
+        if "dictionary changed size" not in str(e):
+            raise
+        copy = model.__class__.model_validate(model.model_dump())
+        # Preserve private attributes that model_dump() does not serialise
+        for attr in ("_hidden_params", "_response_headers"):
+            if hasattr(model, attr):
+                try:
+                    setattr(copy, attr, getattr(model, attr))
+                except Exception:
+                    pass
+        return copy
 
 
 class CustomStreamWrapper:

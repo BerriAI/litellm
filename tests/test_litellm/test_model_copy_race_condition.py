@@ -89,6 +89,8 @@ class TestSafeModelDeepCopy:
                 )
             ],
         )
+        resp._hidden_params = {"custom_llm_provider": "openai", "is_finished": True}
+        resp._response_headers = {"x-request-id": "abc123"}
         with patch.object(
             ModelResponse,
             "model_copy",
@@ -98,6 +100,30 @@ class TestSafeModelDeepCopy:
         assert copy.id == "chatcmpl-race"
         assert copy.choices[0].message.content == "race"
         assert copy is not resp
+        assert copy._hidden_params["custom_llm_provider"] == "openai"
+        assert copy._response_headers["x-request-id"] == "abc123"
+
+    def test_non_dict_runtime_error_reraises(self):
+        """RuntimeError unrelated to dict iteration must not be swallowed."""
+        resp = ModelResponse(
+            id="chatcmpl-other",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content="other"),
+                    finish_reason="stop",
+                )
+            ],
+        )
+        import pytest
+
+        with patch.object(
+            ModelResponse,
+            "model_copy",
+            side_effect=RuntimeError("some other error"),
+        ):
+            with pytest.raises(RuntimeError, match="some other error"):
+                _safe_model_deep_copy(resp)
 
     def test_usage_preserved_in_copy(self):
         resp = ModelResponse(
@@ -168,6 +194,7 @@ class TestSafeModelDeepCopy:
             for i in range(100):
                 try:
                     resp.id = f"chatcmpl-mutated-{i}"
+                    resp._hidden_params = {"mutation": i}
                 except Exception as e:
                     errors.append(e)
 
