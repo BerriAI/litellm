@@ -1005,6 +1005,12 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
+        # Filter out unsupported schema constraints (minimum, maximum, etc.)
+        # Safe for all Bedrock models: removes non-standard JSON Schema fields
+        # that most LLM APIs don't support in structured outputs
+        if json_schema is not None:
+            json_schema = AnthropicConfig.filter_anthropic_output_schema(json_schema)
+
         if self._supports_native_structured_outputs(model) and json_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.
