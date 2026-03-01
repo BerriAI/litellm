@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
@@ -1594,6 +1595,7 @@ class LiteLLMCompletionResponsesConfig:
         choices: List[Choices],
     ) -> List[
         Union[
+            BaseLiteLLMOpenAIResponseObject,
             GenericResponseOutputItem,
             OutputFunctionToolCall,
             OutputImageGenerationCall,
@@ -1602,6 +1604,7 @@ class LiteLLMCompletionResponsesConfig:
     ]:
         responses_output: List[
             Union[
+                BaseLiteLLMOpenAIResponseObject,
                 GenericResponseOutputItem,
                 OutputFunctionToolCall,
                 OutputImageGenerationCall,
@@ -1630,27 +1633,24 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[GenericResponseOutputItem]:
+    ) -> List[BaseLiteLLMOpenAIResponseObject]:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
                 if hasattr(message, "reasoning_content") and message.reasoning_content:
-                    # Only check the first choice for reasoning content
+                    # Use summary/summary_text to match the streaming path
                     return [
-                        GenericResponseOutputItem(
-                            type="reasoning",
-                            id=f"rs_{hash(str(message.reasoning_content))}",
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                                choice.finish_reason
-                            ),
-                            role="assistant",
-                            content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=message.reasoning_content,
-                                    annotations=[],
-                                )
-                            ],
+                        BaseLiteLLMOpenAIResponseObject(
+                            **{
+                                "type": "reasoning",
+                                "id": f"rs_{hash(str(message.reasoning_content))}",
+                                "summary": [
+                                    {
+                                        "type": "summary_text",
+                                        "text": message.reasoning_content,
+                                    }
+                                ],
+                            }
                         )
                     ]
         return []
