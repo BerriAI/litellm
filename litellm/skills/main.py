@@ -755,7 +755,7 @@ def delete_skill(
 @client
 async def aupdate_skill(
     skill_id: str,
-    default_version: Optional[int] = None,
+    default_version: Optional[Union[int, str]] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -803,7 +803,7 @@ async def aupdate_skill(
 @client
 def update_skill(
     skill_id: str,
-    default_version: Optional[int] = None,
+    default_version: Optional[Union[int, str]] = None,
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
