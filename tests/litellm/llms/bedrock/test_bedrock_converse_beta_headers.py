@@ -29,10 +29,13 @@ class TestBedrockConverseBetaHeaderStripping:
         handler = BedrockConverseLLM()
 
         captured_request_headers = {}
+        spy_called = False
 
         original_get_request_headers = handler.get_request_headers
 
         def spy_get_request_headers(**kwargs):
+            nonlocal spy_called
+            spy_called = True
             result = original_get_request_headers(**kwargs)
             captured_request_headers.update(kwargs.get("extra_headers", {}))
             return result
@@ -71,6 +74,7 @@ class TestBedrockConverseBetaHeaderStripping:
                 except Exception:
                     pass
 
+        assert spy_called, "get_request_headers spy was never invoked — test is vacuous"
         assert "anthropic-beta" not in captured_request_headers
 
     def test_case_insensitive_beta_stripped(self):
