@@ -1093,6 +1093,19 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
+        # When base_model is used and its provider differs from custom_llm_provider,
+        # update custom_llm_provider to match the base_model's provider.
+        # e.g. model="anthropic/gemini-3-flash" (provider=anthropic) with
+        # base_model="gemini/gemini-3-flash-preview" should use provider=gemini
+        # for cost lookup.
+        if base_model is not None and selected_model == base_model:
+            _base_model_provider_prefix = base_model.split("/")[0]
+            if (
+                _base_model_provider_prefix in LlmProvidersSet
+                and _base_model_provider_prefix != custom_llm_provider
+            ):
+                custom_llm_provider = _base_model_provider_prefix
+
         potential_model_names = [
             selected_model,
             _get_response_model(completion_response),

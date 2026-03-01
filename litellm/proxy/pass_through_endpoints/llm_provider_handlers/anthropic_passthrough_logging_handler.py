@@ -17,6 +17,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import LiteLLMBatch, ModelResponse, TextCompletionResponse
+from litellm.utils import _get_base_model_from_metadata
 
 if TYPE_CHECKING:
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
@@ -124,10 +125,15 @@ class AnthropicPassthroughLoggingHandler:
             if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/"):
                 model_for_cost = f"{custom_llm_provider}/{model}"
 
+            base_model = _get_base_model_from_metadata(
+                model_call_details=logging_obj.model_call_details
+            )
+
             response_cost = litellm.completion_cost(
                 completion_response=litellm_model_response,
                 model=model_for_cost,
                 custom_llm_provider=custom_llm_provider,
+                base_model=base_model,
             )
 
             kwargs["response_cost"] = response_cost
