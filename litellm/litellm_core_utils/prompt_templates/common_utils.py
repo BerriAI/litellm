@@ -1205,6 +1205,18 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
         return message["reasoning_content"], message_content
     elif "reasoning" in message:
         return message["reasoning"], message_content
+    elif "reasoning_details" in message:
+        details = message["reasoning_details"]
+        if isinstance(details, list):
+            text = "".join(
+                item.get("text", "")
+                for item in details
+                if isinstance(item, dict)
+            )
+            return text or None, message_content
+        elif isinstance(details, str):
+            return details or None, message_content
+        return None, message_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content
