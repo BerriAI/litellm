@@ -1190,6 +1190,17 @@ def convert_prefix_message_to_non_prefix_messages(
     return new_messages
 
 
+def _concat_reasoning_details(details: Any) -> str:
+    """Concatenate reasoning_details (list of dicts or string) into a single string."""
+    if isinstance(details, list):
+        return "".join(
+            str(item.get("text") or "") for item in details if isinstance(item, dict)
+        )
+    if isinstance(details, str):
+        return details
+    return ""
+
+
 def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[str]]:
     """
     Extract reasoning content and main content from a message.
@@ -1206,17 +1217,8 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     elif "reasoning" in message:
         return message["reasoning"], message_content
     elif "reasoning_details" in message:
-        details = message["reasoning_details"]
-        if isinstance(details, list):
-            text = "".join(
-                str(item.get("text") or "")
-                for item in details
-                if isinstance(item, dict)
-            )
-            return text or None, message_content
-        elif isinstance(details, str):
-            return details or None, message_content
-        return None, message_content
+        text = _concat_reasoning_details(message["reasoning_details"])
+        return text or None, message_content
     elif isinstance(message_content, str):
         return _parse_content_for_reasoning(message_content)
     return None, message_content
